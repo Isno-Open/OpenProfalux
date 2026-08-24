@@ -258,10 +258,10 @@ void pfx_emit_enroll_all(uint32_t pause_ms) {
         if (!pfx_key_for_serial(s.serial, &s.crypt_key, &idx)) continue;
         s.discrimination = s.serial & 0xFFFu;
         s.counter = 2;                           /* counter d'enrolement fixe */
-        pfx_frame_build(&s, 0x08, frame);        /* bouton 0x8 = enrolement */
-        uint32_t plain = ((uint32_t)0x8u<<28)|((uint32_t)(s.discrimination & 0xFFFu)<<16)|s.counter;
+        pfx_frame_build(&s, PFX_BTN_ENROLL, frame);
+        uint32_t plain = ((uint32_t)PFX_BTN_ENROLL<<28)|((uint32_t)(s.discrimination & 0xFFFu)<<16)|s.counter;
         uint32_t klhop = keeloq_encrypt(plain, s.crypt_key);
-        ESP_LOGI(TAG, "  [%2d/63] serial=0x%05X fam=0x%03X idx=%u key=0x%016llX cnt=2 btn=0x8 klhop=0x%08X",
+        ESP_LOGI(TAG, "  [%2d/63] serial=0x%05X fam=0x%03X idx=%u key=0x%016llX cnt=2 btn=0x5 klhop=0x%08X",
                  slot, (unsigned)s.serial, (unsigned)(s.serial & 0x3FFu), idx,
                  (unsigned long long)s.crypt_key, (unsigned)klhop);
         /* une "pression" = ~10 trames, RPT=0 sur la 1re puis RPT=1 */
@@ -311,10 +311,10 @@ void pfx_emit_enroll_slot(int slot) {
     s.serial = ((uint32_t)slot << 12) | 0x067u;
     if (!pfx_key_for_serial(s.serial, &s.crypt_key, &idx)) { ESP_LOGW(TAG, "slot %d invalide", slot); return; }
     s.discrimination = s.serial & 0xFFFu; s.counter = 2;
-    pfx_frame_build(&s, 0x08, frame);
-    uint32_t plain = ((uint32_t)0x8u<<28)|((uint32_t)(s.discrimination&0xFFFu)<<16)|s.counter;
+    pfx_frame_build(&s, PFX_BTN_ENROLL, frame);
+    uint32_t plain = ((uint32_t)PFX_BTN_ENROLL<<28)|((uint32_t)(s.discrimination&0xFFFu)<<16)|s.counter;
     uint32_t klhop = keeloq_encrypt(plain, s.crypt_key);
-    ESP_LOGI(TAG, "ENROLEMENT slot %d/63 : serial=0x%05X fam=0x%03X idx=%u key=0x%016llX cnt=2 btn=0x8 klhop=0x%08X",
+    ESP_LOGI(TAG, "ENROLEMENT slot %d/63 : serial=0x%05X fam=0x%03X idx=%u key=0x%016llX cnt=2 btn=0x5 klhop=0x%08X",
              slot, (unsigned)s.serial, (unsigned)(s.serial & 0x3FFu), idx,
              (unsigned long long)s.crypt_key, (unsigned)klhop);
     for (int r = 0; r < 10; r++) { frame[8] = (r==0)?0x00:0x40; cc1101_tx_ook_frame(frame, 66); vTaskDelay(pdMS_TO_TICKS(5)); }
