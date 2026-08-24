@@ -73,12 +73,14 @@ static void publish_state(const char *last_cmd) {
 
 static void on_pair(const char *device) {
     (void)device;
-    /* NATIF Profalux, notice platine radio etape 4.1 : le nouvel emetteur fait
-     * Stop+P = bouton 0x8 (trame que la VRAIE telecommande emet pour enroler,
-     * prouvee par la capture du 10/08). Emis 5 s, compteur INCREMENTE (anti-replay). */
-    ESP_LOGI(TAG, "▶ ENROLEMENT NATIF 4.1 : Stop+P = bouton 0x8, maintenu 5 s.");
+    /* Ne pas confondre le STOP+P d'une vraie telecommande (btn 0x8) avec la
+     * commande virtuelle d'enrolement DEVMEL capturee (btn 0x5). Le runtime
+     * DEVMEL place explicitement ce nibble dans le plaintext KeeLoq. */
+    ESP_LOGI(TAG, "▶ ENROLEMENT DEVMEL : SETTINGS 0x0/cnt courant ~5 s, puis ENROLL 0x5/cnt suivant.");
     ESP_LOGI(TAG, "  PUIS (vraie telecommande) : montee+Stop, descente+Stop, montee+Stop (SANS butees).");
-    pfx_emit_hold(&g_state, PFX_BTN_PROG, 5000);
+    pfx_emit_hold(&g_state, PFX_BTN_SETTINGS, 5000);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    pfx_emit_command(&g_state, PFX_BTN_ENROLL);
     mqtt_pub_pair_result(s_device_name, true, 1);
     publish_state("PAIR");
 }
@@ -196,7 +198,7 @@ void app_main(void) {
              (unsigned)g_state.serial, (unsigned)g_state.counter);
 
     /* Bouton ATOM (G39) :
-     *   - appui LONG (>1,5 s) = ENROLEMENT (burst bouton PROG 0x8)
+     *   - appui LONG (>1,5 s) = ENROLEMENT (commande DEVMEL 0x5)
      *   - appui court        = PILOTAGE, cycle MONTEE -> STOP -> DESCENTE
      * Une seule image pour enroler puis piloter sans reflasher. */
     const uint8_t  seq[3]  = { PFX_BTN_UP, PFX_BTN_STOP, PFX_BTN_DOWN };
@@ -210,7 +212,7 @@ void app_main(void) {
             uint32_t held = 0;
             while (gpio_get_level(39) == 0) { vTaskDelay(pdMS_TO_TICKS(20)); held += 20; }
             if (held >= 1500) {
-                ESP_LOGI(TAG, ">>> Appui LONG (%ums) : ENROLEMENT (bouton PROG 0x8) <<<",
+                ESP_LOGI(TAG, ">>> Appui LONG (%ums) : ENROLEMENT (bouton special 0x5) <<<",
                          (unsigned)held);
                 on_pair(s_device_name);
             } else {

@@ -124,7 +124,14 @@ void pfx_frame_build(const pfx_tx_state_t *st, uint8_t button, uint8_t frame[9])
     frame[4] = (sr >> 20) & 0xFF;
     frame[5] = (sr >> 12) & 0xFF;
     frame[6] = (sr >>  4) & 0xFF;
-    frame[7] = ((sr & 0xF) << 4) | (button & 0xF);
+    /* Les quatre bits bouton HCS300 sont eux aussi transmis LSB-first
+     * (S0, S1, S2, S3). Le CC1101 parcourt le nibble bas MSB-first : il faut
+     * donc inverser le nibble, comme pour le hopping et le serial. Sans cela,
+     * 0x1 et 0x8 ainsi que 0x2 et 0x4 sont permutes sur l'air ; le bouton clair
+     * ne correspond alors plus au bouton inclus dans le plaintext KeeLoq. */
+    uint8_t br = 0;
+    for (int k = 0; k < 4; k++) br |= ((button >> k) & 1u) << (3 - k);
+    frame[7] = ((sr & 0xF) << 4) | br;
     /* Bits 4-3: button (already in frame[7]) */
     /* Bits 2-1: status flags = 0 (repeat=0, batt_low=0) */
     frame[8] = 0;
@@ -140,7 +147,9 @@ int pfx_frame_parse(const uint8_t frame[9], pfx_rx_frame_t *out) {
                 | ((uint32_t)frame[6] <<  4) | ((uint32_t)(frame[7] >> 4) & 0x0F);
     uint32_t serial = 0;
     for (int k = 0; k < 28; k++) serial |= ((sr >> k) & 1u) << (27 - k);
-    uint8_t button = frame[7] & 0x0F;
+    uint8_t br = frame[7] & 0x0F;
+    uint8_t button = 0;
+    for (int k = 0; k < 4; k++) button |= ((br >> k) & 1u) << (3 - k);
     uint8_t status = frame[8] & 0x03;
 
     out->serial = serial;
@@ -182,31 +191,32 @@ void pfx_emit_burst(pfx_tx_state_t *st, uint8_t button, uint32_t n_frames, uint3
 
 void pfx_emit_hold(pfx_tx_state_t *st, uint8_t button, uint32_t duration_ms) {
     uint8_t frame[9];
-    /* Compteur INCREMENTE a chaque trame (vrai code tournant) : sinon on rejoue
-     * la meme trame et le moteur la rejette comme un rejeu. Depart au counter
-     * courant (= 2 au premier appairage), donc 1re trame = PAIRMODE 0xF029775B. */
-    ESP_LOGI(TAG, "EMIT bouton 0x%X depuis counter=%u pendant %u ms (compteur incremente)",
+    /* Un appui maintenu repete le meme codeword : counter/hopping fixes, RPT=0
+     * sur la premiere trame puis RPT=1. Le compteur avance au relachement. */
+    pfx_frame_build(st, button, frame);
+    ESP_LOGI(TAG, "EMIT bouton 0x%X counter=%u FIXE pendant %u ms (RPT 0->1)",
              button, (unsigned)st->counter, (unsigned)duration_ms);
     uint32_t elapsed = 0, n = 0;
     while (elapsed < duration_ms) {
-        pfx_frame_build(st, button, frame);   /* trame avec le counter courant */
+        frame[8] = (n == 0) ? 0x00 : 0x40;
         cc1101_tx_ook_frame(frame, 66);
-        st->counter++;                        /* increment chaque trame */
-        if ((n & 0x0F) == 0) pfx_state_save(st);
         vTaskDelay(pdMS_TO_TICKS(60));
         elapsed += 165; n++;
     }
+    st->counter++;
     pfx_state_save(st);
-    ESP_LOGI(TAG, "EMIT termine: %u trames, counter->%u", (unsigned)n, (unsigned)st->counter);
+    ESP_LOGI(TAG, "EMIT termine: %u repetitions (code fixe), counter->%u",
+             (unsigned)n, (unsigned)st->counter);
 }
 
 void pfx_emit_command(pfx_tx_state_t *st, uint8_t button) {
     uint8_t frame[9];
-    for (int i = 0; i < 3; i++) {  /* HCS301 typical = 3 repeats */
-        pfx_frame_build(st, button, frame);
+    pfx_frame_build(st, button, frame);
+    for (int i = 0; i < 8; i++) {
+        frame[8] = (i == 0) ? 0x00 : 0x40;
         cc1101_tx_ook_frame(frame, 66);
-        st->counter++;
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    st->counter++;
     pfx_state_save(st);
 }

@@ -104,6 +104,15 @@ int main(void) {
     check_u32("oracle PAIRMODE hop decrypt",
               keeloq_decrypt(0xF029775Bu, k54), 0x00670002u);
 
+    /* Trame spéciale d'enrôlement observée chez DEVMEL : ce n'est ni le
+     * placeholder zéro, ni le bouton PROG physique 0x8. */
+    uint32_t enroll_plain = (0x5u << 28) | (0x067u << 16) | 0x0003u;
+    check_u32("plaintext ENROLL DEVMEL btn=5/disc=067/cnt=3",
+              enroll_plain, 0x50670003u);
+    check_u32("roundtrip ENROLL DEVMEL slot 54",
+              keeloq_decrypt(keeloq_encrypt(enroll_plain, k54), k54),
+              0x50670003u);
+
     printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

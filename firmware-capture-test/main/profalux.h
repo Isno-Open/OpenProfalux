@@ -53,7 +53,7 @@ void pfx_emit_burst(pfx_tx_state_t *st, uint8_t button, uint32_t n_frames, uint3
  * Utilise pour l'etape 2 de la notice (STOP-en-P maintenu 5 s = bouton 0x8). */
 void pfx_emit_hold(pfx_tx_state_t *st, uint8_t button, uint32_t duration_ms);
 
-/* SCAN : emet l'enrolement (bouton 0x8, counter 2) pour les 63 identites DEVMEL
+/* SCAN : emet l'enrolement DEVMEL (bouton 0x5, counter 2) pour les 63 identites
  * en boucle pendant duration_ms. Si UNE identite est valide pour ce moteur, elle
  * sera enrolee. Sert a tester tout le pool d'un coup. */
 void pfx_emit_enroll_all(uint32_t duration_ms);

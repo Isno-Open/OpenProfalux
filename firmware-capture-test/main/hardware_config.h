@@ -90,10 +90,12 @@
 #define PROFALUX_REPEAT_COUNT            10  /* HCS301 typical */
 
 /* Boutons Profalux (=confirmés captures beedec65) */
+#define PFX_BTN_SETTINGS               0x00  /* 1re étape DEVMEL, counter courant */
 #define PFX_BTN_DOWN                   0x01
 #define PFX_BTN_STOP                   0x02
 #define PFX_BTN_UP                     0x04
-#define PFX_BTN_PROG                   0x08  /* Hypothèse: PROG button code */
+#define PFX_BTN_ENROLL                 0x05  /* Trame spéciale DEVMEL capturée: 0x50670003 */
+#define PFX_BTN_PROG                   0x08  /* STOP+P d'une vraie télécommande */
 
 /* Pair window duration (=60s selon procédure officielle Profalux) */
 #define PROFALUX_PAIR_WINDOW_MS       60000

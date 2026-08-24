@@ -153,12 +153,13 @@ static int find_frame_nvs(uint32_t want_serial, int want_btn, char *out) {
 
 static void on_pair(const char *device) {
     (void)device;
-    /* NATIF Profalux, notice platine radio etape 4.1 : le nouvel emetteur fait
-     * Stop+P = bouton 0x8 (trame que la VRAIE telecommande emet pour enroler,
-     * prouvee par la capture du 10/08). Emis 5 s, compteur INCREMENTE (anti-replay). */
-    ESP_LOGI(TAG, "▶ ENROLEMENT NATIF 4.1 : Stop+P = bouton 0x8, maintenu 5 s.");
+    /* Commande virtuelle DEVMEL capturee : bouton special 0x5. Ne pas la
+     * confondre avec STOP+P (0x8) emis par une vraie telecommande. */
+    ESP_LOGI(TAG, "▶ ENROLEMENT DEVMEL : SETTINGS 0x0/cnt courant ~5 s, puis ENROLL 0x5/cnt suivant.");
     ESP_LOGI(TAG, "  PUIS (vraie telecommande) : montee+Stop, descente+Stop, montee+Stop (SANS butees).");
-    pfx_emit_hold(&g_state, PFX_BTN_PROG, 5000);
+    pfx_emit_hold(&g_state, PFX_BTN_SETTINGS, 5000);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    pfx_emit_command(&g_state, PFX_BTN_ENROLL);
     mqtt_pub_pair_result(s_device_name, true, 1);
     publish_state("PAIR");
 }
@@ -278,7 +279,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "PRET. Bouton G39 : 1=ENREGISTRE | 2=rejeu BRUT | 3=via OpenProfalux | 4=RECHARGE | 5=TEST clair/hop | 6+=efface.");
 
     /* Bouton ATOM (G39) :
-     *   - appui LONG (>1,5 s) = ENROLEMENT (burst bouton PROG 0x8)
+     *   - appui LONG (>1,5 s) = ENROLEMENT (commande DEVMEL 0x5)
      *   - appui court        = PILOTAGE, cycle MONTEE -> STOP -> DESCENTE
      * Une seule image pour enroler puis piloter sans reflasher. */
     /* ===== MODE 2-TESTS (RollJam + preuve d'emission OpenProfalux) =====

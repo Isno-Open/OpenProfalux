@@ -23,6 +23,74 @@ codeword HCS300 LSB-first, discrimination 10 bits, TE≈450 µs et préambule
 ≈23 éléments. Un simple aller-retour logiciel KeeLoq ne constitue pas une
 preuve d'appairage moteur.
 
+### Piège critique : rejeu brut et trame générée sont deux chemins différents
+
+Le rejeu fonctionnel ne valide pas `pfx_frame_build()`. Le rejeu transmet directement
+les 66 bits capturés par `cc1101_tx_raw_bits()` ; leur ordre est donc déjà correct.
+Une nouvelle identité, en revanche, construit ses champs avant de les émettre.
+
+Tous les champs HCS300 sont transmis LSB-first, y compris les quatre bits bouton :
+
+```text
+[hopping 32 LSB-first] [serial 28 LSB-first] [button 4 LSB-first] [VLOW] [RPT]
+```
+
+Bug trouvé le 2026-08-24 par comparaison avec trois trames DEVMEL Lecanard38
+(`counter=0xCEB`, `0xCEC`, `0xCF3`) : hopping et serial concordaient, mais le bouton
+était empaqueté MSB-first. Cela permutait `0x1↔0x8` et `0x2↔0x4`. Le bouton clair
+ne correspondait alors plus au bouton chiffré dans le hopping, donc une commande
+générée pouvait être rejetée alors que les rejeux fonctionnaient parfaitement.
+
+Le cas `button=0x0` masque totalement ce bug. Par conséquent, une injection d'apprentissage
+en bouton zéro peut être correcte tandis que le test final `UP/DOWN/STOP` est invalide.
+Toujours valider le codeword **sur l'air**, champ clair compris, avec un bouton non nul.
+
+### Le placeholder d'enrôlement est levé
+
+La capture DEVMEL d'enrôlement donne un plaintext KeeLoq
+`0x50670003` : bouton spécial `0x5`, discrimination `0x067`, compteur `3`.
+Ce `0x5` n'est pas le bouton `PROG/STOP+P` `0x8` d'une vraie télécommande.
+
+Le binaire `AirSendWebService` confirme l'emplacement du champ : juste avant la
+boucle KeeLoq (`0x7F5024`), il lit un octet de l'objet radio, le décale de 12 bits,
+l'assemble avec la discrimination, puis décale l'ensemble de 16 bits. Les appels
+isolés `PROG`, `STOP` et `PAIRMODE` du banc donnent un objet à zéro et ne suffisent
+donc pas à reproduire la branche d'enrôlement complète de l'application.
+
+OpenProfalux distingue désormais `PFX_BTN_ENROLL=0x05` (identité virtuelle DEVMEL)
+de `PFX_BTN_PROG=0x08` (télécommande physique), et la procédure locale d'enrôlement
+émet désormais la paire observée : `SETTINGS btn=0/counter=2` répété avec un
+codeword fixe, relâchement, puis `ENROLL btn=5/counter=3` répété avec un codeword
+fixe. Le compteur ne progresse qu'entre les deux commandes, pas entre leurs
+répétitions.
+
+#### Procédure radio à implémenter
+
+État initial : l'identité virtuelle PFX est déjà choisie dans le pool DEVMEL,
+avec `serial & 0xFFF == 0x067`, sa clé du slot et un compteur initial `2`.
+
+| Étape | Commande logique | Bouton | Compteur | Plaintext pour `0x067` | Répétition |
+|---|---|---:|---:|---:|---|
+| 1 | SETTINGS / préparation | `0x0` | `2` | `0x00670002` | même codeword pendant environ 5 s ; `RPT=0`, puis `RPT=1` |
+| 2 | relâchement | — | — | — | silence d'environ 300 ms |
+| 3 | ENROLL / validation | `0x5` | `3` | `0x50670003` | même codeword répété ; `RPT=0`, puis `RPT=1` |
+
+Règles impératives :
+
+- chiffrer une seule fois par étape et répéter le même hopping ;
+- ne pas incrémenter le compteur entre les répétitions d'un même appui ;
+- incrémenter une seule fois au relâchement, donc `2 → 3` entre SETTINGS et ENROLL ;
+- sérialiser hopping, serial et nibble bouton LSB-first ;
+- ne jamais remplacer `0x5` par `0x0` ou `0x8` lors de l'étape 3.
+
+Dans le firmware, `on_pair()` réalise cette séquence avec
+`pfx_emit_hold(..., PFX_BTN_SETTINGS, 5000)`, une pause de 300 ms, puis
+`pfx_emit_command(..., PFX_BTN_ENROLL)`.
+
+La chorégraphie effectuée ensuite avec la vraie télécommande reste une étape
+distincte : elle met le moteur dans les conditions mécaniques attendues, mais
+elle ne remplace aucune des deux commandes de la nouvelle identité.
+
 Ce document décrit la procédure de test empirique révisée après la [contre-analyse « 10e homme »](CONTRE-ANALYSE.md) qui a affaibli l'hypothèse initiale d'un simple "émets crypt_key random et le moteur enregistre".
 
 ## Rappel de la faiblesse identifiée
