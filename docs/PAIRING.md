@@ -58,38 +58,36 @@ isolés `PROG`, `STOP` et `PAIRMODE` du banc donnent un objet à zéro et ne suf
 donc pas à reproduire la branche d'enrôlement complète de l'application.
 
 OpenProfalux distingue désormais `PFX_BTN_ENROLL=0x05` (identité virtuelle DEVMEL)
-de `PFX_BTN_PROG=0x08` (télécommande physique), et la procédure locale d'enrôlement
-émet désormais la paire observée : `SETTINGS btn=0/counter=2` répété avec un
-codeword fixe, relâchement, puis `ENROLL btn=5/counter=3` répété avec un codeword
-fixe. Le compteur ne progresse qu'entre les deux commandes, pas entre leurs
-répétitions.
+de `PFX_BTN_PROG=0x08` (télécommande physique). Attention : le résultat
+`0x00670002` observé en forçant `PROG` dans le banc est un artefact de ce banc,
+pas une trame observée pendant l'enrôlement réel. Dans le workflow complet,
+SETTINGS/PROG est une étape interne silencieuse.
 
 #### Procédure radio à implémenter
 
 État initial : l'identité virtuelle PFX est déjà choisie dans le pool DEVMEL,
 avec `serial & 0xFFF == 0x067`, sa clé du slot et un compteur initial `2`.
 
-| Étape | Commande logique | Bouton | Compteur | Plaintext pour `0x067` | Répétition |
-|---|---|---:|---:|---:|---|
-| 1 | SETTINGS / préparation | `0x0` | `2` | `0x00670002` | même codeword pendant environ 5 s ; `RPT=0`, puis `RPT=1` |
-| 2 | relâchement | — | — | — | silence d'environ 300 ms |
-| 3 | ENROLL / validation | `0x5` | `3` | `0x50670003` | même codeword répété ; `RPT=0`, puis `RPT=1` |
+| Étape | Action | Radio | Compteur interne |
+|---|---|---|---:|
+| 1 | SETTINGS / PROG pendant environ 5 s | **aucune émission** | passage interne `2 → 3` |
+| 2 | ENROLL / validation | `btn=0x5`, plaintext `0x50670003`, codeword répété | `3` |
 
 Règles impératives :
 
-- chiffrer une seule fois par étape et répéter le même hopping ;
-- ne pas incrémenter le compteur entre les répétitions d'un même appui ;
-- incrémenter une seule fois au relâchement, donc `2 → 3` entre SETTINGS et ENROLL ;
+- ne jamais émettre `0x00670002` pour représenter SETTINGS ;
+- chiffrer une seule fois `0x50670003` et répéter le même hopping ;
+- ne pas incrémenter le compteur entre les répétitions ENROLL ;
 - sérialiser hopping, serial et nibble bouton LSB-first ;
-- ne jamais remplacer `0x5` par `0x0` ou `0x8` lors de l'étape 3.
+- ne jamais remplacer `0x5` par `0x0` ou `0x8`.
 
-Dans le firmware, `on_pair()` réalise cette séquence avec
-`pfx_emit_hold(..., PFX_BTN_SETTINGS, 5000)`, une pause de 300 ms, puis
+Dans le firmware, `on_pair()` attend 5 s sans appeler l'émetteur, avance l'état
+interne de `counter=2` à `counter=3`, puis appelle uniquement
 `pfx_emit_command(..., PFX_BTN_ENROLL)`.
 
 La chorégraphie effectuée ensuite avec la vraie télécommande reste une étape
 distincte : elle met le moteur dans les conditions mécaniques attendues, mais
-elle ne remplace aucune des deux commandes de la nouvelle identité.
+elle ne remplace pas la commande ENROLL de la nouvelle identité.
 
 Ce document décrit la procédure de test empirique révisée après la [contre-analyse « 10e homme »](CONTRE-ANALYSE.md) qui a affaibli l'hypothèse initiale d'un simple "émets crypt_key random et le moteur enregistre".
 

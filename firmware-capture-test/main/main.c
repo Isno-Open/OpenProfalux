@@ -155,10 +155,11 @@ static void on_pair(const char *device) {
     (void)device;
     /* Commande virtuelle DEVMEL capturee : bouton special 0x5. Ne pas la
      * confondre avec STOP+P (0x8) emis par une vraie telecommande. */
-    ESP_LOGI(TAG, "▶ ENROLEMENT DEVMEL : SETTINGS 0x0/cnt courant ~5 s, puis ENROLL 0x5/cnt suivant.");
+    ESP_LOGI(TAG, "▶ ENROLEMENT DEVMEL : SETTINGS interne silencieux ~5 s, puis ENROLL 0x5/cnt suivant.");
     ESP_LOGI(TAG, "  PUIS (vraie telecommande) : montee+Stop, descente+Stop, montee+Stop (SANS butees).");
-    pfx_emit_hold(&g_state, PFX_BTN_SETTINGS, 5000);
-    vTaskDelay(pdMS_TO_TICKS(300));
+    vTaskDelay(pdMS_TO_TICKS(5000));           /* SETTINGS/PROG : aucune RF */
+    g_state.counter++;                         /* transition interne cnt 2 -> 3 */
+    pfx_state_save(&g_state);
     pfx_emit_command(&g_state, PFX_BTN_ENROLL);
     mqtt_pub_pair_result(s_device_name, true, 1);
     publish_state("PAIR");

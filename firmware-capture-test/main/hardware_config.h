@@ -90,7 +90,6 @@
 #define PROFALUX_REPEAT_COUNT            10  /* HCS301 typical */
 
 /* Boutons Profalux (=confirmés captures beedec65) */
-#define PFX_BTN_SETTINGS               0x00  /* 1re étape DEVMEL, counter courant */
 #define PFX_BTN_DOWN                   0x01
 #define PFX_BTN_STOP                   0x02
 #define PFX_BTN_UP                     0x04
