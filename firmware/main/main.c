@@ -78,10 +78,7 @@ static void on_pair(const char *device) {
      * DEVMEL place explicitement ce nibble dans le plaintext KeeLoq. */
     ESP_LOGI(TAG, "▶ ENROLEMENT DEVMEL : SETTINGS interne silencieux ~5 s, puis ENROLL 0x5/cnt suivant.");
     ESP_LOGI(TAG, "  PUIS (vraie telecommande) : montee+Stop, descente+Stop, montee+Stop (SANS butees).");
-    vTaskDelay(pdMS_TO_TICKS(5000));           /* SETTINGS/PROG : aucune RF */
-    g_state.counter++;                         /* transition interne cnt 2 -> 3 */
-    pfx_state_save(&g_state);
-    pfx_emit_command(&g_state, PFX_BTN_ENROLL);
+    pfx_emit_enroll(&g_state);
     mqtt_pub_pair_result(s_device_name, true, 1);
     publish_state("PAIR");
 }

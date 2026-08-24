@@ -81,9 +81,43 @@ Règles impératives :
 - sérialiser hopping, serial et nibble bouton LSB-first ;
 - ne jamais remplacer `0x5` par `0x0` ou `0x8`.
 
-Dans le firmware, `on_pair()` attend 5 s sans appeler l'émetteur, avance l'état
-interne de `counter=2` à `counter=3`, puis appelle uniquement
+Dans le firmware, `on_pair()` appelle `pfx_emit_enroll()`, qui attend 5 s sans
+TX, avance l'état interne de `counter=2` à `counter=3`, puis appelle uniquement
 `pfx_emit_command(..., PFX_BTN_ENROLL)`.
+
+L'implémentation est centralisée dans `pfx_emit_enroll()` afin qu'un banc ne
+réintroduise pas la fausse trame SETTINGS. Cette fonction doit être l'unique
+point d'entrée de l'injection :
+
+```c
+/* Précondition : nouvelle identité au counter 2. */
+pfx_emit_enroll(&state);
+/* Sortie : ENROLL 0x50670003 émis, counter prêt pour le test suivant. */
+```
+
+### Déroulé exact du banc à trois étapes
+
+1. Le banc crée une nouvelle identité PFX au compteur interne `2`, puis affiche
+   la phase A. L'utilisateur fait avec la vraie télécommande : butée haute,
+   descente d'environ 20 cm, STOP.
+2. Au premier G39/`next`, le banc appelle `pfx_emit_enroll()`. Pendant cinq
+   secondes il ne doit y avoir aucun appel CC1101 TX. La fonction passe ensuite
+   en interne à `counter=3` et répète uniquement le codeword
+   `btn=5/plain=0x50670003` (`RPT=0`, puis `RPT=1`).
+3. Le banc affiche la phase B. L'utilisateur fait avec la vraie télécommande :
+   montée, descente environ trois secondes, STOP, montée.
+4. Au second G39/`next`, le banc émet une commande de test avec le compteur
+   suivant (`4`) et un seul hopping répété. Le mouvement confirme l'apprentissage.
+
+Contrôle console obligatoire :
+
+```text
+SETTINGS interne: 5000 ms, aucune TX RF (counter=2)
+ENROLL RF: btn=0x5 counter=3 plain=0x50670003
+```
+
+Entre ces deux lignes, aucune ligne `TX`, aucun `plain=0x00670002` et aucune
+activité RF ne doivent apparaître.
 
 La chorégraphie effectuée ensuite avec la vraie télécommande reste une étape
 distincte : elle met le moteur dans les conditions mécaniques attendues, mais

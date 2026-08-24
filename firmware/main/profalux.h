@@ -48,6 +48,10 @@ void pfx_emit_burst(pfx_tx_state_t *st, uint8_t button, uint32_t n_frames, uint3
  * Utilise pour l'etape 2 de la notice (STOP-en-P maintenu 5 s = bouton 0x8). */
 void pfx_emit_hold(pfx_tx_state_t *st, uint8_t button, uint32_t duration_ms);
 
+/* Workflow DEVMEL d'enrolement : SETTINGS interne silencieux pendant 5 s,
+ * transition du compteur, puis seule emission RF ENROLL bouton 0x5. */
+void pfx_emit_enroll(pfx_tx_state_t *st);
+
 /* Emit single command (=3 repeats HCS301-style) */
 void pfx_emit_command(pfx_tx_state_t *st, uint8_t button);
 
