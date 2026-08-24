@@ -229,6 +229,18 @@ void pfx_emit_hold(pfx_tx_state_t *st, uint8_t button, uint32_t duration_ms) {
     ESP_LOGI(TAG, "EMIT termine: %u trames (code fixe), counter->%u", (unsigned)n, (unsigned)st->counter);
 }
 
+void pfx_emit_enroll(pfx_tx_state_t *st) {
+    ESP_LOGI(TAG, "SETTINGS interne: 5000 ms, aucune TX RF (counter=%u)",
+             (unsigned)st->counter);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    st->counter++;
+    pfx_state_save(st);
+    ESP_LOGI(TAG, "ENROLL RF: btn=0x5 counter=%u plain=0x%08X",
+             (unsigned)st->counter,
+             (unsigned)((0x5u << 28) | ((uint32_t)(st->discrimination & 0xFFFu) << 16) | st->counter));
+    pfx_emit_command(st, PFX_BTN_ENROLL);
+}
+
 /* Compteur de pilotage pour le mode scan (apres enrol a counter=2). */
 static uint16_t s_scan_pilot_counter = 3;
 
