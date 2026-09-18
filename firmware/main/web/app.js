@@ -1,8 +1,51 @@
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const api = (u, o) => fetch(u, o).then(r => r.ok ? r.json().catch(() => ({})) : Promise.reject(r.status));
+/* Un 401 signifie que la session a expire (ou que le mot de passe vient de
+   changer) : on réaffiche l'ecran de connexion au lieu de laisser l'UI echouer
+   silencieusement en boucle. */
+const api = (u, o) => fetch(u, o).then(r => {
+  if (r.status === 401) { showLogin(); return Promise.reject(401); }
+  return r.ok ? r.json().catch(() => ({})) : Promise.reject(r.status);
+});
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ── Session ──────────────────────────────────────────────────────────────── */
+function showLogin() {
+  const l = $('#login'); if (!l || !l.hidden) return;   /* deja affiche : ne pas reinitialiser la saisie */
+  /* Garde : on ne bloque l'UI que si le firmware confirme une protection active.
+     Un 401 residuel (requete partie avant un retrait de protection) ne doit pas
+     laisser un ecran de login sur une interface devenue ouverte. */
+  fetch('/api/session').then(r => r.json()).then(s => {
+    if (!s.protected) { boot(); return; }
+    l.hidden = false;
+    const p = $('#login-pass'); if (p) { p.value = ''; setTimeout(() => p.focus(), 50); }
+  }).catch(() => {
+    l.hidden = false;
+    const p = $('#login-pass'); if (p) { p.value = ''; setTimeout(() => p.focus(), 50); }
+  });
+}
+function hideLogin() { const l = $('#login'); if (l) l.hidden = true; }
+
+if ($('#login-form')) $('#login-form').onsubmit = async e => {
+  e.preventDefault();
+  const pass = $('#login-pass').value, btn = $('#login-btn'), err = $('#login-err');
+  err.hidden = true; btn.disabled = true; btn.textContent = 'Connexion…';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pass })
+    });
+    if (r.ok) { hideLogin(); boot(); }        /* session ouverte -> on demarre l'app */
+    else { err.hidden = false; $('#login-pass').select(); }
+  } catch (_) { err.hidden = false; }
+  finally { btn.disabled = false; btn.textContent = 'Se connecter'; }
+};
+
+if ($('#logout')) $('#logout').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
+};
 
 /* ── Radio = ressource unique (mutex), TX synchrone ~1s. Pendant qu'une commande
  *    part, on desactive TOUS les boutons volet + on montre "envoi" pour eviter le
@@ -492,6 +535,15 @@ async function loadConfig() {
     ? `•••••••• (${c.mqtt_pass_len} car. enregistrés, laisser vide pour ne pas changer)`
     : 'mot de passe du broker';
   $('#sys-device').value = c.device || ''; $('#sys-logframes').checked = !!c.log_frames;
+  const uph = $('#sys-uipass-hint'), upi = $('#sys-uipass'), upc = $('#sys-uipass-clear');
+  if (uph) uph.innerHTML = c.ui_auth
+    ? '🔒 <b>Protection active.</b> Le champ ci-dessous reste vide : le mot de passe enregistré n\'est jamais réaffiché. Saisis-en un nouveau pour le remplacer.'
+    : '⚠️ <b>Interface ouverte</b> : tout appareil du réseau peut piloter les volets et envoyer un firmware. Saisis un mot de passe ci-dessous pour la protéger.';
+  /* Le placeholder ne doit pas contredire l'etat : "vide = ouverte" etait faux quand
+     une protection est deja active (le champ est vide parce qu'on ne reaffiche jamais
+     le mot de passe, pas parce qu'il n'y en a pas). */
+  if (upi) upi.placeholder = c.ui_auth ? 'nouveau mot de passe (inchangé si vide)' : 'mot de passe à définir';
+  if (upc) upc.hidden = !c.ui_auth;   /* desactivation par un bouton EXPLICITE, pas par un champ vide */
   if ($('#sys-debug')) $('#sys-debug').checked = !!c.debug;
   if ($('#sys-rxgain')) $('#sys-rxgain').value = c.rx_gain || 39;
   if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 455;
@@ -500,8 +552,13 @@ async function loadConfig() {
   $('#ota-version').textContent = st.version || '…';
   if ($('#version')) $('#version').textContent = st.version ? 'v' + st.version : '…';
 }
-/* version du header, des le chargement (pas seulement a l'ouverture de Systeme) */
-(async () => { try { const s = await api('/api/ota/status'); if (s && s.version && $('#version')) $('#version').textContent = 'v' + s.version; } catch (e) {} })();
+/* Version du header. Appelee par boot(), donc APRES ouverture de session : en
+   appel immediat au chargement du script, la requete partait avant le login et
+   echouait en 401 -> la version restait vide jusqu'a l'ouverture d'un onglet. */
+async function loadVersion() {
+  try { const s = await api('/api/ota/status'); if (s && s.version && $('#version')) $('#version').textContent = 'v' + s.version; }
+  catch (e) {}
+}
 $('#wifi-save').onclick = async () => {
   const b = { wifi_ssid: $('#wifi-ssid').value.trim(), reboot: $('#wifi-reboot').checked };
   if ($('#wifi-pass').value) b.wifi_pass = $('#wifi-pass').value;
@@ -517,8 +574,41 @@ $('#mqtt-save').onclick = async () => {
 };
 $('#sys-save').onclick = async () => {
   const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 455, reboot: $('#sys-reboot').checked };
+  /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
+     desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche
+     jamais le mot de passe) -> la desactivation passe par le bouton dedie ci-dessous. */
+  const up = $('#sys-uipass');
+  const newPass = up && up.value !== '';
+  if (newPass) b.ui_pass = up.value;
   await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
+  if (up) up.value = '';
+  if (newPass) {
+    /* Le firmware invalide toutes les sessions quand le mot de passe change :
+       il faut donc se reconnecter. On affiche l'ecran de login DIRECTEMENT au
+       lieu de recharger : un reload conservait le fragment d'onglet (#sys) et
+       rechargeait toute l'UI pour rien. */
+    toast('Mot de passe enregistré, reconnexion…');
+    setTimeout(() => {
+      if (history.replaceState) history.replaceState(null, '', location.pathname);
+      const l = $('#login');
+      if (l) { l.hidden = false; const p = $('#login-pass'); if (p) { p.value = ''; p.focus(); } }
+    }, 1000);
+    return;
+  }
   b.reboot ? toast('Enregistré, redémarrage…') : savedBtn($('#sys-save'), 'Enregistrer');
+  loadConfig().catch(() => {});
+};
+/* Desactivation EXPLICITE : envoie ui_pass:"" (le firmware efface alors la cle NVS). */
+if ($('#sys-uipass-clear')) $('#sys-uipass-clear').onclick = async () => {
+  if (!confirm('Retirer le mot de passe ?\n\nL\'interface et l\'API redeviendront accessibles à tout appareil du réseau, y compris pour envoyer un firmware.')) return;
+  await api('/api/config', { method: 'POST', body: JSON.stringify({ ui_pass: '' }) }).catch(() => {});
+  /* Le firmware a invalide toutes les sessions (y compris la notre) en changeant
+     le mot de passe. Sans protection il n'en faut plus, mais l'ecran de login
+     pouvait rester affiche par-dessus une UI pourtant accessible : boot() le
+     masque et remet a jour le bouton de deconnexion. */
+  toast('Protection retirée : interface ouverte');
+  boot();
+  loadConfig().catch(() => {});
 };
 const hex2 = n => '0x' + Number(n).toString(16).toUpperCase().padStart(2, '0');
 if ($('#rxcal-btn')) $('#rxcal-btn').onclick = async () => {
@@ -833,6 +923,30 @@ if (rfBody) rfBody.addEventListener('click', async (e) => {
   toast(r && r.ok ? 'Trame rejouée' : 'Échec du rejeu');
   setTimeout(() => { b.disabled = false; }, 800);
 });
-applyRoute();
-loadStatus();
-setInterval(loadStatus, 3000);
+/* Demarrage de l'application. Appele soit directement (UI ouverte ou session
+   deja valide), soit apres une connexion reussie. Garde anti-double-appel : le
+   polling ne doit pas etre arme deux fois. */
+let booted = false, pollTimer = null;
+function boot() {
+  hideLogin();              /* toujours : un rappel de boot() doit lever l'ecran de login */
+  refreshAuthUi();
+  loadVersion();            /* version du header : apres session, sinon 401 */
+  loadStatus();
+  if (!pollTimer) pollTimer = setInterval(loadStatus, 3000);   /* un seul timer, meme apres reconnexion */
+  if (booted) return;       /* le routage ne s'arme qu'une fois */
+  booted = true;
+  applyRoute();
+}
+
+/* Affiche le bouton de deconnexion seulement si une protection est active. */
+function refreshAuthUi() {
+  const lo = $('#logout');
+  if (lo) fetch('/api/session').then(r => r.json()).then(s => { lo.hidden = !s.protected; }).catch(() => {});
+}
+
+/* Au chargement : on demande l'etat d'authentification AVANT de lancer l'app,
+   pour ne pas declencher une volee de requetes qui echoueraient toutes en 401. */
+fetch('/api/session')
+  .then(r => r.json())
+  .then(s => { if (s.authed) boot(); else showLogin(); })
+  .catch(() => boot());   /* firmware plus ancien (route absente) : comportement historique */

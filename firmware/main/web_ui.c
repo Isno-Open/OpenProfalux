@@ -20,12 +20,131 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "cc1101.h"
+#include "esp_random.h"
+#include <inttypes.h>
 
 #ifndef MIN
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #endif
 
 static const char *TAG = "web_ui";
+
+/* ── Authentification par SESSION (cookie) ──────────────────────────────────
+ * MODELE : tant qu'AUCUN mot de passe n'est enregistre (cle NVS cfg/ui_pass vide
+ * ou absente), l'UI est OUVERTE — c'est l'etat du 1er demarrage et celui des
+ * boitiers deja deployes : aucune regression, aucun mot de passe par defaut a
+ * deviner. Des que l'utilisateur en definit un, TOUTES les routes "/api/" l'exigent.
+ * La desactivation se fait par un bouton dedie de l'UI (envoie ui_pass vide).
+ *
+ * POURQUOI PAS HTTP Basic : la popup native du navigateur ne permet ni de se
+ * deconnecter, ni d'expliquer quoi que ce soit, et le navigateur rejoue les
+ * identifiants indefiniment. On utilise donc une page de login servie par l'UI :
+ * POST /api/login verifie le mot de passe et pose un cookie de session.
+ *
+ * JETONS EN RAM UNIQUEMENT : ils ne sont jamais ecrits en flash (pas d'usure NVS,
+ * rien a lire sur une flash extraite). Consequence assumee : un reboot du boitier
+ * invalide les sessions ouvertes -> il faut se reconnecter. Un boitier reboote
+ * rarement, et c'est le comportement le plus sur.
+ *
+ * PORTEE : seul le HTTP est concerne. Home Assistant pilote le boitier par MQTT
+ * (cover/set, listen/set, update/install...) et n'appelle jamais ces routes :
+ * activer l'auth n'a AUCUN impact sur l'integration HA, OTA par HA comprise.
+ *
+ * Le cookie transite en clair (pas de TLS sur l'UI) : cela protege d'un acces
+ * opportuniste sur le LAN, pas d'une ecoute du reseau. C'est le niveau adapte
+ * a la menace reelle ici ; le point dur restant est /api/ota/upload, qui permet
+ * sinon de pousser un firmware arbitraire depuis n'importe quel appareil. */
+#define UI_PASS_MAX   64
+#define UI_SESS_MAX    4     /* sessions simultanees (navigateurs/appareils) */
+#define UI_TOKEN_LEN  32     /* longueur du jeton en caracteres hex */
+#define UI_SESS_TTL_S (7 * 24 * 3600)   /* validite d'une session : 7 jours */
+
+/* Mot de passe courant en cache RAM (evite un acces NVS a chaque requete).
+ * Vide = authentification desactivee. Recharge par ui_auth_reload(). */
+static char s_ui_pass[UI_PASS_MAX] = "";
+
+/* Table des sessions actives (RAM). exp = date d'expiration (s depuis boot). */
+typedef struct { char tok[UI_TOKEN_LEN + 1]; int64_t exp; } uisess_t;
+static uisess_t s_sess[UI_SESS_MAX];
+
+static void ui_auth_reload(void) {
+    nvs_handle_t h;
+    s_ui_pass[0] = 0;
+    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = sizeof(s_ui_pass);
+        if (nvs_get_str(h, "ui_pass", s_ui_pass, &sz) != ESP_OK) s_ui_pass[0] = 0;
+        nvs_close(h);
+    }
+}
+
+/* Comparaison a TEMPS CONSTANT : un strcmp sort au 1er caractere different et
+ * laisse fuir la longueur du prefixe correct, ce qui permet de reconstruire le
+ * secret caractere par caractere. On compare toujours tout le buffer. Utilise
+ * pour le mot de passe ET pour les jetons de session. */
+static bool ui_secret_equal(const char *a, const char *b) {
+    size_t la = strlen(a), lb = strlen(b);
+    unsigned char diff = (unsigned char)(la ^ lb);
+    for (size_t i = 0; i < la; i++) diff |= (unsigned char)(a[i] ^ b[i < lb ? i : (lb ? lb - 1 : 0)]);
+    return diff == 0;
+}
+
+static int64_t ui_now_s(void) { return esp_timer_get_time() / 1000000; }
+
+/* Cree une session et ecrit son jeton dans out (UI_TOKEN_LEN+1 octets).
+ * Jeton tire d'esp_random() (RNG materiel). Si la table est pleine, recycle
+ * l'entree la plus proche de l'expiration. */
+static void ui_sess_create(char *out) {
+    uint32_t r[UI_TOKEN_LEN / 8];
+    for (size_t i = 0; i < sizeof(r) / sizeof(r[0]); i++) r[i] = esp_random();
+    for (size_t i = 0; i < sizeof(r) / sizeof(r[0]); i++)
+        snprintf(out + i * 8, 9, "%08" PRIx32, r[i]);
+    out[UI_TOKEN_LEN] = 0;
+
+    int slot = 0; int64_t oldest = INT64_MAX; int64_t now = ui_now_s();
+    for (int i = 0; i < UI_SESS_MAX; i++) {
+        if (!s_sess[i].tok[0] || s_sess[i].exp <= now) { slot = i; break; }   /* libre/expire */
+        if (s_sess[i].exp < oldest) { oldest = s_sess[i].exp; slot = i; }
+    }
+    strlcpy(s_sess[slot].tok, out, sizeof(s_sess[slot].tok));
+    s_sess[slot].exp = now + UI_SESS_TTL_S;
+}
+
+static void ui_sess_drop(const char *tok) {
+    for (int i = 0; i < UI_SESS_MAX; i++)
+        if (s_sess[i].tok[0] && ui_secret_equal(s_sess[i].tok, tok)) { memset(&s_sess[i], 0, sizeof(s_sess[i])); return; }
+}
+static void ui_sess_drop_all(void) { memset(s_sess, 0, sizeof(s_sess)); }
+
+static bool ui_sess_valid(const char *tok) {
+    int64_t now = ui_now_s();
+    for (int i = 0; i < UI_SESS_MAX; i++)
+        if (s_sess[i].tok[0] && s_sess[i].exp > now && ui_secret_equal(s_sess[i].tok, tok)) return true;
+    return false;
+}
+
+/* Extrait la valeur du cookie de session de la requete. false si absent. */
+static bool ui_cookie_get(httpd_req_t *r, char *out, size_t cap) {
+    char c[256];
+    size_t n = sizeof(c);
+    if (httpd_req_get_cookie_val(r, "opfx_sess", c, &n) != ESP_OK) return false;
+    strlcpy(out, c, cap);
+    return true;
+}
+
+/* true si la requete est autorisee. Repond 401 (JSON) sinon — SANS en-tete
+ * WWW-Authenticate : c'est precisement lui qui declencherait la popup native
+ * du navigateur. L'UI intercepte le 401 et affiche sa propre page de login. */
+static bool ui_auth_ok(httpd_req_t *r) {
+    if (!s_ui_pass[0]) return true;   /* pas de mot de passe defini -> UI ouverte */
+
+    char tok[UI_TOKEN_LEN + 1] = "";
+    if (ui_cookie_get(r, tok, sizeof(tok)) && ui_sess_valid(tok)) return true;
+
+    httpd_resp_set_status(r, "401 Unauthorized");
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"auth\"}");
+    return false;
+}
 
 /* Fichiers UI embarques (voir EMBED_FILES du CMakeLists). */
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
@@ -257,11 +376,14 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) txte = t;
         nvs_close(h);
     }
-    char out[512];
+    char out[560];
+    /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque). */
     snprintf(out, sizeof(out),
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
-             "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u}",
-             dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte);
+             "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
+             "\"ui_auth\":%d}",
+             dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
+             s_ui_pass[0] ? 1 : 0);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
@@ -304,6 +426,27 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             uint32_t te = (uint32_t)tj->valuedouble;  /* TE d'emission (us) */
             nvs_set_u32(h, "tx_te", te);
             cc1101_set_tx_te(te);      /* pris en compte a la prochaine emission */
+        }
+        /* Mot de passe de l'UI. Trois cas DISTINCTS, d'ou le test sur cJSON_IsString
+         * plutot que sur jstr() : champ ABSENT = on ne touche a rien (tout POST de
+         * config ne doit pas effacer le mot de passe) ; chaine VIDE = desactivation
+         * explicite demandee depuis l'UI ; sinon = nouveau mot de passe. */
+        cJSON *up = cJSON_GetObjectItem(j, "ui_pass");
+        if (cJSON_IsString(up)) {
+            const char *v = up->valuestring;
+            if (!v[0]) {
+                nvs_erase_key(h, "ui_pass");   /* vide -> protection desactivee */
+                ESP_LOGW(TAG, "mot de passe UI EFFACE : interface de nouveau ouverte");
+            } else if (strlen(v) < UI_PASS_MAX) {
+                nvs_set_str(h, "ui_pass", v);
+                ESP_LOGW(TAG, "mot de passe UI defini : /api/* protege");
+            }
+            nvs_commit(h);
+            ui_auth_reload();   /* prise en compte immediate, sans reboot */
+            /* Tout changement de mot de passe invalide les sessions ouvertes :
+             * sinon un navigateur deja connecte garderait l'acces alors que le
+             * mot de passe qui l'avait autorise n'existe plus. */
+            ui_sess_drop_all();
         }
         nvs_commit(h); nvs_close(h);
     }
@@ -636,15 +779,100 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
 }
 
-static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
+/* ── /api/login + /api/logout + /api/session ────────────────────────────────
+ * Ces trois routes sont enregistrees en ACCES LIBRE (reg_open) : exiger une
+ * session pour pouvoir en ouvrir une serait circulaire. Elles ne divulguent
+ * rien — /api/session ne dit que si une protection existe et si l'appelant
+ * est deja connecte. */
+static esp_err_t h_login(httpd_req_t *r) {
+    char *body = read_body(r);
+    httpd_resp_set_type(r, "application/json");
+    if (!body) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    cJSON *j = cJSON_Parse(body);
+    free(body);
+    if (!j) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    const char *p = jstr(j, "pass");
+
+    bool ok = s_ui_pass[0] && p && ui_secret_equal(s_ui_pass, p);
+    cJSON_Delete(j);
+
+    if (!s_ui_pass[0]) return httpd_resp_sendstr(r, "{\"ok\":1,\"open\":1}");   /* pas de protection */
+    if (!ok) {
+        /* Freine le bourrage de mots de passe : ~1 essai/s max par requete.
+         * Suffisant ici (LAN, mot de passe choisi par l'utilisateur) et sans
+         * etat a maintenir par IP. */
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        httpd_resp_set_status(r, "401 Unauthorized");
+        return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"bad_pass\"}");
+    }
+    char tok[UI_TOKEN_LEN + 1];
+    ui_sess_create(tok);
+    char ck[128];
+    /* HttpOnly : le jeton n'est pas lisible par du JS (limite le vol par XSS).
+     * SameSite=Lax : pas d'envoi sur une requete cross-site (anti-CSRF de base).
+     * Pas de Secure : l'UI est en HTTP simple, le cookie ne partirait jamais. */
+    snprintf(ck, sizeof(ck), "opfx_sess=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax", tok, UI_SESS_TTL_S);
+    httpd_resp_set_hdr(r, "Set-Cookie", ck);
+    ESP_LOGI(TAG, "connexion UI reussie (session ouverte)");
+    return httpd_resp_sendstr(r, "{\"ok\":1}");
+}
+
+static esp_err_t h_logout(httpd_req_t *r) {
+    char tok[UI_TOKEN_LEN + 1] = "";
+    if (ui_cookie_get(r, tok, sizeof(tok))) ui_sess_drop(tok);
+    httpd_resp_set_hdr(r, "Set-Cookie", "opfx_sess=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"ok\":1}");
+}
+
+/* Etat d'authentification, consulte par l'UI au chargement pour decider
+ * d'afficher la page de login ou l'application. */
+static esp_err_t h_session(httpd_req_t *r) {
+    char tok[UI_TOKEN_LEN + 1] = "";
+    bool authed = !s_ui_pass[0] || (ui_cookie_get(r, tok, sizeof(tok)) && ui_sess_valid(tok));
+    char out[64];
+    snprintf(out, sizeof(out), "{\"protected\":%d,\"authed\":%d}", s_ui_pass[0] ? 1 : 0, authed ? 1 : 0);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+
+/* Wrapper d'authentification : toute route passee a reg() est protegee via ce
+ * trampoline. Centraliser ici garantit qu'aucune route ajoutee plus tard ne soit
+ * oubliee — c'est le seul endroit ou les handlers sont enregistres. Les assets
+ * statiques (/, style.css, app.js) passent par reg_open() : le navigateur doit
+ * pouvoir afficher la page qui DEMANDE le mot de passe. */
+#define MAX_ROUTES 48
+static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
+static int s_nroutes = 0;
+
+static esp_err_t auth_trampoline(httpd_req_t *r) {
+    int idx = (int)(intptr_t)r->user_ctx;
+    if (idx < 0 || idx >= s_nroutes) return ESP_FAIL;
+    if (!ui_auth_ok(r)) return ESP_OK;   /* 401 deja envoye */
+    return s_route_h[idx](r);
+}
+
+/* Enregistre une route SANS authentification (assets statiques uniquement). */
+static void reg_open(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
     httpd_uri_t u = { .uri = uri, .method = m, .handler = h };
     esp_err_t e = httpd_register_uri_handler(s, &u);
     if (e != ESP_OK) ESP_LOGE(TAG, "route NON enregistree: %s (%s) -> augmenter max_uri_handlers", uri, esp_err_to_name(e));
 }
 
+/* Enregistre une route PROTEGEE (toutes les routes sous "/api/"). */
+static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
+    if (s_nroutes >= MAX_ROUTES) { ESP_LOGE(TAG, "route NON enregistree: %s (table pleine)", uri); return; }
+    s_route_h[s_nroutes] = h;
+    httpd_uri_t u = { .uri = uri, .method = m, .handler = auth_trampoline,
+                      .user_ctx = (void *)(intptr_t)s_nroutes };
+    esp_err_t e = httpd_register_uri_handler(s, &u);
+    if (e != ESP_OK) ESP_LOGE(TAG, "route NON enregistree: %s (%s) -> augmenter max_uri_handlers", uri, esp_err_to_name(e));
+    else s_nroutes++;
+}
+
 void web_ui_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 48;   /* LARGE marge > nb de routes reg() (30+). Si trop bas, les dernieres
+    cfg.max_uri_handlers = 56;   /* marge > nb de routes (38 : 35 protegees + 3 assets). Si trop bas, les dernieres
                                     routes echouent EN SILENCE (ex /api/restore mort a 28). reg() loggue
                                     desormais les echecs pour ne plus jamais rater ca. */
     cfg.stack_size = 6144;   /* esp_ota_end() consomme la pile en fin d'upload */
@@ -657,9 +885,16 @@ void web_ui_start(void) {
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }
-    reg(s, "/",            HTTP_GET,  h_index);
-    reg(s, "/style.css",   HTTP_GET,  h_css);
-    reg(s, "/app.js",      HTTP_GET,  h_js);
+    ui_auth_reload();   /* charge le mot de passe UI (vide = UI ouverte) */
+    /* Assets statiques NON proteges : sans eux le navigateur ne peut pas afficher
+     * la page qui demande le mot de passe. Ils ne divulguent aucune donnee. */
+    reg_open(s, "/",          HTTP_GET, h_index);
+    reg_open(s, "/style.css", HTTP_GET, h_css);
+    reg_open(s, "/app.js",    HTTP_GET, h_js);
+    /* Routes de session : libres par necessite (voir commentaire plus haut). */
+    reg_open(s, "/api/login",   HTTP_POST, h_login);
+    reg_open(s, "/api/logout",  HTTP_POST, h_logout);
+    reg_open(s, "/api/session", HTTP_GET,  h_session);
     reg(s, "/api/status",  HTTP_GET,  h_status);
     reg(s, "/api/shutter", HTTP_POST, h_shutter);
     reg(s, "/api/volet/delete", HTTP_POST, h_volet_delete);
