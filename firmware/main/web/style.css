@@ -173,3 +173,13 @@ progress::-webkit-progress-value{background:var(--accent)}
 
 /* Enrôlement (exp.) : pad de test compact */
 .enrol-pad{max-width:340px}
+
+/* ── Ecran de connexion (affiche si /api/session -> authed:0) ── */
+#login{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px}
+#login form{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:28px 24px;text-align:center}
+#login .logo{width:44px;height:44px;color:var(--accent);margin-bottom:12px}
+#login h1{font-size:1.25rem;margin-bottom:6px}
+#login .hint{margin:0 0 18px}
+#login input{width:100%;margin-bottom:14px;text-align:center}
+#login .err{color:var(--danger);font-size:.87rem;margin:0 0 12px}
+.hdr-actions{display:flex;align-items:center;gap:8px}

@@ -9,6 +9,23 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<!-- Ecran de connexion : masque l'application tant que la session n'est pas ouverte.
+     Affiche par app.js au chargement si /api/session repond authed:0. -->
+<div id="login" hidden>
+  <form id="login-form" autocomplete="on">
+    <svg class="logo" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <rect x="4" y="4" width="24" height="24" rx="4.5" stroke="currentColor" stroke-width="2"/>
+      <rect x="4" y="4" width="24" height="5.5" rx="2.5" fill="currentColor"/>
+      <path d="M6.5 13h19M6.5 16.4h19M6.5 19.8h19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".8"/>
+    </svg>
+    <h1>OpenProfalux</h1>
+    <p class="hint">Interface protégée par mot de passe.</p>
+    <input id="login-pass" type="password" autocomplete="current-password" placeholder="Mot de passe" required>
+    <p class="err" id="login-err" hidden>Mot de passe incorrect.</p>
+    <button class="btn primary" type="submit" id="login-btn">Se connecter</button>
+  </form>
+</div>
+
 <div class="app">
   <header class="app-header">
     <div class="brand">
@@ -19,7 +36,10 @@
       </svg>
       <div><h1>OpenProfalux</h1><div class="tag">Volets Profalux 868 · <span id="version">…</span></div></div>
     </div>
-    <button class="icon-btn" id="theme" title="Thème clair / sombre">◐</button>
+    <div class="hdr-actions">
+      <button class="icon-btn" id="logout" title="Se déconnecter" hidden>⏻</button>
+      <button class="icon-btn" id="theme" title="Thème clair / sombre">◐</button>
+    </div>
   </header>
 
   <nav class="tabs" id="tabs">
@@ -192,6 +212,11 @@
         <div class="card">
           <h2>Appareil</h2>
           <div class="field" style="margin-top:12px"><label>Nom de l'appareil</label><input id="sys-device" placeholder="openprofalux"></div>
+          <div class="field" style="margin-top:12px"><label>Mot de passe de l'interface</label>
+            <p class="hint" id="sys-uipass-hint" style="margin-bottom:8px"></p>
+            <input id="sys-uipass" type="password" autocomplete="new-password" placeholder="">
+            <p class="hint" style="margin-top:8px"><button id="sys-uipass-clear" class="btn" type="button" hidden>Retirer la protection</button></p>
+            <p class="hint">Protège cette interface et l'API contre les autres appareils du réseau — dont l'envoi de firmware. <b>Sans effet sur Home Assistant</b>, qui pilote le boîtier par MQTT.</p></div>
           <label class="switch"><input type="checkbox" id="sys-logframes"><span class="track"></span>
             <span class="lbl">Écoute RF permanente<small>Active le RF debug en direct, le suivi de position via la vraie télécommande et le dataset MQTT. Désactivée = radio libre (moins de bruit).</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-debug"><span class="track"></span>

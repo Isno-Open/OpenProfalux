@@ -12,6 +12,13 @@ CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
 # Target compile flag - carte de test = M5Stack ATOM Lite (pinout docs/WIRING.md)
 CONFIG_OPENPROFALUX_TARGET_M5STACK=y
 
+# Serveur HTTP : buffer d'en-tetes de requete.
+# Le defaut IDF (512 o) est trop petit pour un navigateur moderne : Chrome envoie
+# User-Agent + Accept + Accept-Language + sec-ch-ua* + Sec-Fetch-* = ~600 o, et le
+# serveur repond "431 Header fields are too long" (page blanche cote navigateur).
+# Le cookie de session (~50 o) ne fait qu'aggraver un depassement deja present.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
 # WiFi
 CONFIG_ESP32_WIFI_TASK_PINNED_TO_CORE_0=y
 CONFIG_ESP32_WIFI_RX_BA_WIN=6
