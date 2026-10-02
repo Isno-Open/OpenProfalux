@@ -41,7 +41,7 @@ les tailles voisines de celles mesurées.
 | T8 | Boîtier neuf ; document impossible à produire (mémoire) | `nv` n'annonce rien de plus |
 | T9 | Retour à un ancien firmware qui modifie la config, puis mise à jour, pour 7 tailles de config, puis avec une coupure à chaque point | La config de l'ancien firmware fait foi, pas les clés par volet périmées |
 | T10 | Même retour, mais l'ancien firmware n'a pu écrire qu'une config vide | Les volets des clés par volet sont conservés |
-| T11 | Le fichier du dataset ne peut pas être écrit | Config intacte, dataset gardé en NVS ; tout se termine quand le stockage revient |
+| T11 | Le fichier du dataset ne peut pas être écrit ; puis coupure de courant pendant son écriture | Config intacte, dataset gardé en NVS, jamais de fichier incomplet pris pour le dataset ; tout se termine au démarrage suivant |
 
 ## Comment la coupure est simulée
 
@@ -49,6 +49,9 @@ La NVS écrit en flash par `esp_partition_write_raw` et `esp_partition_erase_ran
 banc les intercepte à l'édition de liens (`ld --wrap`) : au point choisi, l'écriture en
 cours est tronquée, puis plus rien n'atteint la flash. Le « redémarrage » ferme et
 rouvre la NVS, qui relit tout depuis la flash.
+
+Pour le fichier du dataset, ce sont `fwrite`, `rename` et `remove` qui sont interceptés :
+la moitié des octets arrive sur le disque, puis plus rien ne se fait.
 
 ## Ce que le banc exerce, et ce qu'il n'exerce pas
 
@@ -59,7 +62,7 @@ l'ancien qu'après avoir écrit le nouveau » sont dans `cfg_store_finish_boot`,
 testés tels quels. Comme le firmware, le banc réécrit à la migration **ce qui a été lu
 en flash**.
 
-Le banc détecte bien un code faux. Vérifié en cassant le firmware de neuf façons, toutes
+Le banc détecte bien un code faux. Vérifié en cassant le firmware de dix façons, toutes
 détectées :
 
 | Mutation | Détectée par |
@@ -73,12 +76,12 @@ détectées :
 | Lecture : un champ lu au mauvais endroit | T0, T4, T8, T9 |
 | Dataset déclaré rangé alors que le fichier n'a pas pu être écrit | T11 |
 | Volet en double non ignoré à la lecture | T0, T7 |
+| Fichier du dataset écrit directement sous son nom final | T11 |
 
 Non couvert :
 
-- Le comportement de SPIFFS lui-même : le fichier du dataset est écrit sur le disque du
-  PC. Seul le cas « écriture impossible » est joué, pas une coupure pendant l'écriture
-  du fichier.
+- SPIFFS lui-même : le fichier du dataset est écrit sur le disque du PC. Le passage
+  NVS → fichier, renommage compris, a été vérifié à part sur un ATOM Lite.
 - Le reste de `shutters.c` : apprentissage, pilotage, suivi de position.
 
 ## Autre taille de NVS

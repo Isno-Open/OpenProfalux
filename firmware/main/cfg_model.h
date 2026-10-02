@@ -82,6 +82,7 @@ cfg_layout_t cfg_model_load(const cfg_model_t *m);
 /* Dataset de trames : lu dans `path` s'il existe ; sinon repris de son ancienne
  * copie NVS et range dans `path`. *sz recoit la taille lue. Renvoie true si le
  * dataset est en fichier : sa copie NVS peut alors etre effacee
- * (cfg_store_finish_boot). Si le fichier ne peut pas etre ecrit, le dataset est
- * quand meme rendu, et sa copie NVS conservee. */
+ * (cfg_store_finish_boot). Le fichier est ecrit sous un nom temporaire puis
+ * renomme : s'il ne peut pas etre ecrit, ou si le courant est coupe pendant
+ * l'ecriture, le dataset est quand meme rendu et sa copie NVS conservee. */
 bool cfg_frames_load(const char *path, void *buf, size_t cap, size_t *sz);

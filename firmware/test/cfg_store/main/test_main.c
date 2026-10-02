@@ -67,6 +67,26 @@ esp_err_t __wrap_esp_partition_erase_range(const esp_partition_t *p, size_t o, s
 }
 static void arm(long k) { s_budget = k; s_armed = true; s_dead = false; }
 
+/* Coupure pendant l'ecriture d'un FICHIER (le dataset de trames) : la moitie des
+ * octets arrive sur le disque, puis plus rien ne se fait, ni renommage, ni
+ * suppression, ni ecriture NVS, jusqu'au redemarrage. */
+static bool s_file_cut;
+size_t __real_fwrite(const void *, size_t, size_t, FILE *);
+int    __real_rename(const char *, const char *);
+int    __real_remove(const char *);
+size_t __wrap_fwrite(const void *p, size_t sz, size_t n, FILE *f) {
+    if (s_dead) return 0;
+    if (s_file_cut) {
+        size_t part = __real_fwrite(p, sz, n / 2, f);
+        fflush(f);
+        s_file_cut = false; s_dead = true;
+        return part;
+    }
+    return __real_fwrite(p, sz, n, f);
+}
+int __wrap_rename(const char *a, const char *b) { return s_dead ? -1 : __real_rename(a, b); }
+int __wrap_remove(const char *a) { return s_dead ? -1 : __real_remove(a); }
+
 /* ════ Outils NVS ═════════════════════════════════════════════════════════ */
 #define NVS_MAX 0x8000                      /* taille maximale geree par le banc */
 static const esp_partition_t *s_part;
@@ -294,7 +314,7 @@ static cfg_layout_t boot_sequence(void) {
     return lay;
 }
 /* Boitier qui n'a jamais demarre le nouveau firmware : pas encore de fichier. */
-static void no_frames_file(void) { remove(FRAMES_OK); s_frames_path = FRAMES_OK; }
+static void no_frames_file(void) { remove(FRAMES_OK); remove(FRAMES_OK ".tmp"); s_frames_path = FRAMES_OK; }
 
 /* ════ Tests ══════════════════════════════════════════════════════════════ */
 static uint8_t g_saturated[NVS_MAX], g_migrated[NVS_MAX];
@@ -658,8 +678,22 @@ int main(void) {
         bool done = flash_is(&g_ref, &lay) && lay == CFG_LAYOUT_SPLIT && !key_size("framesv2", true) && fsz == (long)fr;
         CHECK(done, "reprise apres retour du stockage (format %d, fichier %ld o, attendu %u)", lay, fsz, (unsigned)fr);
         printf("  stockage revenu : dataset en fichier (%ld o), NVS liberee, config migree -> %s\n", fsz, done ? "OK" : "KO");
+
+        /* Coupure de courant PENDANT l'ecriture du fichier : un fichier incomplet
+         * ne doit jamais passer pour le dataset, ni faire effacer sa copie NVS. */
+        use_snapshot(g_saturated); no_frames_file();
+        s_file_cut = true;
+        boot_sequence(); reboot();
+        bool safe = flash_is(&g_ref, &lay) && key_size("framesv2", true) == fr;
+        CHECK(safe, "coupure pendant l'ecriture du fichier : copie NVS du dataset %u o (attendu %u), format %d", (unsigned)key_size("framesv2", true), (unsigned)fr, lay);
+        boot_sequence(); reboot();
+        f = fopen(FRAMES_OK, "rb"); fsz = -1;
+        if (f) { fseek(f, 0, SEEK_END); fsz = ftell(f); fclose(f); }
+        bool whole = flash_is(&g_ref, &lay) && lay == CFG_LAYOUT_SPLIT && !key_size("framesv2", true) && fsz == (long)fr;
+        CHECK(whole, "dataset tronque apres une coupure pendant sa recopie (fichier %ld o, attendu %u)", fsz, (unsigned)fr);
+        printf("  coupure pendant l'ecriture du fichier : copie NVS gardee, puis dataset entier (%ld o) -> %s\n", fsz, safe && whole ? "OK" : "KO");
     }
-    remove(FRAMES_OK);
+    no_frames_file();
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");
     return s_fail ? 1 : 0;

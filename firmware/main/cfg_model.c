@@ -180,15 +180,20 @@ bool cfg_frames_load(const char *path, void *buf, size_t cap, size_t *sz) {
     size_t n = cfg_store_read_legacy_frames(buf, cap);
     if (!n) return false;
     *sz = n;
-    FILE *w = fopen(path, "wb");
+    /* Fichier temporaire, renomme une fois complet. Ecrit directement sous son
+     * nom final, un fichier coupe en cours d'ecriture (panne de courant) passait
+     * au demarrage suivant pour le dataset complet, et sa copie NVS, la seule
+     * entiere, etait effacee. Un temporaire incomplet est simplement reecrit. */
+    char tmp[96];
+    if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp)) return false;
+    FILE *w = fopen(tmp, "wb");
     bool ok = w && fwrite(buf, 1, n, w) == n;
     if (w && fclose(w) != 0) ok = false;
+    if (ok && rename(tmp, path) != 0) ok = false;
     if (ok) {
         ESP_LOGI(TAG, "dataset de trames : NVS -> fichier (%u o)", (unsigned)n);
     } else {
-        /* Pas de fichier partiel : au demarrage suivant il passerait pour le
-         * dataset complet, et la copie NVS serait effacee a tort. */
-        if (w) remove(path);
+        if (w) remove(tmp);
         ESP_LOGE(TAG, "dataset de trames : ecriture du fichier KO, il reste en NVS");
     }
     return ok;
