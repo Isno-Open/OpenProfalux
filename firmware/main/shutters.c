@@ -5,6 +5,7 @@
  */
 #include "shutters.h"
 #include "cfg_store.h"
+#include "cfg_model.h"
 #include "pfx_enrol.h"
 #include <string.h>
 #include <strings.h>
@@ -33,50 +34,14 @@ static const char *TAG = "shutters";
 #define TICK_MS 150
 #define SH_MAX_HOPS 1024   /* set de hops distincts memorises par serial (4 Ko/serial max) */
 
-typedef struct {
-    char id[SH_ID_LEN];
-    char serials[SH_MAX_SERIALS][SH_SERIAL_LEN];
-    int  n_serials;
-    char up[SH_BITS_LEN], down[SH_BITS_LEN], stop[SH_BITS_LEN];
-    uint8_t up_btn, down_btn, stop_btn;   /* code bouton appris (pour la sync RX) */
-    /* Volet VIRTUEL (identite 0x067 enrolee) : au lieu de rejouer up/down/stop captes,
-     * on GENERE la trame a chaque appui (keeloq + compteur roulant). */
-    bool     virt;
-    uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
-    uint16_t virt_counter;   /* compteur roulant courant */
-    uint16_t virt_te;        /* TE d'emission du modele (415 FranciaFlex, 455 Profalux) */
-    /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
-    bool     central;
-    char     members[SH_MEMBERS_LEN];   /* "id1,id2,..." */
-    uint32_t travel_up_ms, travel_down_ms;
-    int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
-    int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
-                              * l'UI place alors le volet a la fin, dans son ordre de creation. */
-    float position;          /* 0..100 */
-    int   dir;               /* -1 down, 0 stop, +1 up */
-    int   target;            /* -1 = aucun, sinon 0..100 */
-    bool  own_move;          /* true = notre commande (on stream) ; false = externe (on suit sans emettre) */
-    int64_t last_tick_us;
-    int   pub_pos;           /* derniere position publiee MQTT (evite le spam) */
-    int   pub_dir;           /* derniere direction publiee MQTT */
-} volet_t;
-
-/* dframe_t (trame distincte du dataset slide : hop brut + bouton + t) est defini dans shutters.h. */
-typedef struct {
-    char serial[SH_SERIAL_LEN]; char name[SH_ID_LEN];
-    uint32_t  last_hop;      /* fast-path : dernier hop (evite le scan sur les maintiens) */
-    dframe_t *hops;          /* SET des trames distinctes (dedup par hop) : hop + bouton + t */
-    uint16_t  nhops;         /* = nb de trames DISTINCTES loggees */
-    uint16_t  caphops;       /* capacite allouee du set */
-} remote_t;
-
+/* volet_t et remote_t : definis dans cfg_model.h (modele persistant + serialisation). */
 typedef struct { uint32_t t; char serial[SH_SERIAL_LEN]; uint8_t button; uint32_t hop; int8_t rssi; } rfrec_t;
 /* LEGER (pas de bits stockes) : les 66 bits sont RECONSTRUITS a la demande depuis serial+bouton+hop
  * (build_frame_bits) pour le rejeu et l'adoption -> permet un ring de 1000 sans exploser la RAM. */
 
 static volet_t  s_volets[SH_MAX_VOLETS];
 static int      s_nvolets = 0;
-static remote_t s_remotes[16];
+static remote_t s_remotes[SH_MAX_REMOTES];
 static int      s_nremotes = 0;
 #define RF_RING 1000          /* trames a l'affichage (paginees) ; l'export /api/frames = l'ensemble du dataset */
 #define STATUS_RF_SHOW 20     /* nb de trames recentes mises dans /api/status (leger, poll 3 s) ; l'onglet RF pagine via /api/rf */
@@ -86,6 +51,8 @@ static SemaphoreHandle_t s_lock;
 static char     s_device[32] = "op";   /* nom appareil (prefixe topics HA) */
 static bool     s_mqtt_ready = false;   /* true apres shutters_mqtt_announce() */
 static bool     s_log_frames = false;   /* publie toutes les trames captees en MQTT */
+/* La config persistante, telle que cfg_model.c la lit et l'ecrit. */
+static const cfg_model_t s_model = { &s_log_frames, s_remotes, &s_nremotes, s_volets, &s_nvolets };
 static bool     s_frames_dirty = false; /* dataset modifie -> a resauvegarder (SPIFFS) */
 static bool     s_ring_dirty = false;    /* ring RF modifie -> a resauvegarder (SPIFFS) */
 static bool     s_pos_dirty = false;     /* position d'un volet a changer/figer -> sauver la cfg (retenir la position au reboot) */
@@ -177,78 +144,14 @@ int shutters_remote_dump(int i, char *serial, int sser, char *name, int sname, d
 }
 
 /* ── Persistance JSON <-> NVS ── */
-/* Un volet en JSON. C'est l'objet de l'export (Systeme > Sauvegarde), au champ
- * pres : la NVS range desormais un document par volet (cfg_store.h), mais le
- * FORMAT ne change pas, d'ou des sauvegardes compatibles dans les deux sens. */
-static cJSON *volet_to_json(const volet_t *v) {
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "id", v->id);
-    cJSON *sr = cJSON_AddArrayToObject(o, "serials");
-    for (int j = 0; j < v->n_serials; j++) cJSON_AddItemToArray(sr, cJSON_CreateString(v->serials[j]));
-    cJSON *cmd = cJSON_AddObjectToObject(o, "cmd");
-    cJSON_AddStringToObject(cmd, "up", v->up);
-    cJSON_AddStringToObject(cmd, "down", v->down);
-    cJSON_AddStringToObject(cmd, "stop", v->stop);
-    cJSON_AddNumberToObject(o, "up_btn", v->up_btn);
-    cJSON_AddNumberToObject(o, "down_btn", v->down_btn);
-    cJSON_AddNumberToObject(o, "stop_btn", v->stop_btn);
-    cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);
-    cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
-    cJSON_AddNumberToObject(o, "orientation", v->orientation);
-    cJSON_AddNumberToObject(o, "order", v->order);   /* rang d'affichage UI (-1 = non range) */
-    cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
-    if (v->virt) {   /* volet virtuel : identite 0x067 + compteur roulant persiste */
-        cJSON_AddBoolToObject(o, "virt", true);
-        cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
-        cJSON_AddNumberToObject(o, "virt_counter", v->virt_counter);
-        cJSON_AddNumberToObject(o, "virt_te", v->virt_te);
-    }
-    if (v->central) {   /* centrale : liste des volets membres (CSV) */
-        cJSON_AddBoolToObject(o, "central", true);
-        cJSON_AddStringToObject(o, "members", v->members);
-    }
-    return o;
-}
-/* En-tete : tout ce qui n'est pas un volet. */
-static cJSON *hdr_to_json(void) {
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "log_frames", s_log_frames);   /* ecoute permanente : restauree au boot */
-    cJSON *rem = cJSON_AddObjectToObject(root, "remotes");
-    for (int i = 0; i < s_nremotes; i++) cJSON_AddStringToObject(rem, s_remotes[i].serial, s_remotes[i].name);
-    return root;
-}
-/* Toute la config (telecommandes + noms + trames de reference + calibration) en un
- * document : format de l'export / import, et de l'ancienne cle NVS unique. */
-static char *cfg_to_json(void) {
-    cJSON *root = hdr_to_json();
-    cJSON *vols = cJSON_AddArrayToObject(root, "volets");
-    for (int i = 0; i < s_nvolets; i++) cJSON_AddItemToArray(vols, volet_to_json(&s_volets[i]));
-    char *js = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    return js;
-}
-static char *print_and_free(cJSON *j) {   /* NULL si plus de memoire : cfg_store le compte en echec */
-    char *s = j ? cJSON_PrintUnformatted(j) : NULL;
-    cJSON_Delete(j);
-    return s;
-}
-/* Un document a la fois : la config n'est jamais tenue entiere en RAM, ni
- * reecrite en bloc. Un volet inchange ne coute rien, la NVS ignore une valeur
- * identique. Les echecs sont journalises : une NVS pleine faisait autrefois
- * echouer TOUTES les sauvegardes sans le moindre message. */
+/* La serialisation et le rangement sont dans cfg_model.c / cfg_store.c. Les
+ * echecs sont journalises : une NVS pleine faisait autrefois echouer TOUTES les
+ * sauvegardes sans le moindre message. */
 static esp_err_t save_cfg(void) {
-    cfg_store_tx_t tx;
-    if (cfg_store_begin(&tx) == ESP_OK) {
-        char *d = print_and_free(hdr_to_json());
-        cfg_store_put_hdr(&tx, d); free(d);
-        for (int i = 0; i < s_nvolets; i++) {
-            d = print_and_free(volet_to_json(&s_volets[i]));
-            cfg_store_put_volet(&tx, d); free(d);
-        }
-    }
-    esp_err_t e = cfg_store_end(&tx);
+    char key[8] = "";
+    esp_err_t e = cfg_model_save(&s_model, key);
     if (e != ESP_OK)
-        ESP_LOGE(TAG, "save_cfg ECHEC sur '%s' : %s (%d volets)", tx.failed_key, esp_err_to_name(e), s_nvolets);
+        ESP_LOGE(TAG, "save_cfg ECHEC sur '%s' : %s (%d volets)", key, esp_err_to_name(e), s_nvolets);
     return e;
 }
 /* Persistance BORNEE du dataset de trames (hops distincts) : survit au reboot, mais
@@ -282,21 +185,9 @@ static void save_frames(void) {
 static bool load_frames(void) {
     static uint32_t buf[FRAMES_MAX * 4];
     size_t sz = 0;
-    bool in_file = false;
-    FILE *f = fopen(FRAMES_FILE, "rb");
-    if (f) {
-        sz = fread(buf, 1, sizeof(buf), f);
-        fclose(f);
-        in_file = true;
-    } else if ((sz = cfg_store_read_legacy_frames(buf, sizeof(buf))) > 0) {
-        FILE *w = fopen(FRAMES_FILE, "wb");
-        in_file = w && fwrite(buf, 1, sz, w) == sz;
-        if (w) fclose(w);
-        if (in_file) ESP_LOGI(TAG, "dataset de trames : NVS -> SPIFFS (%u o)", (unsigned)sz);
-        else         ESP_LOGE(TAG, "dataset de trames : ecriture SPIFFS KO, il reste en NVS");
-    }
-    /* La copie NVS n'est effacee (par cfg_store_finish_boot) qu'une fois le
-     * fichier en place ; cela rattrape aussi une coupure entre les deux. */
+    /* Fichier, sinon ancienne copie NVS rangee en fichier. La copie NVS n'est
+     * effacee (par cfg_store_finish_boot) qu'une fois le fichier en place. */
+    bool in_file = cfg_frames_load(FRAMES_FILE, buf, sizeof(buf), &sz);
     if (sz < 16) return in_file;
     int n = sz / (4 * sizeof(uint32_t));
     for (int i = 0; i < n; i++) {
@@ -416,91 +307,8 @@ static void reset_state(void) {
     for (int i = 0; i < s_nremotes; i++) { free(s_remotes[i].hops); s_remotes[i].hops = NULL; s_remotes[i].nhops = s_remotes[i].caphops = 0; }
     s_nremotes = 0; s_nvolets = 0;
 }
-/* Peuple s_remotes depuis l'en-tete (l'etat doit etre remis a zero avant). */
-static void parse_hdr_json(cJSON *root) {
-    cJSON *lf = cJSON_GetObjectItem(root, "log_frames");
-    if (cJSON_IsBool(lf)) s_log_frames = cJSON_IsTrue(lf);   /* restaure l'ecoute permanente au boot */
-    cJSON *rem = cJSON_GetObjectItem(root, "remotes");
-    /* Objet attendu : dans un tableau, it->string est NULL et strlcpy plantait
-     * (redemarrage provoque par une restauration malformee). */
-    if (!cJSON_IsObject(rem)) return;
-    for (cJSON *it = rem->child; it && s_nremotes < 16; it = it->next) {
-        if (!it->string) continue;
-        strlcpy(s_remotes[s_nremotes].serial, it->string, SH_SERIAL_LEN);
-        strlcpy(s_remotes[s_nremotes].name, cJSON_IsString(it) ? it->valuestring : "", SH_ID_LEN);
-        s_remotes[s_nremotes].hops = NULL; s_remotes[s_nremotes].nhops = 0; s_remotes[s_nremotes].caphops = 0;
-        s_nremotes++;
-    }
-}
-/* Ajoute UN volet depuis son document JSON. */
-static void parse_volet_json(cJSON *o) {
-    if (s_nvolets >= SH_MAX_VOLETS) return;
-    char id[SH_ID_LEN];
-    strlcpy(id, cJSON_GetStringValue(cJSON_GetObjectItem(o, "id")) ?: "", sizeof(id));
-    /* Identifiant deja charge : ignore. Ne se produit pas en temps normal, mais une
-     * coupure au milieu de la suppression d'un volet (les cles suivantes sont
-     * renumerotees) peut laisser deux fois le meme document. */
-    for (int i = 0; i < s_nvolets; i++)
-        if (!strcmp(s_volets[i].id, id)) { ESP_LOGW(TAG, "volet '%s' en double, ignore", id); return; }
-    volet_t *v = &s_volets[s_nvolets++];
-    memset(v, 0, sizeof(*v)); v->target = -1; v->pub_pos = -1; v->pub_dir = -9;
-    strlcpy(v->id, id, SH_ID_LEN);
-    cJSON *sr = cJSON_GetObjectItem(o, "serials");
-    for (cJSON *s = sr ? sr->child : NULL; s && v->n_serials < SH_MAX_SERIALS; s = s->next)
-        strlcpy(v->serials[v->n_serials++], cJSON_GetStringValue(s) ?: "", SH_SERIAL_LEN);
-    cJSON *cmd = cJSON_GetObjectItem(o, "cmd");
-    if (cmd) {
-        strlcpy(v->up,   cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "up"))   ?: "", SH_BITS_LEN);
-        strlcpy(v->down, cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "down")) ?: "", SH_BITS_LEN);
-        strlcpy(v->stop, cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "stop")) ?: "", SH_BITS_LEN);
-    }
-    v->up_btn   = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "up_btn"));
-    v->down_btn = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "down_btn"));
-    v->stop_btn = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "stop_btn"));
-    v->travel_up_ms   = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "travel_up_ms"));
-    v->travel_down_ms = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "travel_down_ms"));
-    cJSON *ori = cJSON_GetObjectItem(o, "orientation");
-    v->orientation    = ori ? (int)cJSON_GetNumberValue(ori) : -1;   /* -1 = non defini */
-    /* Champ absent (config anterieure) -> -1 : le volet garde sa place actuelle. */
-    cJSON *ord = cJSON_GetObjectItem(o, "order");
-    v->order          = ord ? (int)cJSON_GetNumberValue(ord) : -1;
-    v->position       = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "position"));
-    cJSON *vt = cJSON_GetObjectItem(o, "virt");
-    if (cJSON_IsTrue(vt)) {
-        v->virt         = true;
-        v->virt_serial  = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_serial"));
-        v->virt_counter = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_counter"));
-        v->virt_te      = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_te"));
-    }
-    if (cJSON_IsTrue(cJSON_GetObjectItem(o, "central"))) {
-        v->central = true;
-        strlcpy(v->members, cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "", SH_MEMBERS_LEN);
-    }
-}
-/* Config complete (export, ou ancienne cle NVS unique). L'etat doit etre remis a zero avant. */
-static void parse_cfg_json(cJSON *root) {
-    parse_hdr_json(root);
-    cJSON *vols = cJSON_GetObjectItem(root, "volets");
-    for (cJSON *o = vols ? vols->child : NULL; o; o = o->next) parse_volet_json(o);
-}
-static void on_cfg_doc(void *ctx, int index, const char *doc) {
-    (void)ctx;
-    cJSON *j = cJSON_Parse(doc);
-    if (!j) { ESP_LOGE(TAG, "load_cfg : document %d illisible", index); return; }
-    if (index == CFG_DOC_LEGACY)   parse_cfg_json(j);
-    else if (index == CFG_DOC_HDR) parse_hdr_json(j);
-    else                           parse_volet_json(j);
-    cJSON_Delete(j);
-}
-/* L'ancienne config (cle NVS unique) contient-elle au moins un volet ? */
-static bool legacy_has_volets(const char *doc) {
-    cJSON *j = cJSON_Parse(doc);
-    bool yes = cJSON_GetArraySize(cJSON_GetObjectItem(j, "volets")) > 0;
-    cJSON_Delete(j);
-    return yes;
-}
 static cfg_layout_t load_cfg(void) {
-    cfg_layout_t lay = cfg_store_load(on_cfg_doc, NULL, legacy_has_volets);
+    cfg_layout_t lay = cfg_model_load(&s_model);
     for (int i = 0; i < s_nvolets; i++)   /* DIAGNOSTIC : verifie que la calibration est bien relue */
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
@@ -1180,7 +988,7 @@ char *shutters_status_json(void) {
 /* ── Sauvegarde / restauration (telecommandes + noms + trames de reference + calibration) ── */
 char *shutters_export_json(void) {
     LOCK();
-    char *js = cfg_to_json();
+    char *js = cfg_model_export(&s_model);
     UNLOCK();
     return js;
 }
@@ -1190,7 +998,7 @@ int shutters_import_json(const char *js) {
     if (!root) return -1;
     LOCK();
     reset_state();
-    parse_cfg_json(root);
+    cfg_model_import(&s_model, root);
     /* L'echec d'ecriture remonte a l'UI : une restauration repondait "ok" meme
      * quand la NVS pleine l'empechait de survivre au redemarrage. */
     esp_err_t saved = save_cfg();

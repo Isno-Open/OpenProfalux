@@ -18,9 +18,11 @@
  * ecrit que si tous les documents l'ont ete. Au pire, un volet garde son etat
  * precedent ; la config n'est jamais perdue.
  *
- * Ce module ne depend que de la NVS : il se compile aussi pour le PC (cible
- * linux d'ESP-IDF). Son banc de test, sur une NVS de 16 Ko emulee avec coupures
- * de courant simulees, est dans firmware/test/cfg_store.
+ * cfg_store ne lit pas le JSON : les documents sont produits et relus par
+ * cfg_model.c. Les deux modules ne dependent que de la NVS, de cJSON et de
+ * stdio : ils se compilent aussi pour le PC (cible linux d'ESP-IDF). Leur banc
+ * de test, sur une NVS de 16 Ko emulee avec coupures de courant simulees, est
+ * dans firmware/test/cfg_store.
  */
 #include <stdbool.h>
 #include <stddef.h>
