@@ -1,0 +1,5 @@
+# NVS de 16 Ko a 0x9000 : celle de firmware/partitions.csv, donc des boitiers deployes.
+# Le banc s'adapte a la taille declaree ici (essayer 0x8000 pour 32 Ko).
+nvs,      data, nvs,     0x9000,  0x4000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x100000,
