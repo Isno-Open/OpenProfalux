@@ -1,0 +1,3 @@
+## cJSON a quitte le coeur d'ESP-IDF en v6 : il vient du registre, comme pour le firmware.
+dependencies:
+  espressif/cjson: "^1.7.19"

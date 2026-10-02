@@ -10,15 +10,12 @@ Depuis la racine du dépôt, avec l'image ESP-IDF officielle (celle de `Dockerfi
 
 ```bash
 docker run --rm -v "$PWD/firmware:/project/firmware" \
-  -w /project/firmware/test/cfg_store espressif/idf:v5.2.2 \
+  -w /project/firmware/test/cfg_store espressif/idf:v6.1 \
   bash -c "idf.py --preview set-target linux && idf.py build && ./build/cfg_store_host_test.elf"
 ```
 
-Ou, avec un ESP-IDF 5.2 installé sous Linux, les trois mêmes commandes depuis ce
+Ou, avec un ESP-IDF 6.1 installé sous Linux, les trois mêmes commandes depuis ce
 dossier. Le programme renvoie 0 si tout passe, 1 sinon.
-
-Dans le conteneur `docker compose` du projet, `IDF_TARGET=esp32` est défini et empêche
-la compilation pour PC : faire `unset IDF_TARGET` avant.
 
 ## Ce qui est vérifié
 
