@@ -981,10 +981,13 @@ int shutters_set_orientation(const char *id, int orientation) {
  * demande de l'utilisateur (jamais pendant un mouvement). */
 int shutters_set_order(const char *ids_csv) {
     if (!ids_csv) return -1;
+    /* Copie de travail (strtok_r modifie sa chaine) a la taille de la liste :
+     * un tampon fixe de SH_MEMBERS_LEN la tronquait au-dela de 384 octets. Sur
+     * le tas : rien de plus sur la pile de la tache HTTP. */
+    char *buf = strdup(ids_csv);
+    if (!buf) return -1;
     LOCK();
     for (int i = 0; i < s_nvolets; i++) s_volets[i].order = -1;   /* remise a plat */
-    char buf[SH_MEMBERS_LEN];
-    strlcpy(buf, ids_csv, sizeof(buf));
     int rank = 0;
     char *sv = NULL;
     for (char *tok = strtok_r(buf, ",", &sv); tok; tok = strtok_r(NULL, ",", &sv)) {
@@ -994,6 +997,7 @@ int shutters_set_order(const char *ids_csv) {
     }
     save_cfg();
     UNLOCK();
+    free(buf);
     ESP_LOGI(TAG, "ordre d'affichage mis a jour (%d volets ranges)", rank);
     return 0;
 }

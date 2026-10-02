@@ -356,7 +356,10 @@ static esp_err_t h_volet_order(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, 400, "json");
-    char csv[SH_MEMBERS_LEN] = ""; int p = 0;
+    /* Tous les volets, pas les membres d'une centrale : SH_MEMBERS_LEN (384)
+     * tronquait la liste en silence au-dela, et les volets coupes repassaient
+     * a order = -1 (renvoyes en fin d'affichage). */
+    char csv[SH_MAX_VOLETS * SH_ID_LEN + 1] = ""; int p = 0;
     cJSON *ids = cJSON_GetObjectItem(j, "ids"), *it;
     if (cJSON_IsArray(ids)) cJSON_ArrayForEach(it, ids) {
         const char *s = cJSON_GetStringValue(it);
