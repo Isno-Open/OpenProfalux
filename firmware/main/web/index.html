@@ -55,6 +55,10 @@
   <main>
     <!-- Volets -->
     <section class="panel active" data-p="control">
+      <div class="row" id="reorder-row" style="justify-content:flex-end;margin-bottom:10px" hidden>
+        <button id="reorder-toggle" class="btn">↕ Réorganiser</button>
+      </div>
+      <p class="hint" id="reorder-hint" hidden><b>Glisse une carte</b> à l'endroit voulu, ou utilise les flèches ▲▼ (pratique au doigt). Le pilotage est désactivé le temps du rangement.</p>
       <div class="grid two" id="volets"></div>
       <p class="hint" id="control-empty" hidden>Aucun volet. Va dans <b>Télécommandes → Cloner une télécommande</b> pour en ajouter un.</p>
     </section>

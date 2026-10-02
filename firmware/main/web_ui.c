@@ -200,9 +200,9 @@ static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, 
     httpd_resp_set_hdr(r, "Cache-Control", "no-cache");   /* toujours revalider : pas d'UI perimee apres MAJ */
     return httpd_resp_send(r, (const char *)s, e - s);
 }
-static char *read_body(httpd_req_t *r) {
+static char *read_body_max(httpd_req_t *r, int max) {
     int len = r->content_len;
-    if (len <= 0 || len > 8192) return NULL;
+    if (len <= 0 || len > max) return NULL;
     char *buf = malloc(len + 1);
     if (!buf) return NULL;
     int got = 0;
@@ -214,6 +214,7 @@ static char *read_body(httpd_req_t *r) {
     buf[len] = 0;
     return buf;
 }
+static char *read_body(httpd_req_t *r) { return read_body_max(r, 8192); }
 static const char *jstr(cJSON *o, const char *k) {
     cJSON *i = cJSON_GetObjectItem(o, k);
     return cJSON_IsString(i) ? i->valuestring : NULL;
@@ -226,10 +227,12 @@ static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/jav
 
 /* ── /api/status ── */
 static esp_err_t h_status(httpd_req_t *r) {
-    static char buf[4096];
-    int n = shutters_status_json(buf, sizeof(buf));
+    char *js = shutters_status_json();
+    if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
     httpd_resp_set_type(r, "application/json");
-    return httpd_resp_send(r, buf, n > 0 ? n : 0);
+    esp_err_t e = httpd_resp_send(r, js, HTTPD_RESP_USE_STRLEN);
+    free(js);
+    return e;
 }
 
 /* ── /api/shutter ── */
@@ -347,6 +350,28 @@ static esp_err_t h_orientation(httpd_req_t *r) {
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
 }
+/* /api/volet/order : {"ids":["id1","id2",...]} dans l'ordre d'affichage voulu.
+ * Purement cosmetique : ne touche ni la radio, ni le pilotage, ni les topics HA. */
+static esp_err_t h_volet_order(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, 400, "json");
+    /* Tous les volets, pas les membres d'une centrale : SH_MEMBERS_LEN (384)
+     * tronquait la liste en silence au-dela, et les volets coupes repassaient
+     * a order = -1 (renvoyes en fin d'affichage). */
+    char csv[SH_MAX_VOLETS * SH_ID_LEN + 1] = ""; int p = 0;
+    cJSON *ids = cJSON_GetObjectItem(j, "ids"), *it;
+    if (cJSON_IsArray(ids)) cJSON_ArrayForEach(it, ids) {
+        const char *s = cJSON_GetStringValue(it);
+        if (s && *s && p < (int)sizeof(csv) - 1)
+            p += snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", s);
+    }
+    int rc = shutters_set_order(csv);
+    cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+}
+
 static esp_err_t h_remote(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -531,14 +556,19 @@ static esp_err_t h_rf(httpd_req_t *req) {
 
 /* ── /api/backup (export) + /api/restore (import) : telecommandes + trames de reference ── */
 static esp_err_t h_backup(httpd_req_t *r) {
-    static char buf[8192];
-    int n = shutters_export_json(buf, sizeof(buf));
+    char *js = shutters_export_json();
+    if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
     httpd_resp_set_type(r, "application/json");
     httpd_resp_set_hdr(r, "Content-Disposition", "attachment; filename=openprofalux-backup.json");
-    return httpd_resp_send(r, buf, n > 0 ? n : 0);
+    esp_err_t e = httpd_resp_send(r, js, HTTPD_RESP_USE_STRLEN);
+    free(js);
+    return e;
 }
+/* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets,
+ * dont des centrales a longue liste de membres. */
+#define RESTORE_MAX_BODY (24 * 1024)
 static esp_err_t h_restore(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body_max(r, RESTORE_MAX_BODY); if (!body) return httpd_resp_send_err(r, 400, "body");
     int rc = shutters_import_json(body);
     free(body);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -906,6 +936,7 @@ void web_ui_start(void) {
     reg(s, "/api/rf/replay", HTTP_POST, h_rf_replay);
     reg(s, "/api/calibrate", HTTP_POST, h_calibrate);
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
+    reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
     reg(s, "/api/config",    HTTP_GET,  h_config_get);
     reg(s, "/api/config",    HTTP_POST, h_config_post);

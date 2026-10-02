@@ -27,6 +27,8 @@ idf_component_register(
         "wifi_bridge.c"
         "mqtt_bridge.c"
         "shutters.c"
+        "cfg_store.c"
+        "cfg_model.c"
         "keeloq.c"
         "pfx_keys.c"
         "pfx_enrol.c"

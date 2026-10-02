@@ -36,6 +36,9 @@ int  shutters_reassign(const char *id, const char *from, const char *to);
 /* Calibration : temps de course. */
 int  shutters_calibrate(const char *id, uint32_t up_ms, uint32_t down_ms);
 int  shutters_set_orientation(const char *id, int orientation);   /* azimut facade (-1 = non defini) */
+/* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE
+ * l'affichage web (ni radio, ni pilotage, ni decouverte HA). */
+int  shutters_set_order(const char *ids_csv);
 
 /* Nommage d'une telecommande (serial -> nom). */
 int  shutters_remote_name(const char *serial, const char *name);
@@ -50,8 +53,10 @@ int  shutters_replay_frame(const char *serial, uint32_t hop);
 int  shutters_rf_get(int k, char *serial, int sser, uint8_t *button, uint32_t *hop, uint32_t *t, int8_t *rssi);
 int  shutters_rf_capacity(void);
 
-/* Produit le JSON /api/status dans buf (taille cap). Retourne la longueur. */
-int  shutters_status_json(char *buf, int cap);
+/* JSON /api/status, alloue a sa taille : a liberer par l'appelant (NULL si plus de
+ * memoire). Plus de tampon fixe : celui de 4 Ko tronquait l'etat au-dela de ~9 volets,
+ * et l'UI recevait un JSON invalide. */
+char *shutters_status_json(void);
 
 /* ── Integration Home Assistant (MQTT) ── */
 /* Publie la discovery HA (1 cover par volet) + l'etat courant. A appeler apres connexion MQTT. */
@@ -67,8 +72,9 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len);
 void shutters_set_log_frames(bool on);
 
 /* ── Sauvegarde / restauration ── */
-/* Exporte toute la config (telecommandes + noms + trames de reference + calibration) en JSON. */
-int  shutters_export_json(char *buf, int cap);
+/* Exporte toute la config (telecommandes + noms + trames de reference + calibration) en
+ * JSON, alloue a sa taille : a liberer par l'appelant (NULL si plus de memoire). */
+char *shutters_export_json(void);
 /* Restaure la config depuis un JSON (remplace tout). Retourne 0 si OK. */
 int  shutters_import_json(const char *js);
 

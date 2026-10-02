@@ -183,3 +183,16 @@ progress::-webkit-progress-value{background:var(--accent)}
 #login input{width:100%;margin-bottom:14px;text-align:center}
 #login .err{color:var(--danger);font-size:.87rem;margin:0 0 12px}
 .hdr-actions{display:flex;align-items:center;gap:8px}
+
+/* ── Mode réorganisation des volets (flèches par carte) ── */
+.volet .reorder{display:inline-flex;gap:4px}
+.volet .reorder button{appearance:none;font:inherit;font-size:.82rem;line-height:1;padding:5px 9px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface-2);color:var(--text);cursor:pointer;transition:.14s}
+.volet .reorder button:hover{border-color:var(--accent-line);color:var(--accent)}
+.volet .dpad button:disabled{opacity:.35;cursor:not-allowed}
+
+/* Glisser-déposer des volets (mode réorganisation) */
+.volet.draggable{cursor:grab}
+.volet.draggable:active{cursor:grabbing}
+.volet .grip{color:var(--muted);font-size:.95rem;letter-spacing:-1px;cursor:grab}
+.volet.dragging{opacity:.45}
+.volet.drop-target{outline:2px dashed var(--accent);outline-offset:3px}

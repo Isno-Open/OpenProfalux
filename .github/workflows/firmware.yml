@@ -101,6 +101,32 @@ jobs:
             firmware/build-ci/*.map
           retention-days: 14
 
+  # La persistance de la config (cfg_model.c + cfg_store.c) sur la vraie
+  # bibliotheque NVS, partition de 16 Ko emulee, coupures de courant simulees :
+  # voir firmware/test/cfg_store/README.md. Une seconde d'execution une fois
+  # compile, et le programme rend 1 au premier echec.
+  banc:
+    name: Banc de test de la persistance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cfg_model + cfg_store sur une NVS emulee (cible linux)
+        run: |
+          # Memes options que la compilation des cartes : -u pour ne rien
+          # laisser en root, HOME=/tmp car l'utilisateur du runner n'a pas de
+          # foyer dans l'image.
+          docker run --rm --name "opf-banc-$GITHUB_RUN_ID" \
+            -u "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD":/project -w /project/firmware/test/cfg_store \
+            "$IDF_IMAGE" bash -c "
+              set -e
+              idf.py --preview set-target linux
+              idf.py build
+              ./build/cfg_store_host_test.elf
+            "
+
 env:
   # Version epinglee : une montee d'IDF se decide, elle ne se subit pas au
   # prochain build. Le depot compile sur v6.1 depuis la migration du 27/09.

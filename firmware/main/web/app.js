@@ -128,35 +128,116 @@ const sig = d => (d == null) ? '' :
 /* RSSI le plus récent par serial, depuis la liste rf (déjà triée du + récent au + ancien) */
 function rssiForSerials(serials, rf) { for (const f of rf) if ((serials || []).includes(f.serial)) return f.rssi; return null; }
 
+/* Mode reorganisation : masque les % et neutralise le pilotage, affiche des
+   fleches par carte. Purement local a l'UI. */
+let reorderMode = false;
+if ($('#reorder-toggle')) $('#reorder-toggle').onclick = () => {
+  reorderMode = !reorderMode;
+  $('#reorder-toggle').textContent = reorderMode ? '✓ Terminé' : '↕ Réorganiser';
+  $('#reorder-toggle').classList.toggle('primary', reorderMode);
+  renderVolets(statusCache.volets || [], statusCache.rf || []);
+};
+
+let dragId = null;   /* volet en cours de glissement */
+
+/* Applique et persiste un nouvel ordre complet. Le cache local est mis a jour
+   AVANT l'aller-retour reseau, sinon le prochain poll (3 s) ecraserait l'ordre
+   affiche par celui du firmware. */
+async function applyOrder(ids) {
+  (statusCache.volets || []).forEach(v => { v.order = ids.indexOf(v.id); });
+  renderVolets(statusCache.volets || [], statusCache.rf || []);
+  await api('/api/volet/order', { method: 'POST', body: JSON.stringify({ ids }) })
+    .catch(() => toast('Ordre non enregistré'));
+}
+
+/* Deplace un volet d'un cran (dir = -1 monter, +1 descendre). */
+async function moveVolet(id, dir) {
+  const ids = sortVolets(statusCache.volets || []).map(v => v.id);
+  const i = ids.indexOf(id), j = i + dir;
+  if (i < 0 || j < 0 || j >= ids.length) return;          /* deja en bout de liste */
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  await applyOrder(ids);
+}
+
+/* Depose `srcId` a la place de `dstId` : insertion (et non echange), pour que
+   le reste de la liste se decale comme on s'y attend en glisser-deposer. */
+async function dropVolet(srcId, dstId) {
+  const ids = sortVolets(statusCache.volets || []).map(v => v.id);
+  const from = ids.indexOf(srcId);
+  if (from < 0) return;
+  ids.splice(from, 1);
+  const to = ids.indexOf(dstId);
+  if (to < 0) return;
+  ids.splice(to, 0, srcId);
+  await applyOrder(ids);
+}
+
+/* Tri d'affichage des volets. `order` >= 0 = rang choisi par l'utilisateur ;
+   -1 = non range, renvoye en fin de liste dans l'ordre de creation. A defaut
+   d'ordre explicite, les centrales restent en tete (comportement d'origine). */
+function sortVolets(list) {
+  return [...list].sort((a, b) => {
+    const oa = (a.order ?? -1), ob = (b.order ?? -1);
+    if (oa >= 0 && ob >= 0) return oa - ob;
+    if (oa >= 0) return -1;          /* range avant non range */
+    if (ob >= 0) return 1;
+    return (b.central ? 1 : 0) - (a.central ? 1 : 0);
+  });
+}
+
 /* ── Volets ── */
 function renderVolets(list, rf) {
   const box = $('#volets'); box.innerHTML = '';
   $('#control-empty').hidden = list.length > 0;
+  /* Le rangement n'a de sens qu'a partir de 2 volets. */
+  const rr = $('#reorder-row'); if (rr) rr.hidden = list.length < 2;
+  const rh = $('#reorder-hint'); if (rh) rh.hidden = !reorderMode;
   /* Position affichee UNIQUEMENT si l'ecoute permanente est active : sinon un coup de
    * vraie telecommande desynchronise l'estimation (pas de retour moteur) et un % faux
    * est pire qu'aucun %. */
   const showPos = !!statusCache.listening;
-  const ordered = [...list].sort((a, b) => (b.central ? 1 : 0) - (a.central ? 1 : 0));   /* centrales en 1er */
+  /* Ordre d'affichage : champ `order` du firmware (rang choisi par l'utilisateur).
+     -1 = jamais range -> le volet passe apres les autres, dans son ordre de creation.
+     A egalite, les centrales restent en premier (comportement d'origine). */
+  const ordered = sortVolets(list);
   for (const v of ordered) {
     const r = rssiForSerials(v.serials, rf);
     const el = document.createElement('div');
-    el.className = 'card volet';
+    el.className = 'card volet' + (reorderMode ? ' draggable' : '');
     const isC = !!v.central;
     const showP = showPos && !isC;
+    if (reorderMode) { el.draggable = true; el.dataset.id = v.id; }
     el.innerHTML = `
-      <div class="top"><span class="name">${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : ''}</span>${showP ? `<span class="pct">${v.position ?? '?'}%</span>` : ''}</div>
+      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : ''}</span>${
+        reorderMode ? '<span class="reorder"><button data-mv="up" title="Monter">▲</button><button data-mv="down" title="Descendre">▼</button></span>'
+                    : (showP ? `<span class="pct">${v.position ?? '?'}%</span>` : '')}</div>
       <div class="dpad"><button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button></div>
       ${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}
       <div class="serials">${isC
         ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
         : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') || 'aucun') + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')}</div>`;
-    el.querySelectorAll('[data-cmd]').forEach(b =>
-      b.onclick = () => sendCmd({ id: v.id, cmd: b.dataset.cmd }, b));
+    /* En mode reorganisation, le pilotage est NEUTRALISE : un clic mal place ne
+       doit pas faire partir un volet pendant qu'on range l'affichage. */
+    el.querySelectorAll('[data-cmd]').forEach(b => {
+      if (reorderMode) { b.disabled = true; return; }
+      b.onclick = () => sendCmd({ id: v.id, cmd: b.dataset.cmd }, b);
+    });
     const slat = el.querySelector('.slat');
-    if (slat) slat.onclick = e => {
+    if (slat && !reorderMode) slat.onclick = e => {
       const p = Math.round(100 * (e.offsetX / e.currentTarget.offsetWidth));
       sendCmd({ id: v.id, cmd: 'pos', value: p });
     };
+    el.querySelectorAll('[data-mv]').forEach(b =>
+      b.onclick = () => moveVolet(v.id, b.dataset.mv === 'up' ? -1 : 1));
+    /* Glisser-deposer (souris/trackpad). Les fleches restent disponibles : le
+       drag HTML5 ne fonctionne pas au doigt sur mobile. */
+    if (reorderMode) {
+      el.ondragstart = e => { dragId = v.id; el.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; };
+      el.ondragend   = () => { dragId = null; el.classList.remove('dragging'); $$('.volet').forEach(c => c.classList.remove('drop-target')); };
+      el.ondragover  = e => { if (dragId && dragId !== v.id) { e.preventDefault(); el.classList.add('drop-target'); } };
+      el.ondragleave = () => el.classList.remove('drop-target');
+      el.ondrop      = e => { e.preventDefault(); el.classList.remove('drop-target'); if (dragId && dragId !== v.id) dropVolet(dragId, v.id); };
+    }
     box.appendChild(el);
   }
 }
