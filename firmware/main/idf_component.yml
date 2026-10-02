@@ -2,3 +2,5 @@
 dependencies:
   idf: ">=5.2"
   espressif/mdns: "^1.2.0"
+  espressif/mqtt: ">=1.0.0"
+  espressif/cjson: "^1.7.19"

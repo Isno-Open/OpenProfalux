@@ -1,28 +1,49 @@
 # Build & flash — OpenProfalux
 
-## Setup (une fois)
+## Choisir sa carte
+
+Le brochage vient de `boards/<carte>.json`, lu à la configuration CMake. Une carte
+inconnue fait échouer la configuration, elle ne compile pas avec de mauvaises broches.
+
+| `-DBOARD=` | Carte | Cible |
+|---|---|---|
+| `isno-super` | ISNO Super (ESP32-S3-MINI-1-N8, CC1101 868 intégré) | `esp32s3` |
+| `external` | ESP32-WROOM DevKit + CC1101 externe | `esp32` |
+| `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
+
+## Compiler
+
+ESP-IDF **v6.1** : depuis la migration du 2026-09-27, le dépôt ne compile plus en v5.
 
 ```bash
-cd /home/olivier/projects/openprofalux
-docker compose build
-```
-
-## Build firmware
-
-```bash
-docker compose run --rm esp-idf bash -c "\
-    cd /project/firmware && \
-    idf.py set-target esp32 && \
-    idf.py build \
+docker run --rm -v "$PWD":/project -w /project/firmware espressif/idf:v6.1 bash -c "
+    idf.py -B build-isno-super set-target esp32s3
+    idf.py -B build-isno-super -DBOARD=isno-super build
 "
 ```
 
-## Flash + monitor série
+Un répertoire de build **par carte** : deux cibles différentes ne partagent pas le
+même cache CMake. Remplacer les trois valeurs pour une autre carte.
+
+Ou via docker compose, qui construit l'image depuis `Dockerfile.esp-idf` :
 
 ```bash
-docker compose run --rm esp-idf bash -c "\
-    cd /project/firmware && \
-    idf.py -p /dev/ttyUSB0 flash monitor \
+docker compose run --rm esp-idf bash -c "
+    idf.py -B build-isno-super set-target esp32s3
+    idf.py -B build-isno-super -DBOARD=isno-super build
+"
+```
+
+La même chose tourne en intégration continue à chaque poussée, pour les trois
+cartes : voir `.github/workflows/firmware.yml`.
+
+## Flasher + console série
+
+Décommenter la section `devices:` de `docker-compose.yml` et ajuster le port.
+
+```bash
+docker compose run --rm esp-idf bash -c "
+    idf.py -B build-isno-super -p /dev/ttyUSB0 flash monitor
 "
 ```
 

@@ -1,4 +1,6 @@
-FROM espressif/idf:v5.2.2
+# v6.1 : voir la migration du 2026-09-27 (composants sortis du coeur,
+# meta-composant `driver` scinde). Le depot ne compile plus en v5.
+FROM espressif/idf:v6.1
 
 RUN apt-get update && apt-get install -y \
     git curl vim mosquitto-clients \

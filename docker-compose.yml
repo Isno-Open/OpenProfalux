@@ -8,11 +8,13 @@ services:
       - ./firmware:/project/firmware
       - ./docs:/project/docs
       - ./README.md:/project/README.md
-    devices:
-      - /dev/ttyUSB0:/dev/ttyUSB0  # ESP32 UART, ajuster selon setup
+    # Port serie : decommenter pour flasher, et ajuster. Laisse actif, docker
+    # compose refuse de demarrer sur une machine qui n'a pas ce peripherique.
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
     working_dir: /project/firmware
-    environment:
-      - IDF_TARGET=esp32
+    # Pas d'IDF_TARGET ici : la cible depend de la carte choisie au build
+    # (-DBOARD=...), et figer esp32 ferait echouer isno-super en silence.
     stdin_open: true
     tty: true
     command: bash

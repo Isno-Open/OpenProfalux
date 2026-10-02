@@ -1,0 +1,107 @@
+# Compile le firmware pour chaque carte declaree, sur le runner de l'organisation.
+#
+# Pourquoi les runners de GitHub et pas le notre : ce depot est PUBLIC, donc
+# n'importe qui peut ouvrir une PR. Sur notre runner d'organisation, ce code
+# s'executerait a cote de nos depots prives, avec le socket docker et un reseau
+# qui joint Proxmox et le VLAN des automates. Mesure le 2026-10-02. Les runners
+# de GitHub sont gratuits et illimites sur un depot public, et jetables : le
+# prix a payer est de tirer l'image ESP-IDF a chaque execution.
+#
+# Les cartes ne sont pas listees ici : elles viennent de boards/*.json, seul
+# endroit ou une carte se declare. Ajouter une carte, c'est ajouter un fichier.
+name: Firmware
+
+# Une seule execution par branche : sans cela, une branche qui a une PR ouverte
+# compile deux fois, une fois pour le push et une fois pour la PR, et les deux
+# se disputent l'unique runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+  # Toutes les branches, pas seulement main : une branche de travail doit etre
+  # compilee avant d'etre fusionnee, pas apres. Pas de liste a tenir a jour.
+  push:
+  workflow_dispatch:
+
+# `pipefail` pour tout le travail : sans lui, un `docker run ... | tee` rend le
+# code de sortie de `tee`, donc TOUJOURS 0, et une compilation en echec passe au
+# vert. Le piege a deja coute une qualification verte sur du code casse le
+# 2026-09-12 (voir isno-launcher/.github/workflows/qualifier.yml).
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
+jobs:
+  cartes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrice: ${{ steps.lire.outputs.matrice }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: lire
+        name: Lire les cartes declarees dans boards/
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, glob, os
+          cartes = []
+          for f in sorted(glob.glob('boards/*.json')):
+              nom = os.path.basename(f)[:-5]
+              mcu = json.load(open(f)).get('mcu')
+              if not mcu:
+                  raise SystemExit(f"{f} ne declare pas de mcu")
+              cartes.append({"board": nom, "target": mcu})
+          print("matrice=" + json.dumps(cartes))
+          PY
+      - name: Resume
+        run: echo '${{ steps.lire.outputs.matrice }}'
+
+  build:
+    needs: cartes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        carte: ${{ fromJSON(needs.cartes.outputs.matrice) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compiler ${{ matrix.carte.board }} (${{ matrix.carte.target }})
+        run: |
+          # Un repertoire de build par carte : deux cibles differentes ne peuvent
+          # pas partager le meme cache CMake.
+          #
+          # -u : le conteneur ecrit sous l'utilisateur du runner. Sans cela tout
+          # sort en root, et le job SUIVANT ne peut plus nettoyer le repertoire.
+          # Mesure le 2026-10-02 : 260 fichiers root sans l'option, 216 fichiers
+          # au bon proprietaire avec. HOME=/tmp car l'utilisateur du runner n'a
+          # pas de foyer dans l'image.
+          docker run --rm --name "opf-${{ matrix.carte.board }}-$GITHUB_RUN_ID" \
+            -u "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD":/project -w /project/firmware \
+            "$IDF_IMAGE" bash -c "
+              set -e
+              idf.py -B build-ci set-target ${{ matrix.carte.target }}
+              idf.py -B build-ci -DBOARD=${{ matrix.carte.board }} build
+            "
+
+      - name: Taille de l'image
+        run: |
+          bin=$(ls firmware/build-ci/*.bin | grep -vE 'bootloader|partition' | head -1)
+          echo "::notice title=${{ matrix.carte.board }}::$(basename "$bin") = $(stat -c%s "$bin") octets"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.carte.board }}
+          path: |
+            firmware/build-ci/*.bin
+            firmware/build-ci/*.map
+          retention-days: 14
+
+env:
+  # Version epinglee : une montee d'IDF se decide, elle ne se subit pas au
+  # prochain build. Le depot compile sur v6.1 depuis la migration du 27/09.
+  IDF_IMAGE: espressif/idf:v6.1

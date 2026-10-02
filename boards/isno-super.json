@@ -1,0 +1,118 @@
+{
+  "_comment": [
+    "COPIE de isno-launcher/boards/isno-super.json, la source de verite, privee pour l'instant.",
+    "La CI du launcher compare ce fichier au sien et refuse la divergence : une copie",
+    "inevitable se verifie, elle ne se maintient pas a la main. Ne pas modifier ici."
+  ],
+  "id": "isno-super",
+  "name": "ISNO Super",
+  "ap_slug": "Super",
+  "registry_model": "isno-super",
+  "internal_dir": "boards/super-qwiic",
+  "mcu": "esp32s3",
+  "pio_board": "esp32-s3-devkitc-1",
+  "module": "ESP32-S3-MINI-1-N8",
+  "flash_mb": 8,
+  "psram": false,
+  "partitions": "isno-8mb.csv",
+  "partitions_large": "isno-8mb-large.csv",
+  "radios": [
+    {
+      "chip": "CC1101",
+      "band": "868",
+      "module": "E07-900MM10S",
+      "lcsc": "C5844212",
+      "pins": {
+        "sck": 4,
+        "miso": 5,
+        "mosi": 6,
+        "cs": 7,
+        "gdo0": 1,
+        "gdo2": 2
+      }
+    },
+    {
+      "chip": "CC1101",
+      "band": "433",
+      "module": "E07-400MM10S",
+      "lcsc": "C5844213",
+      "pins": {
+        "sck": 4,
+        "miso": 5,
+        "mosi": 6,
+        "cs": 15,
+        "gdo0": 10,
+        "gdo2": 11
+      }
+    }
+  ],
+  "i2c": {
+    "sda": 12,
+    "scl": 13,
+    "label": "Qwiic"
+  },
+  "uart": {
+    "tx": 17,
+    "rx": 18
+  },
+  "usb": {
+    "dm": 19,
+    "dp": 20
+  },
+  "mikrobus": {
+    "an": 8,
+    "rst": 40,
+    "cs": 34,
+    "sck": 36,
+    "miso": 37,
+    "mosi": 35,
+    "pwm": 38,
+    "int": 39
+  },
+  "ui": {
+    "button": 0,
+    "led": 26,
+    "led_active_high": true
+  },
+  "_spare": [
+    "Broches du module SANS reseau sur la carte : GPIO14 (U1.18), GPIO47 (U1.27), GPIO48",
+    "(U1.30). Elles portaient les straps d'identification jusqu'au 2026-09-21 ; l'identite",
+    "vit maintenant dans la partition `identity`, ecrite au provisionnement. Elles restent",
+    "declarees parce que le temoin de rang III (embedded/witness/main/witness.c) les",
+    "pilote : ce sont les seules broches presentes sur TOUTE la gamme que rien d'autre",
+    "n'utilise."
+  ],
+  "spare": {
+    "a": 14,
+    "b": 47,
+    "c": 48
+  },
+  "_region": [
+    "La region de vente FIXE ce que la carte a le droit d'emettre : les plages, la",
+    "porteuse par defaut qu'un generateur ecrit, et la puissance conduite maximale.",
+    "Une variante 915 pour l'Amerique du Nord est la MEME carte avec une autre",
+    "declaration ici (region us, 902000-928000, porteuse 915000), pas un autre circuit.",
+    "max_dbm est CONDUIT, a l'embase SMA, tel que le materiel le permet aujourd'hui :",
+    "10 dBm, la cote des modules E07-xxxMM10S. En 433 il pourra descendre a 8 ou 9",
+    "apres la mesure d'octobre (limite de 10 mW PAR avec une antenne de 2,15 dBi).",
+    "carrier_khz est un CHOIX, pas un releve : 433,92 et 868,35 sont les porteuses",
+    "usuelles ; il est verifie dans sa plage a chaque lecture."
+  ],
+  "region": "eu",
+  "bands_allowed_khz": [
+    {
+      "radio": "433",
+      "low": 433050,
+      "high": 434790,
+      "carrier_khz": 433920,
+      "max_dbm": 10
+    },
+    {
+      "radio": "868",
+      "low": 863000,
+      "high": 870000,
+      "carrier_khz": 868350,
+      "max_dbm": 10
+    }
+  ]
+}

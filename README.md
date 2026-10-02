@@ -51,6 +51,29 @@ s'est révélée inutile pour le pilotage.
 
 Fréquence mesurée : **868.425 MHz** OOK (cf. `docs/`). **CC1101 = 3.3 V max, jamais 5 V.**
 
+## Cartes et construction
+
+Le brochage ne vit pas dans le code : chaque carte est déclarée dans
+`boards/<carte>.json`, et `tools/gen_board.py` en engendre `board_pins.h` à la
+configuration CMake (rien d'engendré n'est commis). Le firmware **lit** ces
+broches, il n'en connaît aucune. Ajouter une carte, c'est ajouter un
+`boards/<nom>.json`.
+
+| `-DBOARD=` | Carte | Cible IDF |
+|---|---|---|
+| `isno-super` | ISNO Super (ESP32-S3-MINI-1-N8, CC1101 868 intégré) | `esp32s3` |
+| `external` | ESP32-WROOM DevKit + CC1101 externe | `esp32` |
+| `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
+
+```bash
+cd firmware
+idf.py -B build -DSDKCONFIG=build/sdkconfig -DIDF_TARGET=esp32s3 -DBOARD=isno-super build
+```
+
+`isno-super.json` est une **copie** de la source de vérité
+`isno-launcher/boards/isno-super.json` : une copie inévitable se vérifie, elle
+ne se tient pas à la main.
+
 ## Structure du dépôt
 
 | Dossier | Rôle |
@@ -62,7 +85,7 @@ Fréquence mesurée : **868.425 MHz** OOK (cf. `docs/`). **CC1101 = 3.3 V max, j
 
 ## Statut
 
-- ✅ Firmware produit **compile** (ESP-IDF v5.2.2, ~1.18 Mo, partitions OTA).
+- ✅ Firmware produit **compile** (ESP-IDF v6.1, 1,29 Mo pour `isno-super`, 14 % libres, partitions OTA).
 - ✅ **Rejeu validé au banc** (le moteur suit une trame rejouée, y compris après la vraie télécommande).
 - ⏳ À valider sur l'installation : calibration des temps de course, portée antenne, multi-volets.
 

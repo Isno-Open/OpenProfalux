@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "M5Stack ATOM Lite (ESP32-PICO) avec un module CC1101 868 MHz cable en Dupont sur le",
+    "connecteur du bas : le banc d'OpenProfalux. Brochage releve dans",
+    "OpenProfalux/firmware/main/hardware_config.h, cible m5stack (2026-09-18).",
+    "La LED de l'ATOM est une RGB adressable (G27), pas une sortie simple : -1.",
+    "Pas de straps d'identification : la carte est nommee, pas lue.",
+    "OpenProfalux pilote la LED RGB WS2812 (G27) et cadence le SPI a 4 MHz (cablage Dupont)."
+  ],
+  "id": "m5-atom-lite",
+  "name": "M5Stack ATOM Lite + CC1101",
+  "ap_slug": "Atom",
+  "mcu": "esp32",
+  "flash_mb": 4,
+  "radios": [
+    {
+      "chip": "CC1101",
+      "band": "868",
+      "module": "E07-900M10S",
+      "pins": {
+        "sck": 19,
+        "miso": 33,
+        "mosi": 23,
+        "cs": 22,
+        "gdo0": 25,
+        "gdo2": 21
+      }
+    }
+  ],
+  "ui": {
+    "button": -1,
+    "led": 27,
+    "led_active_high": true,
+    "led_ws2812": true
+  },
+  "region": "eu",
+  "bands_allowed_khz": [
+    {
+      "radio": "868",
+      "low": 863000,
+      "high": 870000,
+      "carrier_khz": 868350,
+      "max_dbm": 10
+    }
+  ],
+  "spi_freq_hz": 4000000
+}

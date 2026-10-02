@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "ESP32-WROOM DevKit + module CC1101 868 en breakout externe. Le banc de dev",
+    "d'OpenProfalux. Brochage releve dans firmware/main/hardware_config.h (cible",
+    "EXTERNAL). Une carte nommee, pas lue : aucun strap d'identification."
+  ],
+  "id": "external",
+  "name": "ESP32 DevKit + CC1101 externe",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32",
+  "spi_freq_hz": 6000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "E07-900M10S",
+      "pins": { "sck": 18, "miso": 19, "mosi": 23, "cs": 5, "gdo0": 4, "gdo2": 2 } }
+  ],
+  "ui": { "button": -1, "led": 2, "led_active_high": true },
+  "region": "eu",
+  "bands_allowed_khz": [
+    { "radio": "868", "low": 863000, "high": 870000, "carrier_khz": 868350, "max_dbm": 10 }
+  ]
+}
