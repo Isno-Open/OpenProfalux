@@ -1,36 +1,69 @@
 #!/bin/bash
-# Compile les deux variantes d'OpenProfalux et produit les quatre binaires d'une release,
-# dans le conteneur ESP-IDF officiel. Reproductible : rien ne depend du poste.
+# Produit les binaires d'une release, une paire par carte declaree, dans le
+# conteneur ESP-IDF officiel. Reproductible : rien ne depend du poste.
 #
-#   bash scripts/release.sh            # -> dist/openprofalux-{atom,devkit}-{ota,full}.bin
+#   bash scripts/release.sh                 # toutes les cartes de boards/
+#   bash scripts/release.sh m5-atom-lite    # une seule
 #
-# - atom   : M5Stack ATOM Lite (CONFIG_OPENPROFALUX_TARGET_M5STACK, celui de sdkconfig.defaults)
-# - devkit : ESP32 DevKit + CC1101 externe (CONFIG_OPENPROFALUX_TARGET_EXTERNAL)
-# - *-ota.bin  : l'application seule, pour l'onglet OTA et l'entite update de HA
-# - *-full.bin : bootloader + table de partitions + ota_data + application, fusionnes a 0x0
-#                pour une carte neuve (esptool write_flash 0x0)
-# La version vient de PROJECT_VER dans firmware/CMakeLists.txt, seule declaration.
+# Les cartes ne sont pas listees ici : elles viennent de boards/<carte>.json,
+# seul endroit ou une carte se declare, comme pour la CI et la compilation.
+# En ajouter une, c'est ajouter un fichier.
+#
+# Pour chaque carte :
+#   openprofalux-<carte>-ota.bin   l'application seule, pour l'onglet OTA et
+#                                  l'entite update de Home Assistant
+#   openprofalux-<carte>-full.bin  bootloader + table de partitions + ota_data
+#                                  + application, fusionnes a 0x0, pour une
+#                                  carte neuve (esptool write_flash 0x0)
+#
+# La version vient de PROJECT_VER dans firmware/CMakeLists.txt, seule declaration,
+# et chaque binaire est verifie contre elle avant d'etre copie.
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="${IDF_IMAGE:-espressif/idf:v5.2.7}"
+# Meme image que la CI : une release ne doit pas etre batie avec un autre
+# compilateur que celui qui a verifie le code.
+IMAGE="${IDF_IMAGE:-espressif/idf:v6.1}"
+
 cd "$ROOT/firmware"
 VER=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)
-[ -n "$VER" ] || { echo "PROJECT_VER introuvable"; exit 1; }
+[ -n "$VER" ] || { echo "PROJECT_VER introuvable dans firmware/CMakeLists.txt"; exit 1; }
+
+if [ $# -gt 0 ]; then
+  CARTES="$*"
+else
+  CARTES=$(ls "$ROOT/boards"/*.json | xargs -n1 basename | sed 's/\.json$//')
+fi
+
 mkdir -p "$ROOT/dist"
-run() { docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT/firmware":/w -w /w "$IMAGE" bash -c "$*"; }
-for variant in atom devkit; do
-  B="build-$variant"
-  if [ "$variant" = atom ]; then D="sdkconfig.defaults"; else
-    # meme base, la variante EXTERNAL remplace M5STACK (choix Kconfig)
-    sed 's/^CONFIG_OPENPROFALUX_TARGET_M5STACK=y/CONFIG_OPENPROFALUX_TARGET_EXTERNAL=y/' sdkconfig.defaults > sdkconfig.devkit
-    D="sdkconfig.devkit"
-  fi
-  echo "== $variant ($VER, $IMAGE)"
-  run "idf.py -B $B -DSDKCONFIG=$B/sdkconfig -DSDKCONFIG_DEFAULTS=$D -DIDF_TARGET=esp32 build" | tail -n 3
-  [ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['project_version'])" "$B/project_description.json")" = "$VER" ] || { echo "version compilee != $VER"; exit 1; }
-  cp "$B/openprofalux.bin" "$ROOT/dist/openprofalux-$variant-ota.bin"
-  run "cd $B && esptool.py --chip esp32 merge_bin -o ../../w/$B/full.bin @flash_args" >/dev/null
-  cp "$B/full.bin" "$ROOT/dist/openprofalux-$variant-full.bin"
+# -u : rien n'est ecrit en root dans l'arborescence. HOME=/tmp car l'utilisateur
+# n'a pas de foyer dans l'image.
+run() { docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+          -v "$ROOT":/project -w /project/firmware "$IMAGE" bash -c "$*"; }
+
+for carte in $CARTES; do
+  json="$ROOT/boards/$carte.json"
+  [ -f "$json" ] || { echo "carte inconnue : $carte (voir boards/)"; exit 1; }
+  cible=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcu'])" "$json")
+  B="build-release-$carte"
+
+  echo "== $carte ($cible, $VER, $IMAGE)"
+  # Un repertoire par carte : deux cibles ne partagent pas un cache CMake.
+  #
+  # On repart d'un repertoire neuf. Un build interrompu laisse un repertoire que
+  # `set-target` refuse de nettoyer ("doesn't seem to be a CMake build
+  # directory"), et la carte est alors sautee. Une release se fabrique de toute
+  # facon depuis zero : c'est ce qui la rend reproductible.
+  rm -rf "$B"
+  run "idf.py -B $B set-target $cible && idf.py -B $B -DBOARD=$carte build" | tail -n 3
+
+  compilee=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['project_version'])" "$B/project_description.json")
+  [ "$compilee" = "$VER" ] || { echo "version compilee '$compilee' != '$VER' pour $carte"; exit 1; }
+
+  cp "$B/openprofalux.bin" "$ROOT/dist/openprofalux-$carte-ota.bin"
+  run "cd $B && esptool.py --chip $cible merge_bin -o full.bin @flash_args" >/dev/null
+  cp "$B/full.bin" "$ROOT/dist/openprofalux-$carte-full.bin"
 done
-rm -f sdkconfig.devkit
+
+echo
 ls -la "$ROOT/dist"/*.bin
