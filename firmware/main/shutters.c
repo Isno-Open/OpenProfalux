@@ -277,10 +277,9 @@ static void save_frames(void) {
     fwrite(buf, 1, (size_t)n * 4 * sizeof(uint32_t), f);
     fclose(f);
 }
-/* Au boot, apres load_cfg (rattache les hops aux telecommandes) et AVANT la
- * migration de la config : reprendre l'ancien dataset NVS libere la place dont
- * cette migration a besoin sur une NVS de 16 Ko saturee. */
-static void load_frames(void) {
+/* Au boot, apres load_cfg (rattache les hops aux telecommandes). Renvoie true si
+ * le dataset est en fichier : son ancienne copie NVS peut alors etre effacee. */
+static bool load_frames(void) {
     static uint32_t buf[FRAMES_MAX * 4];
     size_t sz = 0;
     bool in_file = false;
@@ -296,11 +295,9 @@ static void load_frames(void) {
         if (in_file) ESP_LOGI(TAG, "dataset de trames : NVS -> SPIFFS (%u o)", (unsigned)sz);
         else         ESP_LOGE(TAG, "dataset de trames : ecriture SPIFFS KO, il reste en NVS");
     }
-    /* Copie NVS effacee seulement une fois le fichier en place (sans effet si deja
-     * absente ; rattrape aussi une coupure entre l'ecriture et l'effacement). */
-    if (in_file && cfg_store_drop_legacy_frames() != ESP_OK)
-        ESP_LOGW(TAG, "dataset de trames : ancienne copie NVS non effacee");
-    if (sz < 16) return;
+    /* La copie NVS n'est effacee (par cfg_store_finish_boot) qu'une fois le
+     * fichier en place ; cela rattrape aussi une coupure entre les deux. */
+    if (sz < 16) return in_file;
     int n = sz / (4 * sizeof(uint32_t));
     for (int i = 0; i < n; i++) {
         char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)buf[i * 4]);
@@ -315,6 +312,7 @@ static void load_frames(void) {
         }
         if (rm->nhops < rm->caphops) rm->hops[rm->nhops++] = (dframe_t){ .hop = buf[i * 4 + 1], .t = buf[i * 4 + 2], .button = (uint8_t)buf[i * 4 + 3] };
     }
+    return in_file;
 }
 
 /* Reconstruit la trame 66 bits a partir de serial(28)+bouton(4)+hop(32) : format deterministe
@@ -494,27 +492,19 @@ static void on_cfg_doc(void *ctx, int index, const char *doc) {
     else                           parse_volet_json(j);
     cJSON_Delete(j);
 }
+/* L'ancienne config (cle NVS unique) contient-elle au moins un volet ? */
+static bool legacy_has_volets(const char *doc) {
+    cJSON *j = cJSON_Parse(doc);
+    bool yes = cJSON_GetArraySize(cJSON_GetObjectItem(j, "volets")) > 0;
+    cJSON_Delete(j);
+    return yes;
+}
 static cfg_layout_t load_cfg(void) {
-    cfg_layout_t lay = cfg_store_load(on_cfg_doc, NULL);
+    cfg_layout_t lay = cfg_store_load(on_cfg_doc, NULL, legacy_has_volets);
     for (int i = 0; i < s_nvolets; i++)   /* DIAGNOSTIC : verifie que la calibration est bien relue */
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
     return lay;
-}
-/* Ancienne cle unique -> une cle par volet. L'ancienne n'est effacee qu'APRES une
- * ecriture reussie au nouveau format : une coupure a n'importe quel moment laisse
- * une config lisible, et un echec (NVS trop pleine) est retente au demarrage suivant.
- * Au nouveau format, l'effacement rattrape une coupure survenue juste avant lui. */
-static void migrate_cfg(cfg_layout_t lay) {
-    if (lay == CFG_LAYOUT_LEGACY) {
-        if (save_cfg() != ESP_OK) {
-            ESP_LOGE(TAG, "migration config : ecriture KO, ancien format conserve");
-            return;
-        }
-        ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
-    }
-    if (lay != CFG_LAYOUT_NONE && cfg_store_drop_legacy() != ESP_OK)
-        ESP_LOGW(TAG, "migration config : ancienne cle non effacee");
 }
 
 /* ── RF ── */
@@ -1376,8 +1366,12 @@ void shutters_init(void) {
      * de cette place pour ecrire ses cles par volet. */
     spiffs_mount();  /* EN PREMIER : dataset de trames et ring RF y vivent */
     cfg_layout_t lay = load_cfg();
-    load_frames();   /* restaure le dataset borne ; reprend l'ancienne copie NVS si besoin */
-    migrate_cfg(lay);
+    bool frames_stored = load_frames();   /* restaure le dataset borne ; reprend l'ancienne copie NVS si besoin */
+    /* Ancien rangement -> nouveau : l'ordre et la regle d'effacement sont dans
+     * cfg_store_finish_boot(), ou le banc de test les exerce tels quels. */
+    esp_err_t mig = cfg_store_finish_boot(lay, frames_stored, save_cfg);
+    if (mig != ESP_OK) ESP_LOGE(TAG, "migration config : ecriture KO (%s), ancien format conserve", esp_err_to_name(mig));
+    else if (lay == CFG_LAYOUT_LEGACY) ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
     load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
     xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, NULL);   /* check GitHub -> entite update HA */

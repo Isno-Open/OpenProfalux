@@ -77,15 +77,29 @@ static char *get_str_alloc(nvs_handle_t h, const char *key) {
     return s;
 }
 
-cfg_layout_t cfg_store_load(cfg_store_doc_cb cb, void *ctx) {
+cfg_layout_t cfg_store_load(cfg_store_doc_cb cb, void *ctx, cfg_store_legacy_check legacy_has_volets) {
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return CFG_LAYOUT_NONE;
     cfg_layout_t lay = CFG_LAYOUT_NONE;
     uint8_t nv = 0;
-    /* "nv" present = format par volet, prioritaire. L'ancienne chaine peut
-     * encore exister (coupure entre la migration et son effacement) : elle
-     * est alors ignoree, et effacee par l'appelant. */
-    if (nvs_get_u8(h, "nv", &nv) == ESP_OK) {
+    bool split = nvs_get_u8(h, "nv", &nv) == ESP_OK;
+    char *legacy = get_str_alloc(h, "cfg");
+    /* L'ancienne chaine "cfg" et les cles par volet ne coexistent que dans deux
+     * cas, et il faut choisir laquelle fait foi :
+     *  - migration interrompue avant l'effacement de "cfg" : les deux disent la
+     *    meme chose, ou les cles par volet sont incompletes -> "cfg" ;
+     *  - retour a un ancien firmware, qui reecrit "cfg" sans toucher aux cles
+     *    par volet. S'il a pu enregistrer sa config, les cles par volet sont
+     *    PERIMEES -> "cfg". Mais sur une NVS de 16 Ko, ces cles lui prennent la
+     *    place : il n'arrive a ecrire qu'une config VIDE (constate sur boitier).
+     *    La preferer effacerait les volets ; on garde alors les cles par volet.
+     * D'ou la regle : "cfg" fait foi si elle contient au moins un volet, ou
+     * s'il n'y a rien d'autre. finish_boot() la reecrit puis l'efface. */
+    bool use_legacy = legacy && !(split && nv > 0 && legacy_has_volets && !legacy_has_volets(legacy));
+    if (use_legacy) {
+        lay = CFG_LAYOUT_LEGACY;
+        cb(ctx, CFG_DOC_LEGACY, legacy);
+    } else if (split) {
         lay = CFG_LAYOUT_SPLIT;
         char *d = get_str_alloc(h, "hdr");
         if (d) { cb(ctx, CFG_DOC_HDR, d); free(d); }
@@ -95,10 +109,8 @@ cfg_layout_t cfg_store_load(cfg_store_doc_cb cb, void *ctx) {
             if (d) { cb(ctx, i, d); free(d); }
             else ESP_LOGW(TAG, "%s annonce par nv=%u mais illisible", k, nv);
         }
-    } else {
-        char *d = get_str_alloc(h, "cfg");
-        if (d) { lay = CFG_LAYOUT_LEGACY; cb(ctx, CFG_DOC_LEGACY, d); free(d); }
     }
+    free(legacy);
     nvs_close(h);
     return lay;
 }
@@ -114,8 +126,21 @@ static esp_err_t erase_one(const char *key) {
     return e;
 }
 
-esp_err_t cfg_store_drop_legacy(void)        { return erase_one("cfg"); }
-esp_err_t cfg_store_drop_legacy_frames(void) { return erase_one("framesv2"); }
+esp_err_t cfg_store_finish_boot(cfg_layout_t lay, bool frames_stored, esp_err_t (*save)(void)) {
+    /* 1. Le dataset d'abord : sur une NVS de 16 Ko saturee, c'est lui qui rend
+     *    la place dont l'etape 2 a besoin. Sans effet s'il est deja parti. */
+    if (frames_stored && erase_one("framesv2") != ESP_OK)
+        ESP_LOGW(TAG, "ancien dataset de trames non efface");
+    /* 2. Ancien format : ecrire le nouveau, et n'effacer l'ancien qu'APRES. Un
+     *    echec garde l'ancien format, retente au prochain demarrage. */
+    if (lay == CFG_LAYOUT_LEGACY) {
+        esp_err_t e = save();
+        if (e != ESP_OK) return e;
+    }
+    if (lay != CFG_LAYOUT_NONE && erase_one("cfg") != ESP_OK)
+        ESP_LOGW(TAG, "ancienne cle de config non effacee");
+    return ESP_OK;
+}
 
 size_t cfg_store_read_legacy_frames(void *buf, size_t cap) {
     nvs_handle_t h;

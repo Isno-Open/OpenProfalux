@@ -19,7 +19,8 @@
  * precedent ; la config n'est jamais perdue.
  *
  * Ce module ne depend que de la NVS : il se compile aussi pour le PC (cible
- * linux d'ESP-IDF), ce qui permet de le tester sur une NVS de 16 Ko emulee.
+ * linux d'ESP-IDF). Son banc de test, sur une NVS de 16 Ko emulee avec coupures
+ * de courant simulees, est dans firmware/test/cfg_store.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -54,15 +55,28 @@ void      cfg_store_put_volet(cfg_store_tx_t *tx, const char *doc);
 esp_err_t cfg_store_end(cfg_store_tx_t *tx);
 
 /* Lit la config : cb(ctx, CFG_DOC_HDR, ...) puis cb(ctx, i, ...) par volet, ou
- * cb(ctx, CFG_DOC_LEGACY, ...) une seule fois pour l'ancien format. */
+ * cb(ctx, CFG_DOC_LEGACY, ...) une seule fois pour l'ancien format.
+ *
+ * Si l'ancienne chaine "cfg" coexiste avec les cles par volet (migration
+ * interrompue, ou retour a un ancien firmware), elle fait foi des qu'elle
+ * contient au moins un volet : voir cfg_store.c. cfg_store ne lit pas le JSON,
+ * c'est legacy_has_volets() qui le lui dit (NULL : "cfg" fait toujours foi). */
 typedef void (*cfg_store_doc_cb)(void *ctx, int index, const char *doc);
-cfg_layout_t cfg_store_load(cfg_store_doc_cb cb, void *ctx);
-
-/* Efface l'ancienne chaine "cfg". A n'appeler qu'APRES une ecriture reussie au
- * nouveau format. Sans effet si elle n'existe pas. */
-esp_err_t cfg_store_drop_legacy(void);
+typedef bool (*cfg_store_legacy_check)(const char *doc);
+cfg_layout_t cfg_store_load(cfg_store_doc_cb cb, void *ctx, cfg_store_legacy_check legacy_has_volets);
 
 /* Ancien dataset de trames ("framesv2", jusqu'a 4 Ko) : il migre vers SPIFFS.
- * read -> l'appelant l'ecrit dans son fichier -> drop seulement si c'est fait. */
+ * Renvoie sa taille (0 s'il n'existe plus). L'appelant l'ecrit dans son fichier
+ * et l'indique a cfg_store_finish_boot(), qui l'efface alors de la NVS. */
 size_t    cfg_store_read_legacy_frames(void *buf, size_t cap);
-esp_err_t cfg_store_drop_legacy_frames(void);
+
+/* A appeler une fois au demarrage, apres cfg_store_load() : termine le passage
+ * au nouveau rangement, dans l'ORDRE qu'exige une NVS de 16 Ko saturee.
+ *  1. si frames_stored (le dataset est desormais en fichier, hors NVS), son
+ *     ancienne copie est effacee de la NVS ;
+ *  2. si lay == CFG_LAYOUT_LEGACY, save() ecrit la config au nouveau format ;
+ *     l'ancienne cle n'est effacee qu'apres une ecriture reussie.
+ * Une coupure a n'importe quel moment laisse une config lisible. Renvoie
+ * l'erreur de save() si la migration n'a pas pu se faire (ancien format
+ * conserve, retente au prochain demarrage). */
+esp_err_t cfg_store_finish_boot(cfg_layout_t lay, bool frames_stored, esp_err_t (*save)(void));
