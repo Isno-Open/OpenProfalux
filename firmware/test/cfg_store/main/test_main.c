@@ -87,6 +87,11 @@ size_t __wrap_fwrite(const void *p, size_t sz, size_t n, FILE *f) {
 int __wrap_rename(const char *a, const char *b) { return s_dead ? -1 : __real_rename(a, b); }
 int __wrap_remove(const char *a) { return s_dead ? -1 : __real_remove(a); }
 
+/* Compile avec AddressSanitizer (CMakeLists.txt) : un acces hors limites, apres
+ * liberation ou une double liberation arrete le banc. Les fuites, elles, sont
+ * voulues : le banc jette ses exemplaires de config sans les liberer. */
+const char *__asan_default_options(void) { return "detect_leaks=0"; }
+
 /* ════ Outils NVS ═════════════════════════════════════════════════════════ */
 #define NVS_MAX 0x8000                      /* taille maximale geree par le banc */
 static const esp_partition_t *s_part;
@@ -149,7 +154,15 @@ static void store_bind(store_t *s) {
     s->m = (cfg_model_t){ &s->log_frames, s->remotes, &s->nremotes, s->volets, &s->nvolets };
 }
 static void store_reset(store_t *s) { memset(s, 0, sizeof(*s)); store_bind(s); }
-static void store_copy(store_t *dst, const store_t *src) { *dst = *src; store_bind(dst); }
+/* Copie profonde : la liste des membres d'une centrale vit sur le tas, et deux
+ * exemplaires ne doivent pas la partager (cfg_model_remove la libere). */
+static void store_copy(store_t *dst, const store_t *src) {
+    *dst = *src; store_bind(dst);
+    for (int i = 0; i < dst->nvolets; i++) {
+        dst->volets[i].members = NULL;
+        cfg_volet_set_members(&dst->volets[i], src->volets[i].members);
+    }
+}
 static store_t g_ref, g_ram;
 
 static void bits66(char *out, unsigned seed) {
@@ -187,7 +200,7 @@ static void model_init(store_t *s) {
     volet_t *c = mk_volet(s, "G\xC3\xA9n\xC3\xA9ral", 6, 0, 0);          /* UTF-8, comme sur le terrain */
     c->n_serials = 0; c->up[0] = c->down[0] = c->stop[0] = 0;
     c->up_btn = c->down_btn = c->stop_btn = 0; c->position = 0; c->central = true;
-    snprintf(c->members, sizeof(c->members), "Volet bureau,Volet du salon,Volet chambre nord,Volet chambre parents,Volet cuisine");
+    cfg_volet_set_members(c, "Volet bureau,Volet du salon,Volet chambre nord,Volet chambre parents,Volet cuisine");
 }
 static void add_volet(store_t *s) {
     char id[SH_ID_LEN];
@@ -207,7 +220,7 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
         && a->up_btn == b->up_btn && a->down_btn == b->down_btn && a->stop_btn == b->stop_btn
         && a->virt == b->virt && a->virt_serial == b->virt_serial
         && a->virt_counter == b->virt_counter && a->virt_te == b->virt_te
-        && a->central == b->central && !strcmp(a->members, b->members)
+        && a->central == b->central && !strcmp(a->members ? a->members : "", b->members ? b->members : "")
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
         && (int)(a->position + 0.5f) == (int)(b->position + 0.5f);
@@ -222,6 +235,37 @@ static bool store_equal(const store_t *a, const store_t *b) {
     if (!hdr_equal(a, b) || a->nvolets != b->nvolets) return false;
     for (int i = 0; i < a->nvolets; i++) if (!volet_equal(&a->volets[i], &b->volets[i])) return false;
     return true;
+}
+/* Volets (non centraux) qu'une liste de membres designe : le parcours de
+ * shutters_cmd(), cfg_members_next(), puis la recherche par id. */
+static int count_found(const store_t *s, const char *csv) {
+    int n = 0; char id[SH_ID_LEN];
+    for (const char *p = cfg_members_next(csv, id); p; p = cfg_members_next(p, id))
+        for (int i = 0; i < s->nvolets; i++)
+            if (!s->volets[i].central && !strcmp(s->volets[i].id, id)) { n++; break; }
+    return n;
+}
+/* Le parcours d'avant (copie dans un tampon, strtok_r, espaces de tete) : la
+ * reference a laquelle cfg_members_next() doit se conformer. */
+static int count_found_old(const store_t *s, const char *csv) {
+    char buf[1024]; snprintf(buf, sizeof(buf), "%s", csv);
+    int n = 0; char *sv = NULL;
+    for (char *t = strtok_r(buf, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) {
+        while (*t == ' ') t++;
+        for (int i = 0; i < s->nvolets; i++)
+            if (!s->volets[i].central && !strcmp(s->volets[i].id, t)) { n++; break; }
+    }
+    return n;
+}
+static const volet_t *last_central(const store_t *s) {
+    const volet_t *c = NULL;
+    for (int i = 0; i < s->nvolets; i++) if (s->volets[i].central) c = &s->volets[i];
+    return c;
+}
+/* Membres de la DERNIERE centrale que la diffusion atteint. */
+static int members_found(const store_t *s) {
+    const volet_t *c = last_central(s);
+    return c ? count_found(s, c->members) : 0;
 }
 
 /* Lit la flash avec le code du firmware. */
@@ -319,6 +363,37 @@ static void no_frames_file(void) { remove(FRAMES_OK); remove(FRAMES_OK ".tmp"); 
 /* ════ Tests ══════════════════════════════════════════════════════════════ */
 static uint8_t g_saturated[NVS_MAX], g_migrated[NVS_MAX];
 static store_t g_sat_ref, g_before, g_tmp;
+
+/* k volets enroles (virtuels, sans trames : les plus petits en NVS) aux
+ * identifiants de idlen caracteres (22 ou 23), et la centrale qui les regroupe.
+ * Renvoie la longueur de la liste, -1 si elle est refusee. */
+static int central_store(store_t *s, int k, int idlen) {
+    static char csv[SH_MAX_VOLETS * SH_ID_LEN + 1];
+    int p = 0;
+    csv[0] = 0;
+    store_reset(s); s->log_frames = true;
+    for (int i = 0; i < k; i++) {
+        char id[SH_ID_LEN];
+        if (idlen == SH_ID_LEN - 1) snprintf(id, sizeof(id), "Baie vitree salon n%04u", (unsigned)i % 10000u);
+        else                        snprintf(id, sizeof(id), "Baie vitree salon n%03u", (unsigned)i % 1000u);
+        volet_t *v = mk_volet(s, id, 40u + (unsigned)i, 21000, 20500);
+        v->up[0] = v->down[0] = v->stop[0] = 0; v->up_btn = v->down_btn = v->stop_btn = 0;
+        v->virt = true; v->virt_serial = 0x0670200u + (unsigned)i; v->virt_counter = 100; v->virt_te = 455;
+        snprintf(v->serials[0], SH_SERIAL_LEN, "0x%07X", (unsigned)v->virt_serial);
+        p += snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", id);
+    }
+    volet_t *c = mk_volet(s, "Centrale toute la maiso", 99, 0, 0);
+    c->n_serials = 0; c->up[0] = c->down[0] = c->stop[0] = 0;
+    c->up_btn = c->down_btn = c->stop_btn = 0; c->central = true;
+    return cfg_volet_set_members(c, csv) == 0 ? p : -1;
+}
+/* Membres qu'un tampon de cap octets aurait gardes (384 : l'ancien plafond). */
+static int kept_by(const store_t *s, size_t cap) {
+    static char cut[SH_MEMBERS_LEN];
+    const volet_t *c = last_central(s);
+    snprintf(cut, cap < sizeof(cut) ? cap : sizeof(cut), "%s", c && c->members ? c->members : "");
+    return count_found(s, cut);
+}
 
 int main(void) {
     esp_log_level_set("*", ESP_LOG_NONE);   /* les erreurs provoquees font partie du test */
@@ -553,8 +628,7 @@ int main(void) {
     /* ── T7. Coupure pendant la suppression d'un volet ── */
     store_copy(&g_ref, &g_before);
     const int gone = 2;                                  /* les volets suivants changent de cle */
-    for (int i = gone; i < g_ref.nvolets - 1; i++) g_ref.volets[i] = g_ref.volets[i + 1];
-    g_ref.nvolets--;
+    cfg_model_remove(&g_ref.m, gone);
     use_snapshot(g_migrated); s_cycles = 0; save_ref(NULL);
     long del_cycles = s_cycles;
     printf("\n[T7] Coupure a chaque point de la suppression d'un volet (%ld points)\n", del_cycles + 1);
@@ -694,6 +768,104 @@ int main(void) {
         printf("  coupure pendant l'ecriture du fichier : copie NVS gardee, puis dataset entier (%ld o) -> %s\n", fsz, safe && whole ? "OK" : "KO");
     }
     no_frames_file();
+
+    /* ── T12. Centrale aux membres nombreux et aux identifiants les plus longs ── */
+    printf("\n[T12] Centrale aux membres nombreux, aux identifiants les plus longs\n");
+    {
+        /* Tous les volets dans la centrale : 23 membres et elle, SH_MAX_VOLETS places. */
+        const int all = SH_MAX_VOLETS - 1;
+        int len = central_store(&g_ref, all, SH_ID_LEN - 1);
+        int in_ram = len > 0 ? members_found(&g_ref) : 0, old = kept_by(&g_ref, 384);
+        char *js = cfg_model_export(&g_ref.m);
+        cJSON *root = js ? cJSON_Parse(js) : NULL;
+        store_reset(&g_tmp);
+        if (root) cfg_model_import(&g_tmp.m, root);
+        int in_backup = members_found(&g_tmp);
+        bool rt = root && store_equal(&g_tmp, &g_ref);
+        cJSON_Delete(root); free(js);
+        CHECK(len > 0 && in_ram == all, "liste de %d membres refusee ou tronquee (limite de %d o) : %d gardes", all, (int)SH_MEMBERS_LEN, in_ram);
+        CHECK(rt && in_backup == all, "export -> import : %d membres sur %d", in_backup, all);
+        printf("  %d membres, liste de %d o : %d en memoire, %d apres export -> import (le plafond de 384 o en gardait %d)\n",
+               all, len, in_ram, in_backup, old);
+
+        /* Limite : SH_MEMBERS_LEN - 1 caracteres acceptes, un de plus refuse, et
+         * le refus laisse la liste en place. */
+        static char big[SH_MEMBERS_LEN + 1];
+        memset(big, 'a', SH_MEMBERS_LEN); big[SH_MEMBERS_LEN] = 0;
+        volet_t *c = &g_ref.volets[g_ref.nvolets - 1];
+        const char *was = c->members;
+        bool refused = was && cfg_volet_set_members(c, big) != 0 && c->members == was && members_found(&g_ref) == all;
+        big[SH_MEMBERS_LEN - 1] = 0;
+        volet_t probe = {0};
+        bool at_max = cfg_volet_set_members(&probe, big) == 0 && probe.members && strlen(probe.members) == SH_MEMBERS_LEN - 1;
+        bool none = cfg_volet_set_members(&probe, "") == 0 && !probe.members;
+        cfg_volet_release(&probe);
+        CHECK(refused && at_max && none, "limite de la liste : refus %d, maximum accepte %d, liste vide %d", refused, at_max, none);
+        printf("  limite : %d caracteres acceptes, %d refuses sans toucher a la liste en place -> %s\n",
+               SH_MEMBERS_LEN - 1, SH_MEMBERS_LEN, refused && at_max && none ? "OK" : "KO");
+
+        /* Le parcours sans tampon designe les memes volets que l'ancien. */
+        static const char *const lists[] = {
+            "Baie vitree salon n0000,Baie vitree salon n0001", ",,Baie vitree salon n0002,,", "  Baie vitree salon n0003, Baie vitree salon n0004",
+            "Baie vitree salon n0005 ,x", " , ,", "", "Baie vitree salon n0006XYZ,Baie vitree salon n0007",
+            "Centrale toute la maiso,Baie vitree salon n0008", "Inconnu,Baie vitree salon n0009,Baie vitree salon n0009" };
+        int same = 0, nl = (int)(sizeof(lists) / sizeof(lists[0]));
+        for (int i = 0; i < nl; i++) same += count_found(&g_ref, lists[i]) == count_found_old(&g_ref, lists[i]);
+        CHECK(same == nl, "parcours des membres different de l'ancien : %d/%d listes", same, nl);
+        printf("  parcours sans tampon : memes volets que l'ancien sur %d/%d listes piegees -> %s\n", same, nl, same == nl ? "OK" : "KO");
+
+        /* Suppressions, la ou un pointeur se perd : un volet place AVANT une
+         * centrale (sa liste glisse d'une place), puis une centrale suivie d'une
+         * autre (la seconde doit garder la sienne). La place liberee en fin de
+         * tableau ne doit plus designer aucune liste. */
+        char *keep = c->members ? strdup(c->members) : NULL;
+        cfg_model_remove(&g_ref.m, 0);
+        c = &g_ref.volets[g_ref.nvolets - 1];
+        bool del_m = keep && c->central && c->members && !strcmp(c->members, keep)
+                     && members_found(&g_ref) == all - 1 && !g_ref.volets[g_ref.nvolets].members;
+        static const char bis[] = "Baie vitree salon n0001,Baie vitree salon n0002";
+        volet_t *d = mk_volet(&g_ref, "Centrale bis", 98, 0, 0);
+        d->central = true; d->n_serials = 0; d->up[0] = d->down[0] = d->stop[0] = 0;
+        cfg_volet_set_members(d, bis);
+        cfg_model_remove(&g_ref.m, g_ref.nvolets - 2);              /* la premiere centrale */
+        d = &g_ref.volets[g_ref.nvolets - 1];
+        bool del_c = d->central && d->members && !strcmp(d->members, bis) && !g_ref.volets[g_ref.nvolets].members;
+        cfg_model_remove(&g_ref.m, g_ref.nvolets - 1);              /* la seconde */
+        del_c = del_c && g_ref.nvolets == all - 1 && !last_central(&g_ref) && !g_ref.volets[g_ref.nvolets].members;
+        free(keep);
+        CHECK(del_m && del_c, "suppression : d'un volet avant une centrale %d, d'une centrale avant une autre %d", del_m, del_c);
+        printf("  suppressions (volet avant une centrale, centrale avant une autre) : %s\n", del_m && del_c ? "OK" : "KO");
+
+        /* Le pire cas qu'une NVS de terrain contient : autant de volets enroles
+         * (les plus petits) que possible, et leur centrale. */
+        int k = all; esp_err_t e = ESP_FAIL;
+        for (; k >= 1; k--) {
+            wipe(); system_state();
+            if ((len = central_store(&g_ref, k, SH_ID_LEN - 1)) < 0) break;
+            if ((e = save_ref(fk)) == ESP_OK) break;
+        }
+        old = kept_by(&g_ref, 384);
+        reboot();
+        bool back = e == ESP_OK && flash_is(&g_ref, &lay) && lay == CFG_LAYOUT_SPLIT;
+        int in_nvs = back ? members_found(&g_seen) : 0;
+        CHECK(back && in_nvs == k, "NVS -> redemarrage : %s, %d membres sur %d", esp_err_to_name(e), in_nvs, k);
+        printf("  NVS de %u Ko : au plus %d volets enroles et leur centrale ; liste de %d o -> %d membres sur %d apres redemarrage (le plafond de 384 o en gardait %d)\n",
+               (unsigned)(s_part->size / 1024), k, len, in_nvs, k, old);
+        stats("ce pire cas");
+
+        /* Et avant la v0.2.5 ? Toute la config tenait dans UNE cle de 4000 octets
+         * au plus : la plus petite config dont la liste depasse 383 octets (17
+         * volets enroles aux identifiants de 22 caracteres, sans telecommande
+         * nommee) n'y entrait pas. Aucune sauvegarde d'alors n'a de liste tronquee. */
+        wipe(); system_state();
+        int l22 = central_store(&g_ref, 17, 22);
+        char *d22 = cfg_model_export(&g_ref.m);
+        size_t z22 = d22 ? strlen(d22) + 1 : 0; free(d22);
+        esp_err_t el = save_legacy(&g_ref);
+        CHECK(l22 > 383 && el != ESP_OK, "ancien format : liste de %d o, document de %u o, ecriture %s", l22, (unsigned)z22, esp_err_to_name(el));
+        printf("  ancien format (cle unique) : liste de %d o, document de %u o -> %s\n",
+               l22, (unsigned)z22, el != ESP_OK ? "impossible a enregistrer, OK" : "ENREGISTRE");
+    }
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");
     return s_fail ? 1 : 0;

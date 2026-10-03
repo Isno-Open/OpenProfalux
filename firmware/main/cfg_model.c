@@ -10,6 +10,41 @@
 
 static const char *TAG = "cfg_model";
 
+/* ── Membres d'une centrale ── */
+int cfg_volet_set_members(volet_t *v, const char *csv) {
+    size_t n = csv ? strlen(csv) : 0;
+    if (n >= SH_MEMBERS_LEN) return -1;
+    char *copy = NULL;
+    if (n && !(copy = strdup(csv))) return -1;
+    free(v->members);
+    v->members = copy;
+    return 0;
+}
+void cfg_volet_release(volet_t *v) {
+    free(v->members);
+    v->members = NULL;
+}
+void cfg_model_remove(const cfg_model_t *m, int idx) {
+    int n = *m->nvolets;
+    if (idx < 0 || idx >= n) return;
+    cfg_volet_release(&m->volets[idx]);
+    memmove(&m->volets[idx], &m->volets[idx + 1], (size_t)(n - idx - 1) * sizeof(volet_t));
+    memset(&m->volets[n - 1], 0, sizeof(volet_t));   /* la place liberee ne partage plus de liste */
+    (*m->nvolets)--;
+}
+/* Meme decoupage que l'ancien parcours (copie + strtok_r + espaces de tete),
+ * sans tampon : un tampon fixe etait ce qui tronquait la liste. */
+const char *cfg_members_next(const char *p, char id[SH_ID_LEN]) {
+    if (!p) return NULL;
+    while (*p == ',') p++;
+    if (!*p) return NULL;
+    while (*p == ' ') p++;
+    size_t n = strcspn(p, ",");
+    if (n < SH_ID_LEN) { memcpy(id, p, n); id[n] = 0; }
+    else id[0] = 0;
+    return p + n;
+}
+
 /* ── Modele -> JSON ── */
 static cJSON *volet_to_json(const volet_t *v) {
     cJSON *o = cJSON_CreateObject();
@@ -36,7 +71,7 @@ static cJSON *volet_to_json(const volet_t *v) {
     }
     if (v->central) {   /* centrale : liste des volets membres (CSV) */
         cJSON_AddBoolToObject(o, "central", true);
-        cJSON_AddStringToObject(o, "members", v->members);
+        cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
     }
     return o;
 }
@@ -138,7 +173,13 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     }
     if (cJSON_IsTrue(cJSON_GetObjectItem(o, "central"))) {
         v->central = true;
-        strlcpy(v->members, cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "", SH_MEMBERS_LEN);
+        /* Une liste ecrite par le firmware tient toujours : seul un fichier modifie
+         * a la main peut depasser SH_MEMBERS_LEN. Refusee entiere plutot que
+         * tronquee, et signalee dans le journal. */
+        const char *mem = cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "";
+        if (cfg_volet_set_members(v, mem) != 0)
+            ESP_LOGE(TAG, "centrale '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
+                     v->id, (unsigned)strlen(mem));
     }
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {

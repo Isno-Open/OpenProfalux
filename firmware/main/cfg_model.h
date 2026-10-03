@@ -33,7 +33,8 @@ typedef struct {
     uint16_t virt_te;        /* TE d'emission du modele (415 FranciaFlex, 455 Profalux) */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
-    char     members[SH_MEMBERS_LEN];   /* "id1,id2,..." */
+    char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
+                              * Ne s'ecrit que par cfg_volet_set_members(). */
     uint32_t travel_up_ms, travel_down_ms;
     int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
@@ -64,6 +65,25 @@ typedef struct {
     remote_t *remotes;  int *nremotes;    /* SH_MAX_REMOTES places */
     volet_t  *volets;   int *nvolets;     /* SH_MAX_VOLETS places */
 } cfg_model_t;
+
+/* ── Membres d'une centrale ──
+ * La liste vit sur le tas, et seulement pour une centrale : un tampon fixe dans
+ * volet_t se payait sur chacun des SH_MAX_VOLETS volets, et a 384 octets il
+ * tronquait en silence les listes longues (les volets coupes ne recevaient plus
+ * rien). Tout volet_t se libere par cfg_volet_release(), ou cfg_model_remove(). */
+
+/* Remplace la liste (NULL ou "" : aucun membre). Renvoie -1, liste inchangee,
+ * si elle depasse SH_MEMBERS_LEN - 1 caracteres ou si la memoire manque. */
+int  cfg_volet_set_members(volet_t *v, const char *csv);
+/* Libere ce que possede le volet (sa liste de membres). */
+void cfg_volet_release(volet_t *v);
+/* Retire le volet idx du tableau du modele, en liberant ce qu'il possede. */
+void cfg_model_remove(const cfg_model_t *m, int idx);
+/* Parcourt une liste de membres, sans la copier ni la modifier :
+ *   for (p = cfg_members_next(csv, id); p; p = cfg_members_next(p, id)) ...
+ * id recoit le membre suivant (espaces de tete ignores, elements vides sautes),
+ * ou "" s'il est plus long qu'un identifiant : il ne designe alors aucun volet. */
+const char *cfg_members_next(const char *p, char id[SH_ID_LEN]);
 
 /* Toute la config (telecommandes + noms + trames de reference + calibration) en
  * UN document : l'export, et l'ancienne cle NVS unique. A liberer par l'appelant. */

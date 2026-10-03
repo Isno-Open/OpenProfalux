@@ -356,7 +356,7 @@ static esp_err_t h_volet_order(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, 400, "json");
-    /* Tous les volets, pas les membres d'une centrale : SH_MEMBERS_LEN (384)
+    /* Tous les volets : un tampon de 384 octets (l'ancien SH_MEMBERS_LEN)
      * tronquait la liste en silence au-dela, et les volets coupes repassaient
      * a order = -1 (renvoyes en fin d'affichage). */
     char csv[SH_MAX_VOLETS * SH_ID_LEN + 1] = ""; int p = 0;
@@ -783,16 +783,34 @@ static esp_err_t h_central(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, 400, "json");
     const char *id = jstr(j, "id");
+    /* Une liste qui ne tient pas est refusee, pas tronquee : les membres coupes ne
+     * recevraient plus les commandes de la centrale, sans que rien ne le dise.
+     * Une liste de volets existants tient toujours (SH_MEMBERS_LEN). */
     char csv[SH_MEMBERS_LEN] = ""; int p = 0;
+    const char *err = NULL;
     cJSON *mem = cJSON_GetObjectItem(j, "members"), *m;
     if (cJSON_IsArray(mem)) cJSON_ArrayForEach(m, mem) {
         const char *s = cJSON_GetStringValue(m);
-        if (s && *s && p < (int)sizeof(csv) - 1) p += snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", s);
+        if (!s || !*s) continue;
+        /* Un nom avec une virgule serait coupe en deux dans la liste : ce membre
+         * ne recevrait rien. Refuse, avec la raison. */
+        if (strchr(s, ',')) { err = "un volet membre a une virgule dans son nom"; break; }
+        int n = snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", s);
+        if (n >= (int)sizeof(csv) - p) { err = "trop de membres"; break; }
+        p += n;
     }
-    int rc = (id && *id) ? shutters_create_central(id, csv) : -1;
-    cJSON_Delete(j);
+    int rc = (id && *id && !err) ? shutters_create_central(id, csv) : -1;
+    if (rc != 0 && !err && id && strchr(id, ',')) err = "virgule dans le nom";
+    if (err) ESP_LOGW(TAG, "centrale '%s' refusee : %s", id ? id : "", err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (err) cJSON_AddStringToObject(o, "err", err);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
-    return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
 }
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");

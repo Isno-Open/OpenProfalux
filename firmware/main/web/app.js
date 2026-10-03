@@ -374,9 +374,14 @@ async function reassign(from, to) {
   await loadStatus();
 }
 
+/* Un NOUVEAU nom de volet ne peut pas contenir de virgule : les membres d'une
+   centrale sont une liste separee par des virgules (le firmware refuse aussi). */
+const COMMA_MSG = 'La virgule n’est pas permise dans un nom de volet';
+const isNewNameWithComma = name => name.includes(',') && !(statusCache.volets || []).some(v => v.id === name);
 async function captureAction(action, btn) {
   const id = activeVolet;
   if (!id) { toast('Choisis d’abord un volet'); return; }
+  if (isNewNameWithComma(id)) { toast(COMMA_MSG); return; }
   const label = LEARN_ACTIONS.find(x => x.a === action).lbl;
   learning = true; renderLearnSlots();
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
@@ -594,6 +599,7 @@ if ($('#pfx-down')) $('#pfx-down').onclick = () => pfxCmd('down', $('#pfx-down')
 if ($('#pfx-save-volet')) $('#pfx-save-volet').onclick = async () => {
   const name = ($('#pfx-volet-name').value || '').trim();
   if (!name) { toast('Donne un nom au volet'); return; }
+  if (isNewNameWithComma(name)) { toast(COMMA_MSG); return; }
   const r = await api('/api/pfx/save_volet', { method: 'POST', body: JSON.stringify({ id: name }) }).catch(() => null);
   if (r && r.ok) {
     toast('Volet créé - voir l’onglet Volets');
@@ -911,11 +917,12 @@ if ($('#central-cancel')) $('#central-cancel').onclick = () => {
 if ($('#central-create')) $('#central-create').onclick = async () => {
   const name = ($('#central-name').value || '').trim();
   if (!name) return toast('Donne un nom à la centrale');
+  if (isNewNameWithComma(name)) return toast(COMMA_MSG);
   const members = $$('#central-members input:checked').map(c => c.value);
   if (!members.length) return toast('Coche au moins un volet');
   const r = await api('/api/central', { method: 'POST', body: JSON.stringify({ id: name, members }) }).catch(() => null);
   if (r && r.ok) { toast('Centrale enregistrée'); $('#central-name').value = ''; $$('#central-members input').forEach(c => c.checked = false); await loadStatus(); }
-  else toast('Échec de l\'enregistrement');
+  else toast('Échec de l\'enregistrement' + (r && r.err ? ' : ' + r.err : ''));
 };
 async function loadStatus() {
   const s = await api('/api/status').catch(() => ({ volets: [], rf: [], remotes: {} }));

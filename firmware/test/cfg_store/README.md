@@ -1,8 +1,8 @@
 # Banc de test de la persistance de la config
 
-Teste `cfg_model.c` (sérialisation JSON des volets) et `cfg_store.c` (rangement en NVS),
-compilés **tels quels**, sur la **vraie bibliothèque NVS d'ESP-IDF** avec une partition
-émulée sur PC (cible `linux`). Aucun matériel requis, une seconde d'exécution.
+Teste `cfg_model.c` (sérialisation JSON des volets, listes des centrales) et
+`cfg_store.c` (rangement en NVS), compilés **tels quels**, sur la **vraie bibliothèque NVS d'ESP-IDF** avec une partition
+émulée sur PC (cible `linux`). Aucun matériel requis, quelques secondes d'exécution.
 
 ## Lancer
 
@@ -39,6 +39,7 @@ les tailles voisines de celles mesurées.
 | T9 | Retour à un ancien firmware qui modifie la config, puis mise à jour, pour 7 tailles de config, puis avec une coupure à chaque point | La config de l'ancien firmware fait foi, pas les clés par volet périmées |
 | T10 | Même retour, mais l'ancien firmware n'a pu écrire qu'une config vide | Les volets des clés par volet sont conservés |
 | T11 | Le fichier du dataset ne peut pas être écrit ; puis coupure de courant pendant son écriture | Config intacte, dataset gardé en NVS, jamais de fichier incomplet pris pour le dataset ; tout se termine au démarrage suivant |
+| T12 | Centrale de 23 membres aux identifiants les plus longs ; limite de la liste ; parcours de listes piégées ; suppressions d'un volet placé avant une centrale et d'une centrale suivie d'une autre ; pire cas qu'une NVS de 16 Ko enregistre (17 volets enrôlés et leur centrale) ; même config dans l'ancien format | Tous les membres gardés, en mémoire, après export → import et après redémarrage ; 576 caractères acceptés, 577 refusés ; mêmes volets désignés que l'ancien parcours ; aucune liste perdue ni partagée ; l'ancien format ne pouvait pas l'enregistrer |
 
 ## Comment la coupure est simulée
 
@@ -59,7 +60,11 @@ l'ancien qu'après avoir écrit le nouveau » sont dans `cfg_store_finish_boot`,
 testés tels quels. Comme le firmware, le banc réécrit à la migration **ce qui a été lu
 en flash**.
 
-Le banc détecte bien un code faux. Vérifié en cassant le firmware de dix façons, toutes
+Le banc est compilé avec AddressSanitizer : la liste des membres d'une centrale vit
+sur le tas, et un accès hors limites, après libération ou une double libération
+l'arrête net. Les fuites ne sont pas comptées (le banc jette ses exemplaires de config).
+
+Le banc détecte bien un code faux. Vérifié en cassant le firmware de quinze façons, toutes
 détectées :
 
 | Mutation | Détectée par |
@@ -74,6 +79,11 @@ détectées :
 | Dataset déclaré rangé alors que le fichier n'a pas pu être écrit | T11 |
 | Volet en double non ignoré à la lecture | T0, T7 |
 | Fichier du dataset écrit directement sous son nom final | T11 |
+| Liste des membres d'une centrale revenue à 384 octets | T12 |
+| Liste trop longue coupée au lieu d'être refusée | T12 |
+| Membre au nom trop long pris pour le volet qui commence pareil | T12 |
+| Suppression : liste libérée sur le volet suivant | T12 |
+| Suppression : place libérée qui désigne encore une liste | T12 |
 
 Non couvert :
 
