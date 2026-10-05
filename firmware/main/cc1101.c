@@ -331,16 +331,29 @@ int cc1101_capture_init(void) {
     c.clk_src = RMT_CLK_SRC_DEFAULT; c.resolution_hz = 1000000;
     /* Une trame entiere (~132 symboles) doit tenir dans UN buffer RX, sinon la
      * capture est hachee en pleine trame et le decode echoue (vu sur ISNO Super/S3).
-     * - ESP32 classic : pas de DMA RMT mais 512 symboles tiennent en multi-blocs.
-     * - S3/C3 : 48 words/canal seulement (SOC_RMT_MEM_WORDS_PER_CHANNEL) -> 512 sans
-     *   DMA echoue, et 48 tronque la trame. Mais le S3/C3 SUPPORTE le DMA RMT :
-     *   with_dma=true permet un grand buffer -> trame complete comme sur ESP32. */
+     *
+     * Trois cas, et SEUL le S3 a le DMA RMT (verifie dans l'ESP-IDF v6.1) :
+     *
+     *   cible    words/canal   SOC_RMT_SUPPORT_DMA
+     *   esp32         64       absent, mais 512 tiennent en multi-blocs
+     *   esp32s3       48       1
+     *   esp32c3       48       absent
+     *   esp32c6       48       absent
+     *
+     * - ESP32 classic : pas de DMA, mais 512 symboles tiennent en multi-blocs.
+     * - S3 : 48 words/canal seulement, donc 512 sans DMA echoue et 48 tronque la
+     *   trame. with_dma=true donne un grand buffer -> trame complete.
+     * - ⚠️ C3 et C6 : PAS de DMA RMT, donc ils tombent dans le #else a 48 words et
+     *   RESTENT TRONQUES. Ce n'est pas corrige pour eux, et aucune de nos cartes
+     *   n'est concernee (boards/*.json : esp32 et esp32s3 seulement). Les corriger
+     *   demanderait un autre mecanisme, par exemple une capture par GPIO+timer. */
 #if defined(CONFIG_IDF_TARGET_ESP32)
     c.mem_block_symbols = 512;
 #elif SOC_RMT_SUPPORT_DMA
-    c.flags.with_dma    = true;   /* S3/C3 : DMA -> buffer complet, plus de trame hachee */
+    c.flags.with_dma    = true;   /* S3 : DMA -> buffer complet, plus de trame hachee */
     c.mem_block_symbols = 512;
 #else
+    /* C3, C6 : 48 words, la trame longue sera tronquee (voir ci-dessus). */
     c.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
 #endif
     c.gpio_num = CC1101_PIN_GDO0;
