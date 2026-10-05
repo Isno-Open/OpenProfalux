@@ -531,6 +531,34 @@ int cc1101_rx_probe(void) {
     return nev;
 }
 
+/* Log DIAG d'une capture (commun aux deux chemins S3/ESP32). sym/nsym = symboles bruts
+ * a dumper, nbits/out = resultat du decode. Ne logge que si le switch DEBUG est ON et la
+ * capture est "interessante" (entete trouvee ou grosse rafale). */
+static void diag_log_capture(const rmt_symbol_word_t *sym, size_t nsym, int nbits, const char *out) {
+    if (!(s_rx_debug && (nbits >= 1 || nsym >= 50))) return;
+    int8_t drssi = cc1101_get_rssi();
+    if (nbits >= 64)
+        ESP_LOGW(TAG, "DIAG RX: %u symb, RSSI %d dBm, %d bits => TRAME PROFALUX/KEELOQ complete: %s",
+                 (unsigned)nsym, drssi, nbits, out);
+    else if (nbits >= 1)
+        ESP_LOGW(TAG, "DIAG RX: %u symb, RSSI %d dBm, entete HCS OK mais %d bits (partiel): %s",
+                 (unsigned)nsym, drssi, nbits, out);
+    else
+        ESP_LOGW(TAG, "DIAG RX: %u symb, RSSI %d dBm, PAS d'entete HCS (ou bruit)", (unsigned)nsym, drssi);
+    if (drssi > -70) {   /* signal fort : dump des durees brutes des 1res impulsions (us) */
+        int8_t fq = (int8_t)cc1101_read_reg(CC_FREQEST | 0x40);
+        int fq_khz = (int)fq * 1587 / 1000;
+        char dbuf[320]; int p = 0;
+        int lim = nsym < 20 ? (int)nsym : 20;
+        for (int k = 0; k < lim && p < 300; k++)
+            p += snprintf(dbuf + p, sizeof(dbuf) - p, "%c%u %c%u ",
+                          sym[k].level0 ? 'H' : 'L', (unsigned)sym[k].duration0,
+                          sym[k].level1 ? 'H' : 'L', (unsigned)sym[k].duration1);
+        ESP_LOGW(TAG, "DIAG RAW (RSSI %d, FREQEST %d ~%d kHz, %d/%u symb, us): %s",
+                 drssi, fq, fq_khz, lim, (unsigned)nsym, dbuf);
+    }
+}
+
 int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     /* RX sur GDO0 (GPIO25) comme le sniffer. On REUTILISE l'unique canal RMT s_cap :
      * l'ESP32 n'a pas assez de memoire RMT pour un 2e canal de 512 symboles
@@ -561,40 +589,32 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     ESP_LOGI(TAG, "RX(GDO0): MARCSTATE=0x%02X (0x0D=RX attendu)", cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F);
-    /* OOK sans squelch => bruit continu sur GDO0. Une rafale Profalux (preambule +
-     * entete + 66 bits, repetee ~10x) DEPASSE une capture unique sur S3 (48 mots/canal).
-     * Avant : on traitait chaque evenement RMT comme une trame complete et on re-armait,
-     * donc on perdait le milieu de la trame entre deux evenements -> capture hachee
-     * (jamais 64 bits contigus). Correctif : en_partial_rx -> le driver remplit s_capbuf
-     * de facon CONTIGUE a travers plusieurs callbacks d'UNE meme reception, SANS re-armer.
-     * On accumule puis on decode TOUT le buffer : decode_rmt scanne les entetes et garde
-     * la meilleure trame (64 bits) parmi les repetitions. On ne re-arme qu'a la fin de
-     * reception (is_last = silence >8ms) ou avant que le buffer ne reboucle (wrap). */
+    /* OOK sans squelch => bruit continu sur GDO0. Une rafale Profalux (preambule + entete
+     * + 66 bits) est repetee ~10x. DEUX chemins selon la puce (cf issue #12) :
+     *  - S3/C3 (SOC_RMT_SUPPORT_RX_PINGPONG) : en_partial_rx -> le driver remplit s_capbuf
+     *    de facon CONTIGUE sur plusieurs callbacks d'UNE meme reception ; on accumule et on
+     *    decode tout le buffer (vote majoritaire dans decode_rmt sur les repetitions), on ne
+     *    re-arme qu'a la fin de reception (is_last) ou avant que le buffer ne reboucle.
+     *  - ESP32 classique : PAS de ping-pong RX -> ESP-IDF v6.1 REFUSE en_partial_rx
+     *    (rmt_rx.c: ESP_ERR_NOT_SUPPORTED) et rmt_receive echoue (regression v0.2.6). On
+     *    garde donc l'ancien fonctionnement : une reception = un evenement delimite par
+     *    l'idle, on decode l'evenement, on re-arme. */
     rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq);
-    /* signal_range_min_ns = filtre anti-glitch RMT MATERIEL. Sur S3 il est plafonne
-     * a ~3187 ns (horloge RMT), donc inutilisable pour filtrer le bruit de demod OOK
-     * (glitches ~55 us) : ce filtrage se fait en logiciel dans decode_rmt. */
-    /* signal_range_max_ns = seuil d'idle qui TERMINE la reception. A 8 ms, les silences
-     * ~8 ms PRESENTS DANS le flux Profalux (entre repetitions) coupaient la reception en
-     * plein milieu de trame (observe : receptions de 7-21 symboles finissant sur L0).
-     * A 25 ms, seul un vrai long silence (bouton relache) termine : en_partial_rx accumule
-     * alors la rafale entiere de facon contigue -> trame complete decodable. (max ~40 ms) */
-    /* signal_range_max_ns plafonne a 32767000 ns par le HW RMT (compteur 15 bits a sa
-     * resolution). On prend 32 ms : > la garde HCS (~16-23 ms) donc une rafale entiere
-     * (plusieurs repetitions) s'accumule dans une seule reception -> matiere a voter. */
-    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 32000000,
-                                .flags.en_partial_rx = true };
     int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     int r = -3;
+    rmt_rx_done_event_data_t ev;
+#if SOC_RMT_SUPPORT_RX_PINGPONG
+    /* signal_range_max_ns plafonne a 32767000 ns (compteur 15 bits). 32 ms > la garde HCS
+     * (~16-23 ms) -> toute la rafale s'accumule dans UNE reception. en_partial_rx requis. */
+    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 32000000,
+                                .flags.en_partial_rx = true };
     const size_t cap = CAP_SYMBOLS;   /* capacite du buffer, en symboles */
     size_t prev_end = 0;              /* fin (offset) du fragment precedent, pour detecter le wrap */
-    rmt_rx_done_event_data_t ev;
     if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) == ESP_OK) {
         while (esp_timer_get_time() < t_end) {
             if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(100)) != pdTRUE) continue;  /* tjrs en RX */
-            /* en_partial_rx : le driver a ecrit ce fragment a la suite dans s_capbuf.
-             * On calcule la fin reelle a partir du POINTEUR (robuste a un callback manque :
-             * les symboles intermediaires sont bien dans s_capbuf meme sans callback). */
+            /* en_partial_rx : fin reelle calculee a partir du POINTEUR (robuste a un
+             * callback manque : les symboles intermediaires sont bien dans s_capbuf). */
             size_t off = (size_t)(ev.received_symbols - s_capbuf);
             if (off < prev_end) {   /* le buffer a reboucle : on repart sur une capture neuve */
                 rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq); prev_end = 0;
@@ -605,45 +625,29 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
             if (end > cap) end = cap;
             prev_end = end;
             int n = decode_rmt(s_capbuf, end, out_bits, max_bits);
-            /* Switch DEBUG : logge les captures "interessantes" : entete HCS trouvee
-             * (n>=1) OU grosse rafale (>=50 symboles cumules) meme sans entete. */
-            if (s_rx_debug && (n >= 1 || end >= 50)) {
-                int8_t drssi = cc1101_get_rssi();
-                if (n >= 64)
-                    ESP_LOGW(TAG, "DIAG RX: %u symb cumules, RSSI %d dBm, %d bits => TRAME PROFALUX/KEELOQ complete: %s",
-                             (unsigned)end, drssi, n, out_bits);
-                else if (n >= 1)
-                    ESP_LOGW(TAG, "DIAG RX: %u symb cumules, RSSI %d dBm, entete HCS OK mais %d bits (partiel): %s",
-                             (unsigned)end, drssi, n, out_bits);
-                else
-                    ESP_LOGW(TAG, "DIAG RX: %u symb cumules, RSSI %d dBm, PAS d'entete HCS (ou bruit)",
-                             (unsigned)end, drssi);
-                /* Signal FORT (> -70 dBm) : dump des durees brutes des 1res impulsions (us). */
-                if (drssi > -70) {
-                    int8_t fq = (int8_t)cc1101_read_reg(CC_FREQEST | 0x40);
-                    int fq_khz = (int)fq * 1587 / 1000;
-                    char dbuf[320]; int p = 0;
-                    int lim = end < 20 ? (int)end : 20;
-                    for (int k = 0; k < lim && p < 300; k++) {
-                        const rmt_symbol_word_t *s = &s_capbuf[k];
-                        p += snprintf(dbuf + p, sizeof(dbuf) - p, "%c%u %c%u ",
-                                      s->level0 ? 'H' : 'L', (unsigned)s->duration0,
-                                      s->level1 ? 'H' : 'L', (unsigned)s->duration1);
-                    }
-                    ESP_LOGW(TAG, "DIAG RAW (RSSI %d, FREQEST %d ~%d kHz, %d/%u symb, us): %s",
-                             drssi, fq, fq_khz, lim, (unsigned)end, dbuf);
-                }
-            }
+            diag_log_capture(s_capbuf, end, n, out_bits);
             if (n >= 64) { r = n; break; }                                  /* vraie trame */
-            /* Fin de reception (silence >8ms = bouton relache) ou buffer presque plein :
-             * on repart neuf (sinon le driver wrap et on casse la contiguite). Sinon la
-             * reception est en cours : le driver continue a remplir, on NE re-arme PAS. */
-            if (ev.flags.is_last || end >= cap - 160) {
+            if (ev.flags.is_last || end >= cap - 160) {   /* fin de reception / wrap imminent */
                 rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq); prev_end = 0;
                 if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;
             }
         }
     } else r = -2;
+#else
+    /* ESP32 classique (pas de ping-pong RX) : en_partial_rx INTERDIT. Une reception =
+     * un evenement (idle a 8 ms), on decode, on re-arme. decode_rmt (de-glitch + vote)
+     * reste commun et tolere le bruit meme sur un seul evenement. */
+    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 8000000 };
+    if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) == ESP_OK) {
+        while (esp_timer_get_time() < t_end) {
+            if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(100)) != pdTRUE) continue;  /* tjrs en RX */
+            int n = decode_rmt(ev.received_symbols, ev.num_symbols, out_bits, max_bits);
+            diag_log_capture(ev.received_symbols, ev.num_symbols, n, out_bits);
+            if (n >= 64) { r = n; break; }                                  /* vraie trame */
+            if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;  /* re-arme */
+        }
+    } else r = -2;
+#endif
     strobe(CC_SIDLE);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* restaure pour le TX bit-bang */
     return r;
