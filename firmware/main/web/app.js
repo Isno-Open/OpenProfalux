@@ -507,9 +507,16 @@ const PFX_GESTURES = {
     'Va-et-vient = enrôlé. Teste ▲ ■ ▼. Rapporte le résultat sur GitHub.',
   ],
   R8: [
-    'Monte → descends ~4 lames → remonte (NeoSol : à confirmer, compteur roulant).',
-    'Va-et-vient = enrôlé. Teste ▲ ■ ▼. Rapporte le résultat sur GitHub.',
+    'Montée → laisse le volet s\'arrêter seul en butée haute.',
+    'Descente → laisse ~4 lames apparentes.',
+    'Montée → laisse s\'arrêter seul.',
+    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ et rapporte le résultat sur GitHub.',
   ],
+};
+/* Geste PHYSIQUE à faire AVANT l'émission (certains modèles l'exigent, ex. NeoSol :
+ * le volet doit partir d'une position de référence). Vide = rien à faire avant. */
+const PFX_PREGESTURES = {
+  R8: 'NeoSol : AVANT d\'émettre, descends le volet et laisse ~4 lames apparentes.',
 };
 let pfxModels = [];
 async function loadPfx() {
@@ -530,6 +537,8 @@ async function loadPfx() {
     if (sel) sel.value = String(d.model);
     const ol = $('#pfx-gestures'); const m = pfxModels[d.model];
     if (ol && m) ol.innerHTML = (PFX_GESTURES[m.routine] || PFX_GESTURES.R6).map(s => `<li>${s}</li>`).join('');
+    const pre = $('#pfx-pre');
+    if (pre && m) { const p = PFX_PREGESTURES[m.routine]; pre.hidden = !p; if (p) pre.querySelector('b').textContent = p; }
   } else { box.hidden = true; steps.hidden = true; }
 }
 function pfxResetSteps() {   // nouvelle identité -> on recache les gestes jusqu'à la prochaine émission
