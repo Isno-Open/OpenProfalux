@@ -10,7 +10,11 @@
 #include <stdint.h>
 
 #define SH_MAX_VOLETS   24
-#define SH_MEMBERS_LEN  384   /* CSV d'ids de volets membres d'une centrale */
+/* Longueur maximale (NUL compris) de la liste des membres d'une centrale, CSV
+ * d'ids : de quoi tenir TOUS les volets a leur longueur maximale (SH_ID_LEN - 1
+ * caracteres + la virgule). Au-dela, la liste est refusee, jamais tronquee. Elle
+ * vit sur le tas, a sa taille (cfg_model.h) : rien n'est reserve par volet. */
+#define SH_MEMBERS_LEN  (SH_MAX_VOLETS * SH_ID_LEN + 1)
 #define SH_MAX_SERIALS  4
 #define SH_BITS_LEN     72   /* 66 bits + marge + NUL */
 #define SH_ID_LEN       24

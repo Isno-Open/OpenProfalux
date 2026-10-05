@@ -105,6 +105,11 @@ static volet_t *get_or_create(const char *id) {
     volet_t *v = find_volet(id);
     if (v) return v;
     if (s_nvolets >= SH_MAX_VOLETS) return NULL;
+    /* Pas de virgule dans un NOUVEAU nom : les membres d'une centrale (et l'ordre
+     * d'affichage) sont des listes d'ids separes par des virgules. Coupe en deux,
+     * le nom n'y designerait plus le volet, qui ne recevrait jamais les commandes
+     * de sa centrale. Un volet existant qui en a une reste utilisable. */
+    if (strchr(id, ',')) { ESP_LOGW(TAG, "volet '%s' refuse : virgule dans le nom", id); return NULL; }
     v = &s_volets[s_nvolets++];
     memset(v, 0, sizeof(*v));
     strlcpy(v->id, id, SH_ID_LEN);
@@ -305,6 +310,7 @@ static void ring_fill_from_mqtt(int slot, const char *ser, uint8_t button, uint3
 /* Remet la config a zero (libere les sets de hops avant reload/import). */
 static void reset_state(void) {
     for (int i = 0; i < s_nremotes; i++) { free(s_remotes[i].hops); s_remotes[i].hops = NULL; s_remotes[i].nhops = s_remotes[i].caphops = 0; }
+    for (int i = 0; i < s_nvolets; i++) cfg_volet_release(&s_volets[i]);   /* listes des centrales */
     s_nremotes = 0; s_nvolets = 0;
 }
 static cfg_layout_t load_cfg(void) {
@@ -525,8 +531,7 @@ int shutters_delete_volet(const char *id) {
     int idx = -1;
     for (int i = 0; i < s_nvolets; i++) if (!strcmp(s_volets[i].id, id)) { idx = i; break; }
     if (idx < 0) { UNLOCK(); return -1; }
-    for (int i = idx; i < s_nvolets - 1; i++) s_volets[i] = s_volets[i + 1];
-    s_nvolets--;
+    cfg_model_remove(&s_model, idx);   /* libere la liste d'une centrale */
     save_cfg();
     update_listening();   /* plus aucun volet -> coupe l'ecoute permanente */
     UNLOCK();
@@ -541,11 +546,9 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
     ESP_LOGW(TAG, "CMD %s '%s' (up=%dc stop=%dc down=%dc)", cmd, id,
              (int)strlen(v->up), (int)strlen(v->stop), (int)strlen(v->down));
     if (v->central) {   /* centrale : diffuse la commande a chaque volet membre (CSV) */
-        char buf[SH_MEMBERS_LEN]; strlcpy(buf, v->members, sizeof(buf));
-        char *sv = NULL;
-        for (char *tok = strtok_r(buf, ",", &sv); tok; tok = strtok_r(NULL, ",", &sv)) {
-            while (*tok == ' ') tok++;
-            volet_t *m = find_volet(tok);
+        char mid[SH_ID_LEN];
+        for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
+            volet_t *m = find_volet(mid);
             if (!m || m == v || m->central) continue;
             if      (!strcmp(cmd, "up"))   { m->target = 0;   start_move(m, +1); }
             else if (!strcmp(cmd, "down")) { m->target = 100; start_move(m, -1); }
@@ -694,16 +697,25 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, u
 int shutters_create_central(const char *id, const char *members_csv) {
     if (!id || !*id) return -1;
     LOCK();
+    int before = s_nvolets;
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
+    /* Liste refusee plutot que tronquee (trop longue, ou plus de memoire) : un
+     * membre coupe ne recevrait plus rien. Rien ne change, pas meme un volet cree. */
+    if (cfg_volet_set_members(v, members_csv) != 0) {
+        if (s_nvolets > before) cfg_model_remove(&s_model, s_nvolets - 1);
+        UNLOCK();
+        ESP_LOGE(TAG, "centrale '%s' refusee : liste de membres de %u o (plus de %d, ou plus de memoire)",
+                 id, members_csv ? (unsigned)strlen(members_csv) : 0u, SH_MEMBERS_LEN - 1);
+        return -1;
+    }
     v->central = true; v->virt = false;
     v->position = 50; v->dir = 0; v->target = -1;
-    strlcpy(v->members, members_csv ? members_csv : "", SH_MEMBERS_LEN);
     save_cfg();
     announce_one(v);
+    ESP_LOGW(TAG, "centrale '%s' creee : membres=[%s]", id, v->members ? v->members : "");
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "centrale '%s' creee : membres=[%s]", id, v->members);
     return 0;
 }
 
@@ -780,7 +792,7 @@ int shutters_set_orientation(const char *id, int orientation) {
 int shutters_set_order(const char *ids_csv) {
     if (!ids_csv) return -1;
     /* Copie de travail (strtok_r modifie sa chaine) a la taille de la liste :
-     * un tampon fixe de SH_MEMBERS_LEN la tronquait au-dela de 384 octets. Sur
+     * un tampon fixe de 384 octets la tronquait au-dela. Sur
      * le tas : rien de plus sur la pile de la tache HTTP. */
     char *buf = strdup(ids_csv);
     if (!buf) return -1;
@@ -931,7 +943,7 @@ char *shutters_status_json(void) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", v->id);
         if (v->virt) cJSON_AddBoolToObject(o, "virt", true);   /* volet a telecommande virtuelle -> pas d'apprentissage */
-        if (v->central) { cJSON_AddBoolToObject(o, "central", true); cJSON_AddStringToObject(o, "members", v->members); }
+        if (v->central) { cJSON_AddBoolToObject(o, "central", true); cJSON_AddStringToObject(o, "members", v->members ? v->members : ""); }
         cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
         cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);     /* pour reafficher la calibration dans l'UI */
         cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
