@@ -127,6 +127,24 @@ jobs:
               ./build/cfg_store_host_test.elf
             "
 
+  # Le decodeur OOK HCS30x/KeeLoq (keeloq_decode.c) sur des trames en bouchon :
+  # voir firmware/test/keeloq/README.md. Il est PUR, donc un simple gcc suffit,
+  # sans l'image IDF : quelques secondes, et il rend 1 au premier echec.
+  banc-keeloq:
+    name: Banc de test du decodeur KeeLoq
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: keeloq_decode sur trames en bouchon (gcc + AddressSanitizer)
+        working-directory: firmware/test/keeloq
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/keeloq_decode.c \
+             -o keeloq_host_test
+          ./keeloq_host_test
+
 env:
   # Version epinglee : une montee d'IDF se decide, elle ne se subit pas au
   # prochain build. Le depot compile sur v6.1 depuis la migration du 27/09.
