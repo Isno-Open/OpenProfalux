@@ -803,9 +803,10 @@ let githubUrl = null;
 $('#ota-check').onclick = async () => {
   const span = $('#ota-latest'); span.textContent = '⏳ Interrogation de GitHub…'; $('#ota-github').hidden = true;
   try {
-    /* variante de CETTE carte -> nom d'asset attendu (jamais le -full.bin, invalide en OTA) */
+    /* asset de CETTE carte : openprofalux-<carte>-ota.bin, <carte> = id de boards/<carte>.json,
+       renvoye tel quel par /api/ota/status (jamais le -full.bin, invalide en OTA) */
     const stt = await api('/api/ota/status').catch(() => ({}));
-    const variant = stt.target === 'm5stack_atom' ? 'atom' : (stt.target === 'external' ? 'devkit' : null);
+    const variant = stt.target || null;
     const r = await fetch('https://api.github.com/repos/Isno-Open/OpenProfalux/releases/latest');
     if (!r.ok) { span.textContent = r.status === 404 ? '❌ Aucune release publique (dépôt privé ?)' : `❌ HTTP ${r.status}`; return; }
     const j = await r.json();
