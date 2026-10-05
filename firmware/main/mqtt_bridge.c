@@ -20,7 +20,7 @@ static char s_avail_topic[64];   /* topic de disponibilite HA (LWT) : openprofal
  * la connexion (esp-mqtt peut les referencer), liberes au stop. NULL = absent. */
 static char *s_tls_ca = NULL, *s_tls_cert = NULL, *s_tls_key = NULL;
 
-/* Topic base — set at start */
+/* Topic base, set at start */
 #define TOPIC_BASE "openprofalux"
 
 static void publish_log(const char *level, const char *msg) {

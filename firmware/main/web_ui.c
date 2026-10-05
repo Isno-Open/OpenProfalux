@@ -1,5 +1,5 @@
 /*
- * web_ui.c — serveur HTTP OpenProfalux : sert l'UI embarquee + endpoints sous /api.
+ * web_ui.c : serveur HTTP OpenProfalux, sert l'UI embarquee + endpoints sous /api.
  */
 #include "web_ui.h"
 #include "shutters.h"
@@ -32,7 +32,7 @@ static const char *TAG = "web_ui";
 
 /* ── Authentification par SESSION (cookie) ──────────────────────────────────
  * MODELE : tant qu'AUCUN mot de passe n'est enregistre (cle NVS cfg/ui_pass vide
- * ou absente), l'UI est OUVERTE — c'est l'etat du 1er demarrage et celui des
+ * ou absente), l'UI est OUVERTE : c'est l'etat du 1er demarrage, celui des
  * boitiers deja deployes : aucune regression, aucun mot de passe par defaut a
  * deviner. Des que l'utilisateur en definit un, TOUTES les routes "/api/" l'exigent.
  * La desactivation se fait par un bouton dedie de l'UI (envoie ui_pass vide).
@@ -132,7 +132,7 @@ static bool ui_cookie_get(httpd_req_t *r, char *out, size_t cap) {
     return true;
 }
 
-/* true si la requete est autorisee. Repond 401 (JSON) sinon — SANS en-tete
+/* true si la requete est autorisee. Repond 401 (JSON) sinon, SANS en-tete
  * WWW-Authenticate : c'est precisement lui qui declencherait la popup native
  * du navigateur. L'UI intercepte le 401 et affiche sa propre page de login. */
 static bool ui_auth_ok(httpd_req_t *r) {
@@ -839,7 +839,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
 /* ── /api/login + /api/logout + /api/session ────────────────────────────────
  * Ces trois routes sont enregistrees en ACCES LIBRE (reg_open) : exiger une
  * session pour pouvoir en ouvrir une serait circulaire. Elles ne divulguent
- * rien — /api/session ne dit que si une protection existe et si l'appelant
+ * rien. /api/session ne dit que si une protection existe et si l'appelant
  * est deja connecte. */
 static esp_err_t h_login(httpd_req_t *r) {
     char *body = read_body(r);
@@ -895,7 +895,7 @@ static esp_err_t h_session(httpd_req_t *r) {
 
 /* Wrapper d'authentification : toute route passee a reg() est protegee via ce
  * trampoline. Centraliser ici garantit qu'aucune route ajoutee plus tard ne soit
- * oubliee — c'est le seul endroit ou les handlers sont enregistres. Les assets
+ * oubliee : c'est le seul endroit ou les handlers sont enregistres. Les assets
  * statiques (/, style.css, app.js) passent par reg_open() : le navigateur doit
  * pouvoir afficher la page qui DEMANDE le mot de passe. */
 #define MAX_ROUTES 48
