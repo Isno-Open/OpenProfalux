@@ -329,12 +329,16 @@ int cc1101_capture_init(void) {
     s_capq = xQueueCreate(2, sizeof(rmt_rx_done_event_data_t));
     rmt_rx_channel_config_t c = {0};
     c.clk_src = RMT_CLK_SRC_DEFAULT; c.resolution_hz = 1000000;
-    /* ESP32 classic : 512 symboles = une trame entiere (~132 symb) tient d'un coup.
-     * Sur S3/C3, 512 depasse la memoire RMT par canal -> rmt_new_rx_channel echoue
-     * (signale par eleroy). On garde 512 sur classic (nos cibles) et on prend le max
-     * du canal sur les autres cibles. On ne fait pas de binaire S3 : c'est pour ceux
-     * qui compilent la source pour un S3/C3. */
+    /* Une trame entiere (~132 symboles) doit tenir dans UN buffer RX, sinon la
+     * capture est hachee en pleine trame et le decode echoue (vu sur ISNO Super/S3).
+     * - ESP32 classic : pas de DMA RMT mais 512 symboles tiennent en multi-blocs.
+     * - S3/C3 : 48 words/canal seulement (SOC_RMT_MEM_WORDS_PER_CHANNEL) -> 512 sans
+     *   DMA echoue, et 48 tronque la trame. Mais le S3/C3 SUPPORTE le DMA RMT :
+     *   with_dma=true permet un grand buffer -> trame complete comme sur ESP32. */
 #if defined(CONFIG_IDF_TARGET_ESP32)
+    c.mem_block_symbols = 512;
+#elif SOC_RMT_SUPPORT_DMA
+    c.flags.with_dma    = true;   /* S3/C3 : DMA -> buffer complet, plus de trame hachee */
     c.mem_block_symbols = 512;
 #else
     c.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
