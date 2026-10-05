@@ -18,6 +18,7 @@
 #include "soc/soc_caps.h"   /* SOC_RMT_MEM_WORDS_PER_CHANNEL : portabilite RMT (S3/C3) */
 #include <esp_timer.h>
 #include <driver/rmt_rx.h>
+#include <esp_heap_caps.h>   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
 
 static const char *TAG = "cc1101";
 /* ── Switch DEBUG capture RX (runtime, togglable depuis l'UI/MQTT) ──────────
@@ -57,7 +58,14 @@ int g_tx_marc = -1;   /* MARCSTATE lu juste apres le dernier STX (0x13=TX). Diag
 static spi_device_handle_t s_spi = NULL;
 static rmt_channel_handle_t s_cap = NULL;
 static QueueHandle_t s_capq = NULL;
-static rmt_symbol_word_t s_capbuf[512];
+/* Buffer de reception RMT. Sur ESP32-S3 avec DMA, ce buffer DOIT etre en RAM
+ * interne DMA-capable et aligne 64 octets, sinon le GDMA lit/ecrit les mauvaises
+ * lignes de cache -> symboles parasites (glitches ~55 us) et corruption silencieuse
+ * (cf esp-idf #12564, FastLED #2156). Un simple tableau statique ne garantit NI
+ * l'alignement NI MALLOC_CAP_DMA. On l'alloue donc a l'init avec heap_caps. */
+#define CAP_SYMBOLS 1024
+static rmt_symbol_word_t *s_capbuf = NULL;
+static size_t s_capbuf_sz = 0;
 /* RX et auto-capture partagent l'unique canal RMT s_cap sur GDO0 (memoire RMT limitee). */
 static cc1101_rx_cb_t     s_rx_cb = NULL;
 static TaskHandle_t       s_rx_task = NULL;
@@ -326,7 +334,9 @@ static bool IRAM_ATTR cc_cap_cb(rmt_channel_handle_t ch, const rmt_rx_done_event
 
 int cc1101_capture_init(void) {
     if (s_cap) return 0;
-    s_capq = xQueueCreate(2, sizeof(rmt_rx_done_event_data_t));
+    s_capq = xQueueCreate(8, sizeof(rmt_rx_done_event_data_t));  /* marge : en_partial_rx genere
+                                 * plusieurs callbacks par reception ; eviter de perdre un fragment
+                                 * si le consommateur (log DEBUG) ralentit. */
     rmt_rx_channel_config_t c = {0};
     c.clk_src = RMT_CLK_SRC_DEFAULT; c.resolution_hz = 1000000;
     /* Une trame entiere (~132 symboles) doit tenir dans UN buffer RX, sinon la
@@ -348,16 +358,25 @@ int cc1101_capture_init(void) {
      *   n'est concernee (boards/ ne declare que esp32 et esp32s3). Les corriger
      *   demanderait un autre mecanisme, par exemple une capture par GPIO+timer. */
 #if defined(CONFIG_IDF_TARGET_ESP32)
-    c.mem_block_symbols = 512;
+    c.mem_block_symbols = 512;    /* ESP32 : pas de DMA mais 512 en multi-blocs */
 #elif SOC_RMT_SUPPORT_DMA
-    c.flags.with_dma    = true;   /* S3 : DMA -> buffer complet, plus de trame hachee */
-    c.mem_block_symbols = 512;
+    c.flags.with_dma    = true;   /* S3/C3 : seulement 48 words/canal -> ping-pong bogue
+                                   * (#13419) sur une trame >48 symb. Le DMA stream vers un
+                                   * grand buffer et evite ce chemin. mem_block_symbols petit
+                                   * avec DMA corrompt (#12564) -> on prend tout le buffer. */
+    c.mem_block_symbols = CAP_SYMBOLS;
 #else
     /* C3, C6 : 48 words, la trame longue sera tronquee (voir ci-dessus). */
     c.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
 #endif
     c.gpio_num = CC1101_PIN_GDO0;
     if (rmt_new_rx_channel(&c, &s_cap) != ESP_OK) { ESP_LOGW(TAG, "RMT capture init KO"); s_cap = NULL; return -1; }
+    /* Buffer RX aligne + DMA-capable (voir note sur s_capbuf). */
+    if (!s_capbuf) {
+        s_capbuf_sz = CAP_SYMBOLS * sizeof(rmt_symbol_word_t);
+        s_capbuf = heap_caps_aligned_alloc(64, s_capbuf_sz, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!s_capbuf) { ESP_LOGW(TAG, "RMT capture: alloc buffer DMA KO"); rmt_del_channel(s_cap); s_cap = NULL; return -1; }
+    }
     rmt_rx_event_callbacks_t cb = { .on_recv_done = cc_cap_cb };
     rmt_rx_register_event_callbacks(s_cap, &cb, s_capq);
     rmt_enable(s_cap);
@@ -368,49 +387,102 @@ int cc1101_capture_init(void) {
 
 /* Emet la trame ET capture GDO0, decode la forme d'onde en bits (ordre du fil).
  * Retourne le nombre de bits decodes (<0 = erreur). bit=1 si HAUT court (H<680us). */
-/* Decode les bits a partir d'UNE entete candidate (index hdr, LOW long). Retourne nb bits. */
-static int decode_from_header(const rmt_symbol_word_t *sym, size_t n, int hdr, int hdr_in_dur0,
-                              char *out, int max_bits, int *out_te) {
-    int nb = 0; uint32_t sum_short = 0; int cnt_short = 0;   /* pour mesurer le TE (HAUT court = bit '1') */
-    /* Correctif off-by-one : si l'entete (LOW long) est dans duration0, alors le HIGH
-     * du PREMIER bit de data est deja dans duration1 du MEME symbole. Sans ca la trame
-     * est decalee (serial = attendu>>1) et le rejeu est invalide. On l'emet ici. */
-    if (hdr_in_dur0 && sym[hdr].level1 && sym[hdr].duration1 >= 200 && sym[hdr].duration1 <= 1300) {
-        if (sym[hdr].duration1 < 680) { out[nb++] = '1'; sum_short += sym[hdr].duration1; cnt_short++; }
-        else out[nb++] = '0';
+/* === Decodage OOK HCS30x/KeeLoq, pipeline tolerant au bruit (inspire Flipper keeloq.c +
+ * rtl_433 pulse_slicer_pwm). HCS301 : Te~430us, bit=3Te, '0'=2Te haut +1Te bas,
+ * '1'=1Te haut +2Te bas ; preambule 23 Te (50% duty), entete TH~10 Te (LOW long),
+ * 66 bits, garde ~39 Te, trame repetee ~10x. Pas de CRC : on valide par serial+bouton. === */
+#define GLITCH_US 140          /* slivers < ~Te/3 = bruit de demod OOK -> jetes */
+#define TE_NOM    430          /* temps elementaire mesure (us) */
+
+/* Liste de fronts (niveau,duree) de-glitchee, partagee par le decodeur. */
+static uint16_t s_ed_dur[2 * (CAP_SYMBOLS + 2)];
+static uint8_t  s_ed_lvl[2 * (CAP_SYMBOLS + 2)];
+
+/* Aplatit les symboles RMT en fronts, JETTE les slivers de bruit (<GLITCH_US) et FUSIONNE
+ * les fronts de meme niveau qui deviennent adjacents (recolle une impulsion coupee par un
+ * glitch). Rend le nombre de fronts. Les fronts resultants alternent strictement H/L. */
+static size_t deglitch_edges(const rmt_symbol_word_t *in, size_t n) {
+    size_t w = 0; const size_t EMAX = sizeof(s_ed_lvl) / sizeof(s_ed_lvl[0]);
+    for (size_t i = 0; i < n; i++) {
+        uint32_t d[2] = { in[i].duration0, in[i].duration1 };
+        uint8_t  l[2] = { in[i].level0,    in[i].level1 };
+        for (int k = 0; k < 2; k++) {
+            if (d[k] == 0) return w;                 /* duree 0 = marqueur EOF du driver */
+            if (d[k] < GLITCH_US) continue;          /* sliver de bruit : on jette */
+            if (w > 0 && s_ed_lvl[w - 1] == l[k]) {  /* meme niveau que le precedent garde : fusion */
+                uint32_t s = (uint32_t)s_ed_dur[w - 1] + d[k];
+                s_ed_dur[w - 1] = s > 65535 ? 65535 : (uint16_t)s;
+            } else if (w < EMAX) {
+                s_ed_dur[w] = d[k] > 65535 ? 65535 : (uint16_t)d[k]; s_ed_lvl[w] = l[k]; w++;
+            }
+        }
     }
-    for (size_t i = hdr + 1; i < n && nb < max_bits && nb < 66; i++) {
-        uint32_t hi = sym[i].level0 ? sym[i].duration0 : sym[i].duration1;
-        uint32_t lo = sym[i].level0 ? sym[i].duration1 : sym[i].duration0;
-        if (hi < 200 || hi > 1300) break;
-        if (hi < 680) { out[nb++] = '1'; sum_short += hi; cnt_short++; } else out[nb++] = '0';
-        if (lo > 2000) break;
+    return w;
+}
+
+/* Decode UNE repetition a partir d'une entete (LOW long a l'index hdr). Apparie HIGH/LOW,
+ * classe le bit par la duree du HAUT (court ~1Te = '1', long ~2Te = '0'). Une impulsion
+ * hors gabarit ARRETE cette repetition (le scan des entetes suivantes re-synchronise,
+ * on n'abandonne jamais la capture). Rend nb bits ; *out_te = moyenne des HAUT courts. */
+static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
+    int nb = 0; uint32_t sum = 0; int cnt = 0;
+    for (size_t i = hdr + 1; i + 1 < w && nb < 66; i += 2) {
+        if (s_ed_lvl[i] != 1 || s_ed_lvl[i + 1] != 0) break;   /* alternance HIGH/LOW attendue */
+        uint32_t hi = s_ed_dur[i], lo = s_ed_dur[i + 1];
+        if (hi < 190 || hi > 1200) break;                      /* HAUT hors gabarit */
+        if (hi < 680) { out[nb++] = '1'; sum += hi; cnt++; } else out[nb++] = '0';
+        if (lo > 1600) break;                                  /* BAS trop long = garde/entete suivante */
     }
     out[nb] = 0;
-    if (out_te && cnt_short) *out_te = (int)(sum_short / cnt_short);   /* TE ≈ moyenne des HAUT courts */
+    if (out_te && cnt) *out_te = (int)(sum / cnt);
     return nb;
 }
 
-/* Decode une capture RMT (OOK HCS30x) en bits. ROBUSTE AU BRUIT : au lieu de s'arreter
- * a la 1re entete (souvent un simple trou de bruit -> 2-3 bits bidons), on SCANNE toutes
- * les entetes candidates (LOW long >3500us) et on garde la MEILLEURE trame. La trame
- * Profalux est repetee ~10x dans la rafale : il y en a forcement une propre a trouver.
- * Retourne nb bits (max sur toutes les entetes), -4 si aucune entete. */
-static int decode_rmt(const rmt_symbol_word_t *sym, size_t n, char *out, int max_bits) {
-    int best = -4;
-    char tmp[80];
-    int tmpcap = max_bits < 79 ? max_bits : 79;
-    for (size_t i = 0; i < n; i++) {
-        int hdr = -1, in0 = 0;
-        if      (!sym[i].level0 && sym[i].duration0 > 3500) { hdr = (int)i; in0 = 1; }
-        else if (!sym[i].level1 && sym[i].duration1 > 3500) { hdr = (int)i; in0 = 0; }
-        if (hdr < 0) continue;
+/* Decode une capture RMT. 1) de-glitch ; 2) scanne TOUTES les entetes (LOW long ~10 Te)
+ * et decode chaque repetition sans jamais abandonner ; 3) VOTE MAJORITAIRE bit a bit sur
+ * les repetitions >=64 bits (un glitch tombe a des positions differentes selon la repet,
+ * le vote le corrige). Rend 66 (trame votee), la meilleure partielle sinon, -4 si rien. */
+#define VOTE_MINBITS 16   /* on inclut les repetitions PARTIELLES >=16 bits dans le vote.
+                           * Comme on n'ancre QUE sur le vrai en-tete (voir decode_rmt), tous
+                           * les fragments sont des prefixes EXACTS alignes sur le bit 0 : les
+                           * additionner couvre toutes les positions et reconstruit 66 bits
+                           * meme si aucune repetition n'est complete seule. <16 bits = bruit. */
+#define VOTE_MAXW   32
+static int decode_rmt(const rmt_symbol_word_t *raw, size_t raw_n, char *out, int max_bits) {
+    (void)max_bits;
+    size_t w = deglitch_edges(raw, raw_n);
+    static char words[VOTE_MAXW][67];
+    int nwords = 0, best = -4, te_any = 0;
+    char tmp[80], bestpart[80]; bestpart[0] = 0;
+    for (size_t i = 0; i < w; i++) {
+        /* On ancre UNIQUEMENT sur le vrai en-tete HCS (~10 Te = 4,5-6,5 ms). Les gardes
+         * et dropouts (>9 ms) sont suivis du PREAMBULE, pas du bit 0 : s'y ancrer
+         * decalerait les fragments et polluerait le vote. On les exclut donc. */
+        if (!(s_ed_lvl[i] == 0 && s_ed_dur[i] > 3000 && s_ed_dur[i] < 8500)) continue;
         int te = 0;
-        int nb = decode_from_header(sym, n, hdr, in0, tmp, tmpcap, &te);
-        if (nb > best) { best = nb; memcpy(out, tmp, (size_t)nb + 1); if (te) s_last_te = te; }   /* garde la meilleure + son TE */
-        if (best >= 64) break;                                            /* trame complete : stop */
+        int nb = decode_word(i, w, tmp, &te);
+        if (nb > best) { best = nb; memcpy(bestpart, tmp, (size_t)nb + 1); }
+        if (nb >= VOTE_MINBITS && nwords < VOTE_MAXW) {
+            memcpy(words[nwords], tmp, (size_t)nb + 1); nwords++;
+            if (te) te_any = te;
+        }
+    }
+    if (nwords > 0) {                                  /* vote majoritaire bit a bit */
+        int L = 0;
+        for (int p = 0; p < 66; p++) {
+            int ones = 0, tot = 0;
+            for (int k = 0; k < nwords; k++)
+                if ((int)strlen(words[k]) > p) { tot++; if (words[k][p] == '1') ones++; }
+            if (tot == 0) break;                       /* plus aucune repetition ne couvre cette position */
+            out[p] = (ones * 2 >= tot) ? '1' : '0';
+            L = p + 1;
+        }
+        out[L] = 0;
+        if (te_any) s_last_te = te_any;
+        if (L >= 64) return L;                         /* trame votee complete */
     }
     if (best < 0) { out[0] = 0; return -4; }
+    memcpy(out, bestpart, (size_t)best + 1);          /* pas de trame complete : meilleure partielle */
     return best;
 }
 
@@ -418,7 +490,7 @@ int cc1101_tx_and_capture_bits(const uint8_t *frame, size_t bits, char *out_bits
     if (!s_cap && cc1101_capture_init() != 0) return -1;
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* on pilote GDO0 (TX) */
     rmt_receive_config_t rc = { .signal_range_min_ns = 2000, .signal_range_max_ns = 6000000 };
-    if (rmt_receive(s_cap, s_capbuf, sizeof(s_capbuf), &rc) != ESP_OK) return -2;
+    if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) return -2;
     cc1101_tx_ook_frame(frame, bits);         /* bit-bang GDO0, RMT capture en parallele */
     rmt_rx_done_event_data_t ev;
     if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(500)) != pdTRUE) return -3;
@@ -434,7 +506,7 @@ int cc1101_rx_probe(void) {
     if (!s_cap && cc1101_capture_init() != 0) return -1;
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(0x02, 0x0D); cc1101_write_reg(0x0B, 0x06); cc1101_write_reg(0x19, 0x14);
-    cc1101_write_reg(0x1B, 0x27); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x91);
+    cc1101_write_reg(0x1B, 0x04); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x92);   /* AGC OOK TI DN022 (idem ecoute) */
     strobe(CC_SIDLE); esp_rom_delay_us(200);
     strobe(0x33); vTaskDelay(pdMS_TO_TICKS(3));
     strobe(0x3A); strobe(0x34);
@@ -444,12 +516,12 @@ int cc1101_rx_probe(void) {
     int64_t t_end = esp_timer_get_time() + 800 * 1000;
     int nev = 0; int8_t rssi_max = -128, rssi_min = 0;
     rmt_rx_done_event_data_t ev;
-    if (rmt_receive(s_cap, s_capbuf, sizeof(s_capbuf), &rc) == ESP_OK) {
+    if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) == ESP_OK) {
         while (esp_timer_get_time() < t_end) {
             int8_t r = cc1101_get_rssi(); if (r > rssi_max) rssi_max = r; if (r < rssi_min) rssi_min = r;
             if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(40)) != pdTRUE) continue;
             nev++;
-            if (rmt_receive(s_cap, s_capbuf, sizeof(s_capbuf), &rc) != ESP_OK) break;
+            if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;
         }
     }
     strobe(CC_SIDLE);
@@ -469,11 +541,16 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     cc1101_write_reg(0x02, 0x0D);   /* IOCFG0 = donnee serie demodulee sur GDO0 */
     cc1101_write_reg(0x0B, 0x06);   /* FSCTRL1 */
     cc1101_write_reg(0x19, 0x14);   /* FOCCFG  */
-    cc1101_write_reg(0x1B, s_rx_gain);   /* AGCCTRL2 : plafond de gain LNA, REGLABLE via l'UI (defaut 0x27=-9 dB).
-                                       0x07=gain max (bruit permanent, buffer RMT sature) ; 0x3F=-17 dB (mordant,
-                                       utile si demod bruitee sur signal fort). Voir cc1101_set_rx_gain(). */
+    cc1101_write_reg(0x1B, 0x04);   /* AGCCTRL2 = config OOK recommandee TI DN022 (MAGN_TARGET=4/36 dB,
+                                     * MAX_LNA_GAIN=0 plein, MAX_DVGA_GAIN=0) : l'AGC s'adapte sur toute la
+                                     * plage -40..-90 dBm. Remplace 0x27/NVS rx_gain qui ne couvrait qu'une
+                                     * bande etroite (decrochages hors ~-60/-68 dBm). (void)s_rx_gain. */
+    (void)s_rx_gain;
     cc1101_write_reg(0x1C, 0x00);   /* AGCCTRL1 */
-    cc1101_write_reg(0x1D, 0x91);   /* AGCCTRL0 */
+    cc1101_write_reg(0x1D, 0x92);   /* AGCCTRL0 : FILTER_LENGTH=10 => frontiere de decision
+                                     * ASK/OOK a 12 dB (vs 8 dB en 0x91). Un '0' doit etre >=24 dB
+                                     * sous le '1' : le bruit pres du plancher ne declenche plus de
+                                     * fausses transitions (TI DN022). Profalux = OOK plein, marge OK. */
     strobe(CC_SIDLE); esp_rom_delay_us(200);
     strobe(0x33);     /* SCAL */
     vTaskDelay(pdMS_TO_TICKS(3));
@@ -484,57 +561,87 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     ESP_LOGI(TAG, "RX(GDO0): MARCSTATE=0x%02X (0x0D=RX attendu)", cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F);
-    /* OOK sans squelch => bruit continu sur GDO0. Comme le sniffer : on ARME une
-     * fois, puis on re-arme la RMT UNIQUEMENT apres avoir recu un paquet (sinon la
-     * reception precedente est encore en cours => "channel not in enable state").
-     * On garde le 1er paquet avec header valide (>=64 bits) ; le bruit est ignore.
-     * Reset propre du canal partage avant de commencer (reception pendante possible). */
+    /* OOK sans squelch => bruit continu sur GDO0. Une rafale Profalux (preambule +
+     * entete + 66 bits, repetee ~10x) DEPASSE une capture unique sur S3 (48 mots/canal).
+     * Avant : on traitait chaque evenement RMT comme une trame complete et on re-armait,
+     * donc on perdait le milieu de la trame entre deux evenements -> capture hachee
+     * (jamais 64 bits contigus). Correctif : en_partial_rx -> le driver remplit s_capbuf
+     * de facon CONTIGUE a travers plusieurs callbacks d'UNE meme reception, SANS re-armer.
+     * On accumule puis on decode TOUT le buffer : decode_rmt scanne les entetes et garde
+     * la meilleure trame (64 bits) parmi les repetitions. On ne re-arme qu'a la fin de
+     * reception (is_last = silence >8ms) ou avant que le buffer ne reboucle (wrap). */
     rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq);
-    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 8000000 };
+    /* signal_range_min_ns = filtre anti-glitch RMT MATERIEL. Sur S3 il est plafonne
+     * a ~3187 ns (horloge RMT), donc inutilisable pour filtrer le bruit de demod OOK
+     * (glitches ~55 us) : ce filtrage se fait en logiciel dans decode_rmt. */
+    /* signal_range_max_ns = seuil d'idle qui TERMINE la reception. A 8 ms, les silences
+     * ~8 ms PRESENTS DANS le flux Profalux (entre repetitions) coupaient la reception en
+     * plein milieu de trame (observe : receptions de 7-21 symboles finissant sur L0).
+     * A 25 ms, seul un vrai long silence (bouton relache) termine : en_partial_rx accumule
+     * alors la rafale entiere de facon contigue -> trame complete decodable. (max ~40 ms) */
+    /* signal_range_max_ns plafonne a 32767000 ns par le HW RMT (compteur 15 bits a sa
+     * resolution). On prend 32 ms : > la garde HCS (~16-23 ms) donc une rafale entiere
+     * (plusieurs repetitions) s'accumule dans une seule reception -> matiere a voter. */
+    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 32000000,
+                                .flags.en_partial_rx = true };
     int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     int r = -3;
+    const size_t cap = CAP_SYMBOLS;   /* capacite du buffer, en symboles */
+    size_t prev_end = 0;              /* fin (offset) du fragment precedent, pour detecter le wrap */
     rmt_rx_done_event_data_t ev;
-    if (rmt_receive(s_cap, s_capbuf, sizeof(s_capbuf), &rc) == ESP_OK) {
+    if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) == ESP_OK) {
         while (esp_timer_get_time() < t_end) {
             if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(100)) != pdTRUE) continue;  /* tjrs en RX */
-            int n = decode_rmt(ev.received_symbols, ev.num_symbols, out_bits, max_bits);
+            /* en_partial_rx : le driver a ecrit ce fragment a la suite dans s_capbuf.
+             * On calcule la fin reelle a partir du POINTEUR (robuste a un callback manque :
+             * les symboles intermediaires sont bien dans s_capbuf meme sans callback). */
+            size_t off = (size_t)(ev.received_symbols - s_capbuf);
+            if (off < prev_end) {   /* le buffer a reboucle : on repart sur une capture neuve */
+                rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq); prev_end = 0;
+                if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;
+                continue;
+            }
+            size_t end = off + ev.num_symbols;
+            if (end > cap) end = cap;
+            prev_end = end;
+            int n = decode_rmt(s_capbuf, end, out_bits, max_bits);
             /* Switch DEBUG : logge les captures "interessantes" : entete HCS trouvee
-             * (n>=1) OU grosse rafale (>=50 symboles) meme sans entete (= reception 868
-             * forte mais pas HCS). Filtre le petit bruit epars pour rester lisible. */
-            if (s_rx_debug && (n >= 1 || ev.num_symbols >= 50)) {
+             * (n>=1) OU grosse rafale (>=50 symboles cumules) meme sans entete. */
+            if (s_rx_debug && (n >= 1 || end >= 50)) {
                 int8_t drssi = cc1101_get_rssi();
                 if (n >= 64)
-                    ESP_LOGW(TAG, "DIAG RX: %u symb, RSSI %d dBm, %d bits => TRAME PROFALUX/KEELOQ complete: %s",
-                             (unsigned)ev.num_symbols, drssi, n, out_bits);
+                    ESP_LOGW(TAG, "DIAG RX: %u symb cumules, RSSI %d dBm, %d bits => TRAME PROFALUX/KEELOQ complete: %s",
+                             (unsigned)end, drssi, n, out_bits);
                 else if (n >= 1)
-                    ESP_LOGW(TAG, "DIAG RX: %u symb, RSSI %d dBm, entete HCS OK mais %d bits (partiel/tronque): %s",
-                             (unsigned)ev.num_symbols, drssi, n, out_bits);
+                    ESP_LOGW(TAG, "DIAG RX: %u symb cumules, RSSI %d dBm, entete HCS OK mais %d bits (partiel): %s",
+                             (unsigned)end, drssi, n, out_bits);
                 else
-                    ESP_LOGW(TAG, "DIAG RX: %u symb, RSSI %d dBm, PAS d'entete HCS => pas du Profalux/KeeLoq (ou bruit)",
-                             (unsigned)ev.num_symbols, drssi);
-                /* Signal FORT (> -70 dBm = la telecommande, pas le bruit) : dump des durees
-                 * brutes des 1res impulsions (us) pour voir la forme d'onde reelle.
-                 * Attendu propre : preambule L455/H455 alternes, entete L>3500, bits H455('1')/H910('0').
-                 * Erratique (<200us, valeurs folles) = bruit RF qui dechire la trame. */
+                    ESP_LOGW(TAG, "DIAG RX: %u symb cumules, RSSI %d dBm, PAS d'entete HCS (ou bruit)",
+                             (unsigned)end, drssi);
+                /* Signal FORT (> -70 dBm) : dump des durees brutes des 1res impulsions (us). */
                 if (drssi > -70) {
-                    /* FREQEST : offset de freq estime. |grand| = quartz du module decale
-                     * (RX desaccordee du 868.425 -> demod OOK distordue). ~26MHz/2^14 ≈ 1587 Hz/pas. */
                     int8_t fq = (int8_t)cc1101_read_reg(CC_FREQEST | 0x40);
                     int fq_khz = (int)fq * 1587 / 1000;
                     char dbuf[320]; int p = 0;
-                    int lim = ev.num_symbols < 20 ? (int)ev.num_symbols : 20;
+                    int lim = end < 20 ? (int)end : 20;
                     for (int k = 0; k < lim && p < 300; k++) {
-                        const rmt_symbol_word_t *s = &ev.received_symbols[k];
+                        const rmt_symbol_word_t *s = &s_capbuf[k];
                         p += snprintf(dbuf + p, sizeof(dbuf) - p, "%c%u %c%u ",
                                       s->level0 ? 'H' : 'L', (unsigned)s->duration0,
                                       s->level1 ? 'H' : 'L', (unsigned)s->duration1);
                     }
                     ESP_LOGW(TAG, "DIAG RAW (RSSI %d, FREQEST %d ~%d kHz, %d/%u symb, us): %s",
-                             drssi, fq, fq_khz, lim, (unsigned)ev.num_symbols, dbuf);
+                             drssi, fq, fq_khz, lim, (unsigned)end, dbuf);
                 }
             }
             if (n >= 64) { r = n; break; }                                  /* vraie trame */
-            if (rmt_receive(s_cap, s_capbuf, sizeof(s_capbuf), &rc) != ESP_OK) break;  /* re-arme */
+            /* Fin de reception (silence >8ms = bouton relache) ou buffer presque plein :
+             * on repart neuf (sinon le driver wrap et on casse la contiguite). Sinon la
+             * reception est en cours : le driver continue a remplir, on NE re-arme PAS. */
+            if (ev.flags.is_last || end >= cap - 160) {
+                rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq); prev_end = 0;
+                if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;
+            }
         }
     } else r = -2;
     strobe(CC_SIDLE);
