@@ -345,7 +345,7 @@ int cc1101_capture_init(void) {
      *   trame. with_dma=true donne un grand buffer -> trame complete.
      * - ⚠️ C3 et C6 : PAS de DMA RMT, donc ils tombent dans le #else a 48 words et
      *   RESTENT TRONQUES. Ce n'est pas corrige pour eux, et aucune de nos cartes
-     *   n'est concernee (boards/*.json : esp32 et esp32s3 seulement). Les corriger
+     *   n'est concernee (boards/ ne declare que esp32 et esp32s3). Les corriger
      *   demanderait un autre mecanisme, par exemple une capture par GPIO+timer. */
 #if defined(CONFIG_IDF_TARGET_ESP32)
     c.mem_block_symbols = 512;
