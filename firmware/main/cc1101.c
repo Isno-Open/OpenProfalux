@@ -426,9 +426,15 @@ static size_t deglitch_edges(const rmt_symbol_word_t *in, size_t n) {
  * on n'abandonne jamais la capture). Rend nb bits ; *out_te = moyenne des HAUT courts. */
 static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
     int nb = 0; uint32_t sum = 0; int cnt = 0;
-    for (size_t i = hdr + 1; i + 1 < w && nb < 66; i += 2) {
-        if (s_ed_lvl[i] != 1 || s_ed_lvl[i + 1] != 0) break;   /* alternance HIGH/LOW attendue */
-        uint32_t hi = s_ed_dur[i], lo = s_ed_dur[i + 1];
+    for (size_t i = hdr + 1; i < w && nb < 66; i += 2) {
+        /* 66e bit : son BAS se confond avec la garde qui suit la trame. Quand ce silence
+         * termine la reception (toujours sur ESP32, seuil idle 8 ms), la capture finit sur
+         * ce HAUT sans BAS apres : on le garde, le bit se lisant sur le HAUT seul. Une
+         * repetition coupee plus tot (last && nb!=65) s'arrete comme avant. (fix @Akkeoss) */
+        bool last = i + 1 >= w;
+        if (last && nb != 65) break;
+        if (s_ed_lvl[i] != 1 || (!last && s_ed_lvl[i + 1] != 0)) break;   /* alternance HIGH/LOW attendue */
+        uint32_t hi = s_ed_dur[i], lo = last ? 0 : s_ed_dur[i + 1];
         if (hi < 190 || hi > 1200) break;                      /* HAUT hors gabarit */
         if (hi < 680) { out[nb++] = '1'; sum += hi; cnt++; } else out[nb++] = '0';
         if (lo > 1600) break;                                  /* BAS trop long = garde/entete suivante */
