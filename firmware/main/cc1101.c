@@ -19,6 +19,7 @@
 #include <esp_timer.h>
 #include <driver/rmt_rx.h>
 #include <esp_heap_caps.h>   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
+#include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
 
 static const char *TAG = "cc1101";
 /* ── Switch DEBUG capture RX (runtime, togglable depuis l'UI/MQTT) ──────────
@@ -63,7 +64,8 @@ static QueueHandle_t s_capq = NULL;
  * lignes de cache -> symboles parasites (glitches ~55 us) et corruption silencieuse
  * (cf esp-idf #12564, FastLED #2156). Un simple tableau statique ne garantit NI
  * l'alignement NI MALLOC_CAP_DMA. On l'alloue donc a l'init avec heap_caps. */
-#define CAP_SYMBOLS 1024
+#define CAP_SYMBOLS KEELOQ_CAP_SYMBOLS   /* source unique (keeloq_decode.h) */
+_Static_assert(sizeof(kq_sym_t) == sizeof(rmt_symbol_word_t), "kq_sym_t doit avoir la meme disposition que rmt_symbol_word_t");
 static rmt_symbol_word_t *s_capbuf = NULL;
 static size_t s_capbuf_sz = 0;
 /* RX et auto-capture partagent l'unique canal RMT s_cap sur GDO0 (memoire RMT limitee). */
@@ -387,109 +389,15 @@ int cc1101_capture_init(void) {
 
 /* Emet la trame ET capture GDO0, decode la forme d'onde en bits (ordre du fil).
  * Retourne le nombre de bits decodes (<0 = erreur). bit=1 si HAUT court (H<680us). */
-/* === Decodage OOK HCS30x/KeeLoq, pipeline tolerant au bruit (inspire Flipper keeloq.c +
- * rtl_433 pulse_slicer_pwm). HCS301 : Te~430us, bit=3Te, '0'=2Te haut +1Te bas,
- * '1'=1Te haut +2Te bas ; preambule 23 Te (50% duty), entete TH~10 Te (LOW long),
- * 66 bits, garde ~39 Te, trame repetee ~10x. Pas de CRC : on valide par serial+bouton. === */
-#define GLITCH_US 140          /* slivers < ~Te/3 = bruit de demod OOK -> jetes */
-#define TE_NOM    430          /* temps elementaire mesure (us) */
-
-/* Liste de fronts (niveau,duree) de-glitchee, partagee par le decodeur. */
-static uint16_t s_ed_dur[2 * (CAP_SYMBOLS + 2)];
-static uint8_t  s_ed_lvl[2 * (CAP_SYMBOLS + 2)];
-
-/* Aplatit les symboles RMT en fronts, JETTE les slivers de bruit (<GLITCH_US) et FUSIONNE
- * les fronts de meme niveau qui deviennent adjacents (recolle une impulsion coupee par un
- * glitch). Rend le nombre de fronts. Les fronts resultants alternent strictement H/L. */
-static size_t deglitch_edges(const rmt_symbol_word_t *in, size_t n) {
-    size_t w = 0; const size_t EMAX = sizeof(s_ed_lvl) / sizeof(s_ed_lvl[0]);
-    for (size_t i = 0; i < n; i++) {
-        uint32_t d[2] = { in[i].duration0, in[i].duration1 };
-        uint8_t  l[2] = { in[i].level0,    in[i].level1 };
-        for (int k = 0; k < 2; k++) {
-            if (d[k] == 0) return w;                 /* duree 0 = marqueur EOF du driver */
-            if (d[k] < GLITCH_US) continue;          /* sliver de bruit : on jette */
-            if (w > 0 && s_ed_lvl[w - 1] == l[k]) {  /* meme niveau que le precedent garde : fusion */
-                uint32_t s = (uint32_t)s_ed_dur[w - 1] + d[k];
-                s_ed_dur[w - 1] = s > 65535 ? 65535 : (uint16_t)s;
-            } else if (w < EMAX) {
-                s_ed_dur[w] = d[k] > 65535 ? 65535 : (uint16_t)d[k]; s_ed_lvl[w] = l[k]; w++;
-            }
-        }
-    }
-    return w;
-}
-
-/* Decode UNE repetition a partir d'une entete (LOW long a l'index hdr). Apparie HIGH/LOW,
- * classe le bit par la duree du HAUT (court ~1Te = '1', long ~2Te = '0'). Une impulsion
- * hors gabarit ARRETE cette repetition (le scan des entetes suivantes re-synchronise,
- * on n'abandonne jamais la capture). Rend nb bits ; *out_te = moyenne des HAUT courts. */
-static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
-    int nb = 0; uint32_t sum = 0; int cnt = 0;
-    for (size_t i = hdr + 1; i < w && nb < 66; i += 2) {
-        /* 66e bit : son BAS se confond avec la garde qui suit la trame. Quand ce silence
-         * termine la reception (toujours sur ESP32, seuil idle 8 ms), la capture finit sur
-         * ce HAUT sans BAS apres : on le garde, le bit se lisant sur le HAUT seul. Une
-         * repetition coupee plus tot (last && nb!=65) s'arrete comme avant. (fix @Akkeoss) */
-        bool last = i + 1 >= w;
-        if (last && nb != 65) break;
-        if (s_ed_lvl[i] != 1 || (!last && s_ed_lvl[i + 1] != 0)) break;   /* alternance HIGH/LOW attendue */
-        uint32_t hi = s_ed_dur[i], lo = last ? 0 : s_ed_dur[i + 1];
-        if (hi < 190 || hi > 1200) break;                      /* HAUT hors gabarit */
-        if (hi < 680) { out[nb++] = '1'; sum += hi; cnt++; } else out[nb++] = '0';
-        if (lo > 1600) break;                                  /* BAS trop long = garde/entete suivante */
-    }
-    out[nb] = 0;
-    if (out_te && cnt) *out_te = (int)(sum / cnt);
-    return nb;
-}
-
-/* Decode une capture RMT. 1) de-glitch ; 2) scanne TOUTES les entetes (LOW long ~10 Te)
- * et decode chaque repetition sans jamais abandonner ; 3) VOTE MAJORITAIRE bit a bit sur
- * les repetitions >=64 bits (un glitch tombe a des positions differentes selon la repet,
- * le vote le corrige). Rend 66 (trame votee), la meilleure partielle sinon, -4 si rien. */
-#define VOTE_MINBITS 16   /* on inclut les repetitions PARTIELLES >=16 bits dans le vote.
-                           * Comme on n'ancre QUE sur le vrai en-tete (voir decode_rmt), tous
-                           * les fragments sont des prefixes EXACTS alignes sur le bit 0 : les
-                           * additionner couvre toutes les positions et reconstruit 66 bits
-                           * meme si aucune repetition n'est complete seule. <16 bits = bruit. */
-#define VOTE_MAXW   32
-static int decode_rmt(const rmt_symbol_word_t *raw, size_t raw_n, char *out, int max_bits) {
-    (void)max_bits;
-    size_t w = deglitch_edges(raw, raw_n);
-    static char words[VOTE_MAXW][67];
-    int nwords = 0, best = -4, te_any = 0;
-    char tmp[80], bestpart[80]; bestpart[0] = 0;
-    for (size_t i = 0; i < w; i++) {
-        /* On ancre UNIQUEMENT sur le vrai en-tete HCS (~10 Te = 4,5-6,5 ms). Les gardes
-         * et dropouts (>9 ms) sont suivis du PREAMBULE, pas du bit 0 : s'y ancrer
-         * decalerait les fragments et polluerait le vote. On les exclut donc. */
-        if (!(s_ed_lvl[i] == 0 && s_ed_dur[i] > 3000 && s_ed_dur[i] < 8500)) continue;
-        int te = 0;
-        int nb = decode_word(i, w, tmp, &te);
-        if (nb > best) { best = nb; memcpy(bestpart, tmp, (size_t)nb + 1); }
-        if (nb >= VOTE_MINBITS && nwords < VOTE_MAXW) {
-            memcpy(words[nwords], tmp, (size_t)nb + 1); nwords++;
-            if (te) te_any = te;
-        }
-    }
-    if (nwords > 0) {                                  /* vote majoritaire bit a bit */
-        int L = 0;
-        for (int p = 0; p < 66; p++) {
-            int ones = 0, tot = 0;
-            for (int k = 0; k < nwords; k++)
-                if ((int)strlen(words[k]) > p) { tot++; if (words[k][p] == '1') ones++; }
-            if (tot == 0) break;                       /* plus aucune repetition ne couvre cette position */
-            out[p] = (ones * 2 >= tot) ? '1' : '0';
-            L = p + 1;
-        }
-        out[L] = 0;
-        if (te_any) s_last_te = te_any;
-        if (L >= 64) return L;                         /* trame votee complete */
-    }
-    if (best < 0) { out[0] = 0; return -4; }
-    memcpy(out, bestpart, (size_t)best + 1);          /* pas de trame complete : meilleure partielle */
-    return best;
+/* decode_rmt : fin wrapper autour du decodeur PUR keeloq_decode() (unite keeloq_decode.c,
+ * testee sur hote dans firmware/test/keeloq). On caste le buffer RMT en kq_sym_t (meme
+ * disposition binaire, cf _Static_assert plus haut) et on met a jour le TE mesure
+ * (auto-calage du rejeu). Tout le decodage (de-glitch, scan entetes, vote) vit dans l'unite. */
+static int decode_rmt(const rmt_symbol_word_t *raw, size_t n, char *out, int max_bits) {
+    int te = 0;
+    int r = keeloq_decode((const kq_sym_t *)raw, n, out, max_bits, &te);
+    if (te) s_last_te = te;
+    return r;
 }
 
 int cc1101_tx_and_capture_bits(const uint8_t *frame, size_t bits, char *out_bits, int max_bits) {
