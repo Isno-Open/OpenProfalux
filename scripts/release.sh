@@ -28,6 +28,14 @@ IMAGE="${IDF_IMAGE:-espressif/idf:v6.1}"
 cd "$ROOT/firmware"
 VER=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)
 [ -n "$VER" ] || { echo "PROJECT_VER introuvable dans firmware/CMakeLists.txt"; exit 1; }
+# Une version publiee ne se republie pas sous un autre numero : v0.2.6 a ete taguee
+# avec PROJECT_VER encore a 0.2.5, et ses binaires s'annoncaient 0.2.5 (la mise a
+# jour leur etait proposee en boucle). Le tag v$VER deja pose sur un AUTRE commit
+# veut dire que PROJECT_VER n'a pas ete monte.
+if tag=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/v$VER^{commit}"); then
+  [ "$tag" = "$(git -C "$ROOT" rev-parse HEAD)" ] || {
+    echo "v$VER est deja publiee (tag sur ${tag:0:7}) : monter PROJECT_VER dans firmware/CMakeLists.txt"; exit 1; }
+fi
 
 if [ $# -gt 0 ]; then
   CARTES="$*"
@@ -65,5 +73,14 @@ for carte in $CARTES; do
   cp "$B/full.bin" "$ROOT/dist/openprofalux-$carte-full.bin"
 done
 
+# Les boitiers en v0.2.3 (avant boards/<carte>.json) cherchent leur mise a jour sous
+# les anciens noms. Memes cartes (brochage et table de partitions identiques) : une
+# copie sous ces noms leur permet de se mettre a jour depuis GitHub.
+for paire in m5-atom-lite:atom external:devkit; do
+  src="$ROOT/dist/openprofalux-${paire%%:*}-ota.bin"
+  if [ -f "$src" ]; then cp "$src" "$ROOT/dist/openprofalux-${paire##*:}-ota.bin"; fi
+done
+
 echo
 ls -la "$ROOT/dist"/*.bin
+echo "Binaires faits depuis $(git -C "$ROOT" rev-parse --short HEAD)$(git -C "$ROOT" diff --quiet HEAD || echo ' + modifications non commitees') : c'est ce commit qu'il faut taguer v$VER."

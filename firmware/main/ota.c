@@ -172,13 +172,14 @@ esp_err_t ota_check_github(void)
         if (e && (e - t) < 20) {
             char tag[24]; size_t nn = (size_t)(e - t); memcpy(tag, t, nn); tag[nn] = 0;
             strlcpy(s_latest_ver, tag[0] == 'v' ? tag + 1 : tag, sizeof(s_latest_ver));
-            const char *variant = !strcmp(TARGET_NAME, "m5stack_atom") ? "atom"
-                                : !strcmp(TARGET_NAME, "external")     ? "devkit" : NULL;
-            if (variant) {
-                snprintf(s_latest_url, sizeof(s_latest_url),
-                    "https://github.com/Isno-Open/OpenProfalux/releases/download/%s/openprofalux-%s-ota.bin", tag, variant);
-                rc = ESP_OK;
-            }
+            /* Asset de CETTE carte : scripts/release.sh nomme chaque binaire
+             * openprofalux-<carte>-ota.bin, <carte> etant l'id de boards/<carte>.json,
+             * le meme que TARGET_NAME. L'ancienne table (m5stack_atom -> atom,
+             * external -> devkit) datait d'avant ces fichiers : plus aucune carte n'y
+             * correspondait, et la mise a jour depuis GitHub etait impossible. */
+            snprintf(s_latest_url, sizeof(s_latest_url),
+                "https://github.com/Isno-Open/OpenProfalux/releases/download/%s/openprofalux-%s-ota.bin", tag, TARGET_NAME);
+            rc = ESP_OK;
         }
     }
     free(buf);
