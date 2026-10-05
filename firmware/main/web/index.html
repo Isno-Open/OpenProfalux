@@ -167,6 +167,13 @@
         <div class="row" style="margin:-4px 0 12px"><button class="btn ghost" id="mqtt-detect">🔍 Détecter le broker (mDNS)</button></div>
         <div class="field"><label>Utilisateur</label><input id="mqtt-user" placeholder="(optionnel)"></div>
         <div class="field"><label>Mot de passe</label><input id="mqtt-pass" type="password" placeholder="•••••••• (inchangé si vide)"></div>
+        <details class="field" style="margin-bottom:12px">
+          <summary style="cursor:pointer;font-weight:600">🔒 TLS (mqtts://)</summary>
+          <p class="hint" style="margin-top:8px">Préfixe le broker par <code>mqtts://</code> pour chiffrer. Colle le certificat de l'autorité (CA) du broker, obligatoire pour un broker auto-signé. Pour le TLS mutuel, ajoute le certificat et la clé du client. Laisser un champ vide ne change pas le certificat déjà enregistré.</p>
+          <div class="field"><label>Certificat de l'autorité (CA) du broker</label><textarea id="mqtt-ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+          <div class="field"><label>Certificat client (TLS mutuel)</label><textarea id="mqtt-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+          <div class="field"><label>Clé privée client</label><textarea id="mqtt-key" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+        </details>
         <div class="field"><label>Nom de l'appareil (Home Assistant)</label><input id="mqtt-device" placeholder="OpenProfalux"></div>
         <div class="row end"><button id="mqtt-save" class="btn primary">Enregistrer le MQTT</button></div>
       </div>

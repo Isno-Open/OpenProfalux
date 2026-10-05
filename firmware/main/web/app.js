@@ -621,6 +621,12 @@ async function loadConfig() {
   if ($('#mqtt-pass')) $('#mqtt-pass').placeholder = c.mqtt_pass_len
     ? `•••••••• (${c.mqtt_pass_len} car. enregistrés, laisser vide pour ne pas changer)`
     : 'mot de passe du broker';
+  /* Certificats TLS : on n'affiche que la longueur enregistrée, jamais le contenu. */
+  const certPh = (id, len, empty) => { const e = $(id); if (e) e.placeholder = len
+    ? `${len} octets enregistrés, laisser vide pour ne pas changer` : empty; };
+  certPh('#mqtt-ca', c.mqtt_ca_len, '-----BEGIN CERTIFICATE-----');
+  certPh('#mqtt-cert', c.mqtt_cert_len, '-----BEGIN CERTIFICATE-----');
+  certPh('#mqtt-key', c.mqtt_key_len, '-----BEGIN PRIVATE KEY-----');
   $('#sys-device').value = c.device || ''; $('#sys-logframes').checked = !!c.log_frames;
   const uph = $('#sys-uipass-hint'), upi = $('#sys-uipass'), upc = $('#sys-uipass-clear');
   if (uph) uph.innerHTML = c.ui_auth
@@ -655,6 +661,10 @@ $('#wifi-save').onclick = async () => {
 $('#mqtt-save').onclick = async () => {
   const b = { mqtt_uri: $('#mqtt-uri').value.trim(), mqtt_user: $('#mqtt-user').value.trim(), reboot: true };
   if ($('#mqtt-pass').value) b.mqtt_pass = $('#mqtt-pass').value;
+  /* Certificats TLS : envoyés seulement si remplis (sinon inchangés), comme le mot de passe. */
+  if ($('#mqtt-ca') && $('#mqtt-ca').value.trim()) b.mqtt_ca = $('#mqtt-ca').value.trim();
+  if ($('#mqtt-cert') && $('#mqtt-cert').value.trim()) b.mqtt_cert = $('#mqtt-cert').value.trim();
+  if ($('#mqtt-key') && $('#mqtt-key').value.trim()) b.mqtt_key = $('#mqtt-key').value.trim();
   if ($('#mqtt-device')) b.device = $('#mqtt-device').value.trim();
   await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
   toast('MQTT enregistré, redémarrage…');

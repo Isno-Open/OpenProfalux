@@ -6,6 +6,7 @@
 #include "pfx_enrol.h"
 #include "radio.h"
 #include "ota.h"
+#include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en SPIFFS) */
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
 #include <stdlib.h>
@@ -401,13 +402,15 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) txte = t;
         nvs_close(h);
     }
-    char out[560];
-    /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque). */
+    char out[720];
+    /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque).
+     * Certificats TLS : on ne renvoie que leur longueur, jamais le contenu (surtout la cle). */
     snprintf(out, sizeof(out),
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
              "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
-             "\"ui_auth\":%d}",
+             "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d}",
              dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
+             (unsigned)mqtt_cert_len("ca"), (unsigned)mqtt_cert_len("cert"), (unsigned)mqtt_cert_len("key"),
              s_ui_pass[0] ? 1 : 0);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
     httpd_resp_set_type(r, "application/json");
@@ -428,6 +431,12 @@ static esp_err_t h_config_post(httpd_req_t *r) {
         cfg_set_if(h, j, "wifi_ssid", "wifi_ssid"); cfg_set_if(h, j, "wifi_pass", "wifi_pass");
         cfg_set_if(h, j, "mqtt_uri", "mqtt_uri"); cfg_set_if(h, j, "mqtt_user", "mqtt_user");
         cfg_set_if(h, j, "mqtt_pass", "mqtt_pass");
+        /* Certificats TLS mqtts : ecrits en SPIFFS (pas en NVS, trop petite). Champ absent =
+         * inchange (l'UI n'envoie que ce qui change, comme le mot de passe). */
+        { const char *v;
+          if ((v = jstr(j, "mqtt_ca")))   mqtt_cert_write("ca",   v);
+          if ((v = jstr(j, "mqtt_cert"))) mqtt_cert_write("cert", v);
+          if ((v = jstr(j, "mqtt_key")))  mqtt_cert_write("key",  v); }
         cJSON *lf = cJSON_GetObjectItem(j, "log_frames");
         if (cJSON_IsBool(lf) || cJSON_IsNumber(lf)) {
             uint8_t on = cJSON_IsTrue(lf) || (cJSON_IsNumber(lf) && lf->valuedouble != 0);

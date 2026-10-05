@@ -19,9 +19,18 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 int  mqtt_bridge_start(const char *broker_uri, const char *client_id, const char *user, const char *pass);
 void mqtt_bridge_stop(void);
+
+/* Certificats TLS pour mqtts, stockes en SPIFFS (partition storage, 960 Ko) et non en
+ * NVS : la NVS de 16 Ko est deja trop juste pour la config des volets, exactement comme
+ * pour le ring de trames. which = "ca" (autorite du broker) | "cert" (client) | "key"
+ * (cle privee client). mqtt_bridge_start lit ces fichiers tout seul quand l'URI est en
+ * mqtts://. Ecrit le PEM tel quel ; longueur 0 efface le certificat. */
+int    mqtt_cert_write(const char *which, const char *pem);
+size_t mqtt_cert_len(const char *which);
 
 /* Publish */
 int  mqtt_pub_state(const char *device_name, const char *json);
