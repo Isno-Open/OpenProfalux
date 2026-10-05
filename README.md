@@ -93,3 +93,9 @@ ne se tient pas à la main.
 
 Même approche (capture + rejeu) potentiellement applicable à d'autres volets 868 MHz à
 rolling code non contraint (Delta Dore X2D, France Fermetures LIBRIO…), non vérifié.
+
+## Remerciements
+
+Merci aux personnes qui font avancer le projet :
+
+- [@Akkeoss](https://github.com/Akkeoss) : authentification de l'interface web, ordre des volets dans l'interface, et la liste des membres d'une centrale portée sur le tas (fin des troncatures au-delà de 384 octets).
