@@ -8,6 +8,7 @@
 #include <esp_log.h>
 #include <esp_app_desc.h>
 #include <esp_crt_bundle.h>
+#include <nvs.h>
 #include <cJSON.h>
 
 static const char *TAG = "mqtt";
@@ -99,28 +100,35 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
     }
 }
 
-/* ── Certificats TLS en SPIFFS ── */
-static const char *cert_path(const char *which) {
-    if (!strcmp(which, "ca"))   return "/spiffs/mqtt_ca.pem";
-    if (!strcmp(which, "cert")) return "/spiffs/mqtt_cert.pem";
-    if (!strcmp(which, "key"))  return "/spiffs/mqtt_key.pem";
+/* ── Certificats TLS en NVS (namespace "mqtt_tls") ──
+ * La config MQTT (URI, user, mot de passe) vit deja en NVS ; les certificats l'y rejoignent,
+ * sans nouvelle partition, donc compatible OTA. Stockes en blob AVEC le \0 final (esp-mqtt
+ * exige un PEM termine par \0). Plafond par certificat (MQTT_CERT_MAX) pour ne pas noyer la
+ * config des volets dans la nvs de 16 Ko : au-dela, l'ecriture est refusee proprement. */
+#define MQTT_TLS_NS   "mqtt_tls"
+#define MQTT_CERT_MAX 2048          /* octets max par certificat PEM, \0 compris */
+
+static const char *cert_key(const char *which) {
+    if (!strcmp(which, "ca"))   return "ca";
+    if (!strcmp(which, "cert")) return "cert";
+    if (!strcmp(which, "key"))  return "key";
     return NULL;
 }
 /* Lit un certificat PEM sur le tas, termine par \0 (exige par esp-mqtt). NULL si absent,
  * vide ou erreur : l'appelant retombe alors sur le bundle (CA) ou coupe le TLS mutuel. */
-static char *read_cert_file(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    if (n <= 0) { fclose(f); return NULL; }
-    char *buf = malloc((size_t)n + 1);
-    if (!buf) { fclose(f); return NULL; }
-    fseek(f, 0, SEEK_SET);
-    size_t rd = fread(buf, 1, (size_t)n, f);
-    fclose(f);
-    if (rd == 0) { free(buf); return NULL; }
-    buf[rd] = 0;
+static char *read_cert_nvs(const char *which) {
+    const char *key = cert_key(which);
+    if (!key) return NULL;
+    nvs_handle_t h;
+    if (nvs_open(MQTT_TLS_NS, NVS_READONLY, &h) != ESP_OK) return NULL;
+    size_t n = 0;
+    char *buf = NULL;
+    if (nvs_get_blob(h, key, NULL, &n) == ESP_OK && n > 1 && n <= MQTT_CERT_MAX) {
+        buf = malloc(n);
+        if (buf && nvs_get_blob(h, key, buf, &n) != ESP_OK) { free(buf); buf = NULL; }
+    }
+    nvs_close(h);
+    if (buf) buf[n - 1] = 0;   /* garantit le \0 final */
     return buf;
 }
 /* Hote de l'URI = IPv4 litterale ? Le CN d'un certificat ne peut pas correspondre a une
@@ -137,25 +145,34 @@ static bool host_is_ipv4(const char *uri) {
     return groups == 3 && digits > 0;
 }
 int mqtt_cert_write(const char *which, const char *pem) {
-    const char *path = cert_path(which);
-    if (!path) return -1;
+    const char *key = cert_key(which);
+    if (!key) return -1;
     size_t len = pem ? strlen(pem) : 0;
-    if (len == 0) { remove(path); return 0; }   /* vide = efface le certificat */
-    FILE *f = fopen(path, "wb");
-    if (!f) return -1;
-    size_t wr = fwrite(pem, 1, len, f);
-    fclose(f);
-    return wr == len ? 0 : -1;
+    nvs_handle_t h;
+    if (nvs_open(MQTT_TLS_NS, NVS_READWRITE, &h) != ESP_OK) return -1;
+    esp_err_t e;
+    if (len == 0) {                                   /* vide = efface le certificat */
+        e = nvs_erase_key(h, key);
+        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;   /* deja absent = OK */
+    } else if (len + 1 > MQTT_CERT_MAX) {             /* trop gros : refuse */
+        nvs_close(h);
+        return -2;
+    } else {
+        e = nvs_set_blob(h, key, pem, len + 1);       /* stocke le PEM avec son \0 */
+    }
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK ? 0 : -1;
 }
 size_t mqtt_cert_len(const char *which) {
-    const char *path = cert_path(which);
-    if (!path) return 0;
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fclose(f);
-    return n > 0 ? (size_t)n : 0;
+    const char *key = cert_key(which);
+    if (!key) return 0;
+    nvs_handle_t h;
+    if (nvs_open(MQTT_TLS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+    size_t n = 0;
+    if (nvs_get_blob(h, key, NULL, &n) != ESP_OK) n = 0;
+    nvs_close(h);
+    return n > 1 ? n - 1 : 0;   /* longueur du PEM sans le \0 */
 }
 /* Libere les certificats charges (au stop ou avant un rechargement). */
 static void free_tls_certs(void) {
@@ -188,13 +205,13 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
         .session.last_will.retain = 1,
     };
     /* TLS (mqtts://) : on verifie le broker et, si fournis, on presente un certificat
-     * client (TLS mutuel). Les PEM vivent en SPIFFS, charges ici sur le tas et gardes
+     * client (TLS mutuel). Les PEM vivent en NVS, charges ici sur le tas et gardes
      * vivants jusqu'au stop (esp-mqtt peut les referencer apres l'init). */
     free_tls_certs();
     if (strncmp(s_uri, "mqtts://", 8) == 0) {
-        s_tls_ca   = read_cert_file(cert_path("ca"));
-        s_tls_cert = read_cert_file(cert_path("cert"));
-        s_tls_key  = read_cert_file(cert_path("key"));
+        s_tls_ca   = read_cert_nvs("ca");
+        s_tls_cert = read_cert_nvs("cert");
+        s_tls_key  = read_cert_nvs("key");
         if (s_tls_ca) cfg.broker.verification.certificate = s_tls_ca;          /* autorite du broker */
         else          cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;  /* broker public */
         cfg.broker.verification.skip_cert_common_name_check = host_is_ipv4(s_uri);
