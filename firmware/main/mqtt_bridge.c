@@ -1,5 +1,6 @@
 #include "mqtt_bridge.h"
-#include "hardware_config.h"   /* TARGET_NAME, utilise ligne 130 */
+#include "hardware_config.h"
+#include "mqtt_tls_policy.h"   /* TARGET_NAME, utilise ligne 130 */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,19 +162,6 @@ static char *read_cert_nvs(const char *which) {
     if (buf) buf[n - 1] = 0;   /* garantit le \0 final */
     return buf;
 }
-/* Hote de l'URI = IPv4 litterale ? Sert a decider de lever ou non le controle du nom
- * (CN) du certificat ; la decision complete est au point d'appel (TLS mutuel). */
-static bool host_is_ipv4(const char *uri) {
-    const char *h = strstr(uri, "://");
-    h = h ? h + 3 : uri;
-    int groups = 0, digits = 0;
-    for (; *h && *h != ':' && *h != '/'; h++) {
-        if (*h == '.')      { if (!digits) return false; groups++; digits = 0; }
-        else if (isdigit((unsigned char)*h)) digits++;
-        else return false;
-    }
-    return groups == 3 && digits > 0;
-}
 int mqtt_cert_write(const char *which, const char *pem) {
     const char *key = cert_key(which);
     if (!key) return -1;
@@ -257,7 +245,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
          * certificats. Avec le bundle public on garde le controle : il echoue sur une IP (aucun
          * CA public n'emet pour une IP privee), et c'est voulu, sinon n'importe quel certificat
          * public usurperait le broker. */
-        bool skip_cn = host_is_ipv4(s_uri) && s_tls_ca != NULL;
+        bool skip_cn = mqtt_tls_skip_cn(s_uri, s_tls_ca != NULL);
         cfg.broker.verification.skip_cert_common_name_check = skip_cn;
         if (s_tls_cert && s_tls_key) {   /* TLS mutuel : certificat + cle du client */
             cfg.credentials.authentication.certificate = s_tls_cert;
