@@ -53,9 +53,11 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
 int  shutters_adopt(const char *id, const char *action, const char *serial, uint32_t hop);
 /* Rejoue telle quelle une trame captee (serial+hop) depuis le journal RF (bouton "rejouer" du debug). */
 int  shutters_replay_frame(const char *serial, uint32_t hop);
-/* Ring RF (300 trames recentes) pour /api/rf : k=0 = plus recente. Renvoie 0 si presente, -1 sinon. */
-int  shutters_rf_get(int k, char *serial, int sser, uint8_t *button, uint32_t *hop, uint32_t *t, int8_t *rssi);
-int  shutters_rf_capacity(void);
+/* Journal RF pour /api/rf : la page [offset, offset + limit) des trames triees par date
+ * (recentes d'abord), copiee dans out (limit places). Renvoie le nombre total de trames
+ * (-1 si plus de memoire) ; *nout recoit le nombre copie. */
+typedef struct { char serial[SH_SERIAL_LEN]; uint32_t hop, t; uint8_t button; int8_t rssi; } shutters_rf_item_t;
+int  shutters_rf_page(int offset, int limit, shutters_rf_item_t *out, int *nout);
 
 /* JSON /api/status, alloue a sa taille : a liberer par l'appelant (NULL si plus de
  * memoire). Plus de tampon fixe : celui de 4 Ko tronquait l'etat au-dela de ~9 volets,
@@ -69,7 +71,10 @@ void shutters_mqtt_lost(void);   /* broker perdu -> statut hors ligne */
 /* Export dataset slide : par telecommande, ses trames distinctes {hop, bouton, t} (tout brut). */
 typedef struct { uint32_t hop; uint32_t t; uint8_t button; } dframe_t;
 int  shutters_remote_count(void);
-int  shutters_remote_dump(int i, char *serial, int sser, char *name, int sname, dframe_t *frames, int maxframes);
+/* Telecommande i : numero, nom, et ses trames [from, from + maxframes) copiees dans frames.
+ * Renvoie son nombre TOTAL de trames (-1 si i n'existe pas) : l'export les parcourt par
+ * tranches, sans tampon de la taille du dataset. */
+int  shutters_remote_dump(int i, int from, char *serial, int sser, char *name, int sname, dframe_t *frames, int maxframes);
 /* Route une commande HA cover recue en MQTT : openprofalux/cover/<id>/set|set_position. */
 void shutters_mqtt_on_message(const char *topic, const char *data, int len);
 /* Active/desactive la publication MQTT de TOUTES les trames captees (dedup par serial). */

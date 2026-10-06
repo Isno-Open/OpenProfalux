@@ -493,28 +493,35 @@ static esp_err_t h_config_post(httpd_req_t *r) {
 
 /* ── /api/frames : export du dataset slide (par telecommande : {hop, button, t} par trame), chunke.
  * hop = ciphertext C (brut) ; button + t (ordre = compteur) permettent de reconstruire le plaintext P. ── */
-#define SH_MAX_HOPS_EXPORT 1024   /* aligne sur SH_MAX_HOPS (cap par telecommande) */
+/* Par tranches de FRAMES_CHUNK : un tampon de tout le dataset d'une telecommande
+ * (1024 trames, 12 Ko) restait reserve en permanence pour cet export manuel. */
+#define FRAMES_CHUNK 64
 static esp_err_t h_frames(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
     httpd_resp_set_hdr(r, "Content-Disposition", "attachment; filename=openprofalux-trames.json");
-    static dframe_t fbuf[SH_MAX_HOPS_EXPORT];
+    dframe_t fbuf[FRAMES_CHUNK];
     char serial[SH_SERIAL_LEN], name[SH_ID_LEN], line[600];
     httpd_resp_sendstr_chunk(r, "{\"trames\":{");
     int nr = shutters_remote_count();
     for (int i = 0; i < nr; i++) {
-        int nh = shutters_remote_dump(i, serial, sizeof(serial), name, sizeof(name), fbuf, SH_MAX_HOPS_EXPORT);
+        int nh = shutters_remote_dump(i, 0, serial, sizeof(serial), name, sizeof(name), fbuf, FRAMES_CHUNK);
         if (nh < 0) continue;
         int p = snprintf(line, sizeof(line), "%s\"%s\":{\"name\":\"%s\",\"count\":%d,\"frames\":[",
                          i ? "," : "", serial, name, nh);
         httpd_resp_send_chunk(r, line, p);
-        for (int k = 0; k < nh; ) {
-            p = 0;
-            while (k < nh && p < (int)sizeof(line) - 64) {
-                p += snprintf(line + p, sizeof(line) - p, "%s{\"hop\":\"0x%08X\",\"button\":\"0x%X\",\"t\":%u}",
-                              k ? "," : "", (unsigned)fbuf[k].hop, fbuf[k].button, (unsigned)fbuf[k].t);
-                k++;
+        for (int from = 0; from < nh; from += FRAMES_CHUNK) {
+            int tot = from ? shutters_remote_dump(i, from, serial, sizeof(serial), name, sizeof(name), fbuf, FRAMES_CHUNK) : nh;
+            int m = (tot < nh ? tot : nh) - from; if (m > FRAMES_CHUNK) m = FRAMES_CHUNK;
+            if (m <= 0) break;   /* dataset vide entre-temps (restauration) */
+            for (int k = 0; k < m; ) {
+                p = 0;
+                while (k < m && p < (int)sizeof(line) - 64) {
+                    p += snprintf(line + p, sizeof(line) - p, "%s{\"hop\":\"0x%08X\",\"button\":\"0x%X\",\"t\":%u}",
+                                  from + k ? "," : "", (unsigned)fbuf[k].hop, fbuf[k].button, (unsigned)fbuf[k].t);
+                    k++;
+                }
+                httpd_resp_send_chunk(r, line, p);
             }
-            httpd_resp_send_chunk(r, line, p);
         }
         httpd_resp_sendstr_chunk(r, "]}");
     }
@@ -524,12 +531,6 @@ static esp_err_t h_frames(httpd_req_t *r) {
 }
 
 /* ── /api/rf?offset=&limit= : trames du ring triees par date (recentes d'abord), paginees ── */
-#define RF_MAX_ITEMS 1000
-typedef struct { char serial[SH_SERIAL_LEN]; uint32_t hop, t; uint8_t button; int8_t rssi; } rfitem_t;
-static int rf_cmp(const void *a, const void *b) {   /* t decroissant (plus recent d'abord) */
-    uint32_t ta = ((const rfitem_t *)a)->t, tb = ((const rfitem_t *)b)->t;
-    return (tb > ta) - (tb < ta);
-}
 static esp_err_t h_rf(httpd_req_t *req) {
     int offset = 0, limit = 50;
     char q[80], v[16];
@@ -540,24 +541,24 @@ static esp_err_t h_rf(httpd_req_t *req) {
     if (limit < 1) limit = 1;
     if (limit > 100) limit = 100;
     if (offset < 0) offset = 0;
-    /* collecte toutes les trames du ring puis tri par date (le ring peut etre desordonne apres repeuplement MQTT) */
-    static rfitem_t items[RF_MAX_ITEMS];
-    int cap = shutters_rf_capacity(); if (cap > RF_MAX_ITEMS) cap = RF_MAX_ITEMS;
-    int n = 0;
-    for (int k = 0; k < cap; k++)
-        if (shutters_rf_get(k, items[n].serial, sizeof(items[n].serial), &items[n].button, &items[n].hop, &items[n].t, &items[n].rssi) == 0) n++;
-    qsort(items, n, sizeof(rfitem_t), rf_cmp);
+    /* Tri par date de tout le ring (il peut etre desordonne apres repeuplement MQTT), mais
+     * seule la page demandee est copiee : shutters_rf_page. Plus de tableau statique de
+     * 24 Ko pour les 1000 trames, dont 100 au plus etaient renvoyees. */
+    shutters_rf_item_t *items = malloc((size_t)limit * sizeof(*items));
+    int c = 0, n = items ? shutters_rf_page(offset, limit, items, &c) : -1;
+    if (n < 0) { free(items); return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "mem"); }
     httpd_resp_set_type(req, "application/json");
     char line[176];
     int p = snprintf(line, sizeof(line), "{\"total\":%d,\"offset\":%d,\"frames\":[", n, offset);
     httpd_resp_send_chunk(req, line, p);
-    for (int i = offset, c = 0; i < n && c < limit; i++, c++) {
-        rfitem_t *it = &items[i];
+    for (int i = 0; i < c; i++) {
+        shutters_rf_item_t *it = &items[i];
         p = snprintf(line, sizeof(line),
             "%s{\"serial\":\"%s\",\"button\":\"%X\",\"hop\":\"%08X\",\"rssi\":%d,\"t\":%u}",
-            c ? "," : "", it->serial, it->button, (unsigned)it->hop, it->rssi, (unsigned)it->t);
+            i ? "," : "", it->serial, it->button, (unsigned)it->hop, it->rssi, (unsigned)it->t);
         httpd_resp_send_chunk(req, line, p);
     }
+    free(items);
     httpd_resp_sendstr_chunk(req, "]}");
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
