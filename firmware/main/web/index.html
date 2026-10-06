@@ -171,9 +171,9 @@
         <details class="field" style="margin-bottom:12px">
           <summary style="cursor:pointer;font-weight:600">🔒 TLS (mqtts://)</summary>
           <p class="hint" style="margin-top:8px">Préfixe le broker par <code>mqtts://</code> pour chiffrer. Colle le certificat de l'autorité (CA) du broker, obligatoire pour un broker auto-signé. Pour le TLS mutuel, ajoute le certificat et la clé du client. Laisser un champ vide ne change pas le certificat déjà enregistré.</p>
-          <div class="field"><label>Certificat de l'autorité (CA) du broker</label><textarea id="mqtt-ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
-          <div class="field"><label>Certificat client (TLS mutuel)</label><textarea id="mqtt-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
-          <div class="field"><label>Clé privée client</label><textarea id="mqtt-key" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+          <div class="field"><label>Certificat de l'autorité (CA) du broker</label><textarea id="mqtt-ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea><label class="hint" style="display:block;margin-top:4px"><input type="checkbox" id="mqtt-ca-clear"> Effacer le certificat enregistré (revenir au bundle public)</label></div>
+          <div class="field"><label>Certificat client (TLS mutuel)</label><textarea id="mqtt-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea><label class="hint" style="display:block;margin-top:4px"><input type="checkbox" id="mqtt-cert-clear"> Effacer le certificat client enregistré</label></div>
+          <div class="field"><label>Clé privée client</label><textarea id="mqtt-key" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea><label class="hint" style="display:block;margin-top:4px"><input type="checkbox" id="mqtt-key-clear"> Effacer la clé enregistrée</label></div>
         </details>
         <div class="field"><label>Nom de l'appareil (Home Assistant)</label><input id="mqtt-device" placeholder="OpenProfalux"></div>
         <div class="row end"><button id="mqtt-save" class="btn primary">Enregistrer le MQTT</button></div>
