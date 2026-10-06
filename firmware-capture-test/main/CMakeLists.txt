@@ -5,6 +5,7 @@ idf_component_register(
         "pfx_keys.c"
         "profalux.c"
         "cc1101.c"
+        "console.c"
         "wifi_bridge.c"
         "mqtt_bridge.c"
     INCLUDE_DIRS "."
@@ -16,4 +17,6 @@ idf_component_register(
         mqtt
         json
         driver
+        console
+        esp_timer
 )

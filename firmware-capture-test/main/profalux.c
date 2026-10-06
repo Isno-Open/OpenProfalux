@@ -16,6 +16,13 @@
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
+
+/* HCS300 transmet le nibble bouton LSB-first (comme le serial). Notre code le mettait
+ * MSB-first -> bouton clair != bouton du hop chiffre -> anti-tamper du recepteur rejette.
+ * rev4 inverse les 4 bits (0x2 -> 0100 sur l'air, comme DEVMEL). */
+static inline uint8_t rev4(uint8_t b) {
+    return (uint8_t)(((b & 1) << 3) | ((b & 2) << 1) | ((b & 4) >> 1) | ((b & 8) >> 3));
+}
 #include <freertos/task.h>
 
 static const char *TAG = "profalux";
@@ -124,7 +131,7 @@ void pfx_frame_build(const pfx_tx_state_t *st, uint8_t button, uint8_t frame[9])
     frame[4] = (sr >> 20) & 0xFF;
     frame[5] = (sr >> 12) & 0xFF;
     frame[6] = (sr >>  4) & 0xFF;
-    frame[7] = ((sr & 0xF) << 4) | (button & 0xF);
+    frame[7] = ((sr & 0xF) << 4) | rev4(button);   /* bouton LSB-first (fix anti-tamper) */
     /* Bits 4-3: button (already in frame[7]) */
     /* Bits 2-1: status flags = 0 (repeat=0, batt_low=0) */
     frame[8] = 0;
@@ -154,7 +161,7 @@ void pfx_frame_build_with_hop(uint32_t hop_true, uint32_t serial, uint8_t button
     frame[4] = (sr >> 20) & 0xFF;
     frame[5] = (sr >> 12) & 0xFF;
     frame[6] = (sr >>  4) & 0xFF;
-    frame[7] = ((sr & 0xF) << 4) | (button & 0xF);
+    frame[7] = ((sr & 0xF) << 4) | rev4(button);   /* bouton LSB-first (fix anti-tamper) */
     frame[8] = 0;
 }
 
@@ -168,7 +175,7 @@ int pfx_frame_parse(const uint8_t frame[9], pfx_rx_frame_t *out) {
                 | ((uint32_t)frame[6] <<  4) | ((uint32_t)(frame[7] >> 4) & 0x0F);
     uint32_t serial = 0;
     for (int k = 0; k < 28; k++) serial |= ((sr >> k) & 1u) << (27 - k);
-    uint8_t button = frame[7] & 0x0F;
+    uint8_t button = rev4(frame[7] & 0x0F);   /* dessérialise LSB-first */
     uint8_t status = frame[8] & 0x03;
 
     out->serial = serial;

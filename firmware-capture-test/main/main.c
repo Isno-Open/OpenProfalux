@@ -21,6 +21,7 @@
 #include "profalux.h"
 #include "cc1101.h"
 #include "driver/gpio.h"
+#include "console.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
 
@@ -246,39 +247,21 @@ void app_main(void) {
     /* 4c. Auto-verif trame : re-capture GDO0 de notre propre emission (slot 54, 0x8). */
     pfx_selfverify(&g_state, PFX_BTN_PROG);
 
-    /* 5. Wi-Fi */
-    wifi_bridge_init();
-    if (strlen(s_wifi_ssid) > 0) {
-        wifi_bridge_start_sta(s_wifi_ssid, s_wifi_pass);
-        /* Wait for connection or timeout */
-        int retry = 0;
-        while (!wifi_bridge_is_connected() && retry++ < 60) vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    if (!wifi_bridge_is_connected()) {
-        ESP_LOGW(TAG, "Wi-Fi not connected. Starting SoftAP for config.");
-        wifi_bridge_start_softap("OpenProfalux-Setup", "openprofalux");
-    }
-
-    /* 6. MQTT */
-    if (wifi_bridge_is_connected() && strlen(s_mqtt_uri) > 0) {
-        mqtt_bridge_start(s_mqtt_uri, s_device_name,
-                          strlen(s_mqtt_user) ? s_mqtt_user : NULL,
-                          strlen(s_mqtt_pass) ? s_mqtt_pass : NULL);
-        mqtt_handlers_t h = {
-            .on_pair = on_pair, .on_reset = on_reset, .on_cmd = on_cmd,
-            .on_listen_start = on_listen_start, .on_listen_stop = on_listen_stop,
-        };
-        mqtt_bridge_set_handlers(&h);
-        vTaskDelay(pdMS_TO_TICKS(2000));  /* let MQTT connect */
-        mqtt_ha_publish_discovery(s_device_name);
-        publish_state("BOOT");
-    }
+    /* 5-6. PAS de WiFi/MQTT sur le banc : leur tache/ISR preempte le bit-bang TX (comme le
+     * RMT) -> trames OOK corrompues par moments. Tout passe par la console serie + le bouton
+     * G39, donc on laisse le WiFi OFF pour un TX fiable. */
+    ESP_LOGW(TAG, "Banc : WiFi/MQTT DESACTIVES (TX plus fiable). Pilotage console + bouton G39.");
+    (void)on_pair; (void)on_reset; (void)on_cmd; (void)on_listen_start; (void)on_listen_stop;
 
     /* Trigger LOCAL pour le test d'enrolement (pas besoin de MQTT/WiFi) :
      * appui sur le bouton integre de l'ATOM Lite (GPIO39) -> burst d'appairage. */
     gpio_config_t btn = { .pin_bit_mask = 1ULL << 39, .mode = GPIO_MODE_INPUT };
     gpio_config(&btn);
     ESP_LOGI(TAG, "PRET. Bouton G39 : 1=ENREGISTRE | 2=rejeu BRUT | 3=via OpenProfalux | 4=RECHARGE | 5=TEST clair/hop | 6+=efface.");
+
+    /* Banc d'enrolement DEVMEL R6 pilote par la console serie (COM4). */
+    console_selftest();
+    console_start();
 
     /* Bouton ATOM (G39) :
      *   - appui LONG (>1,5 s) = ENROLEMENT (commande DEVMEL 0x5)
@@ -322,33 +305,8 @@ void app_main(void) {
             }
 
             if (taps == 1) {
-                /* ---- 1 APPUI : ENREGISTRE LA SEQUENCE (ecoute continue) ----
-                 * Fais ta sequence sur la telecommande (haut/stop/bas/stop...). Chaque
-                 * commande DISTINCTE est stockee (repetitions de burst = meme hop ignorees)
-                 * avec le vrai gap. Fin apres 4 s de silence ou tableau plein. */
-                count = 0;
-                uint32_t last_hop = 0; int have_last = 0; int64_t t_prev_f = 0;
-                char tmp[80];
-                ESP_LOGI(TAG, ">>> ENREGISTREMENT SEQUENCE : fais haut/stop/bas/stop... (fin apres 4 s de silence) <<<");
-                while (count < CAP_MAX) {
-                    int n = cc1101_rx_listen_bits(4000, tmp, 79);   /* 4 s sans trame = fin de sequence */
-                    if (n < 64) { ESP_LOGI(TAG, "  (silence : fin de sequence)"); break; }
-                    tmp[n] = '\0';
-                    uint32_t hop = 0; for (int b = 0; b < 32; b++) hop = (hop << 1) | (tmp[b]-'0');
-                    if (have_last && hop == last_hop) continue;     /* repetition de burst : ignore */
-                    int64_t tnow = esp_timer_get_time();
-                    uint32_t gap = (t_prev_f == 0) ? 0 : (uint32_t)((tnow - t_prev_f) / 1000);
-                    t_prev_f = tnow; last_hop = hop; have_last = 1;
-                    memcpy(capbuf[count], tmp, n + 1); capbits[count] = n; capgap[count] = gap;
-                    uint32_t serial = 0; for (int b = 59; b >= 32; b--) serial = (serial << 1) | (tmp[b]-'0');
-                    int btn = 0;         for (int b = 60; b < 64; b++)  btn    = (btn    << 1) | (tmp[b]-'0');
-                    ESP_LOGI(TAG, "  cmd#%d serial=0x%05X btn=0x%X hop=0x%08X gap=%ums",
-                             count, (unsigned)serial, btn, (unsigned)hop, (unsigned)gap);
-                    ESP_LOGI(TAG, "  RAW=%s", tmp);
-                    save_frame_nvs(tmp, cc1101_get_rssi(), gap);    /* persistance flash */
-                    count++;
-                }
-                ESP_LOGI(TAG, ">>> SEQUENCE enregistree : %d commande(s). 2 appuis=rejeu brut, 3 appuis=via OpenProfalux <<<", count);
+                /* ---- 1 APPUI : ENROLEMENT R6 COMPLET (Chambre Parent + injection 0x067) ---- */
+                banc_enroll();
 
             } else if (taps == 2) {
                 /* ---- 2 APPUIS : TEST 1 = rejeu BRUT de la sequence + vrai timing ---- */

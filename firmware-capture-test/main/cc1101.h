@@ -20,6 +20,10 @@ int  cc1101_init(void);
 /* Transmit one frame using OOK modulation (=synthesize preamble + header + data) */
 int  cc1101_tx_ook_frame(const uint8_t *frame, size_t bits);
 
+/* Profil DEVMEL PFX (868.425 MHz, TE 400us) pour l'emission de l'identite virtuelle 0x067. */
+void cc1101_set_freq(uint8_t f2, uint8_t f1, uint8_t f0);
+int  cc1101_tx_devmel_frame(const uint8_t *frame, size_t bits);
+
 /* Enter async RX mode. Callback invoked from ISR-friendly task */
 int  cc1101_rx_start(cc1101_rx_cb_t cb);
 int  cc1101_rx_stop(void);

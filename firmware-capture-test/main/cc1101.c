@@ -204,6 +204,7 @@ int cc1101_tx_selftest(void) {
 }
 
 int cc1101_tx_ook_frame(const uint8_t *frame, size_t bits) {
+    if (s_cap) rmt_disable(s_cap);   /* FIX rc7 : sinon l'ISR RMT preempte le bit-bang -> OOK corrompu par moments */
     strobe(CC_STX);
     esp_rom_delay_us(800);   /* laisse le PLL se caler (FS_AUTOCAL) avant de moduler */
 
@@ -231,12 +232,14 @@ int cc1101_tx_ook_frame(const uint8_t *frame, size_t bits) {
     gpio_set_level(CC1101_PIN_GDO0, 0);
     esp_rom_delay_us(2000);  /* Inter-frame gap */
     strobe(CC_SIDLE);
+    if (s_cap) rmt_enable(s_cap);   /* re-arme le RMT apres le bit-bang */
     return 0;
 }
 
 /* Rejoue une trame brute (chaine de bits '0'/'1' en ordre du fil) en OOK :
  * preambule + entete + symboles HCS30x. Sert au replay d'une trame captee. */
 int cc1101_tx_raw_bits(const char *bits, int n) {
+    if (s_cap) rmt_disable(s_cap);   /* FIX rc7 : l'ISR RMT preempte le bit-bang -> trames corrompues par moments */
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
     strobe(CC_STX);
     esp_rom_delay_us(800);
@@ -255,6 +258,37 @@ int cc1101_tx_raw_bits(const char *bits, int n) {
     gpio_set_level(CC1101_PIN_GDO0, 0);
     esp_rom_delay_us(2000);
     strobe(CC_SIDLE);
+    if (s_cap) rmt_enable(s_cap);   /* re-arme le RMT apres le bit-bang */
+    return 0;
+}
+
+/* Change la porteuse (FREQ2/1/0). Le prochain STX recalibre (FS_AUTOCAL). */
+void cc1101_set_freq(uint8_t f2, uint8_t f1, uint8_t f0) {
+    strobe(CC_SIDLE);
+    cc1101_write_reg(CC_FREQ2, f2);
+    cc1101_write_reg(CC_FREQ1, f1);
+    cc1101_write_reg(CC_FREQ0, f0);
+}
+
+/* Profil DEVMEL PFX : TE=410us (mesure trames reelles ~410), preambule 22 alternances,
+ * header 1H(410)+10L(4100). A utiliser sur 868.425 MHz. frame[8] statut (RPT) inclus. */
+int cc1101_tx_devmel_frame(const uint8_t *frame, size_t bits) {
+    const int TE = 410, TE2 = 820;               /* TE mesure ~410us ; 2TE = 820us */
+    if (s_cap) rmt_disable(s_cap);
+    strobe(CC_STX); esp_rom_delay_us(800);
+    for (int i = 0; i < 22; i++) { gpio_set_level(CC1101_PIN_GDO0, (i & 1) == 0); esp_rom_delay_us(TE); }
+    gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(TE);       /* header 1H */
+    gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(10 * TE);  /* header 10L ~4.1ms */
+    for (size_t i = 0; i < bits; i++) {
+        bool b = (frame[i / 8] >> (7 - (i % 8))) & 1;   /* MSB first */
+        if (b) { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(TE);    /* 1 = 1TE H + 2TE L */
+                 gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(TE2); }
+        else   { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(TE2);   /* 0 = 2TE H + 1TE L */
+                 gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(TE); }
+    }
+    gpio_set_level(CC1101_PIN_GDO0, 0);
+    strobe(CC_SIDLE);
+    if (s_cap) rmt_enable(s_cap);
     return 0;
 }
 
