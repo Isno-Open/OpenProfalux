@@ -26,6 +26,7 @@ idf_component_register(
         "cc1101.c"
         "wifi_bridge.c"
         "mqtt_bridge.c"
+        "mqtt_tls_policy.c"
         "shutters.c"
         "cfg_store.c"
         "cfg_model.c"

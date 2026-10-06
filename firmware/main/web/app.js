@@ -696,13 +696,25 @@ $('#wifi-save').onclick = async () => {
 $('#mqtt-save').onclick = async () => {
   const b = { mqtt_uri: $('#mqtt-uri').value.trim(), mqtt_user: $('#mqtt-user').value.trim(), reboot: true };
   if ($('#mqtt-pass').value) b.mqtt_pass = $('#mqtt-pass').value;
-  /* Certificats TLS : envoyés seulement si remplis (sinon inchangés), comme le mot de passe. */
-  if ($('#mqtt-ca') && $('#mqtt-ca').value.trim()) b.mqtt_ca = $('#mqtt-ca').value.trim();
-  if ($('#mqtt-cert') && $('#mqtt-cert').value.trim()) b.mqtt_cert = $('#mqtt-cert').value.trim();
-  if ($('#mqtt-key') && $('#mqtt-key').value.trim()) b.mqtt_key = $('#mqtt-key').value.trim();
+  /* Certificats TLS : champ rempli = remplace, case « effacer » cochée = envoie "" (supprime en
+   * NVS cote firmware), sinon inchangé (comme le mot de passe). */
+  const certField = (id, key) => {
+    const el = $('#' + id), clr = $('#' + id + '-clear');
+    if (clr && clr.checked) b[key] = '';
+    else if (el && el.value.trim()) b[key] = el.value.trim();
+  };
+  certField('mqtt-ca', 'mqtt_ca');
+  certField('mqtt-cert', 'mqtt_cert');
+  certField('mqtt-key', 'mqtt_key');
   if ($('#mqtt-device')) b.device = $('#mqtt-device').value.trim();
-  await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
-  toast('MQTT enregistré, redémarrage…');
+  try {
+    await api('/api/config', { method: 'POST', body: JSON.stringify(b) });
+    toast('MQTT enregistré, redémarrage…');
+  } catch (e) {
+    /* 400 = corps rejeté (certificats trop volumineux) ; sinon erreur générique. On NE dit
+     * PAS « enregistré » sur un échec, sinon l'utilisateur croit ses certificats pris. */
+    toast(e === 400 ? 'Échec : certificats trop volumineux ou requête invalide' : 'Échec de l’enregistrement MQTT');
+  }
 };
 $('#sys-save').onclick = async () => {
   const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 455, reboot: $('#sys-reboot').checked };

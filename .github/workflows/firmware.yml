@@ -145,6 +145,23 @@ jobs:
              -o keeloq_host_test
           ./keeloq_host_test
 
+  # La politique TLS mqtts (mqtt_tls_policy.c) : quand lever le controle du nom (CN) du
+  # certificat du broker. Pure, un simple gcc suffit. Issu de la revue codex sur #11 (P1).
+  banc-mqtt-tls:
+    name: Banc de test de la politique TLS mqtts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: politique TLS sur URI en bouchon (gcc + AddressSanitizer)
+        working-directory: firmware/test/mqtt-tls
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/mqtt_tls_policy.c \
+             -o mqtt_tls_host_test
+          ./mqtt_tls_host_test
+
 env:
   # Version epinglee : une montee d'IDF se decide, elle ne se subit pas au
   # prochain build. Le depot compile sur v6.1 depuis la migration du 27/09.

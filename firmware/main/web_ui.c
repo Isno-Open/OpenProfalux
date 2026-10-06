@@ -6,7 +6,7 @@
 #include "pfx_enrol.h"
 #include "radio.h"
 #include "ota.h"
-#include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en SPIFFS) */
+#include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
 #include <stdlib.h>
@@ -422,8 +422,12 @@ static void cfg_set_if(nvs_handle_t h, cJSON *j, const char *field, const char *
     const char *v = jstr(j, field);
     if (v) nvs_set_str(h, key, v);
 }
+/* La config peut porter les 3 certificats TLS (jusqu'a 2 Ko chacun) : le corps depasse alors
+ * la limite par defaut de read_body. On prend une limite dediee plus large, sinon la requete
+ * est rejetee avant d'ecrire quoi que ce soit. */
+#define CONFIG_MAX_BODY (16 * 1024)
 static esp_err_t h_config_post(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body_max(r, CONFIG_MAX_BODY); if (!body) return httpd_resp_send_err(r, 400, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, 400, "json");
     nvs_handle_t h;
@@ -432,8 +436,8 @@ static esp_err_t h_config_post(httpd_req_t *r) {
         cfg_set_if(h, j, "wifi_ssid", "wifi_ssid"); cfg_set_if(h, j, "wifi_pass", "wifi_pass");
         cfg_set_if(h, j, "mqtt_uri", "mqtt_uri"); cfg_set_if(h, j, "mqtt_user", "mqtt_user");
         cfg_set_if(h, j, "mqtt_pass", "mqtt_pass");
-        /* Certificats TLS mqtts : ecrits en SPIFFS (pas en NVS, trop petite). Champ absent =
-         * inchange (l'UI n'envoie que ce qui change, comme le mot de passe). */
+        /* Certificats TLS mqtts : ecrits en NVS (namespace dedie). Champ absent = inchange,
+         * chaine vide = efface (l'UI n'envoie que ce qui change, comme le mot de passe). */
         { const char *v;
           if ((v = jstr(j, "mqtt_ca")))   mqtt_cert_write("ca",   v);
           if ((v = jstr(j, "mqtt_cert"))) mqtt_cert_write("cert", v);
