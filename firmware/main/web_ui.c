@@ -1,11 +1,12 @@
 /*
- * web_ui.c — serveur HTTP OpenProfalux : sert l'UI embarquee + endpoints sous /api.
+ * web_ui.c : serveur HTTP OpenProfalux, sert l'UI embarquee + endpoints sous /api.
  */
 #include "web_ui.h"
 #include "shutters.h"
 #include "pfx_enrol.h"
 #include "radio.h"
 #include "ota.h"
+#include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en SPIFFS) */
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
 #include <stdlib.h>
@@ -31,7 +32,7 @@ static const char *TAG = "web_ui";
 
 /* ── Authentification par SESSION (cookie) ──────────────────────────────────
  * MODELE : tant qu'AUCUN mot de passe n'est enregistre (cle NVS cfg/ui_pass vide
- * ou absente), l'UI est OUVERTE — c'est l'etat du 1er demarrage et celui des
+ * ou absente), l'UI est OUVERTE : c'est l'etat du 1er demarrage, celui des
  * boitiers deja deployes : aucune regression, aucun mot de passe par defaut a
  * deviner. Des que l'utilisateur en definit un, TOUTES les routes "/api/" l'exigent.
  * La desactivation se fait par un bouton dedie de l'UI (envoie ui_pass vide).
@@ -131,7 +132,7 @@ static bool ui_cookie_get(httpd_req_t *r, char *out, size_t cap) {
     return true;
 }
 
-/* true si la requete est autorisee. Repond 401 (JSON) sinon — SANS en-tete
+/* true si la requete est autorisee. Repond 401 (JSON) sinon, SANS en-tete
  * WWW-Authenticate : c'est precisement lui qui declencherait la popup native
  * du navigateur. L'UI intercepte le 401 et affiche sa propre page de login. */
 static bool ui_auth_ok(httpd_req_t *r) {
@@ -401,13 +402,15 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) txte = t;
         nvs_close(h);
     }
-    char out[560];
-    /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque). */
+    char out[720];
+    /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque).
+     * Certificats TLS : on ne renvoie que leur longueur, jamais le contenu (surtout la cle). */
     snprintf(out, sizeof(out),
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
              "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
-             "\"ui_auth\":%d}",
+             "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d}",
              dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
+             (unsigned)mqtt_cert_len("ca"), (unsigned)mqtt_cert_len("cert"), (unsigned)mqtt_cert_len("key"),
              s_ui_pass[0] ? 1 : 0);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
     httpd_resp_set_type(r, "application/json");
@@ -428,6 +431,12 @@ static esp_err_t h_config_post(httpd_req_t *r) {
         cfg_set_if(h, j, "wifi_ssid", "wifi_ssid"); cfg_set_if(h, j, "wifi_pass", "wifi_pass");
         cfg_set_if(h, j, "mqtt_uri", "mqtt_uri"); cfg_set_if(h, j, "mqtt_user", "mqtt_user");
         cfg_set_if(h, j, "mqtt_pass", "mqtt_pass");
+        /* Certificats TLS mqtts : ecrits en SPIFFS (pas en NVS, trop petite). Champ absent =
+         * inchange (l'UI n'envoie que ce qui change, comme le mot de passe). */
+        { const char *v;
+          if ((v = jstr(j, "mqtt_ca")))   mqtt_cert_write("ca",   v);
+          if ((v = jstr(j, "mqtt_cert"))) mqtt_cert_write("cert", v);
+          if ((v = jstr(j, "mqtt_key")))  mqtt_cert_write("key",  v); }
         cJSON *lf = cJSON_GetObjectItem(j, "log_frames");
         if (cJSON_IsBool(lf) || cJSON_IsNumber(lf)) {
             uint8_t on = cJSON_IsTrue(lf) || (cJSON_IsNumber(lf) && lf->valuedouble != 0);
@@ -830,7 +839,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
 /* ── /api/login + /api/logout + /api/session ────────────────────────────────
  * Ces trois routes sont enregistrees en ACCES LIBRE (reg_open) : exiger une
  * session pour pouvoir en ouvrir une serait circulaire. Elles ne divulguent
- * rien — /api/session ne dit que si une protection existe et si l'appelant
+ * rien. /api/session ne dit que si une protection existe et si l'appelant
  * est deja connecte. */
 static esp_err_t h_login(httpd_req_t *r) {
     char *body = read_body(r);
@@ -886,7 +895,7 @@ static esp_err_t h_session(httpd_req_t *r) {
 
 /* Wrapper d'authentification : toute route passee a reg() est protegee via ce
  * trampoline. Centraliser ici garantit qu'aucune route ajoutee plus tard ne soit
- * oubliee — c'est le seul endroit ou les handlers sont enregistres. Les assets
+ * oubliee : c'est le seul endroit ou les handlers sont enregistres. Les assets
  * statiques (/, style.css, app.js) passent par reg_open() : le navigateur doit
  * pouvoir afficher la page qui DEMANDE le mot de passe. */
 #define MAX_ROUTES 48

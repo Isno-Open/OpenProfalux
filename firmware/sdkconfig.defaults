@@ -36,3 +36,12 @@ CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
 
 # Task watchdog
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+
+# mbedTLS / mqtts : bundle d'autorites publiques (brokers publics) + buffers dynamiques
+# pour que la poignee de main TLS tienne en RAM, y compris sur l'ESP32 simple de l'ATOM
+# Lite (~36 Ko -> ~8 Ko de pic). IN_CONTENT_LEN reste au defaut de 16384 : le reduire
+# casse le handshake (erreur mbedTLS 0x7200).
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y

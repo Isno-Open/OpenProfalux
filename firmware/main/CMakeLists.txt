@@ -58,4 +58,5 @@ idf_component_register(
         esp_https_ota
         esp_http_client
         esp-tls
+        mbedtls
 )

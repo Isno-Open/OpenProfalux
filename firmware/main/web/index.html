@@ -168,6 +168,13 @@
         <div class="row" style="margin:-4px 0 12px"><button class="btn ghost" id="mqtt-detect">🔍 Détecter le broker (mDNS)</button></div>
         <div class="field"><label>Utilisateur</label><input id="mqtt-user" placeholder="(optionnel)"></div>
         <div class="field"><label>Mot de passe</label><input id="mqtt-pass" type="password" placeholder="•••••••• (inchangé si vide)"></div>
+        <details class="field" style="margin-bottom:12px">
+          <summary style="cursor:pointer;font-weight:600">🔒 TLS (mqtts://)</summary>
+          <p class="hint" style="margin-top:8px">Préfixe le broker par <code>mqtts://</code> pour chiffrer. Colle le certificat de l'autorité (CA) du broker, obligatoire pour un broker auto-signé. Pour le TLS mutuel, ajoute le certificat et la clé du client. Laisser un champ vide ne change pas le certificat déjà enregistré.</p>
+          <div class="field"><label>Certificat de l'autorité (CA) du broker</label><textarea id="mqtt-ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+          <div class="field"><label>Certificat client (TLS mutuel)</label><textarea id="mqtt-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
+          <div class="field"><label>Clé privée client</label><textarea id="mqtt-key" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+        </details>
         <div class="field"><label>Nom de l'appareil (Home Assistant)</label><input id="mqtt-device" placeholder="OpenProfalux"></div>
         <div class="row end"><button id="mqtt-save" class="btn primary">Enregistrer le MQTT</button></div>
       </div>
@@ -221,7 +228,7 @@
             <p class="hint" id="sys-uipass-hint" style="margin-bottom:8px"></p>
             <input id="sys-uipass" type="password" autocomplete="new-password" placeholder="">
             <p class="hint" style="margin-top:8px"><button id="sys-uipass-clear" class="btn" type="button" hidden>Retirer la protection</button></p>
-            <p class="hint">Protège cette interface et l'API contre les autres appareils du réseau — dont l'envoi de firmware. <b>Sans effet sur Home Assistant</b>, qui pilote le boîtier par MQTT.</p></div>
+            <p class="hint">Protège cette interface et l'API contre les autres appareils du réseau, dont l'envoi de firmware. <b>Sans effet sur Home Assistant</b>, qui pilote le boîtier par MQTT.</p></div>
           <label class="switch"><input type="checkbox" id="sys-logframes"><span class="track"></span>
             <span class="lbl">Écoute RF permanente<small>Active le RF debug en direct, le suivi de position via la vraie télécommande et le dataset MQTT. Désactivée = radio libre (moins de bruit).</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-debug"><span class="track"></span>
