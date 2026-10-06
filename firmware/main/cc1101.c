@@ -344,13 +344,18 @@ int cc1101_capture_init(void) {
     /* Une trame entiere (~132 symboles) doit tenir dans UN buffer RX, sinon la
      * capture est hachee en pleine trame et le decode echoue (vu sur ISNO Super/S3).
      *
-     * Trois cas, et SEUL le S3 a le DMA RMT (verifie dans l'ESP-IDF v6.1) :
+     * DEUX drapeaux decident, et ils ne vont pas ensemble (verifie dans l'ESP-IDF
+     * v6.1). Le second a coute la regression v0.2.6, cf issue #12 : il manquait a
+     * ce tableau.
      *
-     *   cible    words/canal   SOC_RMT_SUPPORT_DMA
-     *   esp32         64       absent, mais 512 tiennent en multi-blocs
-     *   esp32s3       48       1
-     *   esp32c3       48       absent
-     *   esp32c6       48       absent
+     *   cible    words/canal   SUPPORT_DMA   SUPPORT_RX_PINGPONG
+     *   esp32         64        absent        absent
+     *   esp32s3       48        1             1
+     *   esp32c3       48        absent        1
+     *   esp32c6       48        absent        1
+     *
+     * Donc le S3 est SEUL a avoir le DMA, mais le C3 et le C6 ont le ping-pong :
+     * en_partial_rx leur convient, un grand buffer non.
      *
      * - ESP32 classic : pas de DMA, mais 512 symboles tiennent en multi-blocs.
      * - S3 : 48 words/canal seulement, donc 512 sans DMA echoue et 48 tronque la
@@ -362,7 +367,8 @@ int cc1101_capture_init(void) {
 #if defined(CONFIG_IDF_TARGET_ESP32)
     c.mem_block_symbols = 512;    /* ESP32 : pas de DMA mais 512 en multi-blocs */
 #elif SOC_RMT_SUPPORT_DMA
-    c.flags.with_dma    = true;   /* S3/C3 : seulement 48 words/canal -> ping-pong bogue
+    c.flags.with_dma    = true;   /* S3 seul (le C3 n'a pas le DMA, il ne passe jamais
+                                   * ici) : seulement 48 words/canal -> ping-pong bogue
                                    * (#13419) sur une trame >48 symb. Le DMA stream vers un
                                    * grand buffer et evite ce chemin. mem_block_symbols petit
                                    * avec DMA corrompt (#12564) -> on prend tout le buffer. */
