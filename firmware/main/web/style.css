@@ -196,3 +196,6 @@ progress::-webkit-progress-value{background:var(--accent)}
 .volet .grip{color:var(--muted);font-size:.95rem;letter-spacing:-1px;cursor:grab}
 .volet.dragging{opacity:.45}
 .volet.drop-target{outline:2px dashed var(--accent);outline-offset:3px}
+/* Journal (Systeme > Journal) : lignes E en rouge, W en orange */
+.log{font-family:var(--mono);font-size:.76rem;line-height:1.45;max-height:28rem;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-top:12px}
+.log .e{color:var(--danger)}.log .w{color:var(--warn)}

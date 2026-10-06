@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "cJSON.h"
+#include "log_ring.h"
 #include "cc1101.h"
 #include "esp_random.h"
 #include <inttypes.h>
@@ -564,6 +565,19 @@ static esp_err_t h_rf(httpd_req_t *req) {
     return ESP_OK;
 }
 
+/* ── /api/log : journal du firmware (Systeme > Journal), texte brut ──
+ * Une copie le temps de la requete : le journal continue de s'ecrire pendant l'envoi. */
+static esp_err_t h_log(httpd_req_t *r) {
+    char *buf = malloc(LOG_RING_SIZE);
+    if (!buf) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
+    size_t n = log_ring_copy(buf, LOG_RING_SIZE);
+    httpd_resp_set_type(r, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    esp_err_t e = httpd_resp_send(r, buf, (ssize_t)n);
+    free(buf);
+    return e;
+}
+
 /* ── /api/backup (export) + /api/restore (import) : telecommandes + trames de reference ── */
 static esp_err_t h_backup(httpd_req_t *r) {
     char *js = shutters_export_json();
@@ -979,6 +993,7 @@ void web_ui_start(void) {
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
     reg(s, "/api/diag/tx",      HTTP_POST, h_diag_tx);
     reg(s, "/api/backup",       HTTP_GET,  h_backup);
+    reg(s, "/api/log",          HTTP_GET,  h_log);
     reg(s, "/api/restore",      HTTP_POST, h_restore);
     reg(s, "/api/mqtt/discover", HTTP_GET, h_mqtt_discover);
     reg(s, "/api/pfx",        HTTP_GET,  h_pfx_get);

@@ -28,6 +28,7 @@
 #include <esp_mac.h>
 #include "mdns.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
+#include "log_ring.h"
 
 static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
@@ -89,6 +90,7 @@ static void on_mqtt_connected(void) {
 /* ────── App entry ────── */
 
 void app_main(void) {
+    log_ring_init();   /* journal de l'interface web : avant le premier message */
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║ OpenProfalux v%s — target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");

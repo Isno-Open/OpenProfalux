@@ -218,6 +218,7 @@
         <button class="subtab" data-s="radio">Radio</button>
         <button class="subtab" data-s="backup">Sauvegarde</button>
         <button class="subtab" data-s="rf">RF (debug)</button>
+        <button class="subtab" data-s="log">Journal</button>
       </nav>
 
       <div class="subpanel active" data-sp="device">
@@ -288,6 +289,18 @@
           <p class="hint" id="frames-info">Hoppings distincts mémorisés par télécommande (avec « Écoute RF permanente »).</p>
           <div class="row"><button class="btn ghost" id="frames-reload">↻ Charger</button><a class="btn" href="/api/frames" download="openprofalux-trames.json">📥 Exporter (JSON)</a></div>
           <div id="frames-dataset"></div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="log">
+        <div class="card">
+          <h2>Journal</h2>
+          <p class="sub">Les derniers messages du firmware, les mêmes que sur le port série : pour comprendre un échec (mise à jour, MQTT, radio) sans câble USB. Les plus anciens s'effacent, et tout repart de zéro au redémarrage.</p>
+          <label class="switch"><input type="checkbox" id="log-follow" checked><span class="track"></span>
+            <span class="lbl">Suivre en direct<small>Relit le journal toutes les 2 s tant que cet onglet est ouvert.</small></span></label>
+          <div class="row"><button class="btn ghost" id="log-reload" type="button">↻ Actualiser</button><button class="btn" id="log-copy" type="button">Copier</button><a class="btn" href="/api/log" download="openprofalux-journal.txt">⬇ Télécharger</a></div>
+          <pre id="log-text" class="log">Chargement…</pre>
+          <p class="hint" id="log-info"></p>
         </div>
       </div>
 

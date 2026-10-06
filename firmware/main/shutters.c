@@ -1117,9 +1117,10 @@ void shutters_mqtt_announce(const char *device) {
 
 void shutters_mqtt_lost(void) {
     LOCK();
+    bool was = s_mqtt_ready;
     s_mqtt_ready = false;   /* broker perdu : le statut UI repasse a deconnecte */
     UNLOCK();
-    ESP_LOGW(TAG, "MQTT perdu : statut hors ligne");
+    if (was) ESP_LOGW(TAG, "MQTT perdu : statut hors ligne");   /* au passage seulement, pas a chaque essai rate */
 }
 
 void shutters_mqtt_on_message(const char *topic, const char *data, int len) {

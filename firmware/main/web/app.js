@@ -86,6 +86,7 @@ function applyRoute() {
   if (sub === 'calib' && !calibLive && typeof fillCalib === 'function') fillCalib();   /* affiche les temps enregistres */
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
+  if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
 }
 /* Rafraichit la 1re page quand l'onglet RF est actif ET qu'on n'a pas defile (sinon on garde la position). */
 setInterval(() => { if ((location.hash || '').includes('/rf') && typeof loadRf === 'function' && rfOffset <= RF_PAGE) loadRf(true); }, 5000);
@@ -107,6 +108,31 @@ async function loadFrames() {
   }).join('');
 }
 if ($('#frames-reload')) $('#frames-reload').onclick = loadFrames;
+
+/* ── Journal du firmware (Systeme > Journal) : texte brut de /api/log ── */
+let logText = '';
+async function loadLog(toEnd) {
+  const pre = $('#log-text'); if (!pre) return;
+  const r = await fetch('/api/log', { cache: 'no-store' }).catch(() => null);
+  if (r && r.status === 401) { showLogin(); return; }
+  if (!r || !r.ok) { $('#log-info').textContent = 'Journal indisponible pour le moment.'; return; }
+  logText = await r.text();
+  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;   /* on ne deplace pas qui relit plus haut */
+  pre.innerHTML = logText ? logText.split('\n').map(l =>
+    /^E \(/.test(l) ? `<span class="e">${esc(l)}</span>` : /^W \(/.test(l) ? `<span class="w">${esc(l)}</span>` : esc(l)).join('\n') : '(vide)';
+  if (toEnd || atEnd) pre.scrollTop = pre.scrollHeight;
+  const n = logText.split('\n').filter(Boolean).length;
+  $('#log-info').textContent = `${n} ligne(s), ${logText.length} octets · ${new Date().toLocaleTimeString()}`;
+}
+setInterval(() => { if ((location.hash || '').includes('sys/log') && $('#log-follow') && $('#log-follow').checked) loadLog(false); }, 2000);
+if ($('#log-reload')) $('#log-reload').onclick = () => loadLog(true);
+if ($('#log-copy')) $('#log-copy').onclick = async () => {
+  /* navigator.clipboard exige HTTPS : l'interface est en HTTP, d'ou le repli par selection */
+  try { await navigator.clipboard.writeText(logText); toast('Journal copié'); return; } catch (e) {}
+  const ta = document.createElement('textarea'); ta.value = logText; document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand('copy'); ta.remove();
+  toast(ok ? 'Journal copié' : 'Copie impossible : utilise « Télécharger »');
+};
 $$('.tab').forEach(t => t.onclick = () => { location.hash = t.dataset.t; });
 $$('.subtab').forEach(t => t.onclick = () => {
   location.hash = `${t.closest('.panel').dataset.p}/${t.dataset.s}`;

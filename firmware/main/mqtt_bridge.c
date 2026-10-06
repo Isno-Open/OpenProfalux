@@ -10,6 +10,7 @@
 #include <esp_crt_bundle.h>
 #include <nvs.h>
 #include <cJSON.h>
+#include <esp_timer.h>
 
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_mqtt = NULL;
@@ -20,6 +21,25 @@ static char s_avail_topic[64];   /* topic de disponibilite HA (LWT) : openprofal
 /* Certificats TLS charges sur le tas quand mqtts:// est actif, gardes vivants le temps de
  * la connexion (esp-mqtt peut les referencer), liberes au stop. NULL = absent. */
 static char *s_tls_ca = NULL, *s_tls_cert = NULL, *s_tls_key = NULL;
+
+/* Reconnexion espacee : 10 s, puis 20, 40, 80, et 2 min au plus ; 10 s des qu'une
+ * connexion reussit. La reconnexion automatique d'esp-mqtt retentait toutes les 10 s
+ * sans fin : un broker injoignable ecrivait ~6 lignes toutes les 17 s, plus de la
+ * moitie du journal de l'interface (log_ring.h), qui ne gardait plus que 5 minutes.
+ * esp-mqtt attend alors esp_mqtt_client_reconnect(), qu'appelle la minuterie. */
+#define MQTT_RETRY_MIN_MS  10000
+#define MQTT_RETRY_MAX_MS 120000
+static esp_timer_handle_t s_retry_timer = NULL;
+static uint32_t s_retry_ms = MQTT_RETRY_MIN_MS;
+static volatile bool s_connected = false;
+static void retry_cb(void *arg) {
+    (void)arg;
+    if (!s_mqtt || s_connected) return;
+    /* Refus si le client n'attend pas de reconnexion (deja en cours) : on repasse plus
+     * tard, pour ne jamais rester deconnecte faute d'avoir relance. */
+    if (esp_mqtt_client_reconnect(s_mqtt) != ESP_OK)
+        esp_timer_start_once(s_retry_timer, (uint64_t)MQTT_RETRY_MIN_MS * 1000);
+}
 
 /* Topic base, set at start */
 #define TOPIC_BASE "openprofalux"
@@ -64,6 +84,8 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
     switch (evt->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "Connected to broker");
+            s_connected = true;
+            s_retry_ms = MQTT_RETRY_MIN_MS;
             esp_mqtt_client_publish(s_mqtt, s_avail_topic, "online", 0, 1, 1);   /* disponibilite HA */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/listen/#", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/cover/+/set", 1);
@@ -79,7 +101,15 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             if (s_hdl.on_connected) s_hdl.on_connected();   /* -> publie la decouverte HA (vraie connexion) */
             break;
         case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGW(TAG, "MQTT disconnected");
+            s_connected = false;
+            if (s_retry_timer) {
+                ESP_LOGW(TAG, "MQTT deconnecte : nouvel essai dans %u s", (unsigned)(s_retry_ms / 1000));
+                esp_timer_stop(s_retry_timer);
+                esp_timer_start_once(s_retry_timer, (uint64_t)s_retry_ms * 1000);
+                s_retry_ms = s_retry_ms * 2 > MQTT_RETRY_MAX_MS ? MQTT_RETRY_MAX_MS : s_retry_ms * 2;
+            } else {
+                ESP_LOGW(TAG, "MQTT disconnected");
+            }
             if (s_hdl.on_disconnected) s_hdl.on_disconnected();
             break;
         case MQTT_EVENT_DATA:
@@ -204,6 +234,14 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
         .session.last_will.qos = 1,
         .session.last_will.retain = 1,
     };
+    /* Reconnexion espacee (voir retry_cb). Sans minuterie, on garde celle d'esp-mqtt. */
+    if (!s_retry_timer) {
+        const esp_timer_create_args_t ta = { .callback = retry_cb, .name = "mqtt_retry" };
+        if (esp_timer_create(&ta, &s_retry_timer) != ESP_OK) s_retry_timer = NULL;
+    }
+    s_retry_ms = MQTT_RETRY_MIN_MS;
+    s_connected = false;
+    cfg.network.disable_auto_reconnect = s_retry_timer != NULL;
     /* TLS (mqtts://) : on verifie le broker et, si fournis, on presente un certificat
      * client (TLS mutuel). Les PEM vivent en NVS, charges ici sur le tas et gardes
      * vivants jusqu'au stop (esp-mqtt peut les referencer apres l'init). */
@@ -231,6 +269,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
 }
 
 void mqtt_bridge_stop(void) {
+    if (s_retry_timer) esp_timer_stop(s_retry_timer);   /* plus de relance d'un client detruit */
     if (s_mqtt) { esp_mqtt_client_stop(s_mqtt); esp_mqtt_client_destroy(s_mqtt); s_mqtt = NULL; }
     free_tls_certs();
 }
