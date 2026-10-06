@@ -21,6 +21,18 @@ cd "$(dirname "$0")"
 command -v idf.py >/dev/null || { echo "idf.py absent : active l'environnement ESP-IDF v6.1"; exit 1; }
 REL="$(pwd)/release"; mkdir -p "$REL"
 
+# Version : PROJECT_VER dans CMakeLists.txt, seule declaration. Une version deja
+# publiee ne se refabrique pas : v0.2.6 a ete taguee avec PROJECT_VER encore a
+# 0.2.5, et ses binaires s'annoncaient 0.2.5 (la mise a jour leur etait proposee
+# en boucle). Le tag vX.Y.Z deja pose sur un AUTRE commit veut dire que
+# PROJECT_VER n'a pas ete monte depuis.
+VER="$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)"
+[ -n "$VER" ] || { echo "PROJECT_VER introuvable dans CMakeLists.txt"; exit 1; }
+if tag="$(git rev-parse -q --verify "refs/tags/v$VER^{commit}")"; then
+  [ "$tag" = "$(git rev-parse HEAD)" ] || {
+    echo "v$VER est deja publiee (tag sur ${tag:0:7}) : monter PROJECT_VER dans CMakeLists.txt"; exit 1; }
+fi
+
 # Les cartes vivent a la racine du depot (boards/), le firmware est un sous-dossier.
 for f in ../boards/*.json; do
   board="$(basename "$f" .json)"
@@ -35,6 +47,17 @@ for f in ../boards/*.json; do
   echo "   ota=$(stat -c%s "$REL/openprofalux-$board-ota.bin") o  full=$(stat -c%s "$REL/openprofalux-$board-full.bin") o"
 done
 
+# Les boitiers en v0.2.3 (avant boards/<carte>.json) cherchent leur mise a jour
+# sous les anciens noms, openprofalux-atom-ota.bin et openprofalux-devkit-ota.bin,
+# dans la DERNIERE release. Memes cartes (brochage et table de partitions
+# identiques) : une copie sous ces noms leur permet de se mettre a jour depuis
+# GitHub. Pas de copie du -full.bin, qui ne sert qu'au flash USB.
+for paire in m5-atom-lite:atom external:devkit; do
+  src="$REL/openprofalux-${paire%%:*}-ota.bin"
+  if [ -f "$src" ]; then cp "$src" "$REL/openprofalux-${paire##*:}-ota.bin"; fi
+done
+
 echo "== binaires produits =="; ls -la "$REL"/*.bin | awk '{print $5, $NF}'
+echo "Faits depuis $(git rev-parse --short HEAD)$(git diff --quiet HEAD || echo ' + modifications NON commitees') : c'est ce commit qu'il faut taguer v$VER."
 echo "Upload : gh auth switch --user Shad107 puis"
-echo "  gh release upload vX.Y.Z $REL/openprofalux-*.bin --clobber"
+echo "  gh release upload v$VER $REL/openprofalux-*.bin --clobber"
