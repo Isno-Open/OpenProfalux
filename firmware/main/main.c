@@ -29,6 +29,8 @@
 #include "mdns.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
 #include "log_ring.h"
+#include <esp_attr.h>     /* RTC_NOINIT_ATTR */
+#include <esp_system.h>   /* esp_reset_reason */
 
 static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
@@ -84,6 +86,46 @@ static void on_mqtt_connected(void) {
     shutters_mqtt_announce(s_device_name);   /* publie la decouverte HA a la VRAIE connexion broker */
 }
 
+/* ── Retour du Wi-Fi en mode secours (wifi_bridge_start_fallback) ──
+ * Des que le reseau repond, on redemarre : le demarrage normal (MQTT, mDNS, decouverte HA)
+ * est deja eprouve, et rien n'est perdu (config et positions en NVS). Une mise a jour
+ * envoyee par le point d'acces est attendue TANT QU'ELLE AVANCE : un envoi abandonne
+ * (telephone coupe du point d'acces, qui suit le canal de la box au retour) reste "en
+ * cours" sans fin cote serveur web ; 20 s sans octet recu -> on redemarre quand meme
+ * (la partition de demarrage ne change qu'une fois l'image verifiee).
+ * La duree passee en mode secours survit au redemarrage logiciel (memoire RTC, pas de
+ * flash) : le journal du demarrage suivant la donne. */
+#define FALLBACK_MAGIC 0x57494649u   /* "WIFI" */
+static RTC_NOINIT_ATTR uint32_t s_fb_magic;
+static RTC_NOINIT_ATTR uint32_t s_fb_secs;
+static int64_t s_fb_since_us;
+static esp_timer_handle_t s_back_timer;
+static void back_restart_now(void) {
+    s_fb_secs = (uint32_t)((esp_timer_get_time() - s_fb_since_us) / 1000000);
+    s_fb_magic = FALLBACK_MAGIC;
+    ESP_LOGW(TAG, "Wi-Fi de retour apres %u s en mode secours : redemarrage", (unsigned)s_fb_secs);
+    esp_restart();
+}
+static void back_restart_cb(void *arg) {
+    (void)arg;
+    static uint32_t last; static int still;   /* octets recus au passage precedent, passages sans progres */
+    ota_status_t st = {0}; ota_get_status(&st);   /* {0} : rien n'est copie si le verrou ne vient pas */
+    bool busy = st.state == OTA_STATE_RECEIVING || st.state == OTA_STATE_VERIFYING || st.state == OTA_STATE_APPLYING;
+    if (busy && st.written_bytes != last) { last = st.written_bytes; still = 0; }
+    if (busy && still++ < 4) {   /* toutes les 5 s, au plus 4 fois sans progres */
+        esp_timer_start_once(s_back_timer, 5 * 1000000ULL);
+        return;
+    }
+    back_restart_now();
+}
+static void on_wifi_back(void) {   /* appele depuis la tache d'evenements : on ne fait qu'armer */
+    if (!s_back_timer) {
+        const esp_timer_create_args_t ta = { .callback = back_restart_cb, .name = "wifi_back" };
+        if (esp_timer_create(&ta, &s_back_timer) != ESP_OK) { back_restart_now(); return; }   /* sinon connecte sans MQTT */
+    }
+    if (!esp_timer_is_active(s_back_timer)) esp_timer_start_once(s_back_timer, 2 * 1000000ULL);
+}
+
 /* NB : le RX radio (capture permanente arbitree) est demarre par shutters_init() ;
  * les trames recues sont routees vers shutters_on_rx en interne. */
 
@@ -94,6 +136,9 @@ void app_main(void) {
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║ OpenProfalux v%s — target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
+    if (s_fb_magic == FALLBACK_MAGIC && esp_reset_reason() == ESP_RST_SW)
+        ESP_LOGW(TAG, "redemarre apres le retour du Wi-Fi (%u s en mode secours)", (unsigned)s_fb_secs);
+    s_fb_magic = 0;
 
     /* 1. NVS */
     esp_err_t err = nvs_flash_init();
@@ -139,8 +184,15 @@ void app_main(void) {
     if (!wifi_bridge_is_connected()) {
         uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
         char ap_ssid[32]; snprintf(ap_ssid, sizeof(ap_ssid), "OpenProfalux_%02X%02X", mac[4], mac[5]);
-        ESP_LOGW(TAG, "Wi-Fi not connected. Starting SoftAP '%s' (open) for config.", ap_ssid);
-        wifi_bridge_start_softap(ap_ssid, "");   /* mdp vide => WIFI_AUTH_OPEN (comme OpenXtraflamme) */
+        if (strlen(s_wifi_ssid) > 0) {
+            /* Reseau configure mais muet (box qui redemarre apres une coupure, ou panne) :
+             * point d'acces ET client, qui continue de chercher le reseau (mode secours). */
+            s_fb_since_us = esp_timer_get_time();
+            wifi_bridge_start_fallback(ap_ssid, on_wifi_back);
+        } else {
+            ESP_LOGW(TAG, "Wi-Fi not connected. Starting SoftAP '%s' (open) for config.", ap_ssid);
+            wifi_bridge_start_softap(ap_ssid, "");   /* mdp vide => WIFI_AUTH_OPEN (comme OpenXtraflamme) */
+        }
     }
 
     /* 5b. mDNS (pour l'auto-decouverte du broker MQTT depuis l'UI) */

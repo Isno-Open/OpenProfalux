@@ -993,6 +993,9 @@ async function loadStatus() {
   if ((location.hash || '').includes('/calib') && !calibLive) fillCalib();   /* affiche les temps enregistres */
   if (!learning) { renderVoletPicker(); renderLearnSlots(); }
   wifiStatusLine(s.wifi); mqttStatusLine(s.mqtt);
+  /* Mode secours (reseau configure mais muet, le boitier reessaie seul) : visible sur toutes
+   * les pages, a cote du titre. */
+  const fb = $('#hdr-fallback'); if (fb) fb.hidden = !(s.wifi && s.wifi.fallback);
   const ci = $('#calib-info'); if (ci) ci.hidden = !!s.listening;   /* bandeau visible seulement si option OFF */
 }
 /* Volet auquel une telecommande (serial) est rattachee, sinon null. */
