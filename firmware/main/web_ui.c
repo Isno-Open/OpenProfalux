@@ -642,16 +642,28 @@ static esp_err_t h_ota_upload(httpd_req_t *r) {
     wifi_ps_type_t ps = WIFI_PS_MIN_MODEM; esp_wifi_get_ps(&ps); esp_wifi_set_ps(WIFI_PS_NONE);
     char *buf = malloc(1460);
     if (!buf) { esp_wifi_set_ps(ps); ota_upload_abort(); return httpd_resp_send_err(r, 500, "malloc"); }
-    int rem = total, cc = 0; esp_err_t res = ESP_OK;
+    /* Un client qui disparait sans fermer la connexion (portable en veille, telephone hors de
+     * portee) bloquait ici pour toujours l'unique tache du serveur web : interface morte pour
+     * tous jusqu'a une coupure de courant. 3 delais de reception (5 s chacun) sans un octet ->
+     * on abandonne ; chaque octet recu remet le compte a zero (envoi lent mais vivant). */
+    int rem = total, cc = 0, idle = 0, k = 0; esp_err_t res = ESP_OK;
     while (rem > 0) {
-        int k = httpd_req_recv(r, buf, MIN(rem, 1460));
-        if (k == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        k = httpd_req_recv(r, buf, MIN(rem, 1460));
+        if (k == HTTPD_SOCK_ERR_TIMEOUT && ++idle < 3) continue;
         if (k <= 0 || ota_upload_data(buf, k) != ESP_OK) { res = ESP_FAIL; break; }
-        rem -= k;
+        idle = 0; rem -= k;
         if ((++cc & 0x0F) == 0) vTaskDelay(1);
     }
     esp_wifi_set_ps(ps); free(buf);
-    if (res != ESP_OK) { ota_upload_abort(); return httpd_resp_send_err(r, 500, "upload"); }
+    if (res != ESP_OK) {
+        ESP_LOGW(TAG, "mise a jour interrompue a %d o sur %d : %s", total - rem, total,
+                 k == HTTPD_SOCK_ERR_TIMEOUT ? "rien recu depuis 15 s" : k <= 0 ? "connexion fermee" : "image refusee");
+        ota_upload_abort();
+        /* ESP_FAIL : le serveur ferme la connexion tout de suite (avec ESP_OK, il tenterait de
+         * lire le reste de l'envoi et attendrait encore un delai). */
+        if (k == HTTPD_SOCK_ERR_TIMEOUT) { httpd_resp_send_err(r, HTTPD_408_REQ_TIMEOUT, NULL); return ESP_FAIL; }
+        return httpd_resp_send_err(r, 500, "upload");
+    }
     httpd_resp_sendstr(r, "{\"ok\":1}");
     ota_upload_end();   /* vérifie + reboot */
     return ESP_OK;
