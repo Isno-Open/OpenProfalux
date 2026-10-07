@@ -39,6 +39,10 @@ s'est révélée inutile pour le pilotage.
 - **OTA** : upload web + pull MQTT + rollback (2 partitions OTA).
 - **Capture de trames** optionnelle vers MQTT (dédup par serial).
 
+> **Portée pendant l'apprentissage.** La capture d'une télécommande et l'enrôlement d'un
+> volet passent par la radio : garde la télécommande d'origine (et le volet) à portée du
+> boîtier pendant ces étapes. Une fois le volet mémorisé, le pilotage se fait à distance.
+
 → Détails, build et flash : **[`firmware/README.md`](firmware/README.md)**.
 
 ## Matériel

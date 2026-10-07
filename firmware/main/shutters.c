@@ -568,6 +568,21 @@ static void announce_extras(void) {
     pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);
 }
 
+/* Efface la decouverte HA d'un cover : payload retenu vide sur le topic de config (HA
+ * retire alors l'entite) + ses topics d'etat/position. Sans ca, un volet supprime reste
+ * affiche dans Home Assistant (le discovery retenu survit). Appele sous LOCK. */
+static void clear_one(volet_t *v) {
+    if (!s_mqtt_ready) return;
+    char topic[96], slug[SH_ID_LEN];
+    slugify(slug, sizeof(slug), v->id);
+    snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
+    pub_defer(topic, "", 0, 1);   /* vide + retenu -> HA retire l'entite */
+    snprintf(topic, sizeof(topic), "openprofalux/cover/%s/state", slug);
+    pub_defer(topic, "", 0, 1);
+    snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
+    pub_defer(topic, "", 0, 1);
+}
+
 /* ── API commande ── */
 int shutters_delete_volet(const char *id) {
     if (!id || !*id) return -1;
@@ -575,10 +590,12 @@ int shutters_delete_volet(const char *id) {
     int idx = -1;
     for (int i = 0; i < s_nvolets; i++) if (!strcmp(s_volets[i].id, id)) { idx = i; break; }
     if (idx < 0) { UNLOCK(); return -1; }
+    clear_one(&s_volets[idx]);         /* retire l'entite HA (discovery retenu) AVANT de perdre le volet */
     cfg_model_remove(&s_model, idx);   /* libere la liste d'une centrale */
     save_cfg();
     update_listening();   /* plus aucun volet -> coupe l'ecoute permanente */
     UNLOCK();
+    pub_flush();          /* pousse l'effacement MQTT hors LOCK */
     ESP_LOGW(TAG, "volet '%s' supprime", id);
     return 0;
 }

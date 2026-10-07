@@ -306,12 +306,14 @@ function renderLearnSlots() {
     box.innerHTML = `<div class="statline ok"><span class="dot"></span><b>C'est une centrale</b> (groupe de volets) - pas d'apprentissage. Gère ses membres dans <b>Volets → Créer une centrale</b>.</div>`;
     return;
   }
-  if (v && v.virt) {   // volet enrôlé (télécommande virtuelle) -> pas d'apprentissage/clonage
-    box.innerHTML = `<div class="statline ok"><span class="dot"></span><b>Ce volet a une télécommande virtuelle.</b> Pas de clonage nécessaire - il est piloté par génération. Gère-le dans <b>Créer une télécommande</b>.</div>`;
-    return;
-  }
   const cmd = (v && v.cmd) || {};
-  box.innerHTML = '';
+  /* Volet enrôlé : piloté par génération, le clonage n'est pas nécessaire. On autorise
+   * quand même d'apprendre ici sa VRAIE télécommande d'origine, uniquement pour SUIVRE
+   * la position (le pilotage reste par génération, ces trames ne sont pas rejouées). */
+  const virtNote = (v && v.virt)
+    ? `<div class="statline ok"><span class="dot"></span><b>Volet enrôlé (télécommande virtuelle).</b> Il est piloté par génération, pas besoin de cloner. En option, apprends ci-dessous sa <b>télécommande d'origine</b> : le boîtier suivra alors la position quand tu l'utilises.</div>`
+    : '';
+  box.innerHTML = virtNote;
   for (const A of LEARN_ACTIONS) {
     const c = cmd[A.a];
     const learned = c != null;
@@ -345,9 +347,11 @@ function renderLearnSlots() {
   const serialEl = $('#learn-serial');
   if (serialEl) {
     const sers = (v && v.serials) || [];
-    serialEl.innerHTML = sers.length > 1
-      ? `⚠ Commandes de plusieurs télécommandes : ${sers.map(s => `<code>${esc(s)}</code>`).join(' ')}`
-      : sers.length ? `Télécommande : <code>${esc(sers[0])}</code>` : '';
+    serialEl.innerHTML = (v && v.virt)   /* virtuel : identité virtuelle + éventuelle télécommande d'origine, pas d'alerte */
+      ? (sers.length ? `Télécommandes : ${sers.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ')}` : '')
+      : sers.length > 1
+        ? `⚠ Commandes de plusieurs télécommandes : ${sers.map(s => `<code>${esc(s)}</code>`).join(' ')}`
+        : sers.length ? `Télécommande : <code>${esc(sers[0])}</code>` : '';
   }
   const orientRow = $('#orient-row');
   if (orientRow) orientRow.hidden = !v;
@@ -357,9 +361,11 @@ function renderLearnSlots() {
   const delRow = $('#del-volet-row');
   if (delRow) delRow.hidden = !v;
   const hint = $('#learn-hint');
-  if (hint) hint.textContent = id
-    ? `Volet « ${id} » : clique Capturer, puis appuie une fois sur le bouton de ta télécommande (< 1 m du boîtier).`
-    : 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.';
+  if (hint) hint.textContent = !id
+    ? 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.'
+    : (v && v.virt)
+      ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie une fois sur sa télécommande d'origine (< 1 m du boîtier). Facultatif.`
+      : `Volet « ${id} » : clique Capturer, puis appuie une fois sur le bouton de ta télécommande (< 1 m du boîtier).`;
   updateRemoteNameField();
 }
 
