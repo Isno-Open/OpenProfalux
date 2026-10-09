@@ -34,7 +34,7 @@
         <rect x="4" y="4" width="24" height="5.5" rx="2.5" fill="currentColor"/>
         <path d="M6.5 13h19M6.5 16.4h19M6.5 19.8h19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".8"/>
       </svg>
-      <div><h1>OpenProfalux <span id="hdr-fallback" class="hdr-fb" hidden title="Le boîtier n'a pas pu rejoindre ton Wi-Fi. Il réessaie toutes les 30 s et redémarrera tout seul dès que le réseau répond.">(mode de secours)</span></h1><div class="tag">Volets Profalux 868 · <span id="version">…</span></div></div>
+      <div><h1>OpenProfalux <span id="hdr-fallback" class="hdr-fb" hidden title="Le boîtier n'a pas pu rejoindre ton Wi-Fi. Il réessaie toutes les 30 s et redémarrera tout seul dès que le réseau répond.">(mode de secours)</span></h1><div class="tag">Volets Profalux 868</div></div>
     </div>
     <div class="hdr-actions">
       <button class="icon-btn" id="logout" title="Se déconnecter" hidden>⏻</button>
@@ -215,6 +215,7 @@
     <section class="panel" data-p="sys">
       <nav class="subtabs">
         <button class="subtab active" data-s="device">Appareil</button>
+        <button class="subtab" data-s="health">État</button>
         <button class="subtab" data-s="radio">Radio</button>
         <button class="subtab" data-s="backup">Sauvegarde</button>
         <button class="subtab" data-s="rf">RF (debug)</button>
@@ -251,6 +252,14 @@
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>
           <div class="row end"><button id="sys-save" class="btn primary">Enregistrer</button></div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="health">
+        <div class="card">
+          <h2>État du boîtier</h2>
+          <dl class="health" id="health"><dt>Chargement…</dt><dd></dd></dl>
+          <p class="hint">« Au plus bas » : depuis le démarrage. « Plus gros bloc » : ce qu'obtient d'un seul tenant une connexion sécurisée (GitHub, MQTT TLS).</p>
         </div>
       </div>
 

@@ -150,3 +150,21 @@ size_t cfg_store_read_legacy_frames(void *buf, size_t cap) {
     nvs_close(h);
     return e == ESP_OK ? sz : 0;
 }
+
+/* Une chaine de L octets (zero final compris, ce que rend nvs_get_str sans tampon)
+ * prend une entree d'en-tete et ceil(L / 32) entrees de donnees (nvs_page.cpp). */
+size_t cfg_store_volet_entries(int *count) {
+    *count = 0;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return 0;
+    uint8_t nv = 0;
+    nvs_get_u8(h, "nv", &nv);
+    size_t entries = 0;
+    for (int i = 0; i < nv && i < CFG_STORE_MAX_DOCS; i++) {
+        char k[8]; volet_key(k, sizeof(k), i);
+        size_t sz = 0;
+        if (nvs_get_str(h, k, NULL, &sz) == ESP_OK && sz) { entries += 1 + (sz + 31) / 32; (*count)++; }
+    }
+    nvs_close(h);
+    return entries;
+}

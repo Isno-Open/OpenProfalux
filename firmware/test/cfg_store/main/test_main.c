@@ -867,6 +867,48 @@ int main(void) {
                l22, (unsigned)z22, el != ESP_OK ? "impossible a enregistrer, OK" : "ENREGISTRE");
     }
 
+    /* ── T13. Place des volets en NVS (Systeme > Etat) ── */
+    printf("\n[T13] Place des volets en NVS, et estimation de la place restante\n");
+    {
+        wipe(); system_state(); model_init(&g_ref);
+        esp_err_t e = save_ref(fk);
+        int n = 0; size_t ent = cfg_store_volet_entries(&n);
+        CHECK(e == ESP_OK && n == g_ref.nvolets && ent > 0, "%d volet(s) comptes sur %d (%u entrees)", n, g_ref.nvolets, (unsigned)ent);
+
+        /* La formule colle a la vraie NVS : un volet de plus prend exactement les
+         * entrees que la fonction lui attribue (les autres cles ne changent pas). */
+        nvs_stats_t a, b;
+        nvs_get_stats(NULL, &a);
+        add_volet(&g_ref); e = save_ref(fk);
+        nvs_get_stats(NULL, &b);
+        int n2 = 0; size_t ent2 = cfg_store_volet_entries(&n2);
+        long mesure = (long)b.used_entries - (long)a.used_entries, prevu = (long)ent2 - (long)ent;
+        CHECK(e == ESP_OK && n2 == n + 1 && mesure == prevu, "volet ajoute : %ld entrees mesurees, %ld prevues", mesure, prevu);
+        printf("  %d volets : %u entrees ; un de plus : %ld entrees mesurees, %ld prevues -> %s\n",
+               n, (unsigned)ent, mesure, prevu, mesure == prevu ? "OK" : "KO");
+
+        /* L'estimation de l'interface (place disponible / taille moyenne d'un volet), a
+         * chaque remplissage, contre le nombre de volets qui entrent vraiment ensuite. */
+        int est[SH_MAX_VOLETS + 1], steps = 0, added = 0; bool full = false;
+        while (g_ref.nvolets < SH_MAX_VOLETS) {
+            nvs_stats_t s; nvs_get_stats(NULL, &s);
+            int c = 0; size_t en = cfg_store_volet_entries(&c);
+            est[steps++] = en ? (int)((double)s.available_entries * c / en) : -1;
+            add_volet(&g_ref);
+            if (save_ref(fk) != ESP_OK) { full = true; break; }
+            added++;
+        }
+        int worst = 0, over = 0;
+        for (int k = 0; k < steps; k++) {
+            int d = est[k] - (added - k);                /* > 0 : promet plus qu'il n'entre */
+            if (abs(d) > abs(worst)) worst = d;
+            if (d > over) over = d;
+        }
+        printf("  %s apres %d volets de plus ; estimation au depart : %d ; pire ecart : %+d (surestimation max %d)\n",
+               full ? "NVS pleine" : "plafond de volets atteint", added, est[0], worst, over);
+        CHECK(full ? abs(worst) <= 1 : est[0] >= added, "estimation : pire ecart %+d volet(s)", worst);
+    }
+
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");
     return s_fail ? 1 : 0;
 }
