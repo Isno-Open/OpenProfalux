@@ -49,6 +49,7 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
+        esp_eth
         mqtt
         espressif__cjson
         driver

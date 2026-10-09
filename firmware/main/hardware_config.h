@@ -39,6 +39,7 @@
     #define LED_PIN                   (-1)
     #define LED_ACTIVE_HIGH           1
     #define LED_IS_WS2812             0
+    #define BOARD_HAS_ETHERNET        0
 
 #else
 

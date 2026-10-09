@@ -173,9 +173,15 @@ void app_main(void) {
     cc1101_set_rx_gain(s_rx_gain);  /* plafond de gain RX restaure au boot */
     cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */
 
-    /* 5. Wi-Fi */
+    /* 5. Reseau : Ethernet filaire d'abord (si la carte en declare), sinon Wi-Fi. */
     wifi_bridge_init();
-    if (strlen(s_wifi_ssid) > 0) {
+#if BOARD_HAS_ETHERNET
+    wifi_bridge_start_eth();
+    /* Laisse le lien physique monter et le DHCP repondre (jusqu'a ~15 s). */
+    for (int r = 0; !wifi_bridge_is_connected() && r < 30; r++) vTaskDelay(pdMS_TO_TICKS(500));
+    if (wifi_bridge_is_connected()) ESP_LOGI(TAG, "reseau par Ethernet filaire");
+#endif
+    if (!wifi_bridge_is_connected() && strlen(s_wifi_ssid) > 0) {
         wifi_bridge_start_sta(s_wifi_ssid, s_wifi_pass);
         /* Wait for connection or timeout */
         int retry = 0;

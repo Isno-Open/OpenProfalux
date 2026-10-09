@@ -4,3 +4,6 @@ dependencies:
   espressif/mdns: "^1.2.0"
   espressif/mqtt: ">=1.0.0"
   espressif/cjson: "^1.7.19"
+  # PHY Ethernet LAN8720, sorti d'ESP-IDF v6.1 vers le registre. Utilise seulement
+  # par la variante esp32-poe (garde BOARD_HAS_ETHERNET) ; tree-shake ailleurs.
+  espressif/lan87xx: "*"

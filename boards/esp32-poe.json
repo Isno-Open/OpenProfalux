@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Olimex ESP32-POE / ESP32-POE-WROVER : reseau filaire (Ethernet LAN8720, PoE)",
+    "EN PLUS du Wi-Fi. Demande de toat, issue #28.",
+    "Le RMII de l'Ethernet occupe GPIO 0 (clk), 18 (MDIO), 23 (MDC), 12 (alim PHY),",
+    "19/21/22/25/26/27 (data) ; le PSRAM du WROVER prend 16/17. Le CC1101 est donc",
+    "sur les GPIO libres non-strap : 4, 13, 14, 32, 33 (et 34-39 en entree seule).",
+    "BROCHAGE A CONFIRMER sur le module exact de toat avant de taguer un binaire :",
+    "l'adresse PHY (0 ou 1 selon la revision) et le choix des broches CC1101.",
+    "Carte nommee, pas lue : aucun strap d'identification."
+  ],
+  "id": "esp32-poe",
+  "name": "Olimex ESP32-POE (Ethernet filaire)",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32",
+  "spi_freq_hz": 6000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "E07-900M10S",
+      "pins": { "sck": 14, "miso": 32, "mosi": 13, "cs": 33, "gdo0": 4, "gdo2": -1 } }
+  ],
+  "ethernet": {
+    "phy": "LAN8720",
+    "mdc": 23,
+    "mdio": 18,
+    "phy_power": 12,
+    "phy_addr": 0,
+    "clk_gpio": 0,
+    "clk_mode": "ext_in"
+  },
+  "ui": { "button": -1, "led": -1, "led_active_high": true },
+  "region": "eu",
+  "bands_allowed_khz": [
+    { "radio": "868", "low": 863000, "high": 870000, "carrier_khz": 868350, "max_dbm": 10 }
+  ]
+}

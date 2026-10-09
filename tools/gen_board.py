@@ -72,9 +72,24 @@ def header(d):
         "#define BTN_PIN_DEBUG_UP     -1",
         "#define BTN_PIN_DEBUG_STOP   -1",
         "#define BTN_PIN_DEBUG_DOWN   -1",
-        "",
-        "#endif",
     ]
+    # Ethernet filaire, optionnel : present uniquement si la carte le declare.
+    eth = d.get("ethernet")
+    if eth:
+        L += [
+            "",
+            "/* Ethernet filaire (voir boards/%s.json). BOARD_HAS_ETHERNET garde le code reseau. */" % d["id"],
+            "#define BOARD_HAS_ETHERNET   1",
+            '#define ETH_PHY_MODEL        "%s"' % eth.get("phy", "LAN8720"),
+            "#define ETH_MDC_GPIO         %d" % int(eth.get("mdc", 23)),
+            "#define ETH_MDIO_GPIO        %d" % int(eth.get("mdio", 18)),
+            "#define ETH_PHY_POWER_GPIO   %d" % int(eth.get("phy_power", -1)),
+            "#define ETH_PHY_ADDR         %d" % int(eth.get("phy_addr", 0)),
+            "#define ETH_CLK_GPIO         %d" % int(eth.get("clk_gpio", 0)),
+        ]
+    else:
+        L += ["", "#define BOARD_HAS_ETHERNET   0"]
+    L += ["", "#endif"]
     return "\n".join(L) + "\n"
 
 

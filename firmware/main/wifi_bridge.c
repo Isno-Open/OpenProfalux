@@ -13,6 +13,15 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/event_groups.h>
+#include "hardware_config.h"   /* BOARD_HAS_ETHERNET + brochage ETH (board_pins.h) */
+#if BOARD_HAS_ETHERNET
+#include <esp_eth.h>
+#include <esp_eth_mac_esp.h>     /* eth_esp32_emac_config_t, ETH_ESP32_EMAC_DEFAULT_CONFIG */
+#include <esp_eth_phy_lan87xx.h> /* esp_eth_phy_new_lan87xx (composant espressif/lan87xx, IDF >= 6.1) */
+#include <driver/gpio.h>
+static esp_eth_handle_t s_eth = NULL;
+static esp_netif_t     *s_eth_netif = NULL;
+#endif
 
 static const char *TAG = "wifi";
 static EventGroupHandle_t s_wifi_events;
@@ -76,6 +85,32 @@ static void wifi_watchdog_task(void *arg) {
     }
 }
 
+/* Horloge reelle (SNTP) : date correctement les trames RF, meme apres reboot. Une seule
+ * init, que le reseau vienne du Wi-Fi ou de l'Ethernet. */
+static void sntp_init_once(void) {
+    static bool s_sntp = false;
+    if (s_sntp) return;
+    s_sntp = true;
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1); tzset();   /* Europe/Paris (heure d'ete auto) */
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
+}
+
+#if BOARD_HAS_ETHERNET
+/* Lien Ethernet : le bit CONNECTED (partage avec le Wi-Fi) suit l'etat du cable. L'IP
+ * arrive via IP_EVENT_ETH_GOT_IP, traite dans wifi_event_cb comme le STA_GOT_IP. */
+static void eth_event_cb(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg; (void)base; (void)data;
+    if (id == ETHERNET_EVENT_CONNECTED) {
+        ESP_LOGI(TAG, "Ethernet : lien physique etabli");
+    } else if (id == ETHERNET_EVENT_DISCONNECTED) {
+        ESP_LOGW(TAG, "Ethernet : cable debranche");
+        xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
+    }
+}
+#endif
+
 static void wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
@@ -110,15 +145,12 @@ static void wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *da
         /* Mode secours : le reseau repond ET a donne une adresse (une box qui redemarre
          * emet souvent son Wi-Fi avant de distribuer des adresses). L'appelant decide. */
         if (s_fallback && s_on_back) s_on_back();
-        /* Horloge reelle (SNTP) : date correctement les trames RF, meme apres reboot. Une seule init. */
-        static bool s_sntp = false;
-        if (!s_sntp) {
-            s_sntp = true;
-            setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1); tzset();   /* Europe/Paris (heure d'ete auto) */
-            esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-            esp_sntp_setservername(0, "pool.ntp.org");
-            esp_sntp_init();
-        }
+        sntp_init_once();
+    } else if (base == IP_EVENT && id == IP_EVENT_ETH_GOT_IP) {
+        ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
+        ESP_LOGI(TAG, "Ethernet IP: " IPSTR, IP2STR(&evt->ip_info.ip));
+        xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
+        sntp_init_once();
     }
 }
 
@@ -189,6 +221,48 @@ int wifi_bridge_start_fallback(const char *ap_ssid, void (*on_back)(void)) {
     ESP_LOGW(TAG, "mode secours : point d'acces '%s' (ouvert) + recherche de '%s'", ap_ssid, s_sta_ssid);
     return 0;
 }
+#if BOARD_HAS_ETHERNET
+/* Ethernet filaire (LAN8720 via RMII). Si le cable donne une IP, le flux normal
+ * (mDNS, MQTT, decouverte HA) continue comme en Wi-Fi ; sinon l'appelant retombe sur STA. */
+int wifi_bridge_start_eth(void) {
+    /* Alim du PHY (Olimex : GPIO12 pilote l'alimentation du LAN8720). */
+    if (ETH_PHY_POWER_GPIO >= 0) {
+        gpio_config_t io = { .pin_bit_mask = 1ULL << ETH_PHY_POWER_GPIO, .mode = GPIO_MODE_OUTPUT };
+        gpio_config(&io);
+        gpio_set_level(ETH_PHY_POWER_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
+    s_eth_netif = esp_netif_new(&netif_cfg);
+
+    eth_esp32_emac_config_t emac_cfg = ETH_ESP32_EMAC_DEFAULT_CONFIG();
+    emac_cfg.smi_gpio.mdc_num  = ETH_MDC_GPIO;
+    emac_cfg.smi_gpio.mdio_num = ETH_MDIO_GPIO;
+    emac_cfg.clock_config.rmii.clock_mode = EMAC_CLK_EXT_IN;   /* horloge 50 MHz externe (Olimex) */
+    emac_cfg.clock_config.rmii.clock_gpio = ETH_CLK_GPIO;      /* GPIO0 */
+    eth_mac_config_t mac_cfg = ETH_MAC_DEFAULT_CONFIG();
+    esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_cfg, &mac_cfg);
+
+    eth_phy_config_t phy_cfg = ETH_PHY_DEFAULT_CONFIG();
+    phy_cfg.phy_addr = ETH_PHY_ADDR;
+    phy_cfg.reset_gpio_num = -1;   /* alim/reset gere ci-dessus */
+    esp_eth_phy_t *phy = esp_eth_phy_new_lan87xx(&phy_cfg);
+
+    esp_eth_config_t eth_cfg = ETH_DEFAULT_CONFIG(mac, phy);
+    if (esp_eth_driver_install(&eth_cfg, &s_eth) != ESP_OK) {
+        ESP_LOGE(TAG, "Ethernet : installation du pilote echouee");
+        return -1;
+    }
+    ESP_ERROR_CHECK(esp_netif_attach(s_eth_netif, esp_eth_new_netif_glue(s_eth)));
+    esp_event_handler_instance_register(ETH_EVENT, ESP_EVENT_ANY_ID, eth_event_cb, NULL, NULL);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, wifi_event_cb, NULL, NULL);
+    ESP_ERROR_CHECK(esp_eth_start(s_eth));
+    ESP_LOGI(TAG, "Ethernet demarre (PHY %s addr %d, MDC=%d MDIO=%d clk=%d)",
+             ETH_PHY_MODEL, ETH_PHY_ADDR, ETH_MDC_GPIO, ETH_MDIO_GPIO, ETH_CLK_GPIO);
+    return 0;
+}
+#endif
+
 bool wifi_bridge_in_fallback(void) { return s_fallback; }
 bool wifi_bridge_is_connected(void) {
     EventBits_t bits = xEventGroupGetBits(s_wifi_events);
@@ -202,7 +276,14 @@ int wifi_bridge_rssi(void) {
 
 void wifi_bridge_get_ip(char *buf, int len) {
     esp_netif_ip_info_t info;
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_t *netif = NULL;
+#if BOARD_HAS_ETHERNET
+    netif = esp_netif_get_handle_from_ifkey("ETH_DEF");
+    if (netif && esp_netif_get_ip_info(netif, &info) == 0 && info.ip.addr) {
+        snprintf(buf, len, IPSTR, IP2STR(&info.ip)); return;
+    }
+#endif
+    netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif && esp_netif_get_ip_info(netif, &info) == 0) {
         snprintf(buf, len, IPSTR, IP2STR(&info.ip));
     } else strncpy(buf, "0.0.0.0", len);
