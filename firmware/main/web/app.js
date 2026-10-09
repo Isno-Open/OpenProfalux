@@ -87,6 +87,7 @@ function applyRoute() {
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
+  if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
 }
 /* Rafraichit la 1re page quand l'onglet RF est actif ET qu'on n'a pas defile (sinon on garde la position). */
 setInterval(() => { if ((location.hash || '').includes('/rf') && typeof loadRf === 'function' && rfOffset <= RF_PAGE) loadRf(true); }, 5000);
@@ -133,6 +134,37 @@ if ($('#log-copy')) $('#log-copy').onclick = async () => {
   const ok = document.execCommand('copy'); ta.remove();
   toast(ok ? 'Journal copié' : 'Copie impossible : utilise « Télécharger »');
 };
+/* ── Etat du boitier (Systeme > Etat) : /api/health + statusCache ── */
+const WDT = 'chien de garde (blocage)', RESET_TXT = ['inconnue', 'mise sous tension', 'bouton reset',
+  'redémarrage logiciel (mise à jour, réglages, retour du Wi-Fi…)', 'plantage', WDT, WDT, WDT, 'réveil de veille',
+  'alimentation trop faible', 'SDIO', 'console USB', 'console USB', 'eFuse', "coupure brève de l'alimentation", 'plantage'];
+const RESET_BAD = [4, 5, 6, 7, 9, 14, 15];
+const ko = b => `${Math.round(b / 1024)} Ko`;
+const dur = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} j ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
+async function loadHealth() {
+  const box = $('#health'); if (!box) return;
+  const h = await api('/api/health').catch(() => null);
+  if (!h) { box.innerHTML = '<dt>État indisponible pour le moment.</dt><dd></dd>'; return; }
+  const s = statusCache, w = s.wifi || {};
+  /* NVS sans la page reservee ; volets de plus = place libre / taille moyenne (banc cfg_store T13) */
+  const usable = h.nvs_total - (h.nvs_free - h.nvs_avail);
+  const pct = usable > 0 ? Math.round(100 * (1 - h.nvs_avail / usable)) : 0;
+  const more = h.volets && h.volet_entries ? Math.floor(h.nvs_avail * h.volets / h.volet_entries) : null;
+  const rows = [
+    ['Allumé depuis', s.uptime != null ? dur(s.uptime) : '…'],
+    ['Dernier redémarrage', RESET_TXT[h.reset] || `code ${h.reset}`, RESET_BAD.includes(h.reset)],
+    ['Mémoire', `${ko(h.heap)} libres · au plus bas ${ko(h.heap_min)} · plus gros bloc ${ko(h.heap_blk)}`, h.heap_min < 20480],
+    ['Réglages (NVS)', `${pct} % utilisés` + (more != null ? ` · environ ${more} volet${more > 1 ? 's' : ''} de plus` : ''), more != null && more < 2],
+    ['Stockage', `${ko(h.spiffs_used)} sur ${ko(h.spiffs_total)}`],
+    ['Wi-Fi', w.connected ? sig(w.rssi) : 'non connecté'],
+    ['MQTT', s.mqtt ? 'connecté' : 'déconnecté'],
+    ['Firmware', `v${esc(h.version)} · partition ${esc(h.part)}`],
+  ];
+  box.innerHTML = rows.map(([k, v, warn]) => `<dt>${k}</dt><dd${warn ? ' class="warn"' : ''}>${v}</dd>`).join('');
+}
+setInterval(() => { if ((location.hash || '').includes('sys/health')) loadHealth(); }, 5000);
+
 $$('.tab').forEach(t => t.onclick = () => { location.hash = t.dataset.t; });
 $$('.subtab').forEach(t => t.onclick = () => {
   location.hash = `${t.closest('.panel').dataset.p}/${t.dataset.s}`;
@@ -684,14 +716,6 @@ async function loadConfig() {
   if ($('#mqtt-device')) $('#mqtt-device').value = c.device || '';
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
-  if ($('#version')) $('#version').textContent = st.version ? 'v' + st.version : '…';
-}
-/* Version du header. Appelee par boot(), donc APRES ouverture de session : en
-   appel immediat au chargement du script, la requete partait avant le login et
-   echouait en 401 -> la version restait vide jusqu'a l'ouverture d'un onglet. */
-async function loadVersion() {
-  try { const s = await api('/api/ota/status'); if (s && s.version && $('#version')) $('#version').textContent = 'v' + s.version; }
-  catch (e) {}
 }
 $('#wifi-save').onclick = async () => {
   const b = { wifi_ssid: $('#wifi-ssid').value.trim(), reboot: $('#wifi-reboot').checked };
@@ -1085,7 +1109,6 @@ let booted = false, pollTimer = null;
 function boot() {
   hideLogin();              /* toujours : un rappel de boot() doit lever l'ecran de login */
   refreshAuthUi();
-  loadVersion();            /* version du header : apres session, sinon 401 */
   loadStatus();
   if (!pollTimer) pollTimer = setInterval(loadStatus, 3000);   /* un seul timer, meme apres reconnexion */
   if (booted) return;       /* le routage ne s'arme qu'une fois */

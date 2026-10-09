@@ -82,3 +82,8 @@ size_t    cfg_store_read_legacy_frames(void *buf, size_t cap);
  * l'erreur de save() si la migration n'a pas pu se faire (ancien format
  * conserve, retente au prochain demarrage). */
 esp_err_t cfg_store_finish_boot(cfg_layout_t lay, bool frames_stored, esp_err_t (*save)(void));
+
+/* Place prise en NVS par les documents des volets enregistres, en entrees de 32 o
+ * (Systeme > Etat : "environ N volets de plus"). *count recoit le nombre de volets
+ * comptes. 0 avec l'ancien format (chaine unique "cfg"). */
+size_t    cfg_store_volet_entries(int *count);

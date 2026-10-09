@@ -23,6 +23,12 @@
 #include "log_ring.h"
 #include "cc1101.h"
 #include "esp_random.h"
+#include "esp_system.h"      /* esp_reset_reason, tas libre (/api/health) */
+#include "esp_heap_caps.h"
+#include "esp_spiffs.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
+#include "cfg_store.h"       /* place des volets en NVS */
 #include <inttypes.h>
 
 #ifndef MIN
@@ -723,6 +729,30 @@ static esp_err_t h_diag(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
+
+/* ── /api/health : sante du boitier (Systeme > Etat), sans cable USB. Le reste (Wi-Fi,
+ * MQTT, temps de fonctionnement, version) est deja dans /api/status et /api/ota/status.
+ * Cause du dernier redemarrage en numero (esp_reset_reason_t), le texte est dans l'UI.
+ * La version y est aussi : elle n'est plus dans l'en-tete de l'interface.
+ * NVS : available = libre hors page reservee ; l'UI en tire "environ N volets de plus"
+ * avec la taille reelle des volets enregistres (banc firmware/test/cfg_store, T13). ── */
+static esp_err_t h_health(httpd_req_t *r) {
+    nvs_stats_t nv = {0}; nvs_get_stats(NULL, &nv);
+    int nvol = 0; size_t vent = cfg_store_volet_entries(&nvol);
+    size_t sp_total = 0, sp_used = 0; esp_spiffs_info("storage", &sp_total, &sp_used);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    char out[320];
+    snprintf(out, sizeof(out),
+             "{\"reset\":%d,\"heap\":%u,\"heap_min\":%u,\"heap_blk\":%u,"
+             "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"volets\":%d,\"volet_entries\":%u,"
+             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\"}",
+             (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries, nvol, (unsigned)vent,
+             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_diag_tx(httpd_req_t *r) {   /* re-lance le self-test TX a la demande */
     int rc = radio_tx_selftest();
     int tx_ok = -1; cc1101_get_diag(&tx_ok, NULL, NULL);
@@ -1007,6 +1037,7 @@ void web_ui_start(void) {
     reg(s, "/api/rx/calibrate", HTTP_POST, h_rx_calibrate);
     reg(s, "/api/rx/calibrate", HTTP_GET,  h_rx_calibrate_status);
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
+    reg(s, "/api/health",       HTTP_GET,  h_health);
     reg(s, "/api/diag/tx",      HTTP_POST, h_diag_tx);
     reg(s, "/api/backup",       HTTP_GET,  h_backup);
     reg(s, "/api/log",          HTTP_GET,  h_log);
