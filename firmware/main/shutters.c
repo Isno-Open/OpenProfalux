@@ -28,6 +28,7 @@
 #include "ota.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = version installee */
 #include "esp_wifi.h"
+#include "wifi_bridge.h"
 #include "esp_netif.h"
 
 static const char *TAG = "shutters";
@@ -1037,7 +1038,11 @@ char *shutters_status_json(void) {
     /* Statut Wi-Fi + MQTT (pour l'UI : pastilles + force du signal) */
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
     wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+    /* Le pilote n'est questionne que si le client est connecte : en mode secours (point
+     * d'acces + client non connecte), chaque appel ecrit "Haven't to connect to a suitable
+     * AP now!", soit une ligne par rafraichissement de l'UI (toutes les 3 s), qui noyait
+     * le journal. */
+    if (wifi_bridge_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         cJSON_AddBoolToObject(wifi, "connected", true);
         cJSON_AddStringToObject(wifi, "ssid", (char *)ap.ssid);
         cJSON_AddNumberToObject(wifi, "rssi", ap.rssi);
@@ -1049,6 +1054,7 @@ char *shutters_status_json(void) {
         }
     } else {
         cJSON_AddBoolToObject(wifi, "connected", false);
+        cJSON_AddBoolToObject(wifi, "fallback", wifi_bridge_in_fallback());   /* reessaie seul (mode secours) */
     }
     cJSON_AddBoolToObject(root, "mqtt", s_mqtt_ready);
     cJSON_AddBoolToObject(root, "listening", s_log_frames);   /* ecoute permanente = position fiable */
