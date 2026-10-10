@@ -143,6 +143,23 @@ jobs:
               ./build/cfg_store_host_test.elf
             "
 
+  # L'alerte pile des telecommandes (remote_battery.c) : decision a partir du bit VLOW.
+  # Pure, un simple gcc suffit.
+  banc-remote-battery:
+    name: Banc de test de l'alerte pile des telecommandes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: decision pile faible (gcc + AddressSanitizer)
+        working-directory: firmware/test/remote-battery
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/remote_battery.c \
+             -o remote_battery_host_test
+          ./remote_battery_host_test
+
   # Le decodeur OOK HCS30x/KeeLoq (keeloq_decode.c) sur des trames en bouchon :
   # voir firmware/test/keeloq/README.md. Il est PUR, donc un simple gcc suffit,
   # sans l'image IDF : quelques secondes, et il rend 1 au premier echec.
