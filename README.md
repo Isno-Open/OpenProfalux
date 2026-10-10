@@ -67,6 +67,7 @@ broches, il n'en connaît aucune. Ajouter une carte, c'est ajouter un
 |---|---|---|
 | `isno-super` | ISNO Super (ESP32-S3-MINI-1-N8, CC1101 868 intégré) | `esp32s3` |
 | `external` | ESP32-WROOM DevKit + CC1101 externe | `esp32` |
+| `d1-mini` | D1 mini ESP32 + CC1101 externe (GDO0 sur IO26, SPI 1 MHz) | `esp32` |
 | `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
 
 ```bash

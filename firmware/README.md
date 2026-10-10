@@ -26,7 +26,7 @@ Brochage : voir `main/hardware_config.h`. **CC1101 = 3.3 V max, jamais 5 V.**
 docker run --rm -v "$PWD/..":/project -w /project/firmware espressif/idf:v6.1 bash -c "
   idf.py -B build-isno-super set-target esp32s3
   idf.py -B build-isno-super -DBOARD=isno-super build"
-# cartes : isno-super (esp32s3), external (esp32), m5-atom-lite (esp32)
+# cartes : isno-super (esp32s3), external (esp32), d1-mini (esp32), m5-atom-lite (esp32)
 # ou en local si ESP-IDF v6.1 est installe :
 idf.py -B build-isno-super set-target esp32s3 && idf.py -B build-isno-super -DBOARD=isno-super build"
 # ou en local si ESP-IDF v5.2 installé :

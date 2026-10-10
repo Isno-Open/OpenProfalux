@@ -45,6 +45,21 @@ Standard électronique universel : rouge/noir pour alim, signaux SPI dans ordre 
 | GDO0 | 🟠 Orange | 15 | GPIO4 |
 | GDO2 | 🟣 Violet | 14 | GPIO2 |
 
+## Table complète — D1 mini ESP32 (`-DBOARD=d1-mini`)
+
+Même bus SPI que le DevKit, mais **GDO0 sur IO26** : sur la carte de référence, IO4 n'est
+pas câblé. SPI à 1 MHz (voir `boards/d1-mini.json`).
+
+| Signal | Couleur | Broche D1 mini ESP32 |
+|--------|---------|----------------------|
+| VCC | 🔴 Rouge | 3V3 |
+| GND | ⚫ Noir | GND |
+| MOSI | 🟡 Jaune | IO23 |
+| MISO | 🟢 Vert | IO19 |
+| SCK | 🔵 Bleu | IO18 |
+| CSN | ⚪ Blanc | IO5 |
+| GDO0 | 🟠 Orange | IO26 |
+
 **Compile flag** :
 - `CONFIG_OPENPROFALUX_TARGET_M5STACK=y` → M5Stack ATOM Lite
 - `CONFIG_OPENPROFALUX_TARGET_EXTERNAL=y` → ESP32 DevKit
