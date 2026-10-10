@@ -154,9 +154,38 @@ static void spi_xfer(uint8_t *tx, uint8_t *rx, size_t n) {
     spi_device_polling_transmit(s_spi, &t);
 }
 
-void cc1101_write_reg(uint8_t addr, uint8_t val) {
+/* Ecritures VERIFIEES. Mesure 2026-10-09 (D1 mini ESP32 + module CC1101) : apres une rafale
+ * de ~5-10 acces SPI (lectures comprises), le CC1101 ignorait les ecritures pendant moins
+ * d'1 ms. Il repondait bien en mode ecriture (octet d'etat 0x0F) mais ne gardait pas la
+ * valeur ; lectures et strobes passaient. Independant de la frequence SPI et du DMA. Sans
+ * verification, l'init perdait au hasard MCSM1/MCSM0/FREND0/TEST* et le PATABLE : puissance
+ * d'emission et modulation fausses, sans aucun message. Le defaut a disparu apres une
+ * coupure d'alimentation (puce en surconsommation, elle chauffait) : la verification sert a
+ * le rendre VISIBLE (spi_retries/spi_fails dans /api/diag) et a s'en remettre.
+ * On relit donc chaque registre de config et on reessaie apres 1 ms. */
+static uint32_t s_spi_retries, s_spi_fails;
+void cc1101_spi_stats(uint32_t *retries, uint32_t *fails) {
+    if (retries) *retries = s_spi_retries;
+    if (fails)   *fails   = s_spi_fails;
+}
+
+static void write_raw(uint8_t addr, uint8_t val) {
     uint8_t tx[2] = {addr, val}, rx[2];
     cs_low(); spi_xfer(tx, rx, 2); cs_high();
+}
+
+void cc1101_write_reg(uint8_t addr, uint8_t val) {
+    for (int i = 0; ; i++) {
+        write_raw(addr, val);
+        if (addr > 0x2E || cc1101_read_reg(addr) == val) return;   /* au-dela : pas relisible */
+        if (i == 5) {
+            s_spi_fails++;
+            ESP_LOGE(TAG, "ecriture registre 0x%02X=0x%02X non prise apres %d essais", addr, val, i + 1);
+            return;
+        }
+        s_spi_retries++;
+        esp_rom_delay_us(1000);
+    }
 }
 
 uint8_t cc1101_read_reg(uint8_t addr) {
@@ -202,9 +231,19 @@ int cc1101_init(void) {
         cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
     }
     /* PATABLE (burst) pour OOK : index0=eteint (bit 0), index1=puissance (bit 1). */
-    {
+    for (int i = 0; ; i++) {   /* ecriture verifiee (relue en burst), voir cc1101_write_reg */
         uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
         cs_low(); spi_xfer(tx, rx, 3); cs_high();
+        uint8_t tr[3] = { CC_PATABLE | 0xC0, 0, 0 }, rr[3];
+        cs_low(); spi_xfer(tr, rr, 3); cs_high();
+        if (rr[1] == 0x00 && rr[2] == 0xC0) break;
+        if (i == 5) {
+            s_spi_fails++;
+            ESP_LOGE(TAG, "PATABLE non pris (lu %02X,%02X) : puissance d'emission fausse", rr[1], rr[2]);
+            break;
+        }
+        s_spi_retries++;
+        esp_rom_delay_us(1000);
     }
     uint8_t partnum = cc1101_read_reg(CC_PARTNUM | 0x40);
     uint8_t version = cc1101_read_reg(0x31 | 0x40);   /* VERSION : ~0x04/0x14 sur un vrai CC1101 */
