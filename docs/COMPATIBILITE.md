@@ -9,7 +9,7 @@ Une ligne = un retour vérifié.
 | Marque | Modèle | Fréquence | Méthode confirmée | Compteur roulant | Source |
 |---|---|---|---|---|---|
 | Profalux | gamme PFX (référence du projet) | 868 MHz | rejeu, enrôlement | variable selon la génération du moteur | mainteneur |
-| Eveno | Zuni-R (installation 2015) | 868 MHz | rejeu | non observé (une vingtaine de rejeux successifs acceptés) | issue #3, azriek |
+| Eveno | Zuni-R (installation 2015) | 868,33 MHz (profil radio `eveno`) | rejeu | non observé (une vingtaine de rejeux successifs acceptés) | issue #3, azriek |
 | Profalux | NeoSol S300 Stella AT | 868 MHz | enrôlement : essais en cours, non confirmé | à déterminer | issue #1, eleroy |
 | FranciaFlex | M4G | 868 MHz | enrôlement | variable | forum HACF, Lecanard38 |
 
@@ -30,6 +30,13 @@ que les trames arrivent, chercher du côté du moteur et non du boîtier.
 Même moteur, deux points où la procédure d'enrôlement diffère de celle décrite au départ :
 le volet doit être **descendu de quelques lames** et non en butée haute, et le moteur ne
 fait **pas d'aller-retour de confirmation** à la fin.
+
+**Eveno Zuni-R** : les télécommandes émettent à **868,33 MHz**, environ 100 kHz sous
+Profalux (868,425 MHz), au bord de la bande passante de réception. Avec le profil Profalux,
+elles ne sont pas captées, même collées à l'antenne. Choisir le profil radio **Eveno** dans
+Système > Appareil (ou `"radio_profile":"eveno"` dans `POST /api/config`). Pour une autre
+marque, le profil **personnalisé** prend une fréquence en kHz, dans la plage autorisée de la
+carte.
 
 ## À compléter
 

@@ -22,6 +22,7 @@
 #include "cJSON.h"
 #include "log_ring.h"
 #include "cc1101.h"
+#include "radio_profile.h"   /* profil radio (frequence par marque) */
 #include "esp_random.h"
 #include "esp_system.h"      /* esp_reset_reason, tas libre (/api/health) */
 #include "esp_heap_caps.h"
@@ -398,6 +399,8 @@ static esp_err_t h_config_get(httpd_req_t *r) {
     char dev[32] = "", ssid[33] = "", uri[160] = "", user[128] = "", pass[256] = "";
     uint8_t logf = 0, dbg = 0, rg = 0x27;
     uint32_t txte = 455;
+    uint8_t rprof = RADIO_PROFILE_DEFAULT;
+    uint32_t fcustom = 0;
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
         cfg_get(h, "device", dev, sizeof(dev)); cfg_get(h, "wifi_ssid", ssid, sizeof(ssid));
@@ -407,18 +410,23 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         nvs_get_u8(h, "debug", &dbg);
         uint8_t tmp; if (nvs_get_u8(h, "rx_gain", &tmp) == ESP_OK && tmp) rg = tmp;
         uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) txte = t;
+        nvs_get_u8(h, "radio_prof", &rprof);
+        nvs_get_u32(h, "freq_khz", &fcustom);
         nvs_close(h);
     }
-    char out[720];
+    char out[900];
     /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque).
      * Certificats TLS : on ne renvoie que leur longueur, jamais le contenu (surtout la cle). */
     snprintf(out, sizeof(out),
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
              "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
-             "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d}",
+             "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d,"
+             "\"radio_profile\":\"%s\",\"freq_custom_khz\":%u,\"freq_khz\":%u,\"band_low_khz\":%u,\"band_high_khz\":%u}",
              dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
              (unsigned)mqtt_cert_len("ca"), (unsigned)mqtt_cert_len("cert"), (unsigned)mqtt_cert_len("key"),
-             s_ui_pass[0] ? 1 : 0);
+             s_ui_pass[0] ? 1 : 0,
+             radio_profile_name((radio_profile_t)rprof), (unsigned)fcustom, (unsigned)cc1101_get_freq_khz(),
+             (unsigned)CC1101_BAND_LOW_KHZ, (unsigned)CC1101_BAND_HIGH_KHZ);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
@@ -437,6 +445,21 @@ static esp_err_t h_config_post(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, 400, "json");
     nvs_handle_t h;
+    /* Profil radio : valide AVANT toute ecriture, pour qu'une requete refusee ne change rien.
+     * radio_profile = "profalux" | "eveno" | "custom" ; freq_khz n'est lu que pour "custom". */
+    int rprof = -1; uint32_t rcustom = 0, rkhz = 0;
+    const char *rpname = jstr(j, "radio_profile");
+    if (rpname) {
+        rprof = radio_profile_from_name(rpname);
+        cJSON *fj = cJSON_GetObjectItem(j, "freq_khz");
+        if (rprof == RADIO_PROFILE_CUSTOM && cJSON_IsNumber(fj) && fj->valuedouble > 0) rcustom = (uint32_t)fj->valuedouble;
+        if (!radio_profile_resolve(rprof, rcustom, CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, &rkhz)) {
+            cJSON_Delete(j);
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,   /* l'enum, pas 400 : 400 litteral sort en 500 */
+                                       rprof < 0 ? "radio_profile inconnu" : "freq_khz hors de la plage de la carte");
+        }
+    }
+    int radio_ok = -2;   /* -2 = profil non demande, 0 = applique, -1 = non pris par la radio */
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
         cfg_set_if(h, j, "device", "device");
         cfg_set_if(h, j, "wifi_ssid", "wifi_ssid"); cfg_set_if(h, j, "wifi_pass", "wifi_pass");
@@ -472,6 +495,13 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             nvs_set_u32(h, "tx_te", te);
             cc1101_set_tx_te(te);      /* pris en compte a la prochaine emission */
         }
+        if (rprof >= 0) {
+            nvs_set_u8(h, "radio_prof", (uint8_t)rprof);
+            if (rprof == RADIO_PROFILE_CUSTOM) nvs_set_u32(h, "freq_khz", rcustom);
+            radio_ok = radio_set_freq_khz(rkhz);   /* immediat, sans reboot */
+            ESP_LOGI(TAG, "profil radio %s : %u kHz%s", radio_profile_name((radio_profile_t)rprof),
+                     (unsigned)rkhz, radio_ok == 0 ? "" : " (NON pris par la radio)");
+        }
         /* Mot de passe de l'UI. Trois cas DISTINCTS, d'ou le test sur cJSON_IsString
          * plutot que sur jstr() : champ ABSENT = on ne touche a rien (tout POST de
          * config ne doit pas effacer le mot de passe) ; chaine VIDE = desactivation
@@ -497,7 +527,13 @@ static esp_err_t h_config_post(httpd_req_t *r) {
     }
     bool reboot = cJSON_IsTrue(cJSON_GetObjectItem(j, "reboot"));
     cJSON_Delete(j);
-    httpd_resp_sendstr(r, "{\"ok\":1}");
+    if (radio_ok == -2) httpd_resp_sendstr(r, "{\"ok\":1}");
+    else {
+        char resp[64];
+        snprintf(resp, sizeof(resp), "{\"ok\":1,\"radio_applied\":%d,\"freq_khz\":%u}",
+                 radio_ok == 0 ? 1 : 0, (unsigned)cc1101_get_freq_khz());
+        httpd_resp_sendstr(r, resp);
+    }
     if (reboot) { vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
     return ESP_OK;
 }
