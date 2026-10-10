@@ -814,11 +814,15 @@ async function loadDiag() {
   if (vd) {
     let cls, msg;
     if (!chipOk) { cls = 'bad'; msg = '🔴 Module NON détecté (câblage / SPI). VERSION=' + vh; }
+    else if (d.spi_fails > 0) { cls = 'bad'; msg = '🔴 Réglages radio non pris par le module : couper l\'alimentation puis redémarrer'; }
     else if (!txOk) { cls = 'bad'; msg = '🔴 Détecté mais émission KO (TX HS)'; }
     else { cls = 'ok'; msg = '🟢 Module OK (détecté + émission)'; }
     vd.className = 'statline ' + cls; vd.querySelector('b').textContent = msg;
   }
-  if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}. Réception : bouton ci-dessous.`;
+  /* Ecritures SPI reessayees / jamais prises : un module sain reste a 0. Des reprises qui
+     montent signalent un module qui decroche (il a deja ete vu chaud et instable). */
+  const spi = (d.spi_retries || d.spi_fails) ? ` · SPI : ${d.spi_retries} reprise(s), ${d.spi_fails} échec(s)` : '';
+  if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}${spi}. Réception : bouton ci-dessous.`;
 }
 if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   const btn = $('#diag-tx-btn'); btn.disabled = true;
