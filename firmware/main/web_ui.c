@@ -724,8 +724,11 @@ static esp_err_t h_rx_calibrate_status(httpd_req_t *r) {
 static esp_err_t h_diag(httpd_req_t *r) {
     int tx_ok = -1; uint8_t partnum = 0xFF, version = 0xFF;
     cc1101_get_diag(&tx_ok, &partnum, &version);
-    char out[128];
-    snprintf(out, sizeof(out), "{\"tx_ok\":%d,\"partnum\":%d,\"version\":%d}", tx_ok, partnum, version);
+    uint32_t retries = 0, fails = 0;
+    cc1101_spi_stats(&retries, &fails);
+    char out[160];
+    snprintf(out, sizeof(out), "{\"tx_ok\":%d,\"partnum\":%d,\"version\":%d,\"spi_retries\":%u,\"spi_fails\":%u}",
+             tx_ok, partnum, version, (unsigned)retries, (unsigned)fails);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
