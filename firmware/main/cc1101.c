@@ -6,6 +6,7 @@
  * asynchronous serial mode with GDO0 output on TX and GDO0 input on RX.
  */
 #include "cc1101.h"
+#include "radio_profile.h"
 #include "hardware_config.h"
 #include <string.h>
 #include <esp_log.h>
@@ -271,6 +272,30 @@ static void ook_bit(bool one) {
         gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(910);
         gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(455);
     }
+}
+
+/* Frequence porteuse (profil radio). Ecrite en IDLE ; le synthetiseur se recalibre au
+ * prochain passage en RX/TX (MCSM0 FS_AUTOCAL). Relue pour verifier : sur certains montages
+ * le CC1101 ignore une ecriture juste apres une rafale d'acces SPI, d'ou 3 essais espaces. */
+static uint32_t s_freq_khz = PROFALUX_FREQ_HZ / 1000;   /* celle de s_regs au boot */
+uint32_t cc1101_get_freq_khz(void) { return s_freq_khz; }
+
+int cc1101_set_freq_khz(uint32_t khz) {
+    uint32_t w = radio_cc1101_freq_word(khz);
+    uint8_t f2 = (w >> 16) & 0xFF, f1 = (w >> 8) & 0xFF, f0 = w & 0xFF;
+    strobe(CC_SIDLE);
+    for (int i = 0; i < 3; i++) {
+        cc1101_write_reg(CC_FREQ2, f2); cc1101_write_reg(CC_FREQ1, f1); cc1101_write_reg(CC_FREQ0, f0);
+        if (cc1101_read_reg(CC_FREQ2) == f2 && cc1101_read_reg(CC_FREQ1) == f1 && cc1101_read_reg(CC_FREQ0) == f0) {
+            s_freq_khz = khz;
+            ESP_LOGI(TAG, "frequence %u kHz (FREQ %02X %02X %02X)", (unsigned)khz, f2, f1, f0);
+            return 0;
+        }
+        esp_rom_delay_us(1000);
+    }
+    ESP_LOGE(TAG, "frequence %u kHz NON prise (FREQ relu %02X %02X %02X)", (unsigned)khz,
+             cc1101_read_reg(CC_FREQ2), cc1101_read_reg(CC_FREQ1), cc1101_read_reg(CC_FREQ0));
+    return -1;
 }
 
 /* Auto-test d'emission : passe en TX, lit MARCSTATE (0x13 = porteuse ON),

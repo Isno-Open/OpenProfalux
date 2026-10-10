@@ -713,6 +713,16 @@ async function loadConfig() {
   if ($('#sys-debug')) $('#sys-debug').checked = !!c.debug;
   if ($('#sys-rxgain')) $('#sys-rxgain').value = c.rx_gain || 39;
   if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 455;
+  const rp = $('#sys-radioprof'), fq = $('#sys-freq');
+  if (rp && fq) {
+    rp.value = c.radio_profile || 'profalux';
+    fq.min = c.band_low_khz || 863000; fq.max = c.band_high_khz || 870000;
+    fq.value = c.freq_custom_khz || c.freq_khz || '';
+    fq.hidden = rp.value !== 'custom';
+    const fh = $('#sys-freq-hint');
+    if (fh) fh.textContent = `Fréquence active : ${c.freq_khz ? (c.freq_khz / 1000).toFixed(3) + ' MHz' : '?'}` +
+      (rp.value === 'custom' ? ` (saisie en kHz, entre ${fq.min} et ${fq.max})` : '');
+  }
   if ($('#mqtt-device')) $('#mqtt-device').value = c.device || '';
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
@@ -746,15 +756,31 @@ $('#mqtt-save').onclick = async () => {
     toast(e === 400 ? 'Échec : certificats trop volumineux ou requête invalide' : 'Échec de l’enregistrement MQTT');
   }
 };
+if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
   const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 455, reboot: $('#sys-reboot').checked };
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
      desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche
      jamais le mot de passe) -> la desactivation passe par le bouton dedie ci-dessous. */
+  /* Profil radio : le firmware refuse toute la requete (400) si la frequence sort de la plage
+     de la carte. On le verifie ici pour un message clair, et on ne dit pas « enregistré » sur
+     un refus. */
+  const rp = $('#sys-radioprof'), fq = $('#sys-freq');
+  if (rp) {
+    b.radio_profile = rp.value;
+    if (rp.value === 'custom') {
+      const f = Number(fq.value);
+      if (!(f >= Number(fq.min) && f <= Number(fq.max))) { toast(`Fréquence invalide : entre ${fq.min} et ${fq.max} kHz`); return; }
+      b.freq_khz = f;
+    }
+  }
   const up = $('#sys-uipass');
   const newPass = up && up.value !== '';
   if (newPass) b.ui_pass = up.value;
-  await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
+  let res;
+  try { res = await api('/api/config', { method: 'POST', body: JSON.stringify(b) }); }
+  catch (e) { toast(e === 400 ? 'Refusé : profil radio ou fréquence invalide, rien n’a été enregistré' : 'Échec de l’enregistrement'); return; }
+  if (res && res.radio_applied === 0) toast('Enregistré, mais la radio n’a pas pris la nouvelle fréquence (voir Diagnostic)');
   if (up) up.value = '';
   if (newPass) {
     /* Le firmware invalide toutes les sessions quand le mot de passe change :

@@ -18,6 +18,7 @@
 
 #include "hardware_config.h"
 #include "cc1101.h"
+#include "radio_profile.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
 #include "shutters.h"
@@ -37,6 +38,8 @@ static bool s_log_frames = false;   /* option UI "capture toutes les trames" (na
 static bool s_debug      = false;   /* switch UI "debug console" : logge chaque capture RX */
 static uint8_t s_rx_gain = 0x27;    /* plafond de gain RX (AGCCTRL2) reglable via l'UI ; defaut 0x27 */
 static uint32_t s_tx_te  = 455;     /* TE d'emission (us) reglable via l'UI ; defaut 455 (Profalux) */
+static uint8_t  s_radio_prof = RADIO_PROFILE_DEFAULT;   /* profil radio (radio_profile.h), via l'UI */
+static uint32_t s_freq_custom = 0;                      /* kHz, profil custom seulement */
 
 /* Device name / config from NVS */
 static char s_device_name[32] = "volet_test";
@@ -61,6 +64,8 @@ static void load_config(void) {
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
     uint8_t rg = 0; if (nvs_get_u8(h, "rx_gain", &rg) == ESP_OK && rg) s_rx_gain = rg;
     uint32_t te = 0; if (nvs_get_u32(h, "tx_te", &te) == ESP_OK && te) s_tx_te = te;
+    nvs_get_u8(h, "radio_prof", &s_radio_prof);
+    nvs_get_u32(h, "freq_khz", &s_freq_custom);
     nvs_close(h);
     /* Nom d'appareil vide -> defaut : sinon client_id MQTT vide + topic de disponibilite
      * qui ne coincide pas avec la decouverte HA. */
@@ -157,6 +162,17 @@ void app_main(void) {
     /* 3. CC1101 */
     if (cc1101_init() != 0) {
         ESP_LOGE(TAG, "CC1101 init FAILED. Check wiring per hardware_config.h");
+    }
+    /* 3b. Profil radio (frequence par marque). Une config invalide ou hors de la plage de la
+     * carte retombe sur le profil par defaut plutot que de laisser la radio muette. */
+    {
+        uint32_t khz;
+        if (!radio_profile_resolve(s_radio_prof, s_freq_custom, CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, &khz)) {
+            ESP_LOGW(TAG, "profil radio %u / %u kHz invalide pour cette carte : profil %s",
+                     s_radio_prof, (unsigned)s_freq_custom, radio_profile_name(RADIO_PROFILE_DEFAULT));
+            khz = radio_profile_freq_khz(RADIO_PROFILE_DEFAULT, 0);
+        }
+        cc1101_set_freq_khz(khz);
     }
     /* 4b. Auto-test emission au boot (prouve que la puce passe en TX). */
     if (cc1101_tx_selftest() == 0)

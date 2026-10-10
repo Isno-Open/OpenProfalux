@@ -37,6 +37,7 @@ idf_component_register(
         "web_ui.c"
         "ota.c"
         "radio.c"
+        "radio_profile.c"
         "log_ring.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
