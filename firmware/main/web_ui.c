@@ -245,9 +245,9 @@ static esp_err_t h_status(httpd_req_t *r) {
 
 /* ── /api/shutter ── */
 static esp_err_t h_shutter(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
     cJSON *val = cJSON_GetObjectItem(j, "value");
     int rc = (id && cmd) ? shutters_cmd(id, cmd, val ? (int)val->valuedouble : 0) : -1;
@@ -260,9 +260,9 @@ static esp_err_t h_shutter(httpd_req_t *r) {
 
 /* ── /api/volet/delete : supprime un volet (permet de reapprendre proprement) ── */
 static esp_err_t h_volet_delete(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_delete_volet(jstr(j, "id"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -286,9 +286,9 @@ static esp_err_t h_learn_poll(httpd_req_t *r) {
     return ESP_OK;
 }
 static esp_err_t h_learn_assign(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_learn_assign(jstr(j, "id"), jstr(j, "action"), jstr(j, "bits"));
     cJSON_Delete(j); s_lready = false;
     if (rc == 0) {   /* AUTO : cale le TE d'emission sur le tempo de la trame captee (le champ UI reste un override) */
@@ -304,18 +304,18 @@ static esp_err_t h_learn_assign(httpd_req_t *r) {
     return ESP_OK;
 }
 static esp_err_t h_learn_reassign(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_reassign(jstr(j, "id"), jstr(j, "from"), jstr(j, "to"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
 }
 static esp_err_t h_learn_adopt(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *hs = jstr(j, "hop");
     uint32_t hop = hs ? (uint32_t)strtoul(hs, NULL, 16) : 0;
     int rc = shutters_adopt(jstr(j, "id"), jstr(j, "action"), jstr(j, "serial"), hop);
@@ -325,9 +325,9 @@ static esp_err_t h_learn_adopt(httpd_req_t *r) {
 }
 
 static esp_err_t h_rf_replay(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *hs = jstr(j, "hop");
     uint32_t hop = hs ? (uint32_t)strtoul(hs, NULL, 16) : 0;
     int rc = shutters_replay_frame(jstr(j, "serial"), hop);
@@ -338,9 +338,9 @@ static esp_err_t h_rf_replay(httpd_req_t *r) {
 
 /* ── /api/calibrate + /api/remote ── */
 static esp_err_t h_calibrate(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_calibrate(jstr(j, "id"),
         (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "travel_up_ms")),
         (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "travel_down_ms")));
@@ -349,9 +349,9 @@ static esp_err_t h_calibrate(httpd_req_t *r) {
     return ESP_OK;
 }
 static esp_err_t h_orientation(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *ori = cJSON_GetObjectItem(j, "orientation");
     int rc = shutters_set_orientation(jstr(j, "id"), ori ? (int)cJSON_GetNumberValue(ori) : -1);
     cJSON_Delete(j);
@@ -361,9 +361,9 @@ static esp_err_t h_orientation(httpd_req_t *r) {
 /* /api/volet/order : {"ids":["id1","id2",...]} dans l'ordre d'affichage voulu.
  * Purement cosmetique : ne touche ni la radio, ni le pilotage, ni les topics HA. */
 static esp_err_t h_volet_order(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     /* Tous les volets : un tampon de 384 octets (l'ancien SH_MEMBERS_LEN)
      * tronquait la liste en silence au-dela, et les volets coupes repassaient
      * a order = -1 (renvoyes en fin d'affichage). */
@@ -381,9 +381,9 @@ static esp_err_t h_volet_order(httpd_req_t *r) {
 }
 
 static esp_err_t h_remote(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_remote_name(jstr(j, "serial"), jstr(j, "name") ?: "");
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -433,9 +433,9 @@ static void cfg_set_if(nvs_handle_t h, cJSON *j, const char *field, const char *
  * est rejetee avant d'ecrire quoi que ce soit. */
 #define CONFIG_MAX_BODY (16 * 1024)
 static esp_err_t h_config_post(httpd_req_t *r) {
-    char *body = read_body_max(r, CONFIG_MAX_BODY); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body_max(r, CONFIG_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
         cfg_set_if(h, j, "device", "device");
@@ -602,7 +602,7 @@ static esp_err_t h_backup(httpd_req_t *r) {
  * dont des centrales a longue liste de membres. */
 #define RESTORE_MAX_BODY (24 * 1024)
 static esp_err_t h_restore(httpd_req_t *r) {
-    char *body = read_body_max(r, RESTORE_MAX_BODY); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body_max(r, RESTORE_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     int rc = shutters_import_json(body);
     free(body);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -643,11 +643,11 @@ static esp_err_t h_ota_status(httpd_req_t *r) {
 }
 static esp_err_t h_ota_upload(httpd_req_t *r) {
     int total = r->content_len;
-    if (total <= 0) return httpd_resp_send_err(r, 400, "empty");
-    if (ota_upload_begin(total) != ESP_OK) return httpd_resp_send_err(r, 500, "ota begin");
+    if (total <= 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "empty");
+    if (ota_upload_begin(total) != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "ota begin");
     wifi_ps_type_t ps = WIFI_PS_MIN_MODEM; esp_wifi_get_ps(&ps); esp_wifi_set_ps(WIFI_PS_NONE);
     char *buf = malloc(1460);
-    if (!buf) { esp_wifi_set_ps(ps); ota_upload_abort(); return httpd_resp_send_err(r, 500, "malloc"); }
+    if (!buf) { esp_wifi_set_ps(ps); ota_upload_abort(); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "malloc"); }
     /* Un client qui disparait sans fermer la connexion (portable en veille, telephone hors de
      * portee) bloquait ici pour toujours l'unique tache du serveur web : interface morte pour
      * tous jusqu'a une coupure de courant. 3 delais de reception (5 s chacun) sans un octet ->
@@ -668,7 +668,7 @@ static esp_err_t h_ota_upload(httpd_req_t *r) {
         /* ESP_FAIL : le serveur ferme la connexion tout de suite (avec ESP_OK, il tenterait de
          * lire le reste de l'envoi et attendrait encore un delai). */
         if (k == HTTPD_SOCK_ERR_TIMEOUT) { httpd_resp_send_err(r, HTTPD_408_REQ_TIMEOUT, NULL); return ESP_FAIL; }
-        return httpd_resp_send_err(r, 500, "upload");
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "upload");
     }
     httpd_resp_sendstr(r, "{\"ok\":1}");
     ota_upload_end();   /* vérifie + reboot */
@@ -692,7 +692,7 @@ static void ota_pull_bg_task(void *arg) {
     vTaskDelete(NULL);
 }
 static esp_err_t h_ota_pull(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     const char *url = j ? cJSON_GetStringValue(cJSON_GetObjectItem(j, "url")) : NULL;
     char *dup = (url && !strncmp(url, "https://", 8)) ? strdup(url) : NULL;   /* HTTPS uniquement */
@@ -786,9 +786,9 @@ static void pfx_capture_task(void *arg) {
     vTaskDelete(NULL);
 }
 static esp_err_t h_pfx_capture(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *mo = cJSON_GetObjectItem(j, "model");
     s_pcap_model = cJSON_IsNumber(mo) ? (int)mo->valuedouble : -1;
     cJSON_Delete(j);
@@ -833,9 +833,9 @@ static esp_err_t h_pfx_learn(httpd_req_t *r) {
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
 }
 static esp_err_t h_pfx_cmd(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = pfx_enrol_cmd(jstr(j, "cmd"));
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
@@ -849,9 +849,9 @@ static esp_err_t h_pfx_forget(httpd_req_t *r) {
 /* Enregistre l'identite virtuelle enrolee comme volet (onglet Volets + cover HA). */
 /* Cree une centrale : {id, members:[id1,id2,...]} -> diffuse aux volets membres. */
 static esp_err_t h_central(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id");
     /* Une liste qui ne tient pas est refusee, pas tronquee : les membres coupes ne
      * recevraient plus les commandes de la centrale, sans que rien ne le dise.
@@ -883,9 +883,9 @@ static esp_err_t h_central(httpd_req_t *r) {
     return e;
 }
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *name = jstr(j, "id");
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     int rc = -1;
