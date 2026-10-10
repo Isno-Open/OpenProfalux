@@ -67,6 +67,17 @@ int radio_tx_selftest(void) {
     return r;
 }
 
+/* Change la frequence porteuse a chaud (profil radio), sous mutex et ecoute en pause. */
+int radio_set_freq_khz(uint32_t khz) {
+    if (!s_mtx) return cc1101_set_freq_khz(khz);   /* avant radio_init : boot, pas de concurrence */
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int r = cc1101_set_freq_khz(khz);
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
 /* ── Auto-calibration du gain RX ──────────────────────────────────────────
  * Balaie une echelle de gain (du + sensible au + mordant) ; a chaque cran, ecoute
  * quelques secondes ; DES QU'UNE TRAME VALIDE (>=64 bits) est captee, verrouille ce

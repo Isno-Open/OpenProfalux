@@ -235,6 +235,15 @@
             <span class="lbl">Écoute RF permanente<small>Active le RF debug en direct, le suivi de position via la vraie télécommande et le dataset MQTT. Désactivée = radio libre (moins de bruit).</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-debug"><span class="track"></span>
             <span class="lbl">Debug console<small>Logge chaque capture RX dans la console série (symboles, RSSI, bits, KeeLoq ou non). Pour diagnostiquer « ça ne capte pas ». À laisser OFF en usage normal (verbeux).</small></span></label>
+          <div class="field" style="margin-top:12px"><label>Profil radio - marque des volets</label>
+            <select id="sys-radioprof">
+              <option value="profalux">Profalux (868,425 MHz)</option>
+              <option value="eveno">Eveno (868,330 MHz)</option>
+              <option value="custom">Fréquence personnalisée</option>
+            </select>
+            <input id="sys-freq" type="number" step="1" placeholder="868330" hidden style="margin-top:8px">
+            <p class="hint" id="sys-freq-hint"></p>
+            <p class="hint">Fréquence d'émission et d'écoute du boîtier. Appliquée tout de suite, sans redémarrage. Si ta télécommande n'est pas captée même collée à l'antenne, essaie l'autre profil : Eveno émet ~100 kHz plus bas que Profalux.</p></div>
           <div class="field" style="margin-top:12px"><label>Gain RX (AGCCTRL2) - réglage de diagnostic réception</label>
             <select id="sys-rxgain">
               <option value="7">0x07 - gain max (le plus sensible, mais capte le bruit)</option>

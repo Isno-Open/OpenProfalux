@@ -162,6 +162,23 @@ jobs:
              -o mqtt_tls_host_test
           ./mqtt_tls_host_test
 
+  # Les profils radio (radio_profile.c) : frequence par marque, plage autorisee, mot de
+  # frequence CC1101. Pur, un simple gcc suffit.
+  banc-radio-profile:
+    name: Banc de test des profils radio
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: profils et mots de frequence (gcc + AddressSanitizer)
+        working-directory: firmware/test/radio-profile
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/radio_profile.c \
+             -o radio_profile_host_test
+          ./radio_profile_host_test
+
 env:
   # Version epinglee : une montee d'IDF se decide, elle ne se subit pas au
   # prochain build. Le depot compile sur v6.1 depuis la migration du 27/09.

@@ -33,6 +33,8 @@
     #define CC1101_PIN_GDO0           (-1)
     #define CC1101_PIN_GDO2           (-1)
     #define CC1101_SPI_FREQ_HZ  1000000
+    #define CC1101_BAND_LOW_KHZ       863000
+    #define CC1101_BAND_HIGH_KHZ      870000
     #define BTN_PIN_DEBUG_UP          -1
     #define BTN_PIN_DEBUG_STOP        -1
     #define BTN_PIN_DEBUG_DOWN        -1

@@ -26,6 +26,9 @@ int  cc1101_rx_stop(void);
 
 /* Auto-test emission : renvoie 0 si la puce passe bien en TX (MARCSTATE 0x13). */
 int  cc1101_tx_selftest(void);
+/* Frequence porteuse en kHz (profil radio, voir radio_profile.h). 0=OK, -1=non prise. */
+int      cc1101_set_freq_khz(uint32_t khz);
+uint32_t cc1101_get_freq_khz(void);
 int  cc1101_rx_probe(void);   /* sonde de bruit RX au boot (RSSI + nb d'evenements RMT a vide) */
 
 /* Auto-capture : initialise le RMT sur GDO0 pour relire notre propre emission. */
