@@ -9,7 +9,7 @@ set(BOARD_JSON "${CMAKE_CURRENT_LIST_DIR}/../../boards/${BOARD}.json")
 set(BOARD_HDR_DIR "${CMAKE_BINARY_DIR}/board")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(NOT EXISTS "${BOARD_JSON}")
-        message(FATAL_ERROR "carte inconnue : ${BOARD_JSON} n'existe pas (-DBOARD=isno-super | external | m5-atom-lite)")
+        message(FATAL_ERROR "carte inconnue : ${BOARD_JSON} n'existe pas (-DBOARD=isno-super | external | d1-mini | m5-atom-lite)")
     endif()
     file(MAKE_DIRECTORY "${BOARD_HDR_DIR}")
     execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py" "${BOARD_JSON}" "${BOARD_HDR_DIR}/board_pins.h"

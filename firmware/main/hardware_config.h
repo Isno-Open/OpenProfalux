@@ -15,7 +15,7 @@
 /* ═══════════════════════════════════════════════════════════════
  * Le brochage vient de la CARTE choisie a la construction.
  *
- * -DBOARD=isno-super | external | m5-atom-lite selectionne boards/<BOARD>.json,
+ * -DBOARD=isno-super | external | d1-mini | m5-atom-lite selectionne boards/<BOARD>.json,
  * et tools/gen_board.py en engendre board_pins.h a la configuration CMake. Ce
  * firmware ne code AUCUNE broche : il les LIT. Ajouter une carte, c'est ajouter
  * un boards/<nom>.json, pas editer ce fichier.
