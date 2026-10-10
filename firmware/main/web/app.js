@@ -719,6 +719,7 @@ async function loadConfig() {
   if (upi) upi.placeholder = c.ui_auth ? 'nouveau mot de passe (inchangé si vide)' : 'mot de passe à définir';
   if (upc) upc.hidden = !c.ui_auth;   /* desactivation par un bouton EXPLICITE, pas par un champ vide */
   if ($('#sys-debug')) $('#sys-debug').checked = !!c.debug;
+  if ($('#sys-txrpt')) $('#sys-txrpt').checked = !!c.tx_repeat_bit;
   if ($('#sys-rxgain')) $('#sys-rxgain').value = c.rx_gain || 39;
   if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 455;
   const rp = $('#sys-radioprof'), fq = $('#sys-freq');
@@ -774,6 +775,7 @@ $('#mqtt-save').onclick = async () => {
 if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
   const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 455, reboot: $('#sys-reboot').checked };
+  if ($('#sys-txrpt')) b.tx_repeat_bit = $('#sys-txrpt').checked;
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
      desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche
      jamais le mot de passe) -> la desactivation passe par le bouton dedie ci-dessous. */

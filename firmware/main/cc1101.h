@@ -47,6 +47,8 @@ void cc1101_set_rx_debug(bool on);   /* switch DEBUG : logge chaque capture RX (
 bool cc1101_get_rx_debug(void);
 void cc1101_set_rx_gain(uint8_t agcctrl2);   /* plafond de gain RX (AGCCTRL2) reglable ; defaut 0x27 */
 uint8_t cc1101_get_rx_gain(void);
+void cc1101_set_tx_repeat_bit(bool on);      /* imite la telecommande : RPT 0 puis 1, 18 ms entre trames */
+bool cc1101_get_tx_repeat_bit(void);
 void cc1101_set_tx_te(uint32_t te_us);       /* TE d'emission (us) reglable ; defaut 455 (Profalux) */
 uint32_t cc1101_get_tx_te(void);
 int cc1101_last_te(void);                    /* TE (us) mesure sur la derniere trame decodee */

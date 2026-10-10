@@ -41,6 +41,16 @@ uint8_t cc1101_get_rx_gain(void)   { return s_rx_gain; }
  * variantes PFX roulent a un TE different (ex FranciaFlex ~415). On derive bit '1'=TE, '0'=2*TE,
  * preambule=TE, entete=10 TE. Permet au rejeu de matcher le timing du recepteur. */
 static volatile uint32_t s_tx_te = PROFALUX_TE_US;
+/* Bit de repetition (bit 65 de la trame KeeLoq). Mesure 2026-10-10 au YARD Stick One sur les
+ * murales Eveno (HCS30x) : la 1re trame d'un appui porte RPT=0, toutes les repetitions RPT=1
+ * (meme code tournant), ~18 ms de silence entre trames. Le rejeu envoyait jusqu'ici N trames
+ * identiques (le bit tel qu'enregistre, 0 pour une trame adoptee) a 2 ms d'intervalle. Option,
+ * desactivee par defaut : les moteurs testes acceptent les deux ; elle sert aux moteurs qui
+ * tiendraient compte du bit, et a un maintien fidele (appui long). */
+#define TX_RPT_GAP_MS 18
+static volatile bool s_tx_rpt = false;
+void cc1101_set_tx_repeat_bit(bool on) { s_tx_rpt = on; ESP_LOGW(TAG, "TX bit de repetition %s", on ? "ON" : "OFF"); }
+bool cc1101_get_tx_repeat_bit(void)    { return s_tx_rpt; }
 void cc1101_set_tx_te(uint32_t te) { if (te >= 200 && te <= 900) { s_tx_te = te; ESP_LOGW(TAG, "TX TE=%u us", (unsigned)te); } }
 uint32_t cc1101_get_tx_te(void)    { return s_tx_te; }
 /* TE (us) mesure sur la DERNIERE trame decodee (periode de bit / 3). Sert a auto-caler
@@ -373,6 +383,7 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
      * raccourcissait l'entete de ~100 us a TE 448). */
     const uint32_t te = s_tx_te, te2 = 2 * s_tx_te;
     const uint32_t hdr = PROFALUX_HEADER_TE * s_tx_te;
+    const bool rpt = s_tx_rpt && n >= 66;   /* bit 65 = RPT : 0 sur la 1re trame, 1 ensuite */
     for (int r = 0; r < repeats; r++) {
         for (int i = 0; i < PROFALUX_PREAMBLE_ELEMENTS; i++) {
             gpio_set_level(CC1101_PIN_GDO0, (i & 1) == 0);
@@ -381,13 +392,15 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
         gpio_set_level(CC1101_PIN_GDO0, 0);
         esp_rom_delay_us(hdr);
         for (int i = 0; i < n; i++) {
-            if (bits[i] == '1') { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(te);
+            const char b = (rpt && i == 65) ? (r == 0 ? '0' : '1') : bits[i];
+            if (b == '1') { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(te);
                                   gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(te2); }
             else                { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(te2);
                                   gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(te); }
         }
         gpio_set_level(CC1101_PIN_GDO0, 0);
-        esp_rom_delay_us(2000);   /* gap inter-trame */
+        if (rpt) vTaskDelay(pdMS_TO_TICKS(TX_RPT_GAP_MS));   /* silence de la telecommande, porteuse coupee */
+        else     esp_rom_delay_us(2000);   /* gap inter-trame */
     }
     strobe(CC_SIDLE);
     if (s_cap) rmt_enable(s_cap);   /* re-arme la capture RMT pour l'ecoute permanente suivante */

@@ -432,6 +432,10 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         size_t k = strlen(out);
         if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
     }
+    {   /* bit de repetition (option) : ajoute en fin d'objet */
+        size_t k = strlen(out);
+        if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"tx_repeat_bit\":%d}", cc1101_get_tx_repeat_bit() ? 1 : 0);
+    }
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -492,6 +496,12 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             uint8_t on = cJSON_IsTrue(uaj) || (cJSON_IsNumber(uaj) && uaj->valuedouble != 0);
             nvs_set_u8(h, "upd_auto", on);
             shutters_set_update_auto(on);   /* prise en compte au prochain cycle */
+        }
+        cJSON *rpj = cJSON_GetObjectItem(j, "tx_repeat_bit");
+        if (cJSON_IsBool(rpj) || cJSON_IsNumber(rpj)) {
+            uint8_t on = cJSON_IsTrue(rpj) || (cJSON_IsNumber(rpj) && rpj->valuedouble != 0);
+            nvs_set_u8(h, "tx_rpt", on);
+            cc1101_set_tx_repeat_bit(on);   /* prise en compte a la prochaine emission */
         }
         cJSON *rgj = cJSON_GetObjectItem(j, "rx_gain");
         if (cJSON_IsNumber(rgj)) {

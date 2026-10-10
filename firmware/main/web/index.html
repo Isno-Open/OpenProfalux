@@ -260,6 +260,8 @@
           <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio du rejeu</label>
             <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="455">
             <p class="hint"><b>Auto-réglé à l'apprentissage</b> : le boîtier mesure le tempo de ta télécommande et cale l'émission dessus (Profalux ≈ 455, FranciaFlex ≈ 415). Ce champ n'est qu'un <b>override manuel</b> si besoin.</p></div>
+          <label class="switch"><input type="checkbox" id="sys-txrpt"><span class="track"></span>
+            <span class="lbl">Émettre comme la télécommande (bit de répétition)<small>Première trame d'un appui marquée « initiale », les suivantes « répétition », 18 ms entre trames, comme une télécommande KeeLoq. Sans cette option, le boîtier envoie des trames identiques. Les moteurs testés acceptent les deux : n'activer que si un moteur ignore les commandes du boîtier.</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>
           <div class="row end"><button id="sys-save" class="btn primary">Enregistrer</button></div>

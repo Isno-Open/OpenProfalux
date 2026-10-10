@@ -37,6 +37,7 @@ static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
 static bool s_debug      = false;   /* switch UI "debug console" : logge chaque capture RX */
 static bool s_upd_auto   = true;    /* verification de mise a jour automatique (toutes les 6 h) */
+static bool s_tx_rpt     = false;   /* option UI : bit de repetition comme la telecommande */
 static uint8_t s_rx_gain = 0x27;    /* plafond de gain RX (AGCCTRL2) reglable via l'UI ; defaut 0x27 */
 static uint32_t s_tx_te  = 455;     /* TE d'emission (us) reglable via l'UI ; defaut 455 (Profalux) */
 static uint8_t  s_radio_prof = RADIO_PROFILE_DEFAULT;   /* profil radio (radio_profile.h), via l'UI */
@@ -64,6 +65,7 @@ static void load_config(void) {
     uint8_t lf = 0; nvs_get_u8(h, "log_frames", &lf); s_log_frames = lf;
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
     uint8_t ua = 1; nvs_get_u8(h, "upd_auto", &ua); s_upd_auto = ua;   /* absent = active */
+    uint8_t rp = 0; nvs_get_u8(h, "tx_rpt", &rp); s_tx_rpt = rp;
     uint8_t rg = 0; if (nvs_get_u8(h, "rx_gain", &rg) == ESP_OK && rg) s_rx_gain = rg;
     uint32_t te = 0; if (nvs_get_u32(h, "tx_te", &te) == ESP_OK && te) s_tx_te = te;
     nvs_get_u8(h, "radio_prof", &s_radio_prof);
@@ -191,6 +193,7 @@ void app_main(void) {
     cc1101_set_rx_debug(s_debug);   /* switch DEBUG console restaure au boot */
     cc1101_set_rx_gain(s_rx_gain);  /* plafond de gain RX restaure au boot */
     cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */
+    cc1101_set_tx_repeat_bit(s_tx_rpt);   /* bit de repetition (option) restaure au boot */
 
     /* 5. Wi-Fi */
     wifi_bridge_init();
