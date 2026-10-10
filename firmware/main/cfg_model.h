@@ -16,6 +16,7 @@
 #include "esp_err.h"
 #include "cfg_store.h"
 #include "shutters.h"
+#include "remote_battery.h"
 
 #define SH_MAX_REMOTES 16
 
@@ -69,6 +70,8 @@ typedef struct {
     dframe_t *hops;          /* SET des trames distinctes (dedup par hop) : hop + bouton + t */
     uint16_t  nhops;         /* = nb de trames DISTINCTES loggees */
     uint16_t  caphops;       /* capacite allouee du set */
+    batt_state_t batt;       /* pile (bit VLOW des trames), recalcule apres chaque demarrage */
+    uint32_t  batt_t;        /* derniere trame complete vue (epoch, 0 si SNTP pas encore synchro) */
 } remote_t;
 
 /* La config, la ou elle vit (tableaux de shutters.c, ou ceux d'un test). */
