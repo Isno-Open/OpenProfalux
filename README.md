@@ -99,8 +99,8 @@ ne se tient pas à la main.
 Même approche (capture + rejeu) potentiellement applicable à d'autres volets 868 MHz à
 rolling code non contraint (Delta Dore X2D, France Fermetures LIBRIO…), non vérifié.
 
-## Remerciements
+## Soutenir le projet
 
-Merci aux personnes qui font avancer le projet :
+OpenProfalux est un firmware libre et gratuit. S'il t'est utile, tu peux soutenir son développement :
 
-- [@Akkeoss](https://github.com/Akkeoss) : authentification de l'interface web, ordre des volets dans l'interface, la liste des membres d'une centrale portée sur le tas (fin des troncatures au-delà de 384 octets), la mise à jour depuis GitHub rétablie (55 Ko de RAM rendus pour la poignée de main TLS), et la garde de version du script de release.
+[❤ Sponsor sur GitHub](https://github.com/sponsors/Shad107)
