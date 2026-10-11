@@ -8,7 +8,7 @@ Une ligne = un retour vérifié.
 
 | Marque | Modèle | Fréquence | Méthode confirmée | Compteur roulant | Source |
 |---|---|---|---|---|---|
-| Profalux | gamme PFX (référence du projet) | 868 MHz | rejeu, enrôlement | variable selon la génération du moteur | mainteneur |
+| Profalux | gamme PFX (référence du projet) | 868 MHz (868,350 à 868,425 selon la génération) | rejeu, enrôlement | variable selon la génération du moteur | mainteneur, issue #34 |
 | Eveno | Zuni-R (installation 2015) | 868,33 MHz (profil radio `eveno`) | rejeu | non observé (une vingtaine de rejeux successifs acceptés) | issue #3, azriek |
 | Profalux | NeoSol S300 Stella AT | 868 MHz | enrôlement : essais en cours, non confirmé | à déterminer | issue #1, eleroy |
 | FranciaFlex | M4G | 868 MHz | enrôlement | variable | forum HACF, Lecanard38 |
@@ -37,6 +37,16 @@ elles ne sont pas captées, même collées à l'antenne. Choisir le profil radio
 Système > Appareil (ou `"radio_profile":"eveno"` dans `POST /api/config`). Pour une autre
 marque, le profil **personnalisé** prend une fréquence en kHz, dans la plage autorisée de la
 carte.
+
+**Profalux, fréquence selon la génération** : la porteuse Profalux n'est pas unique, elle a
+baissé au fil des générations. Récente ≈ **868,425 MHz** (profil `profalux` par défaut), vers
+2011-2012 ≈ **868,400 MHz**, plus anciennes ≈ **868,350 MHz**. Symptôme typique : le boîtier
+capte quelque chose (RSSI fort, log « entête HCS OK mais N bits »), mais aucune trame
+complète, et seules les télécommandes récentes s'apprennent. Dans ce cas, choisir
+**Fréquence personnalisée** dans Système > Appareil et essayer **868350** puis **868400**, en
+relançant l'apprentissage à chaque valeur, télécommande près de l'antenne. Une fois
+l'identité captée, le pilotage fonctionne même revenu sur le profil Profalux. (issue #34 :
+valentinni192 capté à 868,400 ; marcusboludo, 9 anciens volets, à 868,350.)
 
 ## À compléter
 
