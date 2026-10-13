@@ -68,10 +68,10 @@ static cJSON *volet_to_json(const volet_t *v) {
         cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
         cJSON_AddNumberToObject(o, "virt_counter", v->virt_counter);
     }
-    if (v->central) {   /* centrale : liste des volets membres (CSV) */
-        cJSON_AddBoolToObject(o, "central", true);
-        cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
-    }
+    if (v->central) cJSON_AddBoolToObject(o, "central", true);
+    /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
+     * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
+    if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
     return o;
 }
 /* En-tete : tout ce qui n'est pas un volet. */
@@ -169,16 +169,14 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         v->virt_serial  = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_serial"));
         v->virt_counter = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_counter"));
     }
-    if (cJSON_IsTrue(cJSON_GetObjectItem(o, "central"))) {
-        v->central = true;
-        /* Une liste ecrite par le firmware tient toujours : seul un fichier modifie
-         * a la main peut depasser SH_MEMBERS_LEN. Refusee entiere plutot que
-         * tronquee, et signalee dans le journal. */
-        const char *mem = cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "";
-        if (cfg_volet_set_members(v, mem) != 0)
-            ESP_LOGE(TAG, "centrale '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
-                     v->id, (unsigned)strlen(mem));
-    }
+    v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
+    /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le
+     * firmware tient toujours : seul un fichier modifie a la main peut depasser
+     * SH_MEMBERS_LEN. Refusee entiere plutot que tronquee, et signalee. */
+    const char *mem = cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "";
+    if (cfg_volet_set_members(v, mem) != 0)
+        ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
+                 v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);

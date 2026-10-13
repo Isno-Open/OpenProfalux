@@ -420,6 +420,8 @@ int main(void) {
         snprintf(q->serials[1], SH_SERIAL_LEN, "0x0ABCDEF"); q->n_serials = 2; q->orientation = 180;
         volet_t *v = mk_volet(&g_ref, "Virtuel", 8, 0, 0);                        /* volet virtuel */
         v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321;
+        volet_t *z = mk_volet(&g_ref, "Zone salon", 9, 0, 0);                     /* zone : volet appris + suiveurs */
+        cfg_volet_set_members(z, "Volet du salon,Volet cuisine");
         char *js = cfg_model_export(&g_ref.m);
         cJSON *root = cJSON_Parse(js);
         store_reset(&g_tmp);
@@ -427,7 +429,21 @@ int main(void) {
         char *js2 = cfg_model_export(&g_tmp.m);
         bool rt = root && store_equal(&g_tmp, &g_ref) && js2 && !strcmp(js, js2);
         CHECK(rt, "export -> import -> export ne redonne pas la meme config");
-        printf("  aller-retour de %d volets (centrale, virtuel, guillemets, accents) : %s\n", g_ref.nvolets, rt ? "identique" : "DIFFERENT");
+        printf("  aller-retour de %d volets (centrale, virtuel, zone, guillemets, accents) : %s\n", g_ref.nvolets, rt ? "identique" : "DIFFERENT");
+        /* Zone : ses suiveurs reviennent, sans en faire une centrale ; un volet sans
+         * suiveurs n'ecrit pas de "members" (les sauvegardes restent celles d'avant). */
+        const volet_t *zt = NULL, *pl = NULL;
+        for (int i = 0; i < g_tmp.nvolets; i++) {
+            if (!strcmp(g_tmp.volets[i].id, "Zone salon")) zt = &g_tmp.volets[i];
+            if (!strcmp(g_tmp.volets[i].id, "Volet bureau")) pl = &g_tmp.volets[i];
+        }
+        bool zone_ok = zt && !zt->central && zt->members && !strcmp(zt->members, "Volet du salon,Volet cuisine")
+                    && pl && !pl->members;
+        cJSON *vo; int with_members = 0;
+        cJSON_ArrayForEach(vo, cJSON_GetObjectItem(root, "volets")) with_members += cJSON_HasObjectItem(vo, "members");
+        zone_ok = zone_ok && with_members == 2;   /* la centrale et la zone, rien d'autre */
+        CHECK(zone_ok, "zone : suiveurs perdus, centrale par erreur, ou \"members\" sur %d volets", with_members);
+        printf("  zone (suiveurs relus, pas de \"members\" sur les autres volets) : %s\n", zone_ok ? "OK" : "KO");
         /* Export d'une version sans rang d'affichage : "order" absent -> -1, le reste intact. */
         cJSON *v0;
         cJSON_ArrayForEach(v0, cJSON_GetObjectItem(root, "volets")) cJSON_DeleteItemFromObject(v0, "order");
