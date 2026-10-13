@@ -935,7 +935,7 @@ static esp_err_t h_followers(httpd_req_t *r) {
     const char *id = jstr(j, "id");
     char csv[SH_MEMBERS_LEN];
     const char *err = members_csv(j, csv);
-    int rc = (id && *id && !err) ? shutters_set_followers(id, csv) : -1;
+    int rc = (id && *id && !err) ? shutters_set_followers(id, csv, &err) : -1;
     if (err) ESP_LOGW(TAG, "suiveurs de '%s' refuses : %s", id ? id : "", err);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
