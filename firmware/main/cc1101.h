@@ -55,5 +55,6 @@ void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version); /* diag UI
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
 void   cc1101_reapply_config(void);  /* ré-applique la config critique VERIFIEE (hors FREQ) + PATABLE, avant chaque TX/ecoute */
+int    cc1101_last_freqest_khz(void);  /* offset (kHz) de la derniere trame recue a signal fort (FREQEST) */
 
 #endif

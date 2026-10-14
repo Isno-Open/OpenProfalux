@@ -569,6 +569,11 @@ static void diag_log_capture(const rmt_symbol_word_t *sym, size_t nsym, int nbit
     }
 }
 
+/* Offset de frequence (kHz) de la derniere trame recue a signal fort, mesure par FREQEST.
+ * Sert au reglage AUTO de la frequence par volet a l'apprentissage (chantier B). */
+static int s_last_freqest_khz;
+int cc1101_last_freqest_khz(void) { return s_last_freqest_khz; }
+
 int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     /* RX sur GDO0 (GPIO25) comme le sniffer. On REUTILISE l'unique canal RMT s_cap :
      * l'ESP32 n'a pas assez de memoire RMT pour un 2e canal de 512 symboles
@@ -662,6 +667,9 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
         }
     } else r = -2;
 #endif
+    /* Mesure l'offset de frequence de la trame recue (FREQEST) tant qu'on est en RX : sert au
+     * reglage auto de la frequence par volet a l'apprentissage (cc1101_last_freqest_khz). */
+    if (r >= 64) s_last_freqest_khz = (int)(int8_t)cc1101_read_reg(CC_FREQEST | 0x40) * 1587 / 1000;
     strobe(CC_SIDLE);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* restaure pour le TX bit-bang */
     return r;

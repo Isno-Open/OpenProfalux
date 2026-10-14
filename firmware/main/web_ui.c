@@ -175,6 +175,7 @@ static volatile bool  s_lactive;
 static volatile bool     s_pcap_active, s_pcap_done;
 static volatile int      s_pcap_rc, s_pcap_new, s_pcap_model;
 static volatile uint32_t s_pcap_remote;
+static volatile uint32_t s_pcap_freqkhz;   /* porteuse mesuree (FREQEST) de la capture ; 0 = non mesuree */
 
 static uint32_t bits_lsb(const char *b, int from, int len) {
     uint32_t v = 0;
@@ -806,6 +807,7 @@ static esp_err_t h_diag_tx(httpd_req_t *r) {   /* re-lance le self-test TX a la 
 static void pfx_capture_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
+    s_pcap_freqkhz = 0;
     ESP_LOGW(TAG, "PFX CAPTURE: ecoute RX 15s (appuie sur la telecommande)...");
     int n = radio_listen_once(15000, bits, SH_BITS_LEN - 1);   /* 15 s pour appuyer */
     ESP_LOGW(TAG, "PFX CAPTURE: radio_listen_once -> n=%d bits", n);
@@ -815,7 +817,12 @@ static void pfx_capture_task(void *arg) {
         s_pcap_rc     = pfx_enrol_capture(rem, s_pcap_model, &isnew);
         s_pcap_remote = rem;
         s_pcap_new    = isnew ? 1 : 0;
-        ESP_LOGW(TAG, "PFX CAPTURE: trame captee serial=0x%07X -> rc=%d new=%d", (unsigned)rem, s_pcap_rc, s_pcap_new);
+        /* Porteuse mesuree de cette telecommande = frequence d'ecoute + offset FREQEST, si
+         * l'offset est plausible (sinon on laisse 0 -> defaut/profil). */
+        int foff = cc1101_last_freqest_khz();
+        s_pcap_freqkhz = (foff > -150 && foff < 150) ? (cc1101_get_freq_khz() + (uint32_t)foff) : 0;
+        ESP_LOGW(TAG, "PFX CAPTURE: trame captee serial=0x%07X -> rc=%d new=%d, FREQEST %d kHz -> porteuse %u kHz",
+                 (unsigned)rem, s_pcap_rc, s_pcap_new, foff, (unsigned)s_pcap_freqkhz);
     } else {
         s_pcap_rc = -3;   /* aucune trame captée */
         s_pcap_remote = 0;
@@ -929,7 +936,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     int rc = -1;
     if (active && name && *name)
-        rc = shutters_create_virtual(name, id.serial, id.counter, pfx_enrol_model_te(id.model));
+        rc = shutters_create_virtual(name, id.serial, id.counter, pfx_enrol_model_te(id.model), s_pcap_freqkhz);
     if (rc == 0) pfx_enrol_forget();   /* l'identite vit desormais dans le volet */
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");

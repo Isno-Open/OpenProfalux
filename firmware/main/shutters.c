@@ -444,7 +444,12 @@ static void emit_virt(volet_t *v, uint8_t button) {
     save_cfg();
     uint32_t prev_te = sh_cfg_tx_te();
     cc1101_set_tx_te(v->virt_te ? v->virt_te : 455);
+    /* Accord par volet : si la porteuse de ce moteur a ete mesuree a l'apprentissage, on emet
+     * dessus (variance de generation + quartz), puis on restaure la frequence du profil. */
+    uint32_t prev_freq = cc1101_get_freq_khz();
+    if (v->virt_freq_khz) radio_set_freq_khz(v->virt_freq_khz);
     radio_tx(bits, PRESS_REPEATS);
+    if (v->virt_freq_khz) radio_set_freq_khz(prev_freq);
     cc1101_set_tx_te(prev_te);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, v->virt_te);
@@ -728,7 +733,7 @@ uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
 
 /* Cree (ou convertit) un volet VIRTUEL a partir d'une identite 0x067 enrolee : il apparait
  * dans l'onglet Volets + en cover HA, et pilote le moteur par generation (compteur roulant). */
-int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, uint16_t te) {
+int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, uint16_t te, uint32_t freq_khz) {
     if (!id || !*id) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
@@ -737,6 +742,7 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, u
     v->virt_serial = serial;
     v->virt_counter = counter;
     v->virt_te = te;
+    if (freq_khz) v->virt_freq_khz = freq_khz;   /* mesure valide a l'apprentissage ; sinon garde l'existant / defaut */
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);
     bool has = false;
     for (int i = 0; i < v->n_serials; i++) if (!strcmp(v->serials[i], shex)) { has = true; break; }

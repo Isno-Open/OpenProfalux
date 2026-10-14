@@ -31,6 +31,7 @@ typedef struct {
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
     uint16_t virt_te;        /* TE d'emission du modele (415 FranciaFlex, 455 Profalux) */
+    uint32_t virt_freq_khz;  /* porteuse mesuree (FREQEST) a l'apprentissage ; 0 = defaut/profil */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
