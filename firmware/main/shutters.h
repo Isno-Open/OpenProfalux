@@ -15,7 +15,7 @@
  * caracteres + la virgule). Au-dela, la liste est refusee, jamais tronquee. Elle
  * vit sur le tas, a sa taille (cfg_model.h) : rien n'est reserve par volet. */
 #define SH_MEMBERS_LEN  (SH_MAX_VOLETS * SH_ID_LEN + 1)
-#define SH_MAX_SERIALS  4
+#define SH_MAX_SERIALS  8    /* vraies telecommandes d'un volet : une centrale + plusieurs individuelles */
 #define SH_BITS_LEN     72   /* 66 bits + marge + NUL */
 #define SH_ID_LEN       24
 #define SH_SERIAL_LEN   12
