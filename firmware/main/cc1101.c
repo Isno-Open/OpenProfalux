@@ -200,6 +200,25 @@ static void strobe(uint8_t s) {
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
 }
 
+/* PATABLE (burst) pour OOK : index0=eteint (bit 0), index1=puissance (bit 1). Ecriture
+ * VERIFIEE (relue en burst), meme principe que cc1101_write_reg (voir sa note). */
+static void write_patable(void) {
+    for (int i = 0; ; i++) {
+        uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
+        cs_low(); spi_xfer(tx, rx, 3); cs_high();
+        uint8_t tr[3] = { CC_PATABLE | 0xC0, 0, 0 }, rr[3];
+        cs_low(); spi_xfer(tr, rr, 3); cs_high();
+        if (rr[1] == 0x00 && rr[2] == 0xC0) return;
+        if (i == 5) {
+            s_spi_fails++;
+            ESP_LOGE(TAG, "PATABLE non pris (lu %02X,%02X) : puissance d'emission fausse", rr[1], rr[2]);
+            return;
+        }
+        s_spi_retries++;
+        esp_rom_delay_us(1000);
+    }
+}
+
 int cc1101_init(void) {
     /* GPIO CS + GDO0 */
     gpio_config_t io_cs = { .pin_bit_mask = 1ULL << CC1101_PIN_CS,
@@ -231,21 +250,8 @@ int cc1101_init(void) {
     for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++) {
         cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
     }
-    /* PATABLE (burst) pour OOK : index0=eteint (bit 0), index1=puissance (bit 1). */
-    for (int i = 0; ; i++) {   /* ecriture verifiee (relue en burst), voir cc1101_write_reg */
-        uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
-        cs_low(); spi_xfer(tx, rx, 3); cs_high();
-        uint8_t tr[3] = { CC_PATABLE | 0xC0, 0, 0 }, rr[3];
-        cs_low(); spi_xfer(tr, rr, 3); cs_high();
-        if (rr[1] == 0x00 && rr[2] == 0xC0) break;
-        if (i == 5) {
-            s_spi_fails++;
-            ESP_LOGE(TAG, "PATABLE non pris (lu %02X,%02X) : puissance d'emission fausse", rr[1], rr[2]);
-            break;
-        }
-        s_spi_retries++;
-        esp_rom_delay_us(1000);
-    }
+    /* PATABLE (puissance OOK), ecriture verifiee. */
+    write_patable();
     uint8_t partnum = cc1101_read_reg(CC_PARTNUM | 0x40);
     uint8_t version = cc1101_read_reg(0x31 | 0x40);   /* VERSION : ~0x04/0x14 sur un vrai CC1101 */
     uint8_t marc    = cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F;
@@ -347,6 +353,21 @@ int cc1101_tx_ook_frame(const uint8_t *frame, size_t bits) {
     return 0;
 }
 
+/* Ré-applique la config critique (hors FREQ) + PATABLE, le tout VERIFIE (cc1101_write_reg,
+ * voir sa note / azriek #32). A appeler AVANT chaque commande TX et chaque ecoute RX : si la
+ * puce a laisse tomber un registre A CHAUD apres le boot (MCSM/FREND0/TEST/modulation/PATABLE),
+ * on le rattrape ici au lieu d'emettre/recevoir avec une puissance/modulation fausse jusqu'au
+ * reboot. La FREQ courante (profil/custom) n'est PAS touchee : elle n'est pas dans les registres
+ * observes perdus, et la reecrire depuis s_regs ecraserait une frequence personnalisee. */
+void cc1101_reapply_config(void) {
+    for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++) {
+        uint8_t r = s_regs[i].reg;
+        if (r == CC_FREQ2 || r == CC_FREQ1 || r == CC_FREQ0) continue;
+        cc1101_write_reg(r, s_regs[i].val);
+    }
+    write_patable();
+}
+
 /* Rejoue une trame brute (chaine de bits '0'/'1' en ordre du fil) en OOK :
  * preambule + entete + symboles HCS30x. Sert au replay d'une trame captee. */
 int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
@@ -354,6 +375,11 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
      * = une vraie rafale de telecommande. Evite un STX/calibration par trame et rend l'emission
      * plus fiable (le bit-bang reste sensible a la preemption, d'ou plusieurs trames). */
     if (repeats < 1) repeats = 1;
+    /* Resilience : la puce peut laisser tomber un registre de config A CHAUD (voir
+     * cc1101_write_reg) -> emission marginale (il faut repeter). On ré-applique la config
+     * critique VERIFIEE avant d'emettre, en IDLE, avant le STX : aucun impact sur le timing
+     * du bit-bang, et une puissance/modulation perdue est rattrapee. */
+    cc1101_reapply_config();
     /* CRITIQUE : couper la capture RMT pendant le bit-bang. Sinon la RMT ecoute GDO0
      * (l'ecoute permanente l'a armee), capte notre propre TX, deborde ("hw buffer too
      * small") et son ISR PREEMPTE le bit-bang -> timing 455/910 us deforme -> trame
@@ -548,6 +574,10 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
      * l'ESP32 n'a pas assez de memoire RMT pour un 2e canal de 512 symboles
      * ("no free rx channels"). GDO0 est prouve OK par le SELFVERIFY au boot. */
     if (!s_cap && cc1101_capture_init() != 0) return -1;
+    /* Resilience : ré-applique la config de base VERIFIEE avant l'ecoute. Une puce qui a
+     * laisse tomber un registre A CHAUD decode faux -> "mauvais numero" a l'appairage. Les
+     * reglages RX specifiques ci-dessous passent apres et prennent le dessus. */
+    cc1101_reapply_config();
     /* GDO0 en INPUT : la CC1101 (RX, IOCFG0=0x0D) sort la donnee demodulee, on la lit */
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(0x02, 0x0D);   /* IOCFG0 = donnee serie demodulee sur GDO0 */

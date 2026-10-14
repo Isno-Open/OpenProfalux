@@ -54,5 +54,6 @@ void cc1101_spi_stats(uint32_t *retries, uint32_t *fails); /* ecritures SPI rees
 void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version); /* diag UI : puce + self-test TX */
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
+void   cc1101_reapply_config(void);  /* ré-applique la config critique VERIFIEE (hors FREQ) + PATABLE, avant chaque TX/ecoute */
 
 #endif
