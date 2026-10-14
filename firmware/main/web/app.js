@@ -455,11 +455,13 @@ async function captureAction(action, btn) {
     const r = await api('/api/learn/poll').catch(() => null);
     if (r && r.bits) {
       clearInterval(poll); learning = false;
-      /* meme volet = meme telecommande : refuse une trame d'un autre serial que
-       * celui deja appris (evite un stop d'une telecommande + montee d'une autre). */
+      /* Volet CLONE : les 3 trames up/down/stop doivent venir de la MEME telecommande
+       * (sinon on rejoue un melange) -> garde-fou. Volet ENROLE : `serials` est l'ENSEMBLE
+       * des vraies telecommandes a reconnaitre pour le suivi de position (origine, devmel,
+       * centrale...), on en associe donc PLUSIEURS -> pas de garde-fou "meme telecommande". */
       const vol = (statusCache.volets || []).find(x => x.id === id);
       const known = (vol && vol.serials) || [];
-      if (known.length && !known.includes(r.serial)) {
+      if (!(vol && vol.virt) && known.length && !known.includes(r.serial)) {
         toast(`Pas la bonne télécommande : trame de ${r.serial}, le volet utilise ${known[0]}`);
         renderLearnSlots();
         return;
