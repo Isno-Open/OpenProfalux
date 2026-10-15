@@ -20,6 +20,23 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_JSON}" "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py")
 endif()
 
+# L'interface web est embarquee COMPRESSEE (gzip) : ~113 Ko de sources tiennent en ~35 Ko
+# de flash, envoyes tels quels (Content-Encoding: gzip, voir send_asset). Les .gz sont
+# engendres a la configuration dans le dossier de construction, comme board_pins.h ;
+# modifier un fichier de web/ relance la configuration, donc la compression.
+set(WEB_SRCS "${CMAKE_CURRENT_LIST_DIR}/web/index.html"
+             "${CMAKE_CURRENT_LIST_DIR}/web/style.css"
+             "${CMAKE_CURRENT_LIST_DIR}/web/app.js")
+set(WEB_GZ_DIR "${CMAKE_BINARY_DIR}/web")
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gzip_web.py" "${WEB_GZ_DIR}" ${WEB_SRCS}
+                    RESULT_VARIABLE r)
+    if(NOT r EQUAL 0)
+        message(FATAL_ERROR "gzip_web.py n'a pas pu compresser l'interface web")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${WEB_SRCS} "${CMAKE_CURRENT_LIST_DIR}/../../tools/gzip_web.py")
+endif()
+
 idf_component_register(
     SRCS
         "main.c"
@@ -41,9 +58,9 @@ idf_component_register(
         "log_ring.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
-        "web/index.html"
-        "web/style.css"
-        "web/app.js"
+        "${WEB_GZ_DIR}/index.html.gz"
+        "${WEB_GZ_DIR}/style.css.gz"
+        "${WEB_GZ_DIR}/app.js.gz"
     REQUIRES
         nvs_flash
         spiffs

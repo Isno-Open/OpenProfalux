@@ -155,13 +155,13 @@ static bool ui_auth_ok(httpd_req_t *r) {
     return false;
 }
 
-/* Fichiers UI embarques (voir EMBED_FILES du CMakeLists). */
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
-extern const uint8_t style_css_start[]  asm("_binary_style_css_start");
-extern const uint8_t style_css_end[]    asm("_binary_style_css_end");
-extern const uint8_t app_js_start[]     asm("_binary_app_js_start");
-extern const uint8_t app_js_end[]       asm("_binary_app_js_end");
+/* Fichiers UI embarques COMPRESSES (tools/gzip_web.py, voir EMBED_FILES du CMakeLists). */
+extern const uint8_t index_html_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_gz_end");
+extern const uint8_t style_css_start[]  asm("_binary_style_css_gz_start");
+extern const uint8_t style_css_end[]    asm("_binary_style_css_gz_end");
+extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
+extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
 
 /* ── Etat apprentissage ── */
 static char           s_lbits[SH_BITS_LEN];
@@ -204,9 +204,24 @@ static void learn_task(void *arg) {
 }
 
 /* ── Helpers HTTP ── */
+/* Interface embarquee en gzip, envoyee telle quelle : le navigateur decompresse. ETag =
+ * empreinte du firmware (app_elf_sha256) : tant qu'il ne change pas, la revalidation
+ * (no-cache) recoit un 304 sans corps au lieu de toute l'interface ; apres une OTA,
+ * l'empreinte change et la nouvelle interface arrive. */
 static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, const uint8_t *e) {
-    httpd_resp_set_type(r, type);
+    char etag[19], inm[24];
+    const uint8_t *h = esp_app_get_description()->app_elf_sha256;
+    etag[0] = '"';
+    for (int i = 0; i < 8; i++) snprintf(etag + 1 + 2 * i, 3, "%02x", h[i]);
+    etag[17] = '"'; etag[18] = 0;
     httpd_resp_set_hdr(r, "Cache-Control", "no-cache");   /* toujours revalider : pas d'UI perimee apres MAJ */
+    httpd_resp_set_hdr(r, "ETag", etag);
+    if (httpd_req_get_hdr_value_str(r, "If-None-Match", inm, sizeof(inm)) == ESP_OK && !strcmp(inm, etag)) {
+        httpd_resp_set_status(r, "304 Not Modified");
+        return httpd_resp_send(r, NULL, 0);
+    }
+    httpd_resp_set_type(r, type);
+    httpd_resp_set_hdr(r, "Content-Encoding", "gzip");
     return httpd_resp_send(r, (const char *)s, e - s);
 }
 static char *read_body_max(httpd_req_t *r, int max) {

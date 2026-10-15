@@ -8,7 +8,9 @@
 static const char *TAG = "cfg_store";
 #define NS "shutters"
 
-static void volet_key(char *k, size_t sz, int i) { snprintf(k, sz, "v%d", i); }
+/* "v0".."v23". %u et i % 100 : en -Os, GCC refusait "v%d" (sortie jusqu'a 11 octets
+ * dans 8, -Werror=format-truncation) ; les cles produites sont les memes. */
+static void volet_key(char *k, size_t sz, int i) { snprintf(k, sz, "v%u", (unsigned)i % 100u); }
 
 /* Garde la PREMIERE erreur : c'est elle qui explique les suivantes. */
 static void fail(cfg_store_tx_t *tx, const char *key, esp_err_t e) {

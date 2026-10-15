@@ -5,9 +5,14 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# Log defaults - verbose for debug
+# Compilation de production : -Os, et journal plafonne a INFO. Le firmware n'emet aucun
+# ESP_LOGD/ESP_LOGV : le plafond ne retire que le detail interne d'ESP-IDF. Ensemble :
+# ~-160 Ko de flash et ~-9 Ko d'IRAM (ATOM). Pour deboguer (pas-a-pas, traces plus
+# precises), repasser en CONFIG_COMPILER_OPTIMIZATION_DEBUG. Un sdkconfig deja engendre
+# garde ses anciens reglages : le supprimer pour reprendre ces valeurs.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
 
 # Target compile flag - carte de test = M5Stack ATOM Lite (pinout docs/WIRING.md)
 CONFIG_OPENPROFALUX_TARGET_M5STACK=y
