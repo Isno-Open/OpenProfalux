@@ -8,7 +8,7 @@
  *   - radio_tx() prend le mutex et rejoue une trame (replay UI/MQTT/HA),
  *   - radio_pause_rx() suspend l'ecoute pendant qu'on STREAM notre propre commande
  *     (maintien), pour que le TX ne soit jamais bloque par une fenetre RX en cours,
- *   - radio_listen_once() fait une ecoute dediee (apprentissage) sans collision.
+ *   - radio_listen_confirmed() fait une ecoute dediee (apprentissage) sans collision.
  */
 #pragma once
 #include <stdint.h>
@@ -21,7 +21,10 @@ typedef void (*radio_frame_cb_t)(const char *bits, uint32_t serial, uint8_t butt
 void radio_init(void);                 /* cree le mutex (idempotent) */
 void radio_start(radio_frame_cb_t cb); /* demarre la tache RX (en veille tant que listening OFF) */
 void radio_tx(const char *bits, int repeats);   /* rejoue une trame `repeats` fois en UNE rafale TX (mutex-garde) */
-int  radio_listen_once(uint32_t timeout_ms, char *buf, int max); /* ecoute dediee (apprentissage) — marche tjrs */
+/* Ecoute dediee (apprentissage, capture d'enrolement), meme ecoute permanente coupee. Rend la
+ * 1re trame CONFIRMEE par une seconde identique (rx_confirm.h) ; full = exiger une trame complete
+ * de 66 bits. max >= 67. Rend le nombre de bits, ou <0 si rien de confirme avant timeout_ms. */
+int  radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full);
 void radio_pause_rx(bool pause);       /* pause TEMPORAIRE pendant nos TX (stream maintien) */
 void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permanente (case UI "capture") */
 

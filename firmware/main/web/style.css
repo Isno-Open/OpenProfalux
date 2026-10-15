@@ -96,6 +96,13 @@ select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 .btn.wide{width:100%}
 .btn:disabled{opacity:.5;cursor:default}
 .row{display:flex;gap:9px;flex-wrap:wrap}.row.end{justify-content:flex-end}
+/* Telecommandes > Liste : colonnes fixes (serial, nom, signal, volet, supprimer) */
+.remote-row{display:grid;grid-template-columns:7em minmax(0,1fr) 7.5em 9em auto;grid-template-areas:"ser name sig used del";gap:9px;align-items:center;margin-bottom:5px}
+.remote-row .r-ser{grid-area:ser;text-align:center}.remote-row .r-name{grid-area:name;width:100%;min-width:0}
+.remote-row .r-sig{grid-area:sig;white-space:nowrap}.remote-row .r-del{grid-area:del;padding:3px 7px;font-size:.8rem}
+.remote-row .r-name{padding:5px 9px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.9rem}
+.remote-row .r-used{grid-area:used;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:560px){.remote-row{grid-template-columns:7em minmax(0,1fr) auto;grid-template-areas:"ser name del" "sig used used";row-gap:4px}}
 
 .volet{padding:16px}
 .volet .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
