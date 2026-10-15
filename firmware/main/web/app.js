@@ -87,6 +87,7 @@ function applyRoute() {
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
+  if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
 }
 /* Rafraichit la 1re page quand l'onglet RF est actif ET qu'on n'a pas defile (sinon on garde la position). */
@@ -985,8 +986,30 @@ $('#restore-btn').onclick = async () => {
   if (!confirm('Remplacer toute la config actuelle par cette sauvegarde ?')) return;
   const text = await f.text();
   const r = await fetch('/api/restore', { method: 'POST', body: text }).then(x => x.json()).catch(() => ({}));
-  if (r.ok) { toast('Sauvegarde restaurée'); loadStatus(); } else alert('Échec de la restauration (fichier invalide ?)');
+  restoreDone(r, 'Sauvegarde restaurée');
 };
+/* Restauration refusee : le boitier dit pourquoi. Toute restauration acceptee garde une
+ * copie de la config qu'elle remplace (bouton "Revenir", aller-retour possible). */
+const RESTORE_ERR = {
+  format: "Ce fichier n'est pas une sauvegarde de config (l'export des trames ?). Rien n'a été modifié.",
+  copie: "Copie de la config actuelle impossible : restauration annulée, rien n'a été modifié.",
+  nvs: 'Config restaurée mais pas enregistrée (mémoire pleine) : elle sera perdue au redémarrage.',
+  absente: "Aucune config d'avant à restaurer." };
+function restoreDone(r, okMsg) {
+  if (r.ok) { toast(okMsg); loadStatus(); } else alert(RESTORE_ERR[r.err] || 'Échec de la restauration');
+  loadPrevCfg();
+}
+async function loadPrevCfg() {
+  const el = $('#restore-prev'); if (!el) return;
+  const p = await api('/api/restore/undo').catch(() => null);
+  el.hidden = !(p && p.available); if (el.hidden) return;
+  const when = p.t > 1600000000 ? ' du ' + new Date(p.t * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  el.innerHTML = `Config d'avant la dernière restauration${when} : <button id="restore-undo" class="btn" type="button">↩ Revenir à cette config</button>`;
+  $('#restore-undo').onclick = async () => {
+    if (!confirm("Revenir à la config d'avant la dernière restauration ? La config actuelle sera gardée à sa place.")) return;
+    restoreDone(await fetch('/api/restore/undo', { method: 'POST' }).then(x => x.json()).catch(() => ({})), "Config d'avant restaurée");
+  };
+}
 
 /* ── Statut global (polling) ── */
 let statusCache = { volets: [], rf: [], remotes: {} };

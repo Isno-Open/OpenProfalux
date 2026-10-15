@@ -84,7 +84,14 @@ size_t __wrap_fwrite(const void *p, size_t sz, size_t n, FILE *f) {
     }
     return __real_fwrite(p, sz, n, f);
 }
-int __wrap_rename(const char *a, const char *b) { return s_dead ? -1 : __real_rename(a, b); }
+/* Comme SPIFFS (SPIFFS_ERR_CONFLICTING_NAME) : pas de renommage vers un fichier qui
+ * existe deja. Le rename du PC le remplacerait, et cacherait le cas. */
+int __wrap_rename(const char *a, const char *b) {
+    if (s_dead) return -1;
+    FILE *e = fopen(b, "rb");
+    if (e) { fclose(e); return -1; }
+    return __real_rename(a, b);
+}
 int __wrap_remove(const char *a) { return s_dead ? -1 : __real_remove(a); }
 
 /* Compile avec AddressSanitizer (CMakeLists.txt) : un acces hors limites, apres
@@ -907,6 +914,68 @@ int main(void) {
         printf("  %s apres %d volets de plus ; estimation au depart : %d ; pire ecart : %+d (surestimation max %d)\n",
                full ? "NVS pleine" : "plafond de volets atteint", added, est[0], worst, over);
         CHECK(full ? abs(worst) <= 1 : est[0] >= added, "estimation : pire ecart %+d volet(s)", worst);
+    }
+
+    /* ── T14. Restauration : seul le format de sauvegarde passe, copie de la config d'avant ── */
+    printf("\n[T14] Restauration : format de sauvegarde, copie de la config d'avant\n");
+    {
+#define COPY "/tmp/cfg_store_test_copie.json"
+        wipe(); system_state(); model_init(&g_ref);
+        char *exp = cfg_model_export(&g_ref.m);
+        /* Ce qu'un utilisateur peut choisir par erreur dans l'onglet Sauvegarde. */
+        static const struct { const char *nom, *js; bool attendu; } cas[] = {
+            { "export des trames",            "{\"trames\":{\"0x0B20000\":{\"count\":1,\"frames\":[]}}}", false },
+            { "objet vide",                   "{}", false },
+            { "tableau",                      "[]", false },
+            { "texte",                        "\"volets\"", false },
+            { "volets en objet",              "{\"volets\":{}}", false },
+            { "telecommandes en tableau",     "{\"volets\":[],\"remotes\":[]}", false },
+            { "sauvegarde sans volet",        "{\"remotes\":{},\"volets\":[]}", true },
+            { "sauvegarde sans telecommande", "{\"log_frames\":true,\"volets\":[]}", true },
+        };
+        int n = (int)(sizeof(cas) / sizeof(cas[0])), bons = 0;
+        cJSON *j = cJSON_Parse(exp); bool vraie = cfg_model_is_backup(j); cJSON_Delete(j);
+        for (int i = 0; i < n; i++) {
+            cJSON *c = cJSON_Parse(cas[i].js); bool got = cfg_model_is_backup(c); cJSON_Delete(c);
+            if (got == cas[i].attendu) bons++; else printf("  format mal trie : %s -> %d\n", cas[i].nom, got);
+        }
+        CHECK(vraie && bons == n, "format : vraie sauvegarde %d, %d/%d cas", vraie, bons, n);
+        printf("  vraie sauvegarde acceptee, %d/%d cas pieges tries -> %s\n", bons, n, vraie && bons == n ? "OK" : "KO");
+
+        /* La copie egale l'export, et se remplace : SPIFFS refuse de renommer sur un fichier
+         * existant (simule par __wrap_rename), une seconde copie echouait sans le detour. */
+        remove(COPY); remove(COPY ".tmp");
+        bool c1 = cfg_model_save_copy(&g_ref.m, COPY);
+        char *lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool same1 = c1 && lu && !strcmp(lu, exp); free(lu);
+        add_volet(&g_ref);
+        char *exp2 = cfg_model_export(&g_ref.m);
+        bool c2 = cfg_model_save_copy(&g_ref.m, COPY);
+        lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool same2 = c2 && lu && !strcmp(lu, exp2); free(lu);
+        CHECK(same1 && same2, "copie : premiere %d, remplacement %d", same1, same2);
+        printf("  copie identique a l'export, puis remplacee par la suivante -> %s\n", same1 && same2 ? "OK" : "KO");
+
+        /* Coupure pendant l'ecriture d'une nouvelle copie : la precedente reste entiere. */
+        model_init(&g_ref);
+        s_file_cut = true;
+        bool c3 = cfg_model_save_copy(&g_ref.m, COPY);
+        s_dead = false;
+        lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool intact = !c3 && lu && !strcmp(lu, exp2); free(lu);
+        CHECK(intact, "coupure pendant la copie : ecriture %d, precedente %s", c3, intact ? "intacte" : "PERDUE");
+        printf("  coupure pendant une nouvelle copie : la precedente reste entiere -> %s\n", intact ? "OK" : "KO");
+
+        /* Coupure entre l'effacement de l'ancienne et le renommage : seul le temporaire,
+         * complet, existe ; il est repris. */
+        remove(COPY); remove(COPY ".tmp");
+        FILE *t = fopen(COPY ".tmp", "wb"); fputs(exp, t); fclose(t);
+        lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool repris = lu && !strcmp(lu, exp); free(lu);
+        CHECK(repris, "temporaire seul non repris");
+        printf("  coupure entre effacement et renommage : temporaire complet repris -> %s\n", repris ? "OK" : "KO");
+        remove(COPY); remove(COPY ".tmp");
+        free(exp); free(exp2);
     }
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");

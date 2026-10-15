@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #define SH_MAX_VOLETS   24
 /* Longueur maximale (NUL compris) de la liste des membres d'une centrale, CSV
@@ -93,8 +94,15 @@ void shutters_update_check_now(void);
 /* Exporte toute la config (telecommandes + noms + trames de reference + calibration) en
  * JSON, alloue a sa taille : a liberer par l'appelant (NULL si plus de memoire). */
 char *shutters_export_json(void);
-/* Restaure la config depuis un JSON (remplace tout). Retourne 0 si OK. */
-int  shutters_import_json(const char *js);
+/* Restaure la config depuis un JSON (remplace tout). Retourne 0 si OK ; sinon *err dit
+ * pourquoi : "format" (pas une sauvegarde de config, rien n'est touche), "copie" (la
+ * config actuelle n'a pas pu etre copiee, rien n'est touche) ou "nvs" (restauree mais
+ * pas enregistree). Avant de remplacer, copie la config courante : voir undo. */
+int  shutters_import_json(const char *js, const char **err);
+/* Revient a la config d'avant la derniere restauration ; celle-ci devient la copie. */
+int  shutters_restore_undo(const char **err);
+/* Une copie existe-t-elle ? *t recoit sa date (fiable si l'heure etait synchronisee). */
+bool shutters_prev_cfg_time(time_t *t);
 
 /* ── Identités virtuelles PFX (anti-conflit + resync compteur pour l'enrôlement) ── */
 bool     shutters_virt_serial_used(uint32_t serial);        /* serial 0x067 déjà pris par un volet ? */
