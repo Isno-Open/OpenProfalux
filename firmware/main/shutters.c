@@ -737,11 +737,11 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, u
     v->virt_serial = serial;
     v->virt_counter = counter;
     v->virt_te = te;
+    /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
+     * qui pilotent le moteur, pour le suivi de position). L'y melanger bloquait l'ajout d'une vraie
+     * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);
-    bool has = false;
-    for (int i = 0; i < v->n_serials; i++) if (!strcmp(v->serials[i], shex)) { has = true; break; }
-    if (!has && v->n_serials < SH_MAX_SERIALS) strlcpy(v->serials[v->n_serials++], shex, SH_SERIAL_LEN);
-    /* Nomme la télécommande virtuelle -> l'UI affiche son NOM (pas le serial brut). */
+    /* Nomme quand meme l'identite virtuelle -> l'UI l'affiche par son NOM. */
     int ri = -1;
     for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) { ri = i; break; }
     if (ri < 0 && s_nremotes < 16) { ri = s_nremotes++; strlcpy(s_remotes[ri].serial, shex, SH_SERIAL_LEN); }
@@ -1004,7 +1004,11 @@ char *shutters_status_json(void) {
         volet_t *v = &s_volets[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", v->id);
-        if (v->virt) cJSON_AddBoolToObject(o, "virt", true);   /* volet a telecommande virtuelle -> pas d'apprentissage */
+        if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
+            cJSON_AddBoolToObject(o, "virt", true);
+            char vhex[SH_SERIAL_LEN]; snprintf(vhex, sizeof(vhex), "0x%07X", (unsigned)v->virt_serial);
+            cJSON_AddStringToObject(o, "virt_serial", vhex);   /* identite d'emission du volet (0x067) */
+        }
         if (v->central) { cJSON_AddBoolToObject(o, "central", true); cJSON_AddStringToObject(o, "members", v->members ? v->members : ""); }
         cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
         cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);     /* pour reafficher la calibration dans l'UI */
@@ -1247,6 +1251,26 @@ static void update_check_task(void *arg) {
     }
 }
 
+/* Migration : les anciens firmwares rangeaient l'identite d'emission 0x067 dans `serials`
+ * (l'ensemble des VRAIES telecommandes). Ca bloquait l'ajout de la vraie telecommande sur un
+ * volet enrole (garde-fou anti-melange), et affichait le 0x067 comme "la" telecommande du volet.
+ * On l'en retire : `serials` ne porte plus que du reel, l'identite virtuelle vit dans virt_serial.
+ * Renvoie true si au moins un volet a change (il faut alors re-sauver). */
+static bool migrate_strip_virt_serial(void) {
+    bool changed = false;
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        if (!v->virt) continue;
+        char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)v->virt_serial);
+        for (int j = 0; j < v->n_serials; j++) {
+            if (strcmp(v->serials[j], shex)) continue;
+            for (int k = j; k + 1 < v->n_serials; k++) strlcpy(v->serials[k], v->serials[k + 1], SH_SERIAL_LEN);
+            v->n_serials--; j--; changed = true;
+        }
+    }
+    return changed;
+}
+
 void shutters_init(void) {
     s_lock = xSemaphoreCreateMutex();
     /* L'ORDRE compte sur une NVS de 16 Ko saturee : le dataset de trames doit
@@ -1260,6 +1284,7 @@ void shutters_init(void) {
     esp_err_t mig = cfg_store_finish_boot(lay, frames_stored, save_cfg);
     if (mig != ESP_OK) ESP_LOGE(TAG, "migration config : ecriture KO (%s), ancien format conserve", esp_err_to_name(mig));
     else if (lay == CFG_LAYOUT_LEGACY) ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
+    if (migrate_strip_virt_serial()) { save_cfg(); ESP_LOGI(TAG, "migration : identite 0x067 retiree de la liste des vraies telecommandes"); }
     load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
     xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, NULL);   /* check GitHub -> entite update HA */

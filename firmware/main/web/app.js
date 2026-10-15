@@ -273,7 +273,11 @@ function renderVolets(list, rf) {
       ${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}
       <div class="serials">${isC
         ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
-        : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') || 'aucun') + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')}</div>`;
+        : (v.virt
+            ? 'identité : <code>' + esc(remoteName(v.virt_serial)) + '</code>'
+              + ((v.serials || []).length ? ' · télécommandes : ' + v.serials.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') : '')
+            : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') || 'aucun'))
+          + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')}</div>`;
     /* En mode reorganisation, le pilotage est NEUTRALISE : un clic mal place ne
        doit pas faire partir un volet pendant qu'on range l'affichage. */
     el.querySelectorAll('[data-cmd]').forEach(b => {
@@ -379,8 +383,9 @@ function renderLearnSlots() {
   const serialEl = $('#learn-serial');
   if (serialEl) {
     const sers = (v && v.serials) || [];
-    serialEl.innerHTML = (v && v.virt)   /* virtuel : identité virtuelle + éventuelle télécommande d'origine, pas d'alerte */
-      ? (sers.length ? `Télécommandes : ${sers.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ')}` : '')
+    serialEl.innerHTML = (v && v.virt)   /* virtuel : son identité d'émission (virt_serial) + les vraies télécommandes associées */
+      ? `Identité virtuelle : <code>${esc(remoteName(v.virt_serial))}</code>`
+        + (sers.length ? ` · Télécommandes : ${sers.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ')}` : '')
       : sers.length > 1
         ? `⚠ Commandes de plusieurs télécommandes : ${sers.map(s => `<code>${esc(s)}</code>`).join(' ')}`
         : sers.length ? `Télécommande : <code>${esc(sers[0])}</code>` : '';
@@ -455,11 +460,13 @@ async function captureAction(action, btn) {
     const r = await api('/api/learn/poll').catch(() => null);
     if (r && r.bits) {
       clearInterval(poll); learning = false;
-      /* meme volet = meme telecommande : refuse une trame d'un autre serial que
-       * celui deja appris (evite un stop d'une telecommande + montee d'une autre). */
+      /* Volet CLONE : les 3 trames up/down/stop doivent venir de la MEME telecommande
+       * (sinon on rejoue un melange) -> garde-fou. Volet ENROLE : `serials` est l'ENSEMBLE
+       * des vraies telecommandes a reconnaitre pour le suivi de position (origine, devmel,
+       * centrale...), on en associe plusieurs -> pas de garde-fou "meme telecommande". */
       const vol = (statusCache.volets || []).find(x => x.id === id);
       const known = (vol && vol.serials) || [];
-      if (known.length && !known.includes(r.serial)) {
+      if (!(vol && vol.virt) && known.length && !known.includes(r.serial)) {
         toast(`Pas la bonne télécommande : trame de ${r.serial}, le volet utilise ${known[0]}`);
         renderLearnSlots();
         return;
