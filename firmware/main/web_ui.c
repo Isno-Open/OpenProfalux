@@ -191,12 +191,14 @@ static uint32_t bits_lsb(const char *b, int from, int len) {
 static void learn_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
-    /* Ecoute dediee 15 s : on garde la PREMIERE trame valide, quel que soit le bouton.
+    /* Ecoute dediee 15 s : on garde la PREMIERE trame confirmee, quel que soit le bouton.
      * C'est l'action choisie dans l'UI + le bouton physique presse qui determinent la
      * commande. Filtrer par valeur de bouton etait une erreur (codes reels differents de
-     * ce qu'on supposait) : ca empechait d'apprendre stop et descente. */
-    int n = radio_listen_once(15000, bits, SH_BITS_LEN - 1);
-    if (n >= 60) {
+     * ce qu'on supposait) : ca empechait d'apprendre stop et descente.
+     * Confirmee par une 2e trame identique et complete (66 bits) : une trame isolee a bits
+     * faux donnait un volet au serial ou a la commande corrompus (issue #39). */
+    int n = radio_listen_confirmed(15000, bits, SH_BITS_LEN, true);
+    if (n >= 66) {
         s_lrssi   = cc1101_get_rssi();
         strlcpy(s_lbits, bits, SH_BITS_LEN);
         s_lserial = bits_lsb(bits, 32, 28);
@@ -410,7 +412,19 @@ static esp_err_t h_remote(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_remote_name(jstr(j, "serial"), jstr(j, "name") ?: "");
     cJSON_Delete(j);
-    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0,\"err\":\"liste des telecommandes pleine\"}");
+    return ESP_OK;
+}
+/* ── /api/remote/delete : {"serial":"0x..."} ; refuse (400 + raison) si un volet s'en sert ── */
+static esp_err_t h_remote_delete(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *why = NULL;
+    int rc = shutters_delete_remote(jstr(j, "serial"), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    httpd_resp_sendstr(r, "{\"ok\":1}");
     return ESP_OK;
 }
 
@@ -935,9 +949,9 @@ static void pfx_capture_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
     ESP_LOGW(TAG, "PFX CAPTURE: ecoute RX 15s (appuie sur la telecommande)...");
-    int n = radio_listen_once(15000, bits, SH_BITS_LEN - 1);   /* 15 s pour appuyer */
-    ESP_LOGW(TAG, "PFX CAPTURE: radio_listen_once -> n=%d bits", n);
-    if (n >= 60) {
+    int n = radio_listen_confirmed(15000, bits, SH_BITS_LEN, false);   /* 15 s pour appuyer ; seul le serial sert */
+    ESP_LOGW(TAG, "PFX CAPTURE: radio_listen_confirmed -> n=%d bits", n);
+    if (n >= 64) {
         uint32_t rem = bits_lsb(bits, 32, 28);                 /* serial de la télécommande */
         bool isnew = false;
         s_pcap_rc     = pfx_enrol_capture(rem, s_pcap_model, &isnew);
@@ -1216,6 +1230,7 @@ void web_ui_start(void) {
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
+    reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);
     reg(s, "/api/config",    HTTP_GET,  h_config_get);
     reg(s, "/api/config",    HTTP_POST, h_config_post);
     reg(s, "/api/ota/status",   HTTP_GET,  h_ota_status);

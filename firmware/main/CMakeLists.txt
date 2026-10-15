@@ -52,6 +52,7 @@ idf_component_register(
         "keeloq_decode.c"
         "enrol_gate.c"
         "freq_sweep.c"
+        "rx_confirm.c"
         "pfx_keys.c"
         "pfx_enrol.c"
         "web_ui.c"

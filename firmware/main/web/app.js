@@ -415,8 +415,8 @@ function renderLearnSlots() {
   if (hint) hint.textContent = !id
     ? 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.'
     : (v && v.virt)
-      ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie une fois sur sa télécommande d'origine (< 1 m du boîtier). Facultatif.`
-      : `Volet « ${id} » : clique Capturer, puis appuie une fois sur le bouton de ta télécommande (< 1 m du boîtier).`;
+      ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie sur sa télécommande d'origine en tenant le bouton une seconde (< 1 m du boîtier). Facultatif.`
+      : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
   updateRemoteNameField();
 }
 
@@ -515,18 +515,41 @@ if (delVoletBtn) delVoletBtn.onclick = async () => {
 };
 
 /* ── Télécommandes ── */
-function renderRemotes(map, rf) {
+function renderRemotes(s, rf) {
   const box = $('#remotes-list'); if (!box) return;
-  const entries = Object.entries(map || {});
+  const ae = document.activeElement;   /* saisie d'un nom en cours : ne pas l'ecraser au poll */
+  if (ae && ae.tagName === 'INPUT' && box.contains(ae)) return;
+  const entries = Object.entries(s.remotes || {});
+  const max = s.remotes_max || 16;
   $('#remotes-empty').hidden = entries.length > 0;
+  $('#remotes-count').textContent = `${entries.length} / ${max}`;
+  /* Liste pleine : le firmware refuse les nouvelles et dit laquelle (issue #39). */
+  const full = $('#remotes-full');
+  full.hidden = entries.length < max;
+  full.querySelector('b').textContent = s.remote_refused
+    ? `Liste pleine : la télécommande ${s.remote_refused} n'a pas pu être enregistrée. Supprime une télécommande inutile.`
+    : `Liste pleine : une nouvelle télécommande ne pourra pas être enregistrée. Supprime une télécommande inutile.`;
   box.innerHTML = '';
   for (const [serial, name] of entries) {
     const r = rssiForSerials([serial], rf);
-    const row = document.createElement('div'); row.className = 'row'; row.style.alignItems = 'center';
-    row.innerHTML = `<code class="badge">${esc(serial)}</code>
-      <input style="flex:1" value="${esc(name)}" placeholder="nom…">${sig(r)}`;
+    const used = voletForSerial(serial);
+    /* Grille a colonnes fixes (style.css .remote-row) : cellules toujours presentes, meme
+     * vides, pour que le champ du nom ait la meme largeur sur toutes les lignes. */
+    const row = document.createElement('div'); row.className = 'remote-row';
+    row.innerHTML = `<code class="badge r-ser">${esc(serial)}</code>
+      <input class="r-name" value="${esc(name)}" placeholder="nom…">
+      <span class="r-sig">${sig(r)}</span>
+      <span class="hint r-used" title="${esc(used || '')}">${used ? esc(used) : ''}</span>
+      <button class="btn danger r-del" title="Supprimer cette télécommande">🗑</button>`;
     const inp = row.querySelector('input');
     inp.onchange = () => api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
+    const label = name ? `« ${name} » (${serial})` : serial;
+    /* Sans confirmation : une telecommande supprimee revient d'un appui. */
+    row.querySelector('.r-del').onclick = async () => {
+      const rep = await fetch('/api/remote/delete', { method: 'POST', body: JSON.stringify({ serial }) });
+      toast(rep.ok ? `${label} supprimée` : `Refusé : ${await rep.text()}`);
+      await loadStatus();
+    };
     box.appendChild(row);
   }
 }
@@ -1186,6 +1209,7 @@ async function loadStatus() {
   renderVolets(s.volets || [], rf);
   renderCentralMembers();
   renderCentralsList();
+  renderRemotes(s, rf);
   fillVoletPickers(s.volets || []);
   if ((location.hash || '').includes('/calib') && !calibLive) fillCalib();   /* affiche les temps enregistres */
   if (!learning) { renderVoletPicker(); renderLearnSlots(); }
