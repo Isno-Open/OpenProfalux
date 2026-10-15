@@ -517,6 +517,7 @@ if (delVoletBtn) delVoletBtn.onclick = async () => {
 /* ── Télécommandes ── */
 function renderRemotes(s, rf) {
   const box = $('#remotes-list'); if (!box) return;
+  renderIgnored(s.remotes_ignored || []);
   const ae = document.activeElement;   /* saisie d'un nom en cours : ne pas l'ecraser au poll */
   if (ae && ae.tagName === 'INPUT' && box.contains(ae)) return;
   const entries = Object.entries(s.remotes || {});
@@ -540,18 +541,57 @@ function renderRemotes(s, rf) {
       <input class="r-name" value="${esc(name)}" placeholder="nom…">
       <span class="r-sig">${sig(r)}</span>
       <span class="hint r-used" title="${esc(used || '')}">${used ? esc(used) : ''}</span>
-      <button class="btn danger r-del" title="Supprimer cette télécommande">🗑</button>`;
+      <span class="r-act"><button class="btn r-ign" title="Ignorer : ne plus l'enregistrer quand elle est captée">🚫</button><button class="btn danger r-del" title="Supprimer cette télécommande">🗑</button></span>`;
     const inp = row.querySelector('input');
     inp.onchange = () => api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
     const label = name ? `« ${name} » (${serial})` : serial;
-    /* Sans confirmation : une telecommande supprimee revient d'un appui. */
+    /* Sans confirmation : une telecommande supprimee ou ignoree se recupere d'un appui
+     * (ou d'un clic sur sa croix dans les ignorees). */
     row.querySelector('.r-del').onclick = async () => {
       const rep = await fetch('/api/remote/delete', { method: 'POST', body: JSON.stringify({ serial }) });
       toast(rep.ok ? `${label} supprimée` : `Refusé : ${await rep.text()}`);
       await loadStatus();
     };
+    row.querySelector('.r-ign').onclick = async () => {
+      const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
+      toast(rep.ok ? `${label} ignorée` : `Refusé : ${await rep.text()}`);
+      await loadStatus();
+    };
     box.appendChild(row);
   }
+}
+
+/* Telecommandes ignorees : une bulle par serial (croix = ne plus l'ignorer), et un champ pour
+ * en ajouter une a la main. */
+function renderIgnored(list) {
+  const box = $('#ignored-box'); if (!box) return;
+  const inp = $('#ignored-input');
+  const key = list.join(',');
+  if (box.dataset.k === key) return;   /* inchange : ne pas recreer (garde la saisie) */
+  box.dataset.k = key;
+  $$('.tag', box).forEach(t => t.remove());
+  for (const serial of list) {
+    const t = document.createElement('span'); t.className = 'tag';
+    t.innerHTML = `<code>${esc(serial)}</code><button title="Ne plus ignorer">×</button>`;
+    t.querySelector('button').onclick = async (e) => {
+      e.stopPropagation();
+      await api('/api/remote/unignore', { method: 'POST', body: JSON.stringify({ serial }) }).catch(() => {});
+      toast(`${serial} n'est plus ignorée`);
+      await loadStatus();
+    };
+    box.insertBefore(t, inp);
+  }
+}
+if ($('#ignored-box')) {
+  $('#ignored-box').onclick = () => $('#ignored-input').focus();
+  $('#ignored-input').onkeydown = async (e) => {
+    if (e.key !== 'Enter') return;
+    const serial = e.target.value.trim(); if (!serial) return;
+    const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
+    toast(rep.ok ? 'Télécommande ignorée' : `Refusé : ${await rep.text()}`);
+    if (rep.ok) e.target.value = '';
+    await loadStatus();
+  };
 }
 const remoteName = s => (statusCache.remotes || {})[s] || s;
 
