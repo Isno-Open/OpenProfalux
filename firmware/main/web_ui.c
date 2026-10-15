@@ -416,6 +416,27 @@ static esp_err_t h_remote(httpd_req_t *r) {
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0,\"err\":\"liste des telecommandes pleine\"}");
     return ESP_OK;
 }
+/* ── /api/remote/ignore et /api/remote/unignore : {"serial":"0x..."} ── */
+static esp_err_t h_remote_ignore(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *why = NULL;
+    int rc = shutters_ignore_remote(jstr(j, "serial"), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    httpd_resp_sendstr(r, "{\"ok\":1}");
+    return ESP_OK;
+}
+static esp_err_t h_remote_unignore(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    int rc = shutters_unignore_remote(jstr(j, "serial"));
+    cJSON_Delete(j);
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
 /* ── /api/remote/delete : {"serial":"0x..."} ; refuse (400 + raison) si un volet s'en sert ── */
 static esp_err_t h_remote_delete(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
@@ -1283,6 +1304,8 @@ void web_ui_start(void) {
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
     reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);
+    reg(s, "/api/remote/ignore", HTTP_POST, h_remote_ignore);
+    reg(s, "/api/remote/unignore", HTTP_POST, h_remote_unignore);
     reg(s, "/api/config",    HTTP_GET,  h_config_get);
     reg(s, "/api/config",    HTTP_POST, h_config_post);
     reg(s, "/api/ota/status",   HTTP_GET,  h_ota_status);

@@ -66,6 +66,38 @@ static bool     s_pos_dirty = false;     /* position d'un volet a changer/figer 
 /* ── Liste des telecommandes (SH_MAX_REMOTES places) ── Appeles sous LOCK. */
 static char s_remote_refused[SH_SERIAL_LEN];   /* derniere telecommande refusee, liste pleine ("" = aucune) */
 
+/* Telecommandes IGNOREES (bouton UI) : une trame confirmee ne les enregistre plus. Le suivi
+ * de position d'un volet n'en depend pas (il passe par les serials du volet). NVS cfg/rem_ignore,
+ * CSV. Appeles sous LOCK, sauf ignore_load (boot). */
+#define SH_MAX_IGNORED 32
+static char s_ignored[SH_MAX_IGNORED][SH_SERIAL_LEN];
+static int  s_nignored = 0;
+
+static bool ignored(const char *shex) {
+    for (int i = 0; i < s_nignored; i++) if (!strcmp(s_ignored[i], shex)) return true;
+    return false;
+}
+static void ignore_save(void) {
+    char csv[SH_MAX_IGNORED * SH_SERIAL_LEN + 1] = "";
+    for (int i = 0; i < s_nignored; i++) {
+        if (i) strlcat(csv, ",", sizeof(csv));
+        strlcat(csv, s_ignored[i], sizeof(csv));
+    }
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "rem_ignore", csv); nvs_commit(h); nvs_close(h);
+}
+static void ignore_load(void) {
+    char csv[SH_MAX_IGNORED * SH_SERIAL_LEN + 1] = ""; size_t sz = sizeof(csv);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) return;
+    if (nvs_get_str(h, "rem_ignore", csv, &sz) != ESP_OK) csv[0] = 0;
+    nvs_close(h);
+    s_nignored = 0;
+    for (char *p = csv, *t; s_nignored < SH_MAX_IGNORED && (t = strsep(&p, ",")); )
+        if (*t) strlcpy(s_ignored[s_nignored++], t, SH_SERIAL_LEN);
+}
+
 static remote_t *remote_find(const char *shex) {
     for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) return &s_remotes[i];
     return NULL;
@@ -965,6 +997,44 @@ int shutters_delete_remote(const char *serial, const char **why) {
     return 0;
 }
 
+/* Ignore une telecommande : la retire de la liste (refuse si un volet s'en sert, comme la
+ * suppression) et n'enregistre plus ses trames. Un serial absent de la liste (saisi a la main)
+ * est simplement ajoute aux ignorees. Serial normalise en 0x%07X. */
+int shutters_ignore_remote(const char *serial, const char **why) {
+    *why = NULL;
+    char *end = NULL;
+    unsigned long v = serial ? strtoul(serial, &end, 16) : 0;
+    if (!serial || !*serial || *end || v == 0 || v > 0xFFFFFFFUL) { *why = "serial invalide (0x + 7 chiffres hexa)"; return -1; }
+    char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07lX", v);
+    LOCK();
+    const char *user = remote_user(shex);
+    static char msg[SH_ID_LEN + 40];
+    if (user) { snprintf(msg, sizeof(msg), "utilisee par le volet %s", user); *why = msg; }
+    else if (!ignored(shex) && s_nignored >= SH_MAX_IGNORED) *why = "liste des telecommandes ignorees pleine";
+    else {
+        if (!ignored(shex)) { strlcpy(s_ignored[s_nignored++], shex, SH_SERIAL_LEN); ignore_save(); }
+        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) {
+            remote_remove(i); save_cfg(); s_frames_dirty = true; break;
+        }
+    }
+    UNLOCK();
+    if (*why) return -1;
+    save_frames();
+    ESP_LOGW(TAG, "telecommande %s ignoree", shex);
+    return 0;
+}
+int shutters_unignore_remote(const char *serial) {
+    int rc = -1;
+    LOCK();
+    for (int i = 0; i < s_nignored; i++) if (!strcasecmp(s_ignored[i], serial ? serial : "")) {
+        memmove(s_ignored[i], s_ignored[i + 1], (size_t)(s_nignored - i - 1) * SH_SERIAL_LEN);
+        s_nignored--; ignore_save(); rc = 0; break;
+    }
+    UNLOCK();
+    if (rc == 0) ESP_LOGI(TAG, "telecommande %s n'est plus ignoree", serial);
+    return rc;
+}
+
 /* Purge UNIQUE (cle NVS cfg/rem_purge) des telecommandes sans nom qu'aucun volet n'utilise :
  * les fantomes enregistres avant la confirmation des trames (issue #39). Une vraie telecommande
  * purgee revient d'elle-meme a son prochain appui. Au boot, apres load_cfg/load_frames. */
@@ -1056,7 +1126,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
         s_rfhead = (s_rfhead + 1) % RF_RING;
         s_ring_dirty = true;
         /* auto-enregistre le serial vu (nom vide) */
-        remote_add(shex);   /* trame confirmee (radio.c) ; liste pleine -> signale a l'UI */
+        if (!ignored(shex)) remote_add(shex);   /* trame confirmee (radio.c) ; liste pleine -> signale a l'UI ; ignoree -> rien */
         if (s_log_frames && s_mqtt_ready) {
             dataset_log_frame(shex, button, hop, rssi, t);  /* dataset slide (dedup par hop, bouton+t) */
             /* On PREPARE le payload ici, mais on PUBLIE hors du LOCK (voir plus bas). */
@@ -1100,6 +1170,8 @@ char *shutters_status_json(void) {
     for (int i = 0; i < s_nremotes; i++) cJSON_AddStringToObject(rem, s_remotes[i].serial, s_remotes[i].name);
     cJSON_AddNumberToObject(root, "remotes_max", SH_MAX_REMOTES);
     cJSON_AddStringToObject(root, "remote_refused", s_remote_refused);   /* "" = aucune refusee */
+    cJSON *ign = cJSON_AddArrayToObject(root, "remotes_ignored");
+    for (int i = 0; i < s_nignored; i++) cJSON_AddItemToArray(ign, cJSON_CreateString(s_ignored[i]));
     cJSON *vols = cJSON_AddArrayToObject(root, "volets");
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
@@ -1444,6 +1516,7 @@ void shutters_init(void) {
     else if (lay == CFG_LAYOUT_LEGACY) ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
     if (migrate_strip_virt_serial()) { save_cfg(); ESP_LOGI(TAG, "migration : identite 0x067 retiree de la liste des vraies telecommandes"); }
     load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
+    ignore_load();
     purge_ghost_remotes_once();   /* une fois : fantomes d'avant la confirmation des trames (#39) */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
     xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, &s_upd_task);   /* check GitHub -> entite update HA */

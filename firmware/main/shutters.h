@@ -28,6 +28,8 @@ void shutters_init(void);
 int  shutters_cmd(const char *id, const char *cmd, int value);
 int  shutters_delete_volet(const char *id);
 int  shutters_delete_remote(const char *serial, const char **why);   /* refuse si un volet s'en sert (*why) */
+int  shutters_ignore_remote(const char *serial, const char **why);   /* retire + n'enregistre plus ; refuse si un volet s'en sert */
+int  shutters_unignore_remote(const char *serial);
 
 /* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet. Cree le volet si absent. */
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
