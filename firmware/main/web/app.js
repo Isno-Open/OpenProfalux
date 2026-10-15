@@ -91,7 +91,7 @@ function applyRoute() {
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
 }
 /* Rafraichit la 1re page quand l'onglet RF est actif ET qu'on n'a pas defile (sinon on garde la position). */
-setInterval(() => { if ((location.hash || '').includes('/rf') && typeof loadRf === 'function' && rfOffset <= RF_PAGE) loadRf(true); }, 5000);
+setInterval(() => { if (!document.hidden && (location.hash || '').includes('/rf') && typeof loadRf === 'function' && rfOffset <= RF_PAGE) loadRf(true); }, 5000);
 async function loadFrames() {
   const box = $('#frames-dataset'); if (!box) return;
   box.innerHTML = '<p class="hint">Chargement…</p>';
@@ -126,7 +126,7 @@ async function loadLog(toEnd) {
   const n = logText.split('\n').filter(Boolean).length;
   $('#log-info').textContent = `${n} ligne(s), ${logText.length} octets · ${new Date().toLocaleTimeString()}`;
 }
-setInterval(() => { if ((location.hash || '').includes('sys/log') && $('#log-follow') && $('#log-follow').checked) loadLog(false); }, 2000);
+setInterval(() => { if (!document.hidden && (location.hash || '').includes('sys/log') && $('#log-follow') && $('#log-follow').checked) loadLog(false); }, 2000);
 if ($('#log-reload')) $('#log-reload').onclick = () => loadLog(true);
 if ($('#log-copy')) $('#log-copy').onclick = async () => {
   /* navigator.clipboard exige HTTPS : l'interface est en HTTP, d'ou le repli par selection */
@@ -164,7 +164,7 @@ async function loadHealth() {
   ];
   box.innerHTML = rows.map(([k, v, warn]) => `<dt>${k}</dt><dd${warn ? ' class="warn"' : ''}>${v}</dd>`).join('');
 }
-setInterval(() => { if ((location.hash || '').includes('sys/health')) loadHealth(); }, 5000);
+setInterval(() => { if (!document.hidden && (location.hash || '').includes('sys/health')) loadHealth(); }, 5000);
 
 $$('.tab').forEach(t => t.onclick = () => { location.hash = t.dataset.t; });
 $$('.subtab').forEach(t => t.onclick = () => {
@@ -1083,8 +1083,28 @@ if ($('#central-create')) $('#central-create').onclick = async () => {
   if (r && r.ok) { toast('Centrale enregistrée'); $('#central-name').value = ''; $$('#central-members input').forEach(c => c.checked = false); await loadStatus(); }
   else toast('Échec de l\'enregistrement' + (r && r.err ? ' : ' + r.err : ''));
 };
+/* Rafraichissement de l'etat : une requete a la fois, abandonnee au bout de 4 s (sans delai,
+ * elles s'empilaient pendant une coupure). Un echec ne vide plus l'interface : on garde la
+ * derniere reponse, et apres 2 echecs de suite un bandeau dit que le boitier ne repond pas
+ * (mise a jour, redemarrage, Wi-Fi). Un 401 reste l'affaire d'api() : ecran de connexion. */
+let statusBusy = false, statusFails = 0, statusOkAt = 0, lastUptime = null;
+function offline(n) {
+  document.body.classList.toggle('offline', n >= 2);
+  const bar = $('#offline-bar'); if (!bar) return;
+  bar.hidden = n < 2;
+  if (!bar.hidden) bar.textContent = 'Boîtier injoignable : nouvelle tentative toutes les 3 s.' +
+    (statusOkAt ? ` Affiché : l'état de ${new Date(statusOkAt).toLocaleTimeString('fr-FR')}.` : '');
+}
 async function loadStatus() {
-  const s = await api('/api/status').catch(() => ({ volets: [], rf: [], remotes: {} }));
+  if (statusBusy) return;
+  statusBusy = true;
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 4000);
+  let s = null, err = null;
+  try { s = await api('/api/status', { signal: ctl.signal }); } catch (e) { err = e; }
+  clearTimeout(timer); statusBusy = false;
+  if (!s) { if (err !== 401) offline(++statusFails); return; }
+  if (lastUptime != null && s.uptime < lastUptime) toast('Le boîtier a redémarré');
+  statusFails = 0; statusOkAt = Date.now(); lastUptime = s.uptime; offline(0);
   statusCache = s;
   const rf = s.rf || [];
   renderVolets(s.volets || [], rf);
@@ -1181,7 +1201,10 @@ function boot() {
   hideLogin();              /* toujours : un rappel de boot() doit lever l'ecran de login */
   refreshAuthUi();
   loadStatus();
-  if (!pollTimer) pollTimer = setInterval(loadStatus, 3000);   /* un seul timer, meme apres reconnexion */
+  if (!pollTimer) {   /* un seul timer, meme apres reconnexion ; rien tant que l'onglet est cache */
+    pollTimer = setInterval(() => { if (!document.hidden) loadStatus(); }, 3000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStatus(); });
+  }
   if (booted) return;       /* le routage ne s'arme qu'une fois */
   booted = true;
   applyRoute();
