@@ -1079,6 +1079,13 @@ char *shutters_export_json(void) {
     LOCK();
     char *js = cfg_model_export(&s_model);
     UNLOCK();
+    /* + la table d'enrolement des volets virtuels (cle a part, ignoree par cfg_model_import) */
+    cJSON *root = js ? cJSON_Parse(js) : NULL;
+    if (!root) return js;
+    free(js);
+    cJSON_AddItemToObject(root, "pfx_enrol", pfx_enrol_export());
+    js = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
     return js;
 }
 /* Copie de la config d'avant la derniere restauration (Systeme > Sauvegarde, "Revenir"). */
@@ -1101,6 +1108,10 @@ int shutters_import_json(const char *js, const char **err) {
     }
     reset_state();
     cfg_model_import(&s_model, root);
+    /* Table d'enrolement, et compteurs-photo des volets virtuels restaures : non confirmes,
+     * un re-enrolement sautera devant le moteur au lieu de repartir derriere (issue #45). */
+    pfx_enrol_import(cJSON_GetObjectItem(root, "pfx_enrol"));
+    for (int i = 0; i < s_nvolets; i++) if (s_volets[i].virt) pfx_enrol_unconfirm(s_volets[i].virt_serial);
     /* L'echec d'ecriture remonte a l'UI : une restauration repondait "ok" meme
      * quand la NVS pleine l'empechait de survivre au redemarrage. */
     esp_err_t saved = save_cfg();

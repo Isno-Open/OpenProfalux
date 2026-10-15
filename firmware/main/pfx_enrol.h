@@ -10,6 +10,7 @@
  * la télécommande d'origine pour la gestuelle de validation (double accostage en butée).
  */
 #pragma once
+#include "cJSON.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -64,6 +65,13 @@ void pfx_enrol_forget(void);
  * (next = prochain compteur à émettre). Sans ça, le compteur avancé par les commandes du volet
  * était perdu, et un ré-enrôlement repartait d'une valeur en retard (issue #45). */
 void pfx_enrol_note_counter(uint32_t serial, uint16_t next);
+
+/* Sauvegarde / restauration de la table d'enrôlement (tableau JSON {remote, slot, counter}).
+ * La restauration fusionne : compteur le plus avancé, entrées restaurées non confirmées. */
+cJSON *pfx_enrol_export(void);
+void   pfx_enrol_import(const cJSON *arr);
+/* Identité d'un volet virtuel restauré : redevient non confirmée (compteur-photo). */
+void   pfx_enrol_unconfirm(uint32_t serial);
 
 /* Confirme l'enrôlement de l'identité courante (le moteur a répondu : volet virtuel créé) : son
  * compteur devient sûr, un futur ré-enrôlement ne sautera plus. */

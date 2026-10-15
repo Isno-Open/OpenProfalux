@@ -14,6 +14,8 @@
 #include "cc1101.h"
 #include <string.h>
 #include "nvs.h"
+#include "cJSON.h"
+#include <stdlib.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -175,10 +177,10 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
         uint32_t serial = ((uint32_t)e->slot << 12) | PFX_FAMILY_MARKER;
         uint16_t cnt = e->counter;
         uint16_t vc  = shutters_virt_counter_for_serial(serial);  /* compteur réellement émis par le volet */
-        if (vc) {                              /* volet encore là : son compteur est le bon */
-            if (cnt_ahead(vc, cnt)) cnt = vc;  /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
-            map_mark_ok(e->slot);
-        } else if (!map_is_ok(e->slot)) {      /* non confirmée : retard inconnu, saut croissant */
+        if (vc && cnt_ahead(vc, cnt)) cnt = vc;   /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
+        if (!map_is_ok(e->slot)) {             /* non confirmée : retard inconnu, saut croissant.
+                                                * Vaut aussi pour un volet restauré d'une sauvegarde,
+                                                * dont le compteur est une photo. */
             uint8_t t = s_map_try[e->slot];
             uint16_t step = PFX_RESYNC_STEPS[t < N_RESYNC_STEPS ? t : N_RESYNC_STEPS - 1];
             ESP_LOGW(TAG, "slot %u : compteur %u non confirme, essai %u : saut de %u pour la resync KeeLoq",
@@ -209,12 +211,64 @@ void pfx_enrol_note_counter(uint32_t serial, uint16_t next) {
     if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
     uint8_t slot = (uint8_t)(serial >> 12);
     for (int i = 0; i < s_map_n; i++) if (s_map[i].slot == slot) {
-        /* Le volet existait : son enrolement etait confirme, et son compteur est le bon. */
+        /* Compteur reporte ; la marque ne change pas : un volet cree depuis ce correctif a ete
+         * confirme a sa creation, un volet plus ancien ou restaure reste a confirmer. */
         if (cnt_ahead(next, s_map[i].counter)) s_map[i].counter = next;
-        ESP_LOGI(TAG, "slot %u : compteur %u reporte (volet supprime)", slot, s_map[i].counter);
-        map_mark_ok(slot); map_save();
+        ESP_LOGI(TAG, "slot %u : compteur %u reporte (volet supprime)%s", slot, s_map[i].counter,
+                 map_is_ok(slot) ? "" : ", non confirme");
+        map_save();
         return;
     }
+}
+
+/* Sauvegarde : la table d'enrolement (telecommande -> slot + compteur). Sans elle, un
+ * effacement de la NVS faisait capter un moteur deja enrole comme un inconnu. */
+cJSON *pfx_enrol_export(void) {
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < s_map_n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        char rx[12]; snprintf(rx, sizeof(rx), "0x%07X", (unsigned)s_map[i].remote);
+        cJSON_AddStringToObject(o, "remote", rx);
+        cJSON_AddNumberToObject(o, "slot", s_map[i].slot);
+        cJSON_AddNumberToObject(o, "counter", s_map[i].counter);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return arr;
+}
+/* Restauration : fusion avec la table en place. Une sauvegarde est une photo : le moteur a pu
+ * avancer depuis. On garde le compteur le plus avance, et une entree qui vient de la sauvegarde
+ * est NON confirmee (son re-enrolement sautera). Une entree dont le slot est deja pris par une
+ * autre telecommande est ignoree (jamais deux telecommandes sur un slot). */
+void pfx_enrol_import(const cJSON *arr) {
+    if (!cJSON_IsArray(arr)) return;
+    const cJSON *o;
+    cJSON_ArrayForEach(o, arr) {
+        const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(o, "remote"));
+        const cJSON *js = cJSON_GetObjectItem(o, "slot"), *jc = cJSON_GetObjectItem(o, "counter");
+        if (!rs || !cJSON_IsNumber(js) || !cJSON_IsNumber(jc)) continue;
+        uint32_t remote = (uint32_t)strtoul(rs, NULL, 16);
+        uint8_t slot = (uint8_t)js->valuedouble; uint16_t cnt = (uint16_t)jc->valuedouble;
+        if (!remote || !map_slot_ok(slot)) continue;
+        pfx_entry_t *e = map_find(remote);
+        if (e) {
+            if (e->slot != slot) continue;
+            if (cnt_ahead(cnt, e->counter)) { e->counter = cnt; s_map_ok &= ~(1ULL << slot); }
+            continue;
+        }
+        bool taken = false;
+        for (int i = 0; i < s_map_n; i++) if (s_map[i].slot == slot) taken = true;
+        if (taken || s_map_n >= PFX_MAP_MAX) { ESP_LOGW(TAG, "restauration : slot %u deja pris, entree 0x%07X ignoree", slot, (unsigned)remote); continue; }
+        s_map[s_map_n].remote = remote; s_map[s_map_n].slot = slot; s_map[s_map_n].counter = cnt; s_map_n++;
+        s_map_ok &= ~(1ULL << slot); s_map_try[slot] = 0;
+    }
+    map_save();
+}
+/* Un volet virtuel restaure porte un compteur-photo : son identite redevient non confirmee. */
+void pfx_enrol_unconfirm(uint32_t serial) {
+    if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
+    uint8_t slot = (uint8_t)(serial >> 12);
+    if (!map_is_ok(slot)) return;
+    s_map_ok &= ~(1ULL << slot); map_save();
 }
 
 void pfx_enrol_confirm(void) {
