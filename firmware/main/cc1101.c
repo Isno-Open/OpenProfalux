@@ -39,11 +39,11 @@ void cc1101_set_rx_gain(uint8_t v) { s_rx_gain = v; ESP_LOGW(TAG, "RX gain AGCCT
 uint8_t cc1101_get_rx_gain(void)   { return s_rx_gain; }
 /* Timing d'EMISSION reglable : TE (temps elementaire). Defaut 455 us (Profalux). Les autres
  * variantes PFX roulent a un TE different (ex FranciaFlex ~415). On derive bit '1'=TE, '0'=2*TE,
- * preambule=TE, entete proportionnelle. Permet au rejeu de matcher le timing du recepteur. */
+ * preambule=TE, entete=10 TE. Permet au rejeu de matcher le timing du recepteur. */
 static volatile uint32_t s_tx_te = PROFALUX_TE_US;
 void cc1101_set_tx_te(uint32_t te) { if (te >= 200 && te <= 900) { s_tx_te = te; ESP_LOGW(TAG, "TX TE=%u us", (unsigned)te); } }
 uint32_t cc1101_get_tx_te(void)    { return s_tx_te; }
-/* TE (us) mesure sur la DERNIERE trame decodee (moyenne des HAUT courts). Sert a auto-caler
+/* TE (us) mesure sur la DERNIERE trame decodee (periode de bit / 3). Sert a auto-caler
  * le TE d'emission a l'apprentissage (le rejeu matche le tempo de la telecommande captee). */
 static volatile int s_last_te = 455;
 int cc1101_last_te(void) { return s_last_te; }
@@ -369,9 +369,10 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
     ESP_LOGW(TAG, "TX RAW: emission de %d trame(s) x%d bits, MARCSTATE=0x%02X (%s)",
              repeats, n, g_tx_marc, g_tx_marc == 0x13 ? "TX ACTIF" : "PAS EN TX !");
     /* Timing derive du TE reglable : bit '1'=TE haut/2TE bas, '0'=2TE haut/TE bas,
-     * preambule=TE, entete proportionnelle a TE (= HEADER a TE nominal). */
+     * preambule=TE, entete = 10 TE comme la telecommande (l'ancien 4450 x TE / 455 = 9,78 TE
+     * raccourcissait l'entete de ~100 us a TE 448). */
     const uint32_t te = s_tx_te, te2 = 2 * s_tx_te;
-    const uint32_t hdr = (uint32_t)((uint64_t)PROFALUX_HEADER_US * s_tx_te / PROFALUX_TE_US);
+    const uint32_t hdr = PROFALUX_HEADER_TE * s_tx_te;
     for (int r = 0; r < repeats; r++) {
         for (int i = 0; i < PROFALUX_PREAMBLE_ELEMENTS; i++) {
             gpio_set_level(CC1101_PIN_GDO0, (i & 1) == 0);

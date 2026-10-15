@@ -20,6 +20,10 @@
 
 #define TE 430 /* temps elementaire, comme la vraie carte */
 
+/* Te et biais de demodulation des trames fabriquees (T5 les change) : la demod OOK du
+ * CC1101 etire chaque HAUT de g_skew us et raccourcit d'autant le BAS qui suit. */
+static int g_te = TE, g_skew = 0;
+
 /* Une trame de reference arbitraire mais fixe : 66 bits, ordre du fil. */
 static const char EXPECTED[] =
     "100110100011110000101011"
@@ -43,8 +47,8 @@ static void push(edge_t *e, size_t *n, uint16_t dur, uint8_t lvl) {
  * de-glitch) puis l'en-tete : un LOW long ~10 Te, que le decodeur prend comme
  * point d'ancrage (fenetre 3000..8500 us). */
 static void push_header(edge_t *e, size_t *n) {
-    push(e, n, TE, 1);
-    push(e, n, 10 * TE, 0);
+    push(e, n, g_te + g_skew, 1);
+    push(e, n, 10 * g_te - g_skew, 0);
 }
 
 /* Les 66 bits. final_low=false : on omet le DERNIER BAS (66e bit coupe par
@@ -53,8 +57,8 @@ static void push_header(edge_t *e, size_t *n) {
 static void push_bits(edge_t *e, size_t *n, const char *bits, bool final_low, int glitch_bit) {
     int nb = (int)strlen(bits);
     for (int i = 0; i < nb; i++) {
-        uint16_t hi = (bits[i] == '1') ? TE : 2 * TE;
-        uint16_t lo = (bits[i] == '1') ? 2 * TE : TE;
+        uint16_t hi = ((bits[i] == '1') ? g_te : 2 * g_te) + g_skew;
+        uint16_t lo = ((bits[i] == '1') ? 2 * g_te : g_te) - g_skew;
         if (i == glitch_bit) {
             push(e, n, hi / 2, 1);
             push(e, n, 60, 0); /* sliver < GLITCH_US (140) : bruit, doit etre jete */
@@ -134,7 +138,7 @@ int main(void) {
         int nb = run(e, n, out, &te);
         check(nb == 66, "T0 trame propre : 66 bits", "mauvais nombre de bits");
         check(strcmp(out, EXPECTED) == 0, "T0 trame propre : bits exacts", out);
-        check(te >= 380 && te <= 480, "T0 trame propre : Te ~430", "Te hors plage");
+        check(te == TE, "T0 trame propre : Te = 430", "Te faux");
     }
 
     /* T1 : 66e bit coupe par l'idle (pas de BAS final) -> doit quand meme rendre
@@ -190,6 +194,22 @@ int main(void) {
         int nb = run(e, n, out, NULL);
         check(nb == 66, "T4 vote : 66 bits", "nombre de bits");
         check(strcmp(out, EXPECTED) == 0, "T4 vote : le bit faux est corrige", out);
+    }
+
+    /* T5 : TE mesure sur la periode de bit. Te reel 448 us (murale Eveno au RTL-SDR), HAUT
+     * etires de 16 us par le CC1101 : la moyenne des HAUT courts donnait 464, la periode / 3
+     * doit rendre 448 (issue #37). */
+    {
+        static edge_t e[2048];
+        size_t n = 0;
+        g_te = 448; g_skew = 16;
+        push_header(e, &n);
+        push_bits(e, &n, EXPECTED, true, -1);
+        te = 0;
+        int nb = run(e, n, out, &te);
+        g_te = TE; g_skew = 0;
+        check(nb == 66 && strcmp(out, EXPECTED) == 0, "T5 HAUT etires : bits exacts", out);
+        check(te == 448, "T5 HAUT etires : Te = periode / 3 = 448", "Te biaise par l'etirement des HAUT");
     }
 
     printf(g_fail ? "\n%d test(s) en echec\n" : "\nTout passe\n", g_fail);
