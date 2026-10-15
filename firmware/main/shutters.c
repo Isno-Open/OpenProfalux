@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -1075,11 +1076,24 @@ char *shutters_export_json(void) {
     UNLOCK();
     return js;
 }
-int shutters_import_json(const char *js) {
-    if (!js) return -1;
-    cJSON *root = cJSON_Parse(js);
-    if (!root) return -1;
+/* Copie de la config d'avant la derniere restauration (Systeme > Sauvegarde, "Revenir"). */
+#define PREV_CFG_FILE "/spiffs/config-avant.json"
+#define PREV_CFG_MAX  (24 * 1024)   /* = RESTORE_MAX_BODY (web_ui.c) */
+
+int shutters_import_json(const char *js, const char **err) {
+    *err = "format";
+    cJSON *root = js ? cJSON_Parse(js) : NULL;
+    /* Une sauvegarde, et rien d'autre : l'export des trames (meme onglet), {} ou []
+     * passaient, et remettaient toute la config a zero avant de n'importer rien. */
+    if (!cfg_model_is_backup(root)) { cJSON_Delete(root); return -1; }
     LOCK();
+    /* Copie de la config courante, pour pouvoir revenir en arriere. Sans copie, on ne
+     * remplace pas une config qui a des volets ; sans volet, il n'y a rien a perdre. */
+    if (!cfg_model_save_copy(&s_model, PREV_CFG_FILE) && s_nvolets > 0) {
+        UNLOCK(); cJSON_Delete(root);
+        ESP_LOGE(TAG, "restauration annulee : copie de la config actuelle impossible");
+        *err = "copie"; return -1;
+    }
     reset_state();
     cfg_model_import(&s_model, root);
     /* L'echec d'ecriture remonte a l'UI : une restauration repondait "ok" meme
@@ -1092,7 +1106,23 @@ int shutters_import_json(const char *js) {
     cJSON_Delete(root);
     ESP_LOGI(TAG, "config restauree : %d volets, %d telecommandes%s", s_nvolets, s_nremotes,
              saved == ESP_OK ? "" : " (NON enregistree en NVS)");
+    *err = saved == ESP_OK ? NULL : "nvs";
     return saved == ESP_OK ? 0 : -1;
+}
+
+/* Revient a la copie : la config remplacee devient a son tour la copie (aller-retour). */
+int shutters_restore_undo(const char **err) {
+    char *js = cfg_read_file(PREV_CFG_FILE, PREV_CFG_MAX, NULL);
+    if (!js) { *err = "absente"; return -1; }
+    int rc = shutters_import_json(js, err);
+    free(js);
+    return rc;
+}
+bool shutters_prev_cfg_time(time_t *t) {
+    struct stat st;
+    if (stat(PREV_CFG_FILE, &st) != 0 && stat(PREV_CFG_FILE ".tmp", &st) != 0) return false;
+    *t = st.st_mtime;
+    return true;
 }
 
 /* ── Integration Home Assistant (MQTT) ── */

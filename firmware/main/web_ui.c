@@ -647,12 +647,35 @@ static esp_err_t h_backup(httpd_req_t *r) {
 /* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets,
  * dont des centrales a longue liste de membres. */
 #define RESTORE_MAX_BODY (24 * 1024)
+/* Mauvais fichier ou copie absente : 400 ; copie ou NVS en echec cote boitier : 500 (#33).
+ * La raison part dans le corps, l'UI l'affiche en clair. */
+static esp_err_t restore_reply(httpd_req_t *r, int rc, const char *err) {
+    httpd_resp_set_type(r, "application/json");
+    if (rc == 0) return httpd_resp_sendstr(r, "{\"ok\":1}");
+    bool client = !strcmp(err, "format") || !strcmp(err, "absente");
+    httpd_resp_set_status(r, client ? "400 Bad Request" : "500 Internal Server Error");
+    char out[40]; snprintf(out, sizeof(out), "{\"ok\":0,\"err\":\"%s\"}", err);
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_restore(httpd_req_t *r) {
     char *body = read_body_max(r, RESTORE_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
-    int rc = shutters_import_json(body);
+    const char *err = NULL;
+    int rc = shutters_import_json(body, &err);
     free(body);
-    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
-    return ESP_OK;
+    return restore_reply(r, rc, err);
+}
+/* ── /api/restore/undo : la config d'avant la derniere restauration (GET : existe-t-elle,
+ * de quand ; POST : y revenir, la config remplacee devient la copie) ── */
+static esp_err_t h_restore_undo_get(httpd_req_t *r) {
+    time_t t = 0; bool ok = shutters_prev_cfg_time(&t);
+    char out[48]; snprintf(out, sizeof(out), "{\"available\":%s,\"t\":%lld}", ok ? "true" : "false", (long long)t);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+static esp_err_t h_restore_undo(httpd_req_t *r) {
+    const char *err = NULL;
+    int rc = shutters_restore_undo(&err);
+    return restore_reply(r, rc, err);
 }
 
 /* ── /api/mqtt/discover : cherche un broker MQTT en mDNS (_mqtt._tcp) ── */
@@ -1104,6 +1127,8 @@ void web_ui_start(void) {
     reg(s, "/api/backup",       HTTP_GET,  h_backup);
     reg(s, "/api/log",          HTTP_GET,  h_log);
     reg(s, "/api/restore",      HTTP_POST, h_restore);
+    reg(s, "/api/restore/undo", HTTP_GET,  h_restore_undo_get);
+    reg(s, "/api/restore/undo", HTTP_POST, h_restore_undo);
     reg(s, "/api/mqtt/discover", HTTP_GET, h_mqtt_discover);
     reg(s, "/api/pfx",        HTTP_GET,  h_pfx_get);
     reg(s, "/api/pfx/capture", HTTP_POST, h_pfx_capture);

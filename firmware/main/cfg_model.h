@@ -91,6 +91,12 @@ char *cfg_model_export(const cfg_model_t *m);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */
 void  cfg_model_import(const cfg_model_t *m, cJSON *root);
+/* Est-ce une sauvegarde de config (format de cfg_model_export) ? Un objet avec un
+ * tableau "volets", et "remotes" absent ou objet. L'export des trames, {} ou []
+ * ne le sont pas : les restaurer remettait toute la config a zero. */
+bool  cfg_model_is_backup(const cJSON *root);
+/* Copie de la config courante (format de l'export) dans `path`, via cfg_write_file. */
+bool  cfg_model_save_copy(const cfg_model_t *m, const char *path);
 
 /* Ecrit la config en NVS, un document par volet. En cas d'echec, failed_key
  * (8 octets, peut etre NULL) recoit la cle fautive. */
@@ -106,3 +112,12 @@ cfg_layout_t cfg_model_load(const cfg_model_t *m);
  * renomme : s'il ne peut pas etre ecrit, ou si le courant est coupe pendant
  * l'ecriture, le dataset est quand meme rendu et sa copie NVS conservee. */
 bool cfg_frames_load(const char *path, void *buf, size_t cap, size_t *sz);
+
+/* Ecrit `n` octets dans `path` sous un nom temporaire, renomme une fois complet :
+ * une coupure de courant ne laisse jamais un fichier a moitie ecrit sous son vrai
+ * nom (l'ancien reste intact). Renvoie false si rien n'a ete remplace. */
+bool cfg_write_file(const char *path, const void *buf, size_t n);
+/* Lit `path`, ou son temporaire complet si une coupure l'a laisse seul (voir
+ * cfg_write_file), dans un tampon alloue termine par un zero. NULL si absent, vide
+ * ou plus grand que `cap`. *n (peut etre NULL) recoit la taille. */
+char *cfg_read_file(const char *path, size_t cap, size_t *n);
