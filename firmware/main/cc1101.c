@@ -19,6 +19,10 @@
 #include "soc/soc_caps.h"   /* SOC_RMT_MEM_WORDS_PER_CHANNEL : portabilite RMT (S3/C3) */
 #include <esp_timer.h>
 #include <driver/rmt_rx.h>
+#include <driver/rmt_tx.h>
+#include <driver/rmt_encoder.h>
+#include <esp_rom_gpio.h>      /* rendre GDO0 au GPIO apres une emission RMT */
+#include "soc/gpio_sig_map.h"  /* SIG_GPIO_OUT_IDX */
 #include <esp_heap_caps.h>   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
 #include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
 
@@ -41,6 +45,21 @@ uint8_t cc1101_get_rx_gain(void)   { return s_rx_gain; }
  * variantes PFX roulent a un TE different (ex FranciaFlex ~415). On derive bit '1'=TE, '0'=2*TE,
  * preambule=TE, entete=10 TE. Permet au rejeu de matcher le timing du recepteur. */
 static volatile uint32_t s_tx_te = PROFALUX_TE_US;
+/* Bit de repetition (bit 65 de la trame KeeLoq). Mesure 2026-10-10 au YARD Stick One sur les
+ * murales Eveno (HCS30x) : la 1re trame d'un appui porte RPT=0, toutes les repetitions RPT=1
+ * (meme code tournant), ~18 ms de silence entre trames. Le rejeu envoyait jusqu'ici N trames
+ * identiques (le bit tel qu'enregistre, 0 pour une trame adoptee) a 2 ms d'intervalle. Option,
+ * desactivee par defaut : les moteurs testes acceptent les deux ; elle sert aux moteurs qui
+ * tiendraient compte du bit, et a un maintien fidele (appui long). */
+#define TX_RPT_GAP_MS 18
+static volatile bool s_tx_rpt = false;
+void cc1101_set_tx_repeat_bit(bool on) { s_tx_rpt = on; ESP_LOGW(TAG, "TX bit de repetition %s", on ? "ON" : "OFF"); }
+bool cc1101_get_tx_repeat_bit(void)    { return s_tx_rpt; }
+/* Emission par le RMT (timing materiel) au lieu du bit-bang (esp_rom_delay_us + GPIO,
+ * preemptible par le WiFi, voir issue upstream #37). Option, desactivee par defaut. */
+static volatile bool s_tx_rmt = false;
+void cc1101_set_tx_rmt(bool on) { s_tx_rmt = on; ESP_LOGW(TAG, "TX par RMT %s", on ? "ON" : "OFF"); }
+bool cc1101_get_tx_rmt(void)    { return s_tx_rmt; }
 void cc1101_set_tx_te(uint32_t te) { if (te >= 200 && te <= 900) { s_tx_te = te; ESP_LOGW(TAG, "TX TE=%u us", (unsigned)te); } }
 uint32_t cc1101_get_tx_te(void)    { return s_tx_te; }
 /* TE (us) mesure sur la DERNIERE trame decodee (periode de bit / 3). Sert a auto-caler
@@ -347,6 +366,84 @@ int cc1101_tx_ook_frame(const uint8_t *frame, size_t bits) {
     return 0;
 }
 
+/* ── Emission par le RMT ──
+ * Meme forme d'onde que le bit-bang ci-dessous, mais chaque duree est tenue par le
+ * materiel : une interruption (WiFi) ne peut plus allonger un TE et casser la trame.
+ * Le silence entre deux trames est un symbole, lui aussi exact.
+ *
+ * Memoire RMT : sur ESP32, le canal de reception s_cap prend les 512 symboles, c'est-a-dire
+ * les 8 blocs ; il ne reste rien pour un canal d'emission permanent. La reception est de
+ * toute facon coupee pendant une emission : on la libere, on cree un canal d'emission de
+ * SOC_RMT_MEM_WORDS_PER_CHANNEL symboles (l'encodeur le recharge au fil de l'eau), on emet,
+ * puis on rend GDO0 au GPIO et on recree la reception a l'identique. */
+#define TX_SYM_MAX (PROFALUX_PREAMBLE_ELEMENTS / 2 + 1 + 80)   /* preambule + entete + 80 bits */
+_Static_assert(PROFALUX_PREAMBLE_ELEMENTS % 2 == 1, "le dernier element haut du preambule est suivi de l'entete");
+static rmt_symbol_word_t s_txsym[2][TX_SYM_MAX];   /* 1re trame, et repetitions (sous le mutex radio) */
+
+/* Une trame en symboles RMT (1 tic = 1 us). rpt65 = valeur forcee du bit 65, ou 0 pour le
+ * laisser tel quel ; gap = silence apres la trame. Renvoie le nombre de symboles. */
+static size_t tx_frame_syms(rmt_symbol_word_t *sy, const char *bits, int n, char rpt65,
+                            uint32_t te, uint32_t te2, uint32_t hdr, uint32_t gap) {
+    size_t k = 0;
+    for (int i = 0; i + 1 < PROFALUX_PREAMBLE_ELEMENTS; i += 2)   /* H,L,H,L... (Te chacun) */
+        sy[k++] = (rmt_symbol_word_t){ .duration0 = te, .level0 = 1, .duration1 = te, .level1 = 0 };
+    sy[k++] = (rmt_symbol_word_t){ .duration0 = te, .level0 = 1, .duration1 = hdr, .level1 = 0 };
+    for (int i = 0; i < n && k < TX_SYM_MAX; i++) {
+        const char b = (rpt65 && i == 65) ? rpt65 : bits[i];
+        sy[k++] = (b == '1')
+            ? (rmt_symbol_word_t){ .duration0 = te,  .level0 = 1, .duration1 = te2, .level1 = 0 }
+            : (rmt_symbol_word_t){ .duration0 = te2, .level0 = 1, .duration1 = te,  .level1 = 0 };
+    }
+    sy[k - 1].duration1 += gap;   /* bas du dernier bit + silence (< 32767 us : tient sur 15 bits) */
+    return k;
+}
+
+/* Emet la rafale par le RMT. Appele en TX (STX fait), reception desactivee. Renvoie 0 si
+ * la rafale est partie ; sinon -1, rien n'a ete emis et l'appelant passe au bit-bang.
+ * Dans les deux cas, la reception est recreee et active en sortie. */
+static int tx_rmt_burst(const char *bits, int n, int repeats, bool rpt,
+                        uint32_t te, uint32_t te2, uint32_t hdr, uint32_t gap) {
+    if (s_cap) { rmt_del_channel(s_cap); s_cap = NULL; }   /* deja desactive par l'appelant */
+    rmt_channel_handle_t tx = NULL;
+    rmt_encoder_handle_t enc = NULL;
+    rmt_tx_channel_config_t tc = {
+        .gpio_num = CC1101_PIN_GDO0, .clk_src = RMT_CLK_SRC_DEFAULT, .resolution_hz = 1000000,
+        .mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL, .trans_queue_depth = 4,
+    };
+    rmt_copy_encoder_config_t ec = {};   /* structure vide */
+    int rc = -1;
+    if (rmt_new_tx_channel(&tc, &tx) != ESP_OK) { tx = NULL; ESP_LOGW(TAG, "TX RMT : canal KO, bit-bang"); goto out; }
+    if (rmt_new_copy_encoder(&ec, &enc) != ESP_OK) { enc = NULL; ESP_LOGW(TAG, "TX RMT : encodeur KO, bit-bang"); goto out; }
+    if (rmt_enable(tx) != ESP_OK) { ESP_LOGW(TAG, "TX RMT : activation KO, bit-bang"); goto out; }
+    /* 1re trame (RPT force a 0 si l'option est active), puis les repetitions (RPT a 1). */
+    size_t n0 = tx_frame_syms(s_txsym[0], bits, n, rpt ? '0' : 0, te, te2, hdr, gap);
+    size_t n1 = tx_frame_syms(s_txsym[1], bits, n, rpt ? '1' : 0, te, te2, hdr, gap);
+    rmt_transmit_config_t xc = { .loop_count = 0, .flags.eot_level = 0 };
+    const int64_t t0 = esp_timer_get_time();
+    rc = 0;
+    for (int r = 0; r < repeats && rc == 0; r++) {   /* en file : les trames s'enchainent sans trou */
+        if (rmt_transmit(tx, enc, r ? s_txsym[1] : s_txsym[0], (r ? n1 : n0) * sizeof(rmt_symbol_word_t), &xc) != ESP_OK)
+            rc = r ? -2 : -1;   /* -2 : une partie est partie, on n'en remet pas une couche en bit-bang */
+    }
+    if (rmt_tx_wait_all_done(tx, 5000) != ESP_OK) ESP_LOGW(TAG, "TX RMT : fin de rafale non confirmee");
+    /* Duree mesuree : la rafale dure repeats x (trame + silence), au tic pres. Un ecart
+     * signale un probleme d'emission. */
+    else ESP_LOGW(TAG, "TX RMT : %d trame(s) en %lld ms (attendu ~%lu ms)", repeats,
+                  (long long)((esp_timer_get_time() - t0) / 1000),
+                  (unsigned long)((uint64_t)repeats * (PROFALUX_PREAMBLE_ELEMENTS * te + hdr
+                                  + (uint64_t)n * (te + te2) + gap) / 1000));
+    rmt_disable(tx);
+out:
+    if (enc) rmt_del_encoder(enc);
+    if (tx) rmt_del_channel(tx);
+    /* GDO0 rendu au GPIO (sortie bas) pour le bit-bang et l'auto-test, puis reception recreee. */
+    gpio_set_level(CC1101_PIN_GDO0, 0);
+    esp_rom_gpio_connect_out_signal(CC1101_PIN_GDO0, SIG_GPIO_OUT_IDX, false, false);
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
+    if (cc1101_capture_init() != 0) ESP_LOGE(TAG, "TX RMT : reception non recreee");
+    return rc == -2 ? 0 : rc;
+}
+
 /* Rejoue une trame brute (chaine de bits '0'/'1' en ordre du fil) en OOK :
  * preambule + entete + symboles HCS30x. Sert au replay d'une trame captee. */
 int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
@@ -373,6 +470,14 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
      * raccourcissait l'entete de ~100 us a TE 448). */
     const uint32_t te = s_tx_te, te2 = 2 * s_tx_te;
     const uint32_t hdr = PROFALUX_HEADER_TE * s_tx_te;
+    const bool rpt = s_tx_rpt && n >= 66;   /* bit 65 = RPT : 0 sur la 1re trame, 1 ensuite */
+    if (s_tx_rmt) {
+        if (tx_rmt_burst(bits, n, repeats, rpt, te, te2, hdr, rpt ? TX_RPT_GAP_MS * 1000 : 2000) == 0) {
+            strobe(CC_SIDLE);   /* reception deja recreee et active */
+            return 0;
+        }
+        if (s_cap) rmt_disable(s_cap);   /* repli bit-bang : meme etat qu'avant */
+    }
     for (int r = 0; r < repeats; r++) {
         for (int i = 0; i < PROFALUX_PREAMBLE_ELEMENTS; i++) {
             gpio_set_level(CC1101_PIN_GDO0, (i & 1) == 0);
@@ -381,13 +486,15 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
         gpio_set_level(CC1101_PIN_GDO0, 0);
         esp_rom_delay_us(hdr);
         for (int i = 0; i < n; i++) {
-            if (bits[i] == '1') { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(te);
+            const char b = (rpt && i == 65) ? (r == 0 ? '0' : '1') : bits[i];
+            if (b == '1') { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(te);
                                   gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(te2); }
             else                { gpio_set_level(CC1101_PIN_GDO0, 1); esp_rom_delay_us(te2);
                                   gpio_set_level(CC1101_PIN_GDO0, 0); esp_rom_delay_us(te); }
         }
         gpio_set_level(CC1101_PIN_GDO0, 0);
-        esp_rom_delay_us(2000);   /* gap inter-trame */
+        if (rpt) vTaskDelay(pdMS_TO_TICKS(TX_RPT_GAP_MS));   /* silence de la telecommande, porteuse coupee */
+        else     esp_rom_delay_us(2000);   /* gap inter-trame */
     }
     strobe(CC_SIDLE);
     if (s_cap) rmt_enable(s_cap);   /* re-arme la capture RMT pour l'ecoute permanente suivante */
@@ -401,7 +508,7 @@ static bool IRAM_ATTR cc_cap_cb(rmt_channel_handle_t ch, const rmt_rx_done_event
 
 int cc1101_capture_init(void) {
     if (s_cap) return 0;
-    s_capq = xQueueCreate(8, sizeof(rmt_rx_done_event_data_t));  /* marge : en_partial_rx genere
+    if (!s_capq) s_capq = xQueueCreate(8, sizeof(rmt_rx_done_event_data_t));   /* une seule file : la reception est recreee apres chaque emission RMT */  /* marge : en_partial_rx genere
                                  * plusieurs callbacks par reception ; eviter de perdre un fragment
                                  * si le consommateur (log DEBUG) ralentit. */
     rmt_rx_channel_config_t c = {0};
