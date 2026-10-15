@@ -428,6 +428,10 @@ static esp_err_t h_config_get(httpd_req_t *r) {
              radio_profile_name((radio_profile_t)rprof), (unsigned)fcustom, (unsigned)cc1101_get_freq_khz(),
              (unsigned)CC1101_BAND_LOW_KHZ, (unsigned)CC1101_BAND_HIGH_KHZ);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
+    {   /* verification de mise a jour automatique : ajoutee en fin d'objet */
+        size_t k = strlen(out);
+        if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
+    }
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -482,6 +486,12 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             uint8_t on = cJSON_IsTrue(dbg) || (cJSON_IsNumber(dbg) && dbg->valuedouble != 0);
             nvs_set_u8(h, "debug", on);
             cc1101_set_rx_debug(on);   /* switch DEBUG console : prise en compte immediate */
+        }
+        cJSON *uaj = cJSON_GetObjectItem(j, "update_auto");
+        if (cJSON_IsBool(uaj) || cJSON_IsNumber(uaj)) {
+            uint8_t on = cJSON_IsTrue(uaj) || (cJSON_IsNumber(uaj) && uaj->valuedouble != 0);
+            nvs_set_u8(h, "upd_auto", on);
+            shutters_set_update_auto(on);   /* prise en compte au prochain cycle */
         }
         cJSON *rgj = cJSON_GetObjectItem(j, "rx_gain");
         if (cJSON_IsNumber(rgj)) {
@@ -668,11 +678,23 @@ static esp_err_t h_mqtt_discover(httpd_req_t *r) {
 }
 
 /* ── /api/ota/status + /api/ota/upload ── */
+/* Demande au boitier de verifier GitHub tout de suite (en tache de fond). L'UI suit la fin
+ * par le compteur checks de /api/ota/status. */
+static esp_err_t h_ota_check(httpd_req_t *r) {
+    shutters_update_check_now();
+    httpd_resp_set_type(r, "application/json");
+    char out[48]; snprintf(out, sizeof(out), "{\"ok\":1,\"checks\":%u}", (unsigned)ota_check_count());
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_ota_status(httpd_req_t *r) {
     ota_status_t st; ota_get_status(&st);
-    char out[384];   /* message[128] + version[64] + target + scaffolding JSON */
-    snprintf(out, sizeof(out), "{\"state\":%d,\"total\":%u,\"written\":%u,\"msg\":\"%s\",\"version\":\"%s\",\"target\":\"" TARGET_NAME "\"}",
-             st.state, (unsigned)st.total_bytes, (unsigned)st.written_bytes, st.message, st.active_version);
+    char out[640];   /* message[128] + version[64] + target + derniere version + son URL[192] + JSON */
+    /* latest / latest_url / checks : resultat de la derniere verification GitHub faite PAR LE
+     * BOITIER (automatique ou demandee par /api/ota/check) ; checks avance a chaque fin. */
+    snprintf(out, sizeof(out), "{\"state\":%d,\"total\":%u,\"written\":%u,\"msg\":\"%s\",\"version\":\"%s\",\"target\":\"" TARGET_NAME "\","
+             "\"latest\":\"%s\",\"latest_url\":\"%s\",\"checks\":%u}",
+             st.state, (unsigned)st.total_bytes, (unsigned)st.written_bytes, st.message, st.active_version,
+             ota_latest_version(), ota_latest_url(), (unsigned)ota_check_count());
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -1068,6 +1090,7 @@ void web_ui_start(void) {
     reg(s, "/api/config",    HTTP_GET,  h_config_get);
     reg(s, "/api/config",    HTTP_POST, h_config_post);
     reg(s, "/api/ota/status",   HTTP_GET,  h_ota_status);
+    reg(s, "/api/ota/check",    HTTP_POST, h_ota_check);
     reg(s, "/api/ota/upload",   HTTP_POST, h_ota_upload);
     reg(s, "/api/ota/rollback", HTTP_POST, h_ota_rollback);
     reg(s, "/api/ota/pull",     HTTP_POST, h_ota_pull);

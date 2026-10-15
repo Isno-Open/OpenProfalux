@@ -136,6 +136,8 @@ static char s_latest_ver[24] = "";
 static char s_latest_url[192] = "";
 const char *ota_latest_version(void) { return s_latest_ver; }
 const char *ota_latest_url(void)     { return s_latest_url; }
+static volatile uint32_t s_check_n = 0;   /* l'UI y voit la fin d'une verification demandee */
+uint32_t ota_check_count(void)       { return s_check_n; }
 
 esp_err_t ota_check_github(void)
 {
@@ -155,10 +157,10 @@ esp_err_t ota_check_github(void)
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
     esp_err_t err = esp_http_client_open(c, 0);
-    if (err != ESP_OK) { esp_http_client_cleanup(c); return err; }
+    if (err != ESP_OK) { esp_http_client_cleanup(c); s_check_n++; return err; }
     esp_http_client_fetch_headers(c);
     char *buf = malloc(6144);
-    if (!buf) { esp_http_client_close(c); esp_http_client_cleanup(c); return ESP_ERR_NO_MEM; }
+    if (!buf) { esp_http_client_close(c); esp_http_client_cleanup(c); s_check_n++; return ESP_ERR_NO_MEM; }
     int total = 0, r;
     while (total < 6143 && (r = esp_http_client_read(c, buf + total, 6143 - total)) > 0) total += r;
     buf[total > 0 ? total : 0] = 0;
@@ -184,6 +186,7 @@ esp_err_t ota_check_github(void)
     }
     free(buf);
     ESP_LOGI(TAG, "GitHub latest=%s url=%s", s_latest_ver, s_latest_url[0] ? s_latest_url : "(?)");
+    s_check_n++;
     return rc;
 }
 

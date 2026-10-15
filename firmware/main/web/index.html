@@ -188,7 +188,9 @@
         <h3>Depuis GitHub</h3>
         <div class="row"><button id="ota-check" class="btn">Vérifier la dernière version</button>
           <button id="ota-github" class="btn primary" hidden>Installer depuis GitHub</button></div>
-        <p class="hint" id="ota-latest" style="margin:9px 0 0">Récupère la dernière release publiée sur GitHub.</p>
+        <p class="hint" id="ota-latest" style="margin:9px 0 0">Le boîtier interroge GitHub et récupère la dernière release publiée.</p>
+        <label class="switch" style="margin-top:12px"><input type="checkbox" id="ota-auto"><span class="track"></span>
+          <span class="lbl">Vérification automatique<small>Le boîtier interroge GitHub toutes les 6 h (entité de mise à jour Home Assistant). Désactivée, il ne le fait que sur le bouton ci-dessus.</small></span></label>
         <h3>Depuis un fichier</h3>
         <div class="field"><label>Fichier firmware (.bin)</label><input type="file" id="ota-file" accept=".bin"></div>
         <div class="row"><button id="ota-btn" class="btn primary">Flasher</button><button id="ota-rollback" class="btn danger">↩ Version précédente</button></div>

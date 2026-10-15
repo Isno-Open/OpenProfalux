@@ -36,6 +36,7 @@
 static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
 static bool s_debug      = false;   /* switch UI "debug console" : logge chaque capture RX */
+static bool s_upd_auto   = true;    /* verification de mise a jour automatique (toutes les 6 h) */
 static uint8_t s_rx_gain = 0x27;    /* plafond de gain RX (AGCCTRL2) reglable via l'UI ; defaut 0x27 */
 static uint32_t s_tx_te  = 455;     /* TE d'emission (us) reglable via l'UI ; defaut 455 (Profalux) */
 static uint8_t  s_radio_prof = RADIO_PROFILE_DEFAULT;   /* profil radio (radio_profile.h), via l'UI */
@@ -62,6 +63,7 @@ static void load_config(void) {
     sz = sizeof(s_mqtt_pass);   nvs_get_str(h, "mqtt_pass", s_mqtt_pass, &sz);
     uint8_t lf = 0; nvs_get_u8(h, "log_frames", &lf); s_log_frames = lf;
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
+    uint8_t ua = 1; nvs_get_u8(h, "upd_auto", &ua); s_upd_auto = ua;   /* absent = active */
     uint8_t rg = 0; if (nvs_get_u8(h, "rx_gain", &rg) == ESP_OK && rg) s_rx_gain = rg;
     uint32_t te = 0; if (nvs_get_u32(h, "tx_te", &te) == ESP_OK && te) s_tx_te = te;
     nvs_get_u8(h, "radio_prof", &s_radio_prof);
@@ -182,6 +184,7 @@ void app_main(void) {
     cc1101_rx_probe();   /* sonde de bruit RX au boot (comparaison module/antenne) */
 
     /* 4c. Modele cover + arbitre radio (RX permanent gere en interne) */
+    shutters_set_update_auto(s_upd_auto);   /* avant shutters_init : la 1re verification en tient compte */
     shutters_init();
     pfx_enrol_init();   /* identite virtuelle 0x067 (apprentissage sans telecommande, experimental) */
     if (s_log_frames) shutters_set_log_frames(true);
