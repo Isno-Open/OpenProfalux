@@ -419,12 +419,19 @@ static int tx_rmt_burst(const char *bits, int n, int repeats, bool rpt,
     size_t n0 = tx_frame_syms(s_txsym[0], bits, n, rpt ? '0' : 0, te, te2, hdr, gap);
     size_t n1 = tx_frame_syms(s_txsym[1], bits, n, rpt ? '1' : 0, te, te2, hdr, gap);
     rmt_transmit_config_t xc = { .loop_count = 0, .flags.eot_level = 0 };
+    const int64_t t0 = esp_timer_get_time();
     rc = 0;
     for (int r = 0; r < repeats && rc == 0; r++) {   /* en file : les trames s'enchainent sans trou */
         if (rmt_transmit(tx, enc, r ? s_txsym[1] : s_txsym[0], (r ? n1 : n0) * sizeof(rmt_symbol_word_t), &xc) != ESP_OK)
             rc = r ? -2 : -1;   /* -2 : une partie est partie, on n'en remet pas une couche en bit-bang */
     }
     if (rmt_tx_wait_all_done(tx, 5000) != ESP_OK) ESP_LOGW(TAG, "TX RMT : fin de rafale non confirmee");
+    /* Duree mesuree : la rafale dure repeats x (trame + silence), au tic pres. Un ecart
+     * signale un probleme d'emission. */
+    else ESP_LOGW(TAG, "TX RMT : %d trame(s) en %lld ms (attendu ~%lu ms)", repeats,
+                  (long long)((esp_timer_get_time() - t0) / 1000),
+                  (unsigned long)((uint64_t)repeats * (PROFALUX_PREAMBLE_ELEMENTS * te + hdr
+                                  + (uint64_t)n * (te + te2) + gap) / 1000));
     rmt_disable(tx);
 out:
     if (enc) rmt_del_encoder(enc);
