@@ -733,7 +733,14 @@ async function loadConfig() {
   if ($('#mqtt-device')) $('#mqtt-device').value = c.device || '';
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
+  if ($('#ota-auto')) $('#ota-auto').checked = c.update_auto !== 0;   /* absent (ancien firmware) = active */
 }
+if ($('#ota-auto')) $('#ota-auto').onchange = async (e) => {
+  const on = e.target.checked;
+  const r = await api('/api/config', { method: 'POST', body: JSON.stringify({ update_auto: on }) }).catch(() => null);
+  if (r && r.ok) toast(on ? 'Vérification automatique activée' : 'Vérification automatique désactivée');
+  else { e.target.checked = !on; toast('Échec de l\'enregistrement'); }
+};
 $('#wifi-save').onclick = async () => {
   const b = { wifi_ssid: $('#wifi-ssid').value.trim(), reboot: $('#wifi-reboot').checked };
   if ($('#wifi-pass').value) b.wifi_pass = $('#wifi-pass').value;
@@ -916,25 +923,25 @@ $('#ota-rollback').onclick = async () => {
 /* OTA depuis GitHub (la dernière release publique) */
 let githubUrl = null;
 $('#ota-check').onclick = async () => {
-  const span = $('#ota-latest'); span.textContent = '⏳ Interrogation de GitHub…'; $('#ota-github').hidden = true;
-  try {
-    /* asset de CETTE carte : openprofalux-<carte>-ota.bin, <carte> = id de boards/<carte>.json,
-       renvoye tel quel par /api/ota/status (jamais le -full.bin, invalide en OTA) */
-    const stt = await api('/api/ota/status').catch(() => ({}));
-    const variant = stt.target || null;
-    const r = await fetch('https://api.github.com/repos/Isno-Open/OpenProfalux/releases/latest');
-    if (!r.ok) { span.textContent = r.status === 404 ? '❌ Aucune release publique (dépôt privé ?)' : `❌ HTTP ${r.status}`; return; }
-    const j = await r.json();
-    const latest = (j.tag_name || j.name || '?').replace(/^v/, '');   /* "v0.1.1" -> "0.1.1" */
-    const cur = ($('#ota-version').textContent || '').replace(/^v/, '');
-    githubUrl = variant
-      ? (j.assets || []).map(a => a.browser_download_url).find(u => u.endsWith(`openprofalux-${variant}-ota.bin`))
-      : null;
-    if (githubUrl) $('#ota-github').hidden = false;
-    span.textContent = (cur && cur === latest) ? `✅ ${cur} = dernière version`
-      : !variant ? `⚠️ Disponible ${latest} - variante inconnue, utilise le flash manuel`
-      : `⚠️ Installée ${cur}, disponible ${latest}${githubUrl ? '' : ' (pas d’asset OTA pour cette variante)'}`;
-  } catch { span.textContent = '❌ Pas d’accès Internet ?'; }
+  /* C'est le BOITIER qui interroge GitHub (pas le navigateur) : on lui demande une
+     verification, puis on attend qu'elle se termine (compteur checks de /api/ota/status). */
+  const span = $('#ota-latest'); span.textContent = '⏳ Le boîtier interroge GitHub…'; $('#ota-github').hidden = true;
+  const r = await api('/api/ota/check', { method: 'POST' }).catch(() => null);
+  if (!r || !r.ok) { span.textContent = '❌ Le boîtier ne répond pas'; return; }
+  let st = null;
+  for (let i = 0; i < 25; i++) {   /* ~25 s max : la requete GitHub a 10 s de delai */
+    await new Promise(res => setTimeout(res, 1000));
+    st = await api('/api/ota/status').catch(() => null);
+    if (st && st.checks > r.checks) break;
+    st = null;
+  }
+  if (!st) { span.textContent = '❌ Pas de réponse de GitHub (Internet ?)'; return; }
+  const latest = (st.latest || '').replace(/^v/, '');
+  if (!latest) { span.textContent = '❌ Le boîtier n\'a pas pu lire la dernière version (Internet ? limite de l\'API GitHub ?)'; return; }
+  const cur = (st.version || '').replace(/^v/, '');
+  githubUrl = st.latest_url || null;   /* asset de CETTE carte : openprofalux-<carte>-ota.bin */
+  if (githubUrl && cur !== latest) $('#ota-github').hidden = false;
+  span.textContent = cur === latest ? `✅ ${cur} = dernière version` : `⚠️ Installée ${cur}, disponible ${latest}`;
 };
 $('#ota-github').onclick = () => {
   if (!githubUrl) return;

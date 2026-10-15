@@ -43,5 +43,6 @@ esp_err_t ota_pull_from_url(const char *url);   /* telecharge + flashe une image
 esp_err_t   ota_check_github(void);
 const char *ota_latest_version(void);   /* "" si pas encore verifie */
 const char *ota_latest_url(void);       /* "" si pas encore verifie */
+uint32_t    ota_check_count(void);      /* nombre de verifications terminees (reussies ou non) */
 esp_err_t ota_rollback(void);
 esp_err_t ota_mark_valid(void);

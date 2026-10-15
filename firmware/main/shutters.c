@@ -1240,14 +1240,31 @@ static void on_air(const char *bits, uint32_t serial, uint8_t button, uint32_t h
     shutters_on_rx(bits, serial, button, rssi, hop);
 }
 
-/* Verifie GitHub au demarrage puis toutes les 6 h, et republie l'etat de l'entite update HA.
- * Tache dediee : ota_check_github() est bloquant (~s), a ne pas mettre dans tick_task. */
+/* Verifie GitHub au demarrage puis toutes les 6 h (si la verification automatique est
+ * active), ou a la demande (shutters_update_check_now), et republie l'etat de l'entite
+ * update HA. Tache dediee : ota_check_github() est bloquant (~s), a ne pas mettre dans
+ * tick_task.
+ *
+ * ⚠️ Delai en ticks, pas pdMS_TO_TICKS : dans l'IDF, pdMS_TO_TICKS calcule en 32 bits
+ * (projdefs.h), et 6 h = 21 600 000 ms x 1000 Hz depasse 2^32. Le delai retombait a
+ * ~125 s : une connexion TLS vers GitHub toutes les ~2 min au lieu de 4 par jour. */
+static volatile bool s_upd_auto = true;
+static TaskHandle_t  s_upd_task = NULL;
+void shutters_set_update_auto(bool on) { s_upd_auto = on; ESP_LOGI(TAG, "verification MAJ auto %s", on ? "ON" : "OFF"); }
+bool shutters_get_update_auto(void)    { return s_upd_auto; }
+void shutters_update_check_now(void)   { if (s_upd_task) xTaskNotifyGive(s_upd_task); }
+
 static void update_check_task(void *arg) {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(30000));   /* laisse WiFi + MQTT monter */
+    const TickType_t six_h = (TickType_t)6 * 3600 * configTICK_RATE_HZ;
+    /* laisse WiFi + MQTT monter ; une demande explicite passe tout de suite */
+    bool demande = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000)) > 0;
     while (1) {
-        if (s_mqtt_ready) { ota_check_github(); publish_update_state(); pub_flush(); }
-        vTaskDelay(pdMS_TO_TICKS(6UL * 3600UL * 1000UL));   /* toutes les 6 h */
+        if (demande || s_upd_auto) {
+            ota_check_github();
+            if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
+        }
+        demande = ulTaskNotifyTake(pdTRUE, six_h) > 0;
     }
 }
 
@@ -1287,7 +1304,7 @@ void shutters_init(void) {
     if (migrate_strip_virt_serial()) { save_cfg(); ESP_LOGI(TAG, "migration : identite 0x067 retiree de la liste des vraies telecommandes"); }
     load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
-    xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, NULL);   /* check GitHub -> entite update HA */
+    xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, &s_upd_task);   /* check GitHub -> entite update HA */
     radio_init();
     radio_start(on_air);   /* tache radio prete (arbitre TX) */
     update_listening();    /* ecoute si des volets sont deja appris (suivi position) ou si capture ON */

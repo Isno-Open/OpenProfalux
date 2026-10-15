@@ -80,6 +80,15 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len);
 /* Active/desactive la publication MQTT de TOUTES les trames captees (dedup par serial). */
 void shutters_set_log_frames(bool on);
 
+/* ── Verification de mise a jour (GitHub) ── */
+/* Verification automatique toutes les 6 h (defaut : oui). Desactivee, seule une demande
+ * explicite (shutters_update_check_now) interroge GitHub. */
+void shutters_set_update_auto(bool on);
+bool shutters_get_update_auto(void);
+/* Demande une verification tout de suite, en tache de fond (ne bloque pas l'appelant).
+ * Fin observable par ota_check_count(). */
+void shutters_update_check_now(void);
+
 /* ── Sauvegarde / restauration ── */
 /* Exporte toute la config (telecommandes + noms + trames de reference + calibration) en
  * JSON, alloue a sa taille : a liberer par l'appelant (NULL si plus de memoire). */
