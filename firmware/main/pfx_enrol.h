@@ -65,6 +65,10 @@ void pfx_enrol_forget(void);
  * était perdu, et un ré-enrôlement repartait d'une valeur en retard (issue #45). */
 void pfx_enrol_note_counter(uint32_t serial, uint16_t next);
 
+/* Confirme l'enrôlement de l'identité courante (le moteur a répondu : volet virtuel créé) : son
+ * compteur devient sûr, un futur ré-enrôlement ne sautera plus. */
+void pfx_enrol_confirm(void);
+
 /* Émet la trame d'apprentissage (bouton LEARN, compteur courant de l'identité) en rafale. 0 si OK. */
 int  pfx_enrol_emit_learn(void);
 /* Émet une commande après enrôlement : "up" | "stop" | "down" (compteur roulant). 0 si OK. */

@@ -53,24 +53,31 @@ typedef struct __attribute__((packed)) {
 static pfx_entry_t s_map[PFX_MAP_MAX];
 static int         s_map_n;
 
-/* Slots dont le compteur de la table est EXACT (bit = slot) : identite neuve, compteur reporte a
- * la suppression du volet, ou suivi par les commandes d'enrolement. Une entree ecrite par un
- * firmware anterieur (bit absent) peut etre en retard d'un nombre inconnu de commandes : son
- * re-enrolement saute de PFX_RESYNC_MARGIN (voir pfx_enrol_capture). NVS map_sync. */
-static uint64_t s_map_sync;
-/* Saut au re-enrolement d'une entree au compteur incertain. Un decodeur KeeLoq standard accepte
- * un code au-dela de sa fenetre directe (+16) s'il recoit DEUX codes consecutifs, jusqu'a 32768
- * d'avance : l'apprentissage (n) puis la 1re commande (n+1) les fournissent. 1024 couvre des mois
- * d'usage d'un volet. A confirmer sur un vrai moteur enrole, selon la marque (issue #45). */
-#define PFX_RESYNC_MARGIN 1024
+/* Slots dont le compteur de la table est SUR (bit = slot), NVS map_ok : identite neuve, compteur
+ * reporte a la suppression du volet, ou enrolement CONFIRME (volet virtuel cree, l'utilisateur a
+ * vu le moteur repondre). Une entree non confirmee (ancien firmware, ou re-enrolement pas encore
+ * confirme) peut etre en retard d'un nombre inconnu de commandes : son re-enrolement saute
+ * (voir pfx_enrol_capture). La marque n'est JAMAIS posee avant de savoir que le moteur a accepte :
+ * un echec ne doit pas consommer le saut (issue #45, retour terrain). La cle s'appelait map_sync
+ * dans un build de test qui marquait trop tot : elle est ignoree. */
+static uint64_t s_map_ok;
+static uint8_t  s_map_try[PFX_KEY_COUNT + 1];   /* sauts deja tentes par slot (NVS map_try) */
+/* Saut au re-enrolement d'une entree non confirmee, croissant a chaque essai rate. Un decodeur
+ * KeeLoq accepte un code au-dela de sa fenetre directe (+16) s'il recoit DEUX codes consecutifs
+ * (l'apprentissage n, puis la 1re commande n+1), jusqu'a sa fenetre de resync (32768 en standard).
+ * Prouve sur FranciaFlex M4G a +1024 ; on part petit au cas ou un recepteur aurait une fenetre plus
+ * etroite. A 16384, 3 essais au plus rattrapent n'importe quel compteur (fenetre de 32768). */
+static const uint16_t PFX_RESYNC_STEPS[] = { 1024, 4096, 16384 };
+#define N_RESYNC_STEPS ((int)(sizeof(PFX_RESYNC_STEPS) / sizeof(PFX_RESYNC_STEPS[0])))
 
 static void map_load(void) {
-    s_map_n = 0; memset(s_map, 0, sizeof(s_map)); s_map_sync = 0;
+    s_map_n = 0; memset(s_map, 0, sizeof(s_map)); s_map_ok = 0; memset(s_map_try, 0, sizeof(s_map_try));
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
     size_t len = sizeof(s_map);
     if (nvs_get_blob(h, "map", s_map, &len) == ESP_OK) s_map_n = (int)(len / sizeof(pfx_entry_t));
-    nvs_get_u64(h, "map_sync", &s_map_sync);
+    nvs_get_u64(h, "map_ok", &s_map_ok);
+    len = sizeof(s_map_try); nvs_get_blob(h, "map_try", s_map_try, &len);
     nvs_close(h);
     if (s_map_n > PFX_MAP_MAX) s_map_n = PFX_MAP_MAX;
 }
@@ -78,11 +85,14 @@ static void map_save(void) {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_blob(h, "map", s_map, (size_t)s_map_n * sizeof(pfx_entry_t));
-    nvs_set_u64(h, "map_sync", s_map_sync);
+    nvs_set_u64(h, "map_ok", s_map_ok);
+    nvs_set_blob(h, "map_try", s_map_try, sizeof(s_map_try));
     nvs_commit(h); nvs_close(h);
 }
-static inline void map_mark_sync(uint8_t slot) { if (slot >= 1 && slot <= 63) s_map_sync |= 1ULL << slot; }
-static inline bool map_is_sync(uint8_t slot)   { return slot >= 1 && slot <= 63 && (s_map_sync >> slot & 1); }
+static inline bool map_slot_ok(uint8_t slot) { return slot >= 1 && slot <= PFX_KEY_COUNT; }
+/* Compteur sur : marque posee, tentatives remises a zero. */
+static inline void map_mark_ok(uint8_t slot) { if (map_slot_ok(slot)) { s_map_ok |= 1ULL << slot; s_map_try[slot] = 0; } }
+static inline bool map_is_ok(uint8_t slot)   { return map_slot_ok(slot) && (s_map_ok >> slot & 1); }
 /* Prochain slot libre [1,63] : ni dans la table, ni celui de l'identité active courante
  * (protège une identité pas encore dans la table). 0 si tous pris. */
 static uint8_t map_free_slot(void) {
@@ -121,9 +131,8 @@ static void save(void) {
     /* garde le compteur de la table à jour pour cette télécommande (compteur roulant par identité) */
     if (s_id.remote) {
         pfx_entry_t *e = map_find(s_id.remote);
-        if (e && (e->counter != s_id.counter || !map_is_sync(e->slot))) {
-            e->counter = s_id.counter; map_mark_sync(e->slot); map_save();
-        }
+        /* suit le compteur emis, sans jamais le faire reculer ni marquer l'entree sure */
+        if (e && cnt_ahead(s_id.counter, e->counter)) { e->counter = s_id.counter; map_save(); }
     }
 }
 
@@ -168,12 +177,16 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
         uint16_t vc  = shutters_virt_counter_for_serial(serial);  /* compteur réellement émis par le volet */
         if (vc) {                              /* volet encore là : son compteur est le bon */
             if (cnt_ahead(vc, cnt)) cnt = vc;  /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
-        } else if (!map_is_sync(e->slot)) {    /* entrée d'un ancien firmware : retard inconnu */
-            ESP_LOGW(TAG, "slot %u : compteur %u incertain (ancien firmware), saut de %u pour la resync KeeLoq",
-                     e->slot, cnt, PFX_RESYNC_MARGIN);
-            cnt = (uint16_t)(cnt + PFX_RESYNC_MARGIN);
+            map_mark_ok(e->slot);
+        } else if (!map_is_ok(e->slot)) {      /* non confirmée : retard inconnu, saut croissant */
+            uint8_t t = s_map_try[e->slot];
+            uint16_t step = PFX_RESYNC_STEPS[t < N_RESYNC_STEPS ? t : N_RESYNC_STEPS - 1];
+            ESP_LOGW(TAG, "slot %u : compteur %u non confirme, essai %u : saut de %u pour la resync KeeLoq",
+                     e->slot, cnt, (unsigned)t + 1, step);
+            cnt = (uint16_t)(cnt + step);
+            if (t < 255) s_map_try[e->slot] = t + 1;
         }
-        e->counter = cnt; map_mark_sync(e->slot); map_save();
+        e->counter = cnt; map_save();          /* marque posée seulement à la confirmation */
         load_slot(e->slot, cnt, model, remote);
         ESP_LOGW(TAG, "telecommande 0x%07X connue -> identite existante slot=%u serial=0x%07X cnt=%u",
                  (unsigned)remote, e->slot, (unsigned)s_id.serial, cnt);
@@ -183,7 +196,7 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
     uint8_t slot = map_free_slot();            /* moteur inconnu -> prochain slot libre */
     if (!slot) { ESP_LOGW(TAG, "aucun slot libre"); return -1; }
     s_map[s_map_n].remote = remote; s_map[s_map_n].counter = 2; s_map[s_map_n].slot = slot; s_map_n++;
-    map_mark_sync(slot);
+    map_mark_ok(slot);                         /* identité neuve : compteur sûr */
     map_save();                                /* mémorisé DÉFINITIVEMENT */
     load_slot(slot, 2, model, remote);
     if (is_new) *is_new = true;
@@ -196,12 +209,21 @@ void pfx_enrol_note_counter(uint32_t serial, uint16_t next) {
     if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
     uint8_t slot = (uint8_t)(serial >> 12);
     for (int i = 0; i < s_map_n; i++) if (s_map[i].slot == slot) {
-        if (cnt_ahead(next, s_map[i].counter) || !map_is_sync(slot)) {
-            ESP_LOGI(TAG, "slot %u : compteur %u -> %u (volet supprime)", slot, s_map[i].counter, next);
-            s_map[i].counter = next; map_mark_sync(slot); map_save();
-        }
+        /* Le volet existait : son enrolement etait confirme, et son compteur est le bon. */
+        if (cnt_ahead(next, s_map[i].counter)) s_map[i].counter = next;
+        ESP_LOGI(TAG, "slot %u : compteur %u reporte (volet supprime)", slot, s_map[i].counter);
+        map_mark_ok(slot); map_save();
         return;
     }
+}
+
+void pfx_enrol_confirm(void) {
+    if (!s_id.active || !s_id.remote) return;
+    pfx_entry_t *e = map_find(s_id.remote);
+    if (!e) return;
+    if (cnt_ahead(s_id.counter, e->counter)) e->counter = s_id.counter;
+    map_mark_ok(e->slot); map_save();
+    ESP_LOGI(TAG, "slot %u : enrolement confirme, compteur %u", e->slot, e->counter);
 }
 
 void pfx_enrol_forget(void) {
@@ -211,9 +233,7 @@ void pfx_enrol_forget(void) {
      * la récupère avec son compteur (jamais remis à zéro) -> un moteur strict l'accepte toujours. */
     if (rem) {                                 /* fige le dernier compteur avant de désélectionner */
         pfx_entry_t *e = map_find(rem);
-        if (e && (e->counter != s_id.counter || !map_is_sync(e->slot))) {
-            e->counter = s_id.counter; map_mark_sync(e->slot); map_save();
-        }
+        if (e && cnt_ahead(s_id.counter, e->counter)) { e->counter = s_id.counter; map_save(); }
     }
     memset(&s_id, 0, sizeof(s_id)); save();
     ESP_LOGW(TAG, "identite deselectionnee (etait 0x%07X, telecommande 0x%07X : compteur conserve)",
