@@ -27,11 +27,12 @@ celle attendue.
 
 | Test | Scénario | Attendu |
 |---|---|---|
-| T0 | Trame propre, une répétition | 66 bits exacts, Te ≈ 430 |
+| T0 | Trame propre, une répétition | 66 bits exacts, Te = 430 |
 | T1 | 66e bit coupé par l'idle (pas de BAS final) | 66 bits quand même (correctif @Akkeoss, issue #12) |
 | T2 | Un glitch de démod (sliver < `GLITCH_US`) fend un HAUT | Le de-glitch le jette, recolle le HAUT, trame intacte |
 | T3 | Du bruit sans en-tête long | Aucun ancrage → `-4` |
 | T4 | Trois répétitions dont une avec un bit faux | Le vote 2 contre 1 corrige le bit |
+| T5 | Te 448, HAUT étirés de 16 µs (biais de démodulation du CC1101) | Bits exacts, Te = période de bit / 3 = 448 |
 
 Le banc est compilé avec AddressSanitizer : toute lecture/écriture hors des
 tampons du décodeur (liste de fronts, mots du vote) l'arrête net.

@@ -41,7 +41,12 @@ static size_t deglitch_edges(const kq_sym_t *in, size_t n) {
 /* Decode UNE repetition a partir d'une entete (LOW long a l'index hdr). Apparie HIGH/LOW,
  * classe le bit par la duree du HAUT (court ~1Te = '1', long ~2Te = '0'). Une impulsion
  * hors gabarit ARRETE cette repetition (le scan des entetes suivantes re-synchronise,
- * on n'abandonne jamais la capture). Rend nb bits ; *out_te = moyenne des HAUT courts. */
+ * on n'abandonne jamais la capture). Rend nb bits ; *out_te = periode de bit moyenne / 3.
+ *
+ * TE sur la PERIODE (HAUT + BAS = 3 Te), pas sur la largeur des HAUT : la demodulation OOK
+ * du CC1101 etire les HAUT (~+16 us) et raccourcit d'autant les BAS, ce qui biaisait le TE
+ * d'environ +2 % (458 us mesure pour 448 reels, verifie au RTL-SDR, cf issue #37). Le decalage
+ * se compense sur la periode. Bits comptes : ceux dont le BAS est dans la trame (pas le 66e). */
 static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
     int nb = 0; uint32_t sum = 0; int cnt = 0;
     for (size_t i = hdr + 1; i < w && nb < 66; i += 2) {
@@ -54,11 +59,12 @@ static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
         if (s_ed_lvl[i] != 1 || (!last && s_ed_lvl[i + 1] != 0)) break;   /* alternance HIGH/LOW attendue */
         uint32_t hi = s_ed_dur[i], lo = last ? 0 : s_ed_dur[i + 1];
         if (hi < 190 || hi > 1200) break;                      /* HAUT hors gabarit */
-        if (hi < 680) { out[nb++] = '1'; sum += hi; cnt++; } else out[nb++] = '0';
+        out[nb++] = (hi < 680) ? '1' : '0';
         if (lo > 1600) break;                                  /* BAS trop long = garde/entete suivante */
+        if (!last) { sum += hi + lo; cnt++; }                  /* periode de ce bit (= 3 Te) */
     }
     out[nb] = 0;
-    if (out_te && cnt) *out_te = (int)(sum / cnt);
+    if (out_te && cnt) *out_te = (int)((sum + 3u * cnt / 2) / (3u * cnt));   /* arrondi */
     return nb;
 }
 

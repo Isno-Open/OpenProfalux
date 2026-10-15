@@ -60,6 +60,7 @@
 #define PROFALUX_PREAMBLE_ELEMENTS       23    /* 23 alternances de Te */
 #define PROFALUX_PREAMBLE_US            455    /* = Te */
 #define PROFALUX_HEADER_US             4450    /* silence mesure 4420-4491 us */
+#define PROFALUX_HEADER_TE               10    /* entete HCS = 10 Te (datasheet ; RTL-SDR : ~4475 us a Te 448) */
 #define PROFALUX_REPEAT_COUNT            10  /* HCS301 typical */
 #define PROFALUX_PAIR_FRAMES             60  /* 1 par seconde */
 #define PROFALUX_PAIR_DELAY_MS         1000
