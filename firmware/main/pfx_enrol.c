@@ -86,6 +86,9 @@ static pfx_entry_t *map_find(uint32_t remote) {
     return NULL;
 }
 
+/* Compteur 16 bits qui reboucle : a est DEVANT b s'il le precede de moins d'un demi-tour. */
+static inline bool cnt_ahead(uint16_t a, uint16_t b) { return (int16_t)(a - b) > 0; }
+
 int                pfx_enrol_model_count(void) { return N_MODELS; }
 const pfx_model_t *pfx_enrol_model(int id)     { return (id >= 0 && id < N_MODELS) ? &MODELS[id] : NULL; }
 
@@ -146,7 +149,7 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
         uint32_t serial = ((uint32_t)e->slot << 12) | PFX_FAMILY_MARKER;
         uint16_t cnt = e->counter;
         uint16_t vc  = shutters_virt_counter_for_serial(serial);  /* compteur réellement émis par le volet */
-        if (vc > cnt) cnt = vc;                /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
+        if (cnt_ahead(vc, cnt)) cnt = vc;      /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
         e->counter = cnt; map_save();
         load_slot(e->slot, cnt, model, remote);
         ESP_LOGW(TAG, "telecommande 0x%07X connue -> identite existante slot=%u serial=0x%07X cnt=%u",
@@ -163,6 +166,18 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
     ESP_LOGW(TAG, "telecommande 0x%07X inconnue -> nouvelle identite slot=%u serial=0x%07X (memorisee)",
              (unsigned)remote, slot, (unsigned)s_id.serial);
     return 0;
+}
+
+void pfx_enrol_note_counter(uint32_t serial, uint16_t next) {
+    if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
+    uint8_t slot = (uint8_t)(serial >> 12);
+    for (int i = 0; i < s_map_n; i++) if (s_map[i].slot == slot) {
+        if (cnt_ahead(next, s_map[i].counter)) {
+            ESP_LOGI(TAG, "slot %u : compteur %u -> %u (volet supprime)", slot, s_map[i].counter, next);
+            s_map[i].counter = next; map_save();
+        }
+        return;
+    }
 }
 
 void pfx_enrol_forget(void) {
@@ -240,12 +255,20 @@ static int emit(uint8_t button, uint16_t counter) {
 
 int pfx_enrol_emit_learn(void) {
     if (!s_id.active) return -1;
-    /* Trame d'apprentissage (btn5, compteur FIGÉ = 3) tenue ~5 s : on répète la même trame
-     * en salves, avec un yield entre chaque (nourrit le watchdog, évite un bit-bang bloquant
-     * de 5 s d'un coup). Le moteur ne fait son va-et-vient de confirmation qu'après ~5 s. */
+    /* Trame d'apprentissage (btn5) tenue ~5 s : on répète la même trame en salves, avec un
+     * yield entre chaque (nourrit le watchdog, évite un bit-bang bloquant de 5 s d'un coup).
+     * Le moteur ne fait son va-et-vient de confirmation qu'après ~5 s.
+     *
+     * Compteur = le compteur COURANT de l'identité : 3 pour une identité neuve (capture à 2),
+     * le compteur conservé pour un moteur déjà connu. Il était figé à 3, puis les commandes
+     * repartaient de 4 : ré-enrôler un moteur connu émettait DERRIÈRE son compteur, rejeté
+     * comme un rejeu (issue #45). Réserve-puis-émets, comme pfx_enrol_cmd. */
     const pfx_model_t *m = &MODELS[s_id.model];
+    uint16_t cnt = s_id.counter < 3 ? 3 : s_id.counter;
+    s_id.counter = cnt + 1;   /* commandes à partir du suivant */
+    save();
     char bits[68];
-    frame_with_key(s_id.serial, s_id.key, BTN_LEARN, 3, bits);
+    frame_with_key(s_id.serial, s_id.key, BTN_LEARN, cnt, bits);
     uint32_t prev_te = cfg_tx_te();
     cc1101_set_tx_te(m->te_us);
     for (int i = 0; i < PFX_LEARN_ROUNDS; i++) {
@@ -253,10 +276,8 @@ int pfx_enrol_emit_learn(void) {
         vTaskDelay(pdMS_TO_TICKS(15));
     }
     cc1101_set_tx_te(prev_te);
-    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=3 (~5s, %d salves) te=%u",
-             (unsigned)s_id.serial, PFX_LEARN_ROUNDS, m->te_us);
-    s_id.counter = 4;   /* commandes de test à partir de 4 */
-    save();
+    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=%u (~5s, %d salves) te=%u",
+             (unsigned)s_id.serial, cnt, PFX_LEARN_ROUNDS, m->te_us);
     return 0;
 }
 

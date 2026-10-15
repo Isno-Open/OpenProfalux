@@ -60,7 +60,12 @@ int  pfx_enrol_capture(uint32_t remote, int model, bool *is_new);
 /* Oublie l'identité courante : libère son slot dans la table (réattribuable) et efface l'état. */
 void pfx_enrol_forget(void);
 
-/* Émet la trame d'apprentissage (bouton LEARN, compteur figé) en rafale. 0 si OK. */
+/* Reporte dans la table le compteur d'une identité dont le volet virtuel va disparaître
+ * (next = prochain compteur à émettre). Sans ça, le compteur avancé par les commandes du volet
+ * était perdu, et un ré-enrôlement repartait d'une valeur en retard (issue #45). */
+void pfx_enrol_note_counter(uint32_t serial, uint16_t next);
+
+/* Émet la trame d'apprentissage (bouton LEARN, compteur courant de l'identité) en rafale. 0 si OK. */
 int  pfx_enrol_emit_learn(void);
 /* Émet une commande après enrôlement : "up" | "stop" | "down" (compteur roulant). 0 si OK. */
 int  pfx_enrol_cmd(const char *cmd);

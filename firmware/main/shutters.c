@@ -592,12 +592,17 @@ int shutters_delete_volet(const char *id) {
     int idx = -1;
     for (int i = 0; i < s_nvolets; i++) if (!strcmp(s_volets[i].id, id)) { idx = i; break; }
     if (idx < 0) { UNLOCK(); return -1; }
+    /* Volet virtuel : son compteur roulant (le seul a jour, il avance a chaque commande) doit
+     * survivre au volet, sinon un re-enrolement du meme moteur repart en retard (issue #45). */
+    bool virt = s_volets[idx].virt;
+    uint32_t vser = s_volets[idx].virt_serial; uint16_t vcnt = s_volets[idx].virt_counter;
     clear_one(&s_volets[idx]);         /* retire l'entite HA (discovery retenu) AVANT de perdre le volet */
     cfg_model_remove(&s_model, idx);   /* libere la liste d'une centrale */
     save_cfg();
     update_listening();   /* plus aucun volet -> coupe l'ecoute permanente */
     UNLOCK();
     pub_flush();          /* pousse l'effacement MQTT hors LOCK */
+    if (virt) pfx_enrol_note_counter(vser, vcnt);   /* table d'enrolement, hors LOCK */
     ESP_LOGW(TAG, "volet '%s' supprime", id);
     return 0;
 }
