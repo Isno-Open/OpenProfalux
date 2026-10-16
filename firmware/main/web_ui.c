@@ -162,6 +162,11 @@ extern const uint8_t style_css_start[]  asm("_binary_style_css_gz_start");
 extern const uint8_t style_css_end[]    asm("_binary_style_css_gz_end");
 extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
 extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
+/* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
+extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
+extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
+extern const uint8_t icon_png_start[]   asm("_binary_icon_192_png_start");
+extern const uint8_t icon_png_end[]     asm("_binary_icon_192_png_end");
 
 /* ── Etat apprentissage ── */
 static char           s_lbits[SH_BITS_LEN];
@@ -208,7 +213,7 @@ static void learn_task(void *arg) {
  * empreinte du firmware (app_elf_sha256) : tant qu'il ne change pas, la revalidation
  * (no-cache) recoit un 304 sans corps au lieu de toute l'interface ; apres une OTA,
  * l'empreinte change et la nouvelle interface arrive. */
-static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, const uint8_t *e) {
+static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, const uint8_t *e, bool gz) {
     char etag[19], inm[24];
     const uint8_t *h = esp_app_get_description()->app_elf_sha256;
     etag[0] = '"';
@@ -221,7 +226,7 @@ static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, 
         return httpd_resp_send(r, NULL, 0);
     }
     httpd_resp_set_type(r, type);
-    httpd_resp_set_hdr(r, "Content-Encoding", "gzip");
+    if (gz) httpd_resp_set_hdr(r, "Content-Encoding", "gzip");
     return httpd_resp_send(r, (const char *)s, e - s);
 }
 static char *read_body_max(httpd_req_t *r, int max) {
@@ -245,9 +250,11 @@ static const char *jstr(cJSON *o, const char *k) {
 }
 
 /* ── Handlers statiques ── */
-static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end); }
-static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end);  }
-static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end);  }
+static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end, true); }
+static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end,  true); }
+static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
+static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
+static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
 /* ── /api/status ── */
 static esp_err_t h_status(httpd_req_t *r) {
@@ -1125,6 +1132,9 @@ void web_ui_start(void) {
     reg_open(s, "/",          HTTP_GET, h_index);
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
+    /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
+    reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
+    reg_open(s, "/icon-192.png",         HTTP_GET, h_icon);
     /* Routes de session : libres par necessite (voir commentaire plus haut). */
     reg_open(s, "/api/login",   HTTP_POST, h_login);
     reg_open(s, "/api/logout",  HTTP_POST, h_logout);

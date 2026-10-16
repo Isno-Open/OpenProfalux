@@ -1,0 +1,24 @@
+{
+  "name": "OpenProfalux",
+  "short_name": "OpenProfalux",
+  "description": "Pilotage des volets Profalux",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a1424",
+  "theme_color": "#0e7490",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

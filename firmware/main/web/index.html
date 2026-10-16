@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0e7490">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="OpenProfalux">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>OpenProfalux</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%230e7490'/%3E%3Crect x='3' y='3' width='26' height='6.5' rx='3' fill='%23063a47'/%3E%3Cg stroke='%23c9e9f0' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 14h20'/%3E%3Cpath d='M6 18h20'/%3E%3Cpath d='M6 22h20'/%3E%3C/g%3E%3C/svg%3E">
+<script>try{var t=localStorage.getItem('opfx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -37,8 +42,8 @@
       <div><h1>OpenProfalux <span id="hdr-fallback" class="hdr-fb" hidden title="Le boîtier n'a pas pu rejoindre ton Wi-Fi. Il réessaie toutes les 30 s et redémarrera tout seul dès que le réseau répond.">(mode de secours)</span></h1><div class="tag">Volets Profalux 868</div></div>
     </div>
     <div class="hdr-actions">
-      <button class="icon-btn" id="logout" title="Se déconnecter" hidden>⏻</button>
-      <button class="icon-btn" id="theme" title="Thème clair / sombre">◐</button>
+      <button class="icon-btn" id="logout" title="Se déconnecter" aria-label="Se déconnecter" hidden>⏻</button>
+      <button class="icon-btn" id="theme" title="Thème clair / sombre" aria-label="Thème clair / sombre">◐</button>
     </div>
   </header>
   <div class="offline-bar" id="offline-bar" role="status" hidden></div>
@@ -48,7 +53,7 @@
     <button class="tab" data-t="remotes"><span>📱</span>Télécommandes</button>
     <button class="tab" data-t="wifi"><span>📶</span>Wi-Fi</button>
     <button class="tab" data-t="mqtt"><span>📡</span>MQTT</button>
-    <button class="tab" data-t="ota"><span>⬆️</span>OTA</button>
+    <button class="tab" data-t="ota"><span>⬆️</span>OTA<b class="tab-badge" id="ota-badge" title="Mise à jour disponible" aria-label="mise à jour disponible" hidden></b></button>
     <button class="tab" data-t="sys"><span>⚙️</span>Système</button>
     <button class="tab" data-t="about"><span>ℹ️</span>À propos</button>
   </nav>

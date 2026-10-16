@@ -148,6 +148,8 @@ progress::-webkit-progress-bar{background:var(--surface-2)}
 progress::-webkit-progress-value{background:var(--accent)}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--text);color:var(--surface);padding:10px 18px;border-radius:999px;font-size:.86rem;font-weight:600;box-shadow:var(--shadow);transition:.2s;pointer-events:none;z-index:50}
 .toast.show{opacity:1;transform:translateX(-50%)}
+/* Pastille "mise a jour disponible" sur l'onglet OTA */
+.tab-badge{width:8px;height:8px;border-radius:50%;background:var(--warn);display:inline-block}.tab-badge[hidden]{display:none}
 /* Boitier injoignable (loadStatus) : bandeau sous l'en-tete, commandes inactives */
 .offline-bar{margin:12px 0 0;padding:9px 13px;border:1px solid var(--warn);border-radius:var(--radius-sm);color:var(--warn);font-size:.85rem;font-weight:600}
 .offline .dpad button{opacity:.45;pointer-events:none}
