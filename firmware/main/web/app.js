@@ -175,8 +175,21 @@ $('#theme').onclick = () => {
   const r = document.documentElement;
   const dark = r.getAttribute('data-theme') === 'dark' ||
     (!r.getAttribute('data-theme') && matchMedia('(prefers-color-scheme:dark)').matches);
-  r.setAttribute('data-theme', dark ? 'light' : 'dark');
+  const t = dark ? 'light' : 'dark';
+  r.setAttribute('data-theme', t);
+  try { localStorage.setItem('opfx_theme', t); } catch (e) {}   /* memorise, reapplique dans le <head> */
 };
+/* Libelles des boutons-symboles ▲ ■ ▼ (lecteurs d'ecran, infobulles), poses apres chaque rendu :
+ * les cartes de volets sont regenerees toutes les 3 s. */
+const SYM = { up: 'Monter', stop: 'Stop', down: 'Descendre' };
+function labelSymbols() {
+  const set = (b, l) => { if (b && !b.hasAttribute('aria-label')) { b.setAttribute('aria-label', l); if (!b.title) b.title = l; } };
+  $$('.dpad button[data-cmd]').forEach(b => set(b, SYM[b.dataset.cmd]));
+  $$('.reorder button[data-mv]').forEach(b => set(b, b.dataset.mv === 'up' ? 'Monter dans la liste' : 'Descendre dans la liste'));
+  set($('#pfx-up'), SYM.up); set($('#pfx-stop'), SYM.stop); set($('#pfx-down'), SYM.down);
+}
+labelSymbols();
+if ($('#volets')) new MutationObserver(labelSymbols).observe($('#volets'), { childList: true });
 
 /* ── Helpers ── */
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1600); }
@@ -945,9 +958,30 @@ $('#ota-check').onclick = async () => {
   if (!latest) { span.textContent = '❌ Le boîtier n\'a pas pu lire la dernière version (Internet ? limite de l\'API GitHub ?)'; return; }
   const cur = (st.version || '').replace(/^v/, '');
   githubUrl = st.latest_url || null;   /* asset de CETTE carte : openprofalux-<carte>-ota.bin */
-  if (githubUrl && cur !== latest) $('#ota-github').hidden = false;
-  span.textContent = cur === latest ? `✅ ${cur} = dernière version` : `⚠️ Installée ${cur}, disponible ${latest}`;
+  const plus = newerThan(latest, cur);   /* jamais proposer une release PLUS ANCIENNE (version de dev) */
+  if (githubUrl && plus) $('#ota-github').hidden = false;
+  span.textContent = plus ? `⚠️ Installée ${cur}, disponible ${latest}`
+    : cur === latest ? `✅ ${cur} = dernière version` : `✅ Installée ${cur}, dernière release ${latest}`;
+  updateBadge(st);
 };
+/* "0.2.12" plus recente que "0.2.11" ? Comparaison numerique ; suffixe ("-dev") ignore. */
+function newerThan(a, b) {
+  const p = v => ((String(v || '').replace(/^v/, '').match(/^\d+(?:\.\d+)*/) || [null])[0]);
+  const x = p(a), y = p(b); if (!x || !y) return false;
+  const xa = x.split('.').map(Number), ya = y.split('.').map(Number);
+  for (let i = 0; i < Math.max(xa.length, ya.length); i++) { const d = (xa[i] || 0) - (ya[i] || 0); if (d) return d > 0; }
+  return false;
+}
+/* Mise a jour disponible (verification GitHub faite par le boitier, toutes les 6 h) : pastille
+ * sur l'onglet OTA, et dans l'onglet la ligne + le bouton d'installation, sans cliquer. */
+function updateBadge(st) {
+  const avail = !!(st && st.latest_url && newerThan(st.latest, st.version));
+  const b = $('#ota-badge'); if (b) b.hidden = !avail;
+  if (!avail) return;
+  githubUrl = st.latest_url; $('#ota-github').hidden = false;
+  $('#ota-latest').textContent = `⚠️ Installée ${String(st.version).replace(/^v/, '')}, disponible ${String(st.latest).replace(/^v/, '')}`;
+}
+async function checkUpdate() { updateBadge(await api('/api/ota/status').catch(() => null)); }
 $('#ota-github').onclick = () => {
   if (!githubUrl) return;
   /* Confirmation IN-PAGE (pas d'alert natif) : on affiche un avertissement + 2 boutons. */
@@ -1052,7 +1086,7 @@ function renderCentralsList() {
   if (!centrals.length) { box.innerHTML = '<p class="hint">Aucune centrale pour l\'instant.</p>'; return; }
   box.innerHTML = '<p class="hint" style="margin-bottom:6px">Clique une centrale pour la modifier ci-dessous.</p>' + centrals.map(v =>
     `<div class="statline ce" data-id="${esc(v.id)}" style="cursor:pointer"><span class="dot"></span><b>🎛 ${esc(v.id)}</b> <span class="hint" style="margin-left:6px">${esc(v.members || 'aucun volet')}</span>
-     <span class="r"><button class="btn danger cd" data-id="${esc(v.id)}" style="padding:2px 9px">🗑</button></span></div>`).join('');
+     <span class="r"><button class="btn danger cd" data-id="${esc(v.id)}" title="Supprimer" aria-label="Supprimer la centrale ${esc(v.id)}" style="padding:2px 9px">🗑</button></span></div>`).join('');
   box.querySelectorAll('.ce').forEach(row => row.onclick = () => {
     const v = (statusCache.volets || []).find(x => x.id === row.dataset.id); if (v) editCentral(v);
   });
@@ -1150,7 +1184,7 @@ function rfRow(f) {
   const btnCell = bl ? `<span class="badge">${esc(bl)}</span>` : `<span class="badge m">0x${esc(f.button)}</span>`;
   return `<tr><td class="m">${ts}</td><td>${nameCell}</td>
     <td>${btnCell}</td><td class="m">0x${esc(f.hop)}</td><td class="m">${f.rssi} dBm</td>
-    <td><button class="replay" title="Rejouer cette trame" data-s="${esc(f.serial)}" data-h="${esc(f.hop)}">▶</button></td></tr>`;
+    <td><button class="replay" title="Rejouer cette trame" aria-label="Rejouer cette trame" data-s="${esc(f.serial)}" data-h="${esc(f.hop)}">▶</button></td></tr>`;
 }
 /* Onglet RF : trames du ring, chargees par pages (scroll infini). Trie serveur par date. */
 let rfOffset = 0, rfTotal = 0, rfLoading = false;
@@ -1203,6 +1237,7 @@ function boot() {
   loadStatus();
   if (!pollTimer) {   /* un seul timer, meme apres reconnexion ; rien tant que l'onglet est cache */
     pollTimer = setInterval(() => { if (!document.hidden) loadStatus(); }, 3000);
+    checkUpdate(); setInterval(() => { if (!document.hidden) checkUpdate(); }, 30 * 60 * 1000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStatus(); });
   }
   if (booted) return;       /* le routage ne s'arme qu'une fois */
