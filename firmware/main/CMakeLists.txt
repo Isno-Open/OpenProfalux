@@ -69,6 +69,7 @@ idf_component_register(
         spiffs
         esp_wifi
         esp_netif
+        esp_eth
         esp_event
         mqtt
         espressif__cjson
