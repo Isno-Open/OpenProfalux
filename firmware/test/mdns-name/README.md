@@ -20,3 +20,8 @@ cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
 | T8 | noms par défaut reconnus (vide, `openprofalux`, `volet_test`) |
 | T9-T10 | premier démarrage : boîtier installé → `openprofalux`, boîtier neuf → suffixe |
 | T11 | noms par défaut reconnus sans tenir compte des majuscules (`OpenProfalux`) |
+| T12 | identifiant du service `_openprofalux._tcp` : MAC **station** en 12 hexa minuscules |
+
+Deux MAC distinctes, comme sur une carte (point d'accès = station + 1) : le nom par défaut et le
+SSID prennent celle du **point d'accès** (`…0ac1`), l'identifiant `id` celle de la **station**
+(`…0ac0`), qu'affiche la liste DHCP de la box. Le choix de la MAC lue est fait dans `main.c`.

@@ -12,7 +12,10 @@ static void check(bool ok, const char *name, const char *got) {
 
 int main(void) {
     char o[40];
-    static const uint8_t mac[6] = { 0xec, 0xe3, 0x34, 0x1a, 0x0a, 0xc1 };
+    /* Deux MAC distinctes, comme sur une carte : point d'acces = station + 1 (ESP-IDF). Le nom par
+     * defaut prend celle du point d'acces (comme le SSID), l'identifiant du service celle de la station. */
+    static const uint8_t mac[6] = { 0xec, 0xe3, 0x34, 0x1a, 0x0a, 0xc1 };   /* point d'acces */
+    static const uint8_t sta[6] = { 0xec, 0xe3, 0x34, 0x1a, 0x0a, 0xc0 };   /* station */
     printf("Banc mdns_name\n");
 
     mdns_name_sanitize("Salon", o, sizeof(o));               check(!strcmp(o, "salon"), "T0 minuscules", o);
@@ -34,6 +37,7 @@ int main(void) {
     check(mdns_name_is_default_device("OpenProfalux") && mdns_name_is_default_device("OPENPROFALUX")
           && mdns_name_is_default_device("Volet_Test") && !mdns_name_is_default_device("OpenProfalux2"),
           "T11 noms par defaut reconnus sans tenir compte des majuscules", "");
+    mdns_name_id(sta, o, sizeof(o));                         check(!strcmp(o, "ece3341a0ac0"), "T12 identifiant : MAC station en 12 hexa minuscules", o);
 
     printf(g_fail ? "\n%d test(s) en echec\n" : "\nTout passe\n", g_fail);
     return g_fail ? 1 : 0;
