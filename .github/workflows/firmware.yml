@@ -162,6 +162,23 @@ jobs:
              -o freq_sweep_host_test
           ./freq_sweep_host_test
 
+  # La porte d'apprentissage de l'enrolement (enrol_gate.c) : pas d'apprentissage sans
+  # capture reussie dans la tentative en cours. Voir firmware/test/enrol-gate (issue #53).
+  banc-enrol-gate:
+    name: Banc de test de la porte d'apprentissage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: enrol_gate (gcc + AddressSanitizer)
+        working-directory: firmware/test/enrol-gate
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/enrol_gate.c \
+             -o enrol_gate_host_test
+          ./enrol_gate_host_test
+
   # La politique TLS mqtts (mqtt_tls_policy.c) : quand lever le controle du nom (CN) du
   # certificat du broker. Pure, un simple gcc suffit. Issu de la revue codex sur #11 (P1).
   banc-mqtt-tls:
