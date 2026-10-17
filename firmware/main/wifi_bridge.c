@@ -9,6 +9,7 @@
 #include <esp_timer.h>
 #include <esp_system.h>
 #include <nvs.h>
+#include "captive_dns.h"
 #include <time.h>
 #include <stdlib.h>
 #include <freertos/FreeRTOS.h>
@@ -242,8 +243,24 @@ int wifi_bridge_start_sta(const char *ssid, const char *pass) {
     return 0;
 }
 
+/* Portail captif du point d'acces (configuration et mode secours) : DNS qui renvoie tout vers le
+ * boitier, et option DHCP 114 (RFC 8910) qui annonce l'adresse du portail. Le serveur web redirige
+ * les adresses inconnues vers la page de configuration tant que le point d'acces est actif. */
+static volatile bool s_ap_on = false;
+bool wifi_bridge_ap_active(void) { return s_ap_on; }
+static void captive_start(esp_netif_t *ap) {
+    static const char uri[] = "http://192.168.4.1/";
+    if (ap) {
+        esp_netif_dhcps_stop(ap);
+        esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI, (void *)uri, sizeof(uri) - 1);
+        esp_netif_dhcps_start(ap);
+    }
+    captive_dns_start();
+    s_ap_on = true;
+}
+
 int wifi_bridge_start_softap(const char *ssid, const char *pass) {
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap = esp_netif_create_default_wifi_ap();
     wifi_config_t cfg = {0};
     strncpy((char*)cfg.ap.ssid, ssid, sizeof(cfg.ap.ssid));
     cfg.ap.ssid_len = strlen(ssid);
@@ -253,6 +270,7 @@ int wifi_bridge_start_softap(const char *ssid, const char *pass) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+    captive_start(ap);
     ESP_LOGI(TAG, "SoftAP started, SSID=%s", ssid);
     return 0;
 }
@@ -265,7 +283,7 @@ int wifi_bridge_start_fallback(const char *ap_ssid, void (*on_back)(void)) {
         const esp_timer_create_args_t ta = { .callback = fallback_retry_cb, .name = "wifi_retry" };
         if (esp_timer_create(&ta, &s_retry_timer) != ESP_OK) s_retry_timer = NULL;   /* -> essais immediats */
     }
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap = esp_netif_create_default_wifi_ap();
     wifi_config_t cfg = {0};
     strncpy((char*)cfg.ap.ssid, ap_ssid, sizeof(cfg.ap.ssid));
     cfg.ap.ssid_len = strlen(ap_ssid);
@@ -276,11 +294,15 @@ int wifi_bridge_start_fallback(const char *ap_ssid, void (*on_back)(void)) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());   /* STA_START -> premier essai aussitot */
+    captive_start(ap);
     esp_wifi_set_ps(WIFI_PS_NONE);       /* apres chaque start (voir wifi_bridge_start_sta) */
     ESP_LOGW(TAG, "mode secours : point d'acces '%s' (ouvert) + recherche de '%s'", ap_ssid, s_sta_ssid);
     return 0;
 }
 bool wifi_bridge_in_fallback(void) { return s_fallback; }
+static char s_hostname[33] = "openprofalux";
+void wifi_bridge_set_hostname(const char *host) { if (host && *host) strlcpy(s_hostname, host, sizeof(s_hostname)); }
+const char *wifi_bridge_hostname(void) { return s_hostname; }
 bool wifi_bridge_is_connected(void) {
     EventBits_t bits = xEventGroupGetBits(s_wifi_events);
     return (bits & WIFI_CONNECTED_BIT) != 0;

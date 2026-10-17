@@ -28,6 +28,7 @@
 #include <esp_timer.h>
 #include <esp_mac.h>
 #include "mdns.h"
+#include "mdns_name.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
 #include "log_ring.h"
 #include <esp_attr.h>     /* RTC_NOINIT_ATTR */
@@ -162,6 +163,27 @@ void app_main(void) {
 
     /* 2. Config */
     load_config();
+    /* Nom mDNS (mdns_name.h), decide AVANT le Wi-Fi : un boitier neuf demarre sans Wi-Fi (point
+     * d'acces), et c'est a ce premier demarrage que son nom a suffixe doit etre fige. Nom choisi
+     * par l'utilisateur, sinon le nom fige (cfg/mdns_host) : openprofalux pour un boitier deja
+     * installe (Wi-Fi deja enregistre : adresse inchangee), openprofalux-xxxx pour un neuf. */
+    {
+        char host[MDNS_NAME_MAX + 1] = "";
+        if (!mdns_name_is_default_device(s_device_name)) mdns_name_sanitize(s_device_name, host, sizeof(host));
+        if (!host[0]) {
+            nvs_handle_t h; size_t sz = sizeof(host);
+            if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+                if (nvs_get_str(h, "mdns_host", host, &sz) != ESP_OK || !host[0]) {
+                    uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+                    mdns_name_first_boot(s_wifi_ssid[0] != 0, mac, host, sizeof(host));
+                    nvs_set_str(h, "mdns_host", host); nvs_commit(h);
+                    ESP_LOGW(TAG, "mDNS : nom fige au premier demarrage : %s.local", host);
+                }
+                nvs_close(h);
+            }
+        }
+        wifi_bridge_set_hostname(host);   /* vide : garde openprofalux */
+    }
     ESP_LOGI(TAG, "device=%s wifi_ssid=%s mqtt=%s",
              s_device_name, s_wifi_ssid, s_mqtt_uri);
 
@@ -228,7 +250,11 @@ void app_main(void) {
 
     /* 5b. mDNS (pour l'auto-decouverte du broker MQTT depuis l'UI) */
     if (wifi_bridge_is_connected()) {
-        if (mdns_init() == ESP_OK) { mdns_hostname_set("openprofalux"); mdns_instance_name_set("OpenProfalux"); }
+        if (mdns_init() == ESP_OK) {
+            mdns_hostname_set(wifi_bridge_hostname());
+            mdns_instance_name_set(mdns_name_is_default_device(s_device_name) ? "OpenProfalux" : s_device_name);
+            ESP_LOGI(TAG, "mDNS : %s.local", wifi_bridge_hostname());
+        }
     }
 
     /* 5c. UI web embarquee (config Wi-Fi/MQTT, apprentissage, OTA...) */

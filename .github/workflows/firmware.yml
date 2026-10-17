@@ -179,6 +179,23 @@ jobs:
              -o enrol_gate_host_test
           ./enrol_gate_host_test
 
+  # Le nom mDNS du boitier (mdns_name.c) : nettoyage du nom choisi, nom par defaut a suffixe
+  # pour un boitier neuf. Voir firmware/test/mdns-name.
+  banc-mdns-name:
+    name: Banc de test du nom mDNS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: mdns_name (gcc + AddressSanitizer)
+        working-directory: firmware/test/mdns-name
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/mdns_name.c \
+             -o mdns_name_host_test
+          ./mdns_name_host_test
+
   # La politique TLS mqtts (mqtt_tls_policy.c) : quand lever le controle du nom (CN) du
   # certificat du broker. Pure, un simple gcc suffit. Issu de la revue codex sur #11 (P1).
   banc-mqtt-tls:

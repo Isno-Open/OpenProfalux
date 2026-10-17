@@ -8,6 +8,7 @@
 #include "radio.h"
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
+#include "wifi_bridge.h"
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
 #include <stdlib.h>
@@ -451,6 +452,13 @@ static esp_err_t h_config_get(httpd_req_t *r) {
              radio_profile_name((radio_profile_t)rprof), (unsigned)fcustom, (unsigned)cc1101_get_freq_khz(),
              (unsigned)CC1101_BAND_LOW_KHZ, (unsigned)CC1101_BAND_HIGH_KHZ);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
+    {   /* nom mDNS du boitier (<nom>.local) : affiche avant le redemarrage sur le reseau domestique */
+        size_t k = strlen(out);
+        char dflt[33] = ""; size_t dsz = sizeof(dflt); nvs_handle_t hh;   /* nom fige au 1er demarrage */
+        if (nvs_open("cfg", NVS_READONLY, &hh) == ESP_OK) { nvs_get_str(hh, "mdns_host", dflt, &dsz); nvs_close(hh); }
+        if (k > 0 && k + 96 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"mdns_host\":\"%s\",\"mdns_default\":\"%s\"}",
+                                                     wifi_bridge_hostname(), dflt);
+    }
     {   /* verification de mise a jour automatique : ajoutee en fin d'objet */
         size_t k = strlen(out);
         if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
@@ -1204,6 +1212,20 @@ static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (
     else s_nroutes++;
 }
 
+/* Portail captif : point d'acces actif (configuration ou secours), toute adresse inconnue
+ * (dont les tests de connexion des telephones : generate_204, hotspot-detect.html, connecttest.txt)
+ * est redirigee vers la page de configuration ; le telephone ouvre alors le portail tout seul.
+ * Hors point d'acces : 404 ordinaire. */
+static esp_err_t h_not_found(httpd_req_t *r, httpd_err_code_t err) {
+    (void)err;
+    if (!wifi_bridge_ap_active()) { httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, NULL); return ESP_OK; }
+    httpd_resp_set_status(r, "302 Found");
+    httpd_resp_set_hdr(r, "Location", "http://192.168.4.1/#wifi");   /* directement l'onglet Wi-Fi */
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    httpd_resp_send(r, NULL, 0);
+    return ESP_OK;
+}
+
 void web_ui_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = 56;   /* marge > nb de routes (38 : 35 protegees + 3 assets). Si trop bas, les dernieres
@@ -1219,6 +1241,7 @@ void web_ui_start(void) {
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }
+    httpd_register_err_handler(s, HTTPD_404_NOT_FOUND, h_not_found);   /* portail captif */
     ui_auth_reload();   /* charge le mot de passe UI (vide = UI ouverte) */
     /* Assets statiques NON proteges : sans eux le navigateur ne peut pas afficher
      * la page qui demande le mot de passe. Ils ne divulguent aucune donnee. */

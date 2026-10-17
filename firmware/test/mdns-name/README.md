@@ -1,0 +1,22 @@
+# Banc de test du nom mDNS
+
+Teste `mdns_name.c`, compilé **tel quel**, sur PC (PR #58). Le nom mDNS du boîtier est
+son nom choisi, nettoyé ; à défaut, le nom figé au premier démarrage : `openprofalux`
+pour un boîtier déjà installé (adresse inchangée), `openprofalux-xxxx` pour un boîtier
+neuf (2 derniers octets de la MAC du point d'accès, comme son SSID `OpenProfalux_XXXX`).
+
+```bash
+cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+   -I main -I ../../main main/test_main.c ../../main/mdns_name.c -o mdns_name_host_test
+./mdns_name_host_test
+```
+
+| Test | Attendu |
+|---|---|
+| T0-T2 | minuscules ; caractère invalide → tiret ; pas de tiret en tête, en queue ni double |
+| T3 | nom tout invalide → vide |
+| T4-T6 | tronqué à 32, sans tiret final, dans la taille du tampon |
+| T7 | nom par défaut `openprofalux-0ac1` |
+| T8 | noms par défaut reconnus (vide, `openprofalux`, `volet_test`) |
+| T9-T10 | premier démarrage : boîtier installé → `openprofalux`, boîtier neuf → suffixe |
+| T11 | noms par défaut reconnus sans tenir compte des majuscules (`OpenProfalux`) |

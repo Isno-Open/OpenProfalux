@@ -12,6 +12,10 @@ int  wifi_bridge_start_fallback(const char *ap_ssid, void (*on_back)(void));
  * (BOARD_HAS_ETHERNET). L'appelant ne l'invoque que sous cette garde. */
 int  wifi_bridge_start_eth(void);
 bool wifi_bridge_in_fallback(void);
+bool wifi_bridge_ap_active(void);   /* point d'acces (config ou secours) actif : portail captif */
+/* Nom mDNS du boitier (sans .local), fixe au demarrage par main.c ; affiche par l'UI. */
+void        wifi_bridge_set_hostname(const char *host);
+const char *wifi_bridge_hostname(void);
 bool wifi_bridge_is_connected(void);
 int  wifi_bridge_rssi(void);
 void wifi_bridge_get_ip(char *buf, int len);

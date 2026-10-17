@@ -214,9 +214,12 @@
         <div class="statline" id="wifi-status"><span class="dot"></span><b>…</b></div>
         <div class="field"><label>Nom du réseau (SSID)</label><input id="wifi-ssid"></div>
         <div class="field"><label>Mot de passe</label><input id="wifi-pass" type="password" placeholder="•••••••• (inchangé si vide)"></div>
+        <div class="field"><label>Nom du boîtier (facultatif)</label><input id="wifi-device" placeholder="openprofalux">
+          <p class="hint">Donne aussi son adresse sur ton réseau : <code id="wifi-url">…</code></p></div>
         <label class="switch"><input type="checkbox" id="wifi-reboot" checked><span class="track"></span>
           <span class="lbl">Redémarrer après enregistrement<small>Nécessaire pour appliquer un nouveau réseau</small></span></label>
         <div class="row end"><button id="wifi-save" class="btn primary">Enregistrer le Wi-Fi</button></div>
+        <div class="statline ok" id="wifi-next" hidden><span class="dot"></span><b></b></div>
       </div>
     </section>
 
