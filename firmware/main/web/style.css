@@ -96,6 +96,24 @@ select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 .btn.wide{width:100%}
 .btn:disabled{opacity:.5;cursor:default}
 .row{display:flex;gap:9px;flex-wrap:wrap}.row.end{justify-content:flex-end}
+/* Telecommandes > Liste : colonnes fixes (serial, nom, signal, volet, supprimer) */
+.remote-row{display:grid;grid-template-columns:7em minmax(0,1.35fr) 7.5em minmax(0,1fr) auto;grid-template-areas:"ser name sig used del";gap:9px;align-items:center;margin-bottom:5px}
+.remote-row .r-ser{grid-area:ser;text-align:center}.remote-row .r-name{grid-area:name;width:100%;min-width:0}
+.remote-row .r-sig{grid-area:sig;white-space:nowrap}.remote-row .r-act{grid-area:del;display:inline-flex;gap:5px}
+.remote-row .r-act .btn{padding:3px 7px;font-size:.8rem}
+.remote-row .r-used .r-mk{padding:3px 7px;font-size:.8rem;max-width:100%}
+.remote-row .r-used.r-mkform{display:flex;gap:4px;overflow:visible}
+.remote-row .r-vname{flex:1;min-width:0;padding:4px 7px;background:var(--surface-2);border:1px solid var(--accent-line);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.85rem}
+.remote-row .r-mkok{padding:3px 8px;font-size:.8rem}
+.tagbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:5.5em;align-content:flex-start;padding:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:text}
+.tagbox input{flex:1;min-width:10em;border:0;background:transparent;color:var(--text);font:inherit;font-size:.9rem;outline:none;padding:3px}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 9px;border-radius:999px;background:var(--accent-weak);color:var(--accent);font-size:.8rem}
+.tag code{font-family:var(--mono)}
+.tag button{appearance:none;border:0;background:transparent;color:inherit;cursor:pointer;font-size:1rem;line-height:1;padding:0 4px;border-radius:999px}
+.tag button:hover{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.remote-row .r-name{padding:5px 9px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.9rem}
+.remote-row .r-used{grid-area:used;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:560px){.remote-row{grid-template-columns:7em minmax(0,1fr) auto;grid-template-areas:"ser name del" "sig used used";row-gap:4px}}
 
 .volet{padding:16px}
 .volet .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
