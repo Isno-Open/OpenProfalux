@@ -143,6 +143,15 @@ const RESET_BAD = [4, 5, 6, 7, 9, 14, 15];
 const ko = b => `${Math.round(b / 1024)} Ko`;
 const dur = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   return d ? `${d} j ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
+/* Occupation de la NVS par espace de noms (entrees), du plus gros au plus petit. */
+const NVS_NS_TXT = { shutters: 'volets', cfg: 'réglages', pfx_enrol: 'enrôlement',
+  'nvs.net80211': 'pile Wi-Fi', phy: 'calibration radio' };
+function nvsDetail(h) {
+  const ns = Object.entries(h.nvs_ns || {}).sort((a, b) => b[1] - a[1]);
+  if (!ns.length) return '…';
+  return ns.map(([k, v]) => `${esc(NVS_NS_TXT[k] || k)} ${v}`).join(' · ')
+    + ` (entrées, sur ${h.nvs_total - (h.nvs_free - h.nvs_avail)} utilisables)`;
+}
 async function loadHealth() {
   const box = $('#health'); if (!box) return;
   const h = await api('/api/health').catch(() => null);
@@ -157,6 +166,7 @@ async function loadHealth() {
     ['Dernier redémarrage', RESET_TXT[h.reset] || `code ${h.reset}`, RESET_BAD.includes(h.reset)],
     ['Mémoire', `${ko(h.heap)} libres · au plus bas ${ko(h.heap_min)} · plus gros bloc ${ko(h.heap_blk)}`, h.heap_min < 20480],
     ['Réglages (NVS)', `${pct} % utilisés` + (more != null ? ` · environ ${more} volet${more > 1 ? 's' : ''} de plus` : ''), more != null && more < 2],
+    ['NVS par usage', nvsDetail(h)],
     ['Stockage', `${ko(h.spiffs_used)} sur ${ko(h.spiffs_total)}`],
     ['Wi-Fi', w.connected ? sig(w.rssi) : 'non connecté'],
     ['MQTT', s.mqtt ? 'connecté' : 'déconnecté'],
