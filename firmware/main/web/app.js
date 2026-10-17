@@ -763,6 +763,12 @@ if ($('#sys-sweep-apply')) $('#sys-sweep-apply').onclick = async () => {
 async function loadConfig() {
   const c = await api('/api/config').catch(() => ({}));
   $('#wifi-ssid').value = c.wifi_ssid || '';
+  cfgCache = c;
+  if ($('#wifi-device')) {
+    $('#wifi-device').value = c.device || '';
+    $('#wifi-device').placeholder = c.mdns_default || c.mdns_host || 'openprofalux';   /* nom pris si le champ reste vide */
+    refreshWifiUrl();
+  }
   $('#mqtt-uri').value = c.mqtt_uri || ''; $('#mqtt-user').value = c.mqtt_user || '';
   if ($('#mqtt-pass')) $('#mqtt-pass').placeholder = c.mqtt_pass_len
     ? `•••••••• (${c.mqtt_pass_len} car. enregistrés, laisser vide pour ne pas changer)`
@@ -809,11 +815,22 @@ if ($('#ota-auto')) $('#ota-auto').onchange = async (e) => {
   if (r && r.ok) toast(on ? 'Vérification automatique activée' : 'Vérification automatique désactivée');
   else { e.target.checked = !on; toast('Échec de l\'enregistrement'); }
 };
+if ($('#wifi-device')) $('#wifi-device').oninput = refreshWifiUrl;
 $('#wifi-save').onclick = async () => {
   const b = { wifi_ssid: $('#wifi-ssid').value.trim(), reboot: $('#wifi-reboot').checked };
   if ($('#wifi-pass').value) b.wifi_pass = $('#wifi-pass').value;
+  if ($('#wifi-device')) b.device = $('#wifi-device').value.trim();   /* nom du boitier = son adresse */
+  const url = boxUrl(b.device);
   await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
   b.reboot ? toast('Wi-Fi enregistré, redémarrage…') : savedBtn($('#wifi-save'), 'Enregistrer le Wi-Fi');
+  /* Le portail (point d'acces) disparait au redemarrage : dire ou retrouver le boitier. */
+  const nx = $('#wifi-next');
+  if (nx && b.reboot) {
+    nx.hidden = false;
+    nx.querySelector('b').innerHTML = `Après le redémarrage, reconnecte-toi à « ${esc(b.wifi_ssid)} » et ouvre `
+      + `<a href="${esc(url)}/">${esc(url)}</a>. `
+      + `Sur Android, si l'adresse ne répond pas, utilise l'adresse IP du boîtier indiquée par ta box internet.`;
+  }
 };
 $('#mqtt-save').onclick = async () => {
   const b = { mqtt_uri: $('#mqtt-uri').value.trim(), mqtt_user: $('#mqtt-user').value.trim(), reboot: true };
@@ -1109,6 +1126,28 @@ function fillVoletPickers(volets) {
   if (sel) { const cur = sel.value; sel.innerHTML = ids.map(id => `<option>${esc(id)}</option>`).join(''); if (ids.includes(cur)) sel.value = cur; }
   const dl = $('#volet-list'); if (dl) dl.innerHTML = ids.map(id => `<option value="${esc(id)}">`).join('');
 }
+/* Adresse mDNS du boitier, comme le firmware la calcule (mdns_name.c) : nom choisi nettoye
+ * (minuscules, a-z/0-9, autre caractere -> tiret, pas de tiret en tete/queue/double, 32 max),
+ * sinon le nom fige au premier demarrage (mdns_default). */
+let cfgCache = {};
+function mdnsSanitize(n) {
+  let o = '';
+  for (const ch of (n || '').toLowerCase()) {
+    if (o.length >= 32) break;
+    if (/[a-z0-9]/.test(ch)) o += ch; else if (o && !o.endsWith('-')) o += '-';
+  }
+  return o.replace(/-+$/, '');
+}
+function boxHost(device) {
+  const d = (device ?? cfgCache.device ?? '').trim();
+  const dflt = !d || ['openprofalux', 'volet_test'].includes(d.toLowerCase());   /* comme mdns_name.c */
+  return (!dflt && mdnsSanitize(d)) || cfgCache.mdns_default || cfgCache.mdns_host || 'openprofalux';
+}
+function boxUrl(device) { return `http://${boxHost(device)}.local`; }
+function refreshWifiUrl() {
+  const u = $('#wifi-url'); if (u) u.textContent = boxUrl($('#wifi-device') ? $('#wifi-device').value : undefined);
+  wifiStatusLine(statusCache.wifi);
+}
 function wifiStatusLine(w) {
   const el = $('#wifi-status'); if (!el) return;
   if (w && w.connected) {
@@ -1116,7 +1155,9 @@ function wifiStatusLine(w) {
     el.innerHTML = `<span class="dot"></span><b>Connecté</b> à « ${esc(w.ssid)} » ${sig(w.rssi)}<span class="r">${esc(w.ip || '')}</span>`;
   } else {
     el.className = 'statline bad';
-    el.innerHTML = `<span class="dot"></span><b>Non connecté</b> : le boîtier est en point d'accès de configuration`;
+    const dv = $('#wifi-device') ? $('#wifi-device').value : undefined;
+    el.innerHTML = `<span class="dot"></span><b>Non connecté</b> : le boîtier est en point d'accès de configuration.`
+      + ` Une fois sur ton Wi-Fi, il sera à l'adresse <b>${esc(boxUrl(dv))}</b>`;
   }
 }
 function mqttStatusLine(ok) {

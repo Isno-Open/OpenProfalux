@@ -51,6 +51,7 @@ idf_component_register(
         "keeloq.c"
         "keeloq_decode.c"
         "mdns_name.c"
+        "captive_dns.c"
         "enrol_gate.c"
         "freq_sweep.c"
         "pfx_keys.c"
