@@ -43,6 +43,9 @@ int  cc1101_tx_raw_bits(const char *bits, int n, int repeats);
 /* Utils */
 extern int g_tx_marc;   /* MARCSTATE lu apres le dernier STX (0x13=TX). Diagnostic. */
 int8_t cc1101_get_rssi(void);
+/* Balayage RSSI : RSSI max (demi-dB) sur dwell_ms a chaque frequence khz[i]. Filtre RX a 58 kHz
+ * pendant le balayage ; frequence et filtre restaures. L'appelant tient le radio. 0, ou -1. */
+int cc1101_rssi_scan(const uint32_t *khz, int n, int dwell_ms, int16_t *peak_hdb);
 void cc1101_set_rx_debug(bool on);   /* switch DEBUG : logge chaque capture RX (symboles+RSSI+bits+classif) */
 bool cc1101_get_rx_debug(void);
 void cc1101_set_rx_gain(uint8_t agcctrl2);   /* plafond de gain RX (AGCCTRL2) reglable ; defaut 0x27 */

@@ -707,6 +707,44 @@ if ($('#pfx-forget')) $('#pfx-forget').onclick = async () => {
   toast('Identité désélectionnée · compteur conservé'); await loadPfx();
 };
 
+/* ── Calage sur la télécommande : balayage RSSI (issue #51) ── */
+let sweepKhz = 0;
+function sweepShow(txt, cls, applyKhz) {
+  const st = $('#sys-sweep-res'); if (!st) return;
+  st.hidden = false; st.className = 'statline' + (cls ? ' ' + cls : '');
+  st.querySelector('b').textContent = txt;
+  sweepKhz = applyKhz || 0;
+  $('#sys-sweep-apply-row').hidden = !sweepKhz;
+}
+if ($('#sys-sweep')) $('#sys-sweep').onclick = async () => {
+  const b = $('#sys-sweep');
+  const wait = ms => new Promise(res => setTimeout(res, ms));
+  const r = await api('/api/rx/sweep', { method: 'POST' }).catch(() => null);
+  if (!r || !r.ok) { sweepShow('Lancement impossible', 'bad'); return; }
+  b.disabled = true; setRadioBusy(true);
+  sweepShow('📡 Balayage en cours, garde la télécommande sur P…');
+  let d = null;
+  for (let i = 0; i < 20; i++) { await wait(1000); d = await api('/api/rx/sweep').catch(() => null); if (d && d.state === 2) break; }
+  b.disabled = false; setRadioBusy(false);
+  if (!d || d.state !== 2) { sweepShow('Pas de réponse du boîtier', 'bad'); return; }
+  const mhz = k => (k / 1000).toFixed(3).replace('.', ',') + ' MHz';
+  const lvl = `signal ${Math.round(d.peak_dbm)} dBm, bruit ${Math.round(d.floor_dbm)} dBm`;
+  if (d.status === 0) {
+    const off = d.center_khz - d.from_khz;
+    sweepShow(`Porteuse de la télécommande : ${mhz(d.center_khz)} (${off >= 0 ? '+' : ''}${off} kHz par rapport à la fréquence actuelle) · ${lvl}`,
+      'ok', d.center_khz);
+  } else if (d.status === -2) sweepShow(`Signal trop faible (${lvl}) : rapproche la télécommande, vérifie qu'elle est bien sur P, et recommence.`, 'bad');
+  else if (d.status === -3) sweepShow(`Porteuse hors de la plage balayée (±150 kHz) : choisis l'autre profil radio et recommence.`, 'bad');
+  else sweepShow(`Échec du balayage (${d.status})`, 'bad');
+};
+if ($('#sys-sweep-apply')) $('#sys-sweep-apply').onclick = async () => {
+  if (!sweepKhz) return;
+  const ok = await api('/api/config', { method: 'POST', body: JSON.stringify({ radio_profile: 'custom', freq_khz: sweepKhz }) })
+    .then(() => true).catch(() => false);
+  toast(ok ? `Fréquence personnalisée : ${sweepKhz} kHz` : 'Refusé (fréquence hors de la plage de la carte ?)');
+  if (ok) { $('#sys-sweep-apply-row').hidden = true; if (typeof loadConfig === 'function') await loadConfig(); }
+};
+
 /* ── Config : Wi-Fi / MQTT / Système (sauvegardes séparées, partielles) ── */
 async function loadConfig() {
   const c = await api('/api/config').catch(() => ({}));

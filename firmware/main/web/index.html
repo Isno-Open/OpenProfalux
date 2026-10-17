@@ -252,7 +252,11 @@
             </select>
             <input id="sys-freq" type="number" step="1" placeholder="868330" hidden style="margin-top:8px">
             <p class="hint" id="sys-freq-hint"></p>
-            <p class="hint">Fréquence d'émission et d'écoute du boîtier. Appliquée tout de suite, sans redémarrage. Si ta télécommande n'est pas captée même collée à l'antenne, essaie l'autre profil : Eveno émet ~100 kHz plus bas que Profalux.</p></div>
+            <p class="hint">Fréquence d'émission et d'écoute du boîtier. Appliquée tout de suite, sans redémarrage. Si ta télécommande n'est pas captée même collée à l'antenne, essaie l'autre profil : Eveno émet ~100 kHz plus bas que Profalux.</p>
+            <div class="row" style="margin-top:8px"><button id="sys-sweep" class="btn">📡 Caler sur ma télécommande</button></div>
+            <p class="hint">Trouve la fréquence exacte de ta télécommande, telle que ce boîtier la reçoit. Place-la à 1-2 m du boîtier, passe son commutateur sur <b>P</b> (sans appuyer sur STOP : ce n'est pas un apprentissage, le volet ne bouge pas), clique, et laisse-le sur P jusqu'à la fin (~5 s). Remets-le ensuite sur N.</p>
+            <div class="statline" id="sys-sweep-res" hidden><span class="dot"></span><b></b></div>
+            <div class="row" id="sys-sweep-apply-row" hidden><button id="sys-sweep-apply" class="btn primary">Appliquer cette fréquence</button></div></div>
           <div class="field" style="margin-top:12px"><label>Gain RX (AGCCTRL2) - réglage de diagnostic réception</label>
             <select id="sys-rxgain">
               <option value="7">0x07 - gain max (le plus sensible, mais capte le bruit)</option>

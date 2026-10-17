@@ -31,3 +31,11 @@ int  radio_set_freq_khz(uint32_t khz); /* frequence porteuse a chaud (sous mutex
 int  radio_tx_selftest(void);          /* relance le self-test TX (sous mutex) ; 0=OK, -1=HS */
 int  radio_calibrate_start(void);      /* 0=lance, 1=deja en cours, -1=erreur */
 void radio_calibrate_status(int *state, uint8_t *testing, uint8_t *result); /* state:0 idle/1 run/2 ok/3 echec */
+
+/* Balayage RSSI (issue #51) : porteuse de la telecommande pendant une emission longue (commutateur
+ * P seul). Non bloquant ; n'applique rien. start : 0 lance, 1 deja en cours, -1 erreur.
+ * status : rend l'etat (0 jamais, 1 en cours, 2 fini) ; *status = fsweep_status_t (0 = trouvee)
+ * ou -10 (puce pas en RX) ; la courbe (khz[], hdb[] en demi-dB, n points) une fois fini. */
+int  radio_sweep_start(void);
+int  radio_sweep_status(int *status, uint32_t *from_khz, const uint32_t **khz, const int16_t **hdb, int *n,
+                        uint32_t *center_khz, int16_t *peak_hdb, int16_t *floor_hdb);

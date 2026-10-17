@@ -840,6 +840,43 @@ static esp_err_t h_rx_calibrate_status(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* ── /api/rx/sweep : porteuse de la telecommande par balayage RSSI (issue #51) ──
+ * POST lance (l'utilisateur met le commutateur P de sa telecommande), GET rend l'etat et,
+ * une fois fini, la porteuse trouvee et la courbe [[kHz, RSSI demi-dB], ...]. */
+static esp_err_t h_rx_sweep(httpd_req_t *r) {
+    int rc = radio_sweep_start();
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : (rc == 1 ? "{\"ok\":1,\"busy\":1}" : "{\"ok\":0}"));
+}
+static esp_err_t h_rx_sweep_status(httpd_req_t *r) {
+    int status, n; uint32_t from, center; int16_t peak, floor_; const uint32_t *khz; const int16_t *hdb;
+    int st = radio_sweep_status(&status, &from, &khz, &hdb, &n, &center, &peak, &floor_);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "state", st);
+    if (st == 2) {
+        cJSON_AddNumberToObject(o, "status", status);
+        cJSON_AddNumberToObject(o, "from_khz", from);
+        if (status == 0) cJSON_AddNumberToObject(o, "center_khz", center);
+        cJSON_AddNumberToObject(o, "peak_dbm", peak / 2.0);
+        cJSON_AddNumberToObject(o, "floor_dbm", floor_ / 2.0);
+        cJSON_AddNumberToObject(o, "band_low_khz", CC1101_BAND_LOW_KHZ);
+        cJSON_AddNumberToObject(o, "band_high_khz", CC1101_BAND_HIGH_KHZ);
+        cJSON *pts = cJSON_AddArrayToObject(o, "points");
+        for (int i = 0; i < n; i++) {
+            cJSON *p = cJSON_CreateArray();
+            cJSON_AddItemToArray(p, cJSON_CreateNumber(khz[i]));
+            cJSON_AddItemToArray(p, cJSON_CreateNumber(hdb[i]));
+            cJSON_AddItemToArray(pts, p);
+        }
+    }
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"state\":0}");
+    free(js);
+    return e;
+}
+
 /* ── /api/diag : diagnostic radio (puce + self-test TX) pour l'UI ── */
 static esp_err_t h_diag(httpd_req_t *r) {
     int tx_ok = -1; uint8_t partnum = 0xFF, version = 0xFF;
@@ -1163,6 +1200,8 @@ void web_ui_start(void) {
     reg(s, "/api/rf",           HTTP_GET,  h_rf);
     reg(s, "/api/rx/calibrate", HTTP_POST, h_rx_calibrate);
     reg(s, "/api/rx/calibrate", HTTP_GET,  h_rx_calibrate_status);
+    reg(s, "/api/rx/sweep",     HTTP_POST, h_rx_sweep);
+    reg(s, "/api/rx/sweep",     HTTP_GET,  h_rx_sweep_status);
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
     reg(s, "/api/health",       HTTP_GET,  h_health);
     reg(s, "/api/diag/tx",      HTTP_POST, h_diag_tx);

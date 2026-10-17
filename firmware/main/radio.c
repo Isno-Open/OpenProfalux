@@ -3,6 +3,8 @@
  */
 #include "radio.h"
 #include "cc1101.h"
+#include "freq_sweep.h"
+#include "hardware_config.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -123,6 +125,63 @@ void radio_calibrate_status(int *state, uint8_t *testing, uint8_t *result) {
     if (state)   *state   = s_cal_state;
     if (testing) *testing = s_cal_testing;
     if (result)  *result  = s_cal_result;
+}
+
+/* ── Balayage RSSI : porteuse de la telecommande (issue #51) ──────────────────────
+ * Pendant une emission longue de la telecommande (commutateur P seul), balaie la frequence de
+ * reception autour de la frequence actuelle et trouve sa porteuse (freq_sweep.h). Tache de
+ * fond, ecoute permanente en pause. N'applique rien : l'UI propose la frequence trouvee. */
+#define SWEEP_SPAN_KHZ  150
+#define SWEEP_STEP_KHZ  10
+#define SWEEP_DWELL_MS  150   /* > une trame (~135 ms a TE 448) : le RSSI max voit un HAUT */
+#define SWEEP_MAX       (2 * SWEEP_SPAN_KHZ / SWEEP_STEP_KHZ + 1)
+static volatile int s_sw_state = 0;   /* 0 jamais lance, 1 en cours, 2 fini */
+static uint32_t s_sw_khz[SWEEP_MAX];
+static int16_t  s_sw_hdb[SWEEP_MAX];
+static int      s_sw_n;
+static uint32_t s_sw_from;            /* frequence au lancement */
+static int      s_sw_status;          /* fsweep_status_t, ou -10 si la puce n'est pas passee en RX */
+static fsweep_result_t s_sw_res;
+
+static void sweep_task(void *arg) {
+    (void)arg;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    s_sw_from = cc1101_get_freq_khz();
+    s_sw_n = 0;
+    for (int o = -SWEEP_SPAN_KHZ; o <= SWEEP_SPAN_KHZ && s_sw_n < SWEEP_MAX; o += SWEEP_STEP_KHZ) {
+        uint32_t f = s_sw_from + o;
+        if (f >= CC1101_BAND_LOW_KHZ && f <= CC1101_BAND_HIGH_KHZ) s_sw_khz[s_sw_n++] = f;   /* bande de la carte */
+    }
+    int rc = cc1101_rssi_scan(s_sw_khz, s_sw_n, SWEEP_DWELL_MS, s_sw_hdb);
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    s_sw_status = rc ? -10 : fsweep_analyze(s_sw_khz, s_sw_hdb, s_sw_n, &s_sw_res);
+    if (s_sw_status == FSWEEP_OK)
+        ESP_LOGW(TAG, "balayage RSSI : porteuse %u kHz (profil %u kHz, ecart %+d kHz), pic %d dBm, bruit %d dBm",
+                 (unsigned)s_sw_res.center_khz, (unsigned)s_sw_from, (int)s_sw_res.center_khz - (int)s_sw_from,
+                 s_sw_res.peak_hdb / 2, s_sw_res.floor_hdb / 2);
+    else
+        ESP_LOGW(TAG, "balayage RSSI : echec (%d), pic %d dBm, bruit %d dBm", s_sw_status,
+                 s_sw_res.peak_hdb / 2, s_sw_res.floor_hdb / 2);
+    s_sw_state = 2;
+    vTaskDelete(NULL);
+}
+
+int radio_sweep_start(void) {
+    if (!s_mtx) return -1;
+    if (s_sw_state == 1 || s_cal_state == 1) return 1;   /* deja en cours (ou calibration de gain) */
+    s_sw_state = 1; s_sw_status = 0; memset(&s_sw_res, 0, sizeof(s_sw_res));
+    if (xTaskCreate(sweep_task, "radio_sweep", 4096, NULL, 5, NULL) != pdPASS) { s_sw_state = 0; return -1; }
+    return 0;
+}
+
+int radio_sweep_status(int *status, uint32_t *from_khz, const uint32_t **khz, const int16_t **hdb, int *n,
+                       uint32_t *center_khz, int16_t *peak_hdb, int16_t *floor_hdb) {
+    *status = s_sw_status; *from_khz = s_sw_from; *khz = s_sw_khz; *hdb = s_sw_hdb;
+    *n = s_sw_state == 2 ? s_sw_n : 0;
+    *center_khz = s_sw_res.center_khz; *peak_hdb = s_sw_res.peak_hdb; *floor_hdb = s_sw_res.floor_hdb;
+    return s_sw_state;
 }
 
 void radio_set_listening(bool on) {
