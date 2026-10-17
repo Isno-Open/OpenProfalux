@@ -437,6 +437,20 @@ static esp_err_t h_remote_unignore(httpd_req_t *r) {
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
 }
+/* ── /api/remote/create_volet : {"serial":"0x...","name":"..."} -> {"ok":1,"learned":"up,stop,down"} ── */
+static esp_err_t h_remote_create_volet(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    char learned[24]; const char *why = NULL;
+    int rc = shutters_create_volet_from_remote(jstr(j, "name"), jstr(j, "serial"), learned, sizeof(learned), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    char out[64]; snprintf(out, sizeof(out), "{\"ok\":1,\"learned\":\"%s\"}", learned);
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, out);
+    return ESP_OK;
+}
 /* ── /api/remote/delete : {"serial":"0x..."} ; refuse (400 + raison) si un volet s'en sert ── */
 static esp_err_t h_remote_delete(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
@@ -1304,6 +1318,7 @@ void web_ui_start(void) {
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
     reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);
+    reg(s, "/api/remote/create_volet", HTTP_POST, h_remote_create_volet);
     reg(s, "/api/remote/ignore", HTTP_POST, h_remote_ignore);
     reg(s, "/api/remote/unignore", HTTP_POST, h_remote_unignore);
     reg(s, "/api/config",    HTTP_GET,  h_config_get);

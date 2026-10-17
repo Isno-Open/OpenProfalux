@@ -920,6 +920,42 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
     return shutters_learn_assign(id, action, bits);   /* prend son propre LOCK */
 }
 
+/* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste) : pour chaque
+ * commande, la trame la plus recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les
+ * commandes absentes du journal restent a apprendre. *learned recoit "up,stop,down" (celles
+ * trouvees). Refuse un nom deja pris : on ne reecrit pas un volet existant. */
+int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
+    *why = NULL; if (cap) learned[0] = 0;
+    if (!id || !*id) { *why = "nom manquant"; return -1; }
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    static const struct { const char *action; uint8_t btn; } CMD[] = {
+        { "up", PFX_BTN_UP }, { "stop", PFX_BTN_STOP }, { "down", PFX_BTN_DOWN } };
+    char bits[3][SH_BITS_LEN] = {{0}};
+    LOCK();
+    if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
+    /* du plus recent au plus ancien : s_rfhead est la prochaine place libre de l'anneau */
+    for (int k = 1; k <= RF_RING; k++) {
+        rfrec_t *r = &s_rf[(s_rfhead - k + RF_RING) % RF_RING];
+        if (!r->serial[0] || strcmp(r->serial, serial)) continue;
+        for (int c = 0; c < 3; c++)
+            if (!bits[c][0] && r->button == CMD[c].btn)
+                build_frame_bits(bits[c], (uint32_t)strtoul(serial, NULL, 16), r->button, r->hop);
+    }
+    UNLOCK();
+    if (!bits[0][0] && !bits[1][0] && !bits[2][0]) { *why = "aucune trame ▲ ■ ▼ de cette telecommande dans le journal RF"; return -1; }
+    for (int c = 0; c < 3; c++) {
+        if (!bits[c][0]) continue;
+        if (shutters_learn_assign(id, CMD[c].action, bits[c]) != 0) { *why = "creation du volet impossible"; return -1; }
+        if (cap) { if (learned[0]) strlcat(learned, ",", cap); strlcat(learned, CMD[c].action, cap); }
+    }
+    LOCK();
+    remote_t *rm = remote_find(serial);
+    if (rm && !rm->name[0]) { strlcpy(rm->name, id, SH_ID_LEN); save_cfg(); }   /* nomme la telecommande comme le volet */
+    UNLOCK();
+    ESP_LOGW(TAG, "volet '%s' cree depuis la telecommande %s (journal RF) : %s", id, serial, learned);
+    return 0;
+}
+
 int shutters_calibrate(const char *id, uint32_t up_ms, uint32_t down_ms) {
     LOCK();
     volet_t *v = find_volet(id);
