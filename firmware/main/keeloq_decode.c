@@ -8,7 +8,11 @@
 #include <stdbool.h>
 
 #define GLITCH_US 140          /* slivers < ~Te/3 = bruit de demod OOK -> jetes */
-#define TE_NOM    430          /* temps elementaire mesure (us) */
+/* En-tete (bas de 10 Te) : la datasheet HCS300 garantit Te = 260 a 660 us en mode 400 us
+ * (oscillateur RC), soit 2,6 a 6,6 ms ; marge en dessous. Les gardes (39 Te >= 10 ms) et les
+ * coupures sont au-dessus de HDR_MAX_US : on ne s'y ancre pas. */
+#define HDR_MIN_US 2200
+#define HDR_MAX_US 8500
 #define VOTE_MINBITS 16        /* repetitions >=16 bits incluses dans le vote (prefixes alignes) */
 #define VOTE_MAXW   32
 
@@ -43,12 +47,22 @@ static size_t deglitch_edges(const kq_sym_t *in, size_t n) {
  * hors gabarit ARRETE cette repetition (le scan des entetes suivantes re-synchronise,
  * on n'abandonne jamais la capture). Rend nb bits ; *out_te = periode de bit moyenne / 3.
  *
+ * Seuils CALES SUR L'EN-TETE, comme le decodeur de reference Microchip AN742 (« recalibrates
+ * itself [...] according to the length of the characteristic synchronization pause (TH = 10 x
+ * TE) ») : Te = en-tete / 10, puis haut court/long separes a 1,5 Te, haut accepte de 0,45 a
+ * 2,8 Te, bas d'un bit sous 3,7 Te (les rapports des anciens seuils fixes 680/190/1200/1600 us,
+ * calcules a Te 430). Avant, ces seuils fixes limitaient le Te accepte a ~340-600 us, alors
+ * que la datasheet va de 260 a 660 : les telecommandes rapides etaient ratees (issue #37).
+ *
  * TE sur la PERIODE (HAUT + BAS = 3 Te), pas sur la largeur des HAUT : la demodulation OOK
  * du CC1101 etire les HAUT (~+16 us) et raccourcit d'autant les BAS, ce qui biaisait le TE
  * d'environ +2 % (458 us mesure pour 448 reels, verifie au RTL-SDR, cf issue #37). Le decalage
  * se compense sur la periode. Bits comptes : ceux dont le BAS est dans la trame (pas le 66e). */
 static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
     int nb = 0; uint32_t sum = 0; int cnt = 0;
+    const uint32_t te = s_ed_dur[hdr] / 10;                   /* Te de cette repetition */
+    uint32_t hi_min = te * 45 / 100; if (hi_min < GLITCH_US) hi_min = GLITCH_US;
+    const uint32_t hi_max = te * 28 / 10, hi_split = te * 3 / 2, lo_max = te * 37 / 10;
     for (size_t i = hdr + 1; i < w && nb < 66; i += 2) {
         /* 66e bit : son BAS se confond avec la garde qui suit la trame. Quand ce silence
          * termine la reception (toujours sur ESP32, seuil idle 8 ms), la capture finit sur
@@ -58,9 +72,9 @@ static int decode_word(size_t hdr, size_t w, char *out, int *out_te) {
         if (last && nb != 65) break;
         if (s_ed_lvl[i] != 1 || (!last && s_ed_lvl[i + 1] != 0)) break;   /* alternance HIGH/LOW attendue */
         uint32_t hi = s_ed_dur[i], lo = last ? 0 : s_ed_dur[i + 1];
-        if (hi < 190 || hi > 1200) break;                      /* HAUT hors gabarit */
-        out[nb++] = (hi < 680) ? '1' : '0';
-        if (lo > 1600) break;                                  /* BAS trop long = garde/entete suivante */
+        if (hi < hi_min || hi > hi_max) break;                 /* HAUT hors gabarit */
+        out[nb++] = (hi < hi_split) ? '1' : '0';
+        if (lo > lo_max) break;                                /* BAS trop long = garde/entete suivante */
         if (!last) { sum += hi + lo; cnt++; }                  /* periode de ce bit (= 3 Te) */
     }
     out[nb] = 0;
@@ -78,10 +92,10 @@ int keeloq_decode(const kq_sym_t *raw, size_t raw_n, char *out, int max_bits, in
     int nwords = 0, best = -4, te_any = 0;
     char tmp[80], bestpart[80]; bestpart[0] = 0;
     for (size_t i = 0; i < w; i++) {
-        /* On ancre UNIQUEMENT sur le vrai en-tete HCS (~10 Te = 4,5-6,5 ms). Les gardes
-         * et dropouts (>9 ms) sont suivis du PREAMBULE, pas du bit 0 : s'y ancrer
-         * decalerait les fragments et polluerait le vote. On les exclut donc. */
-        if (!(s_ed_lvl[i] == 0 && s_ed_dur[i] > 3000 && s_ed_dur[i] < 8500)) continue;
+        /* On ancre UNIQUEMENT sur le vrai en-tete HCS (10 Te). Les gardes et dropouts
+         * (>= 10 ms) sont suivis du PREAMBULE, pas du bit 0 : s'y ancrer decalerait les
+         * fragments et polluerait le vote. On les exclut donc. */
+        if (!(s_ed_lvl[i] == 0 && s_ed_dur[i] > HDR_MIN_US && s_ed_dur[i] < HDR_MAX_US)) continue;
         int te = 0;
         int nb = decode_word(i, w, tmp, &te);
         if (nb > best) { best = nb; memcpy(bestpart, tmp, (size_t)nb + 1); }
