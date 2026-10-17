@@ -33,6 +33,7 @@ celle attendue.
 | T3 | Du bruit sans en-tête long | Aucun ancrage → `-4` |
 | T4 | Trois répétitions dont une avec un bit faux | Le vote 2 contre 1 corrige le bit |
 | T5 | Te 448, HAUT étirés de 16 µs (biais de démodulation du CC1101) | Bits exacts, Te = période de bit / 3 = 448 |
+| T6 | Te 270, 400 et 650 µs (extrêmes et nominal de la datasheet HCS300) | Bits exacts : seuils calés sur l'en-tête (10 Te) |
 
 Le banc est compilé avec AddressSanitizer : toute lecture/écriture hors des
 tampons du décodeur (liste de fronts, mots du vote) l'arrête net.

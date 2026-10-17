@@ -944,8 +944,10 @@ static void track_shutter_position(const char *shex, uint8_t button) {
 
 /* ── RX : chaque trame recue -> journal + les 2 fonctions ci-dessus ── */
 void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rssi, uint32_t hop) {
-    ESP_LOGI(TAG, "RX serial=0x%07X bouton=0x%X hop=0x%08X rssi=%d dBm",
-             (unsigned)serial, button, (unsigned)hop, rssi);
+    /* te : TE de la trame, mesure sur sa periode de bit / 3 (cc1101_last_te, mis a jour au decodage
+     * qui vient de la produire). Permet de relever le TE de chaque telecommande sans console. */
+    ESP_LOGI(TAG, "RX serial=0x%07X bouton=0x%X hop=0x%08X rssi=%d dBm te=%d us",
+             (unsigned)serial, button, (unsigned)hop, rssi, cc1101_last_te());
     bool do_pub = false; int pub_slot = -1; char pub_lf[128];   /* publie APRES UNLOCK (anti-deadlock) */
     LOCK();
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);

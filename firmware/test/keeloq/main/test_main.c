@@ -45,7 +45,7 @@ static void push(edge_t *e, size_t *n, uint16_t dur, uint8_t lvl) {
 
 /* Preambule minimal (une pulse HIGH, pour que deux LOW ne fusionnent pas au
  * de-glitch) puis l'en-tete : un LOW long ~10 Te, que le decodeur prend comme
- * point d'ancrage (fenetre 3000..8500 us). */
+ * point d'ancrage (fenetre 2200..8500 us, 10 Te pour Te = 260 a 660). */
 static void push_header(edge_t *e, size_t *n) {
     push(e, n, g_te + g_skew, 1);
     push(e, n, 10 * g_te - g_skew, 0);
@@ -170,7 +170,7 @@ int main(void) {
         static edge_t e[2048];
         size_t n = 0;
         uint16_t d[] = {200, 350, 180, 520, 260, 300, 240, 600, 190, 410};
-        for (int i = 0; i < 40; i++) push(e, &n, d[i % 10], i % 2); /* alterne H/L, rien dans 3000..8500 */
+        for (int i = 0; i < 40; i++) push(e, &n, d[i % 10], i % 2); /* alterne H/L, rien dans 2200..8500 */
         int nb = run(e, n, out, NULL);
         check(nb == -4, "T3 bruit : pas d'en-tete -> -4", "a cru decoder du bruit");
     }
@@ -210,6 +210,24 @@ int main(void) {
         g_te = TE; g_skew = 0;
         check(nb == 66 && strcmp(out, EXPECTED) == 0, "T5 HAUT etires : bits exacts", out);
         check(te == 448, "T5 HAUT etires : Te = periode / 3 = 448", "Te biaise par l'etirement des HAUT");
+    }
+
+    /* T6 : Te aux deux extremes de la datasheet HCS300 (260 a 660 us en mode 400 us) et au
+     * nominal. Les seuils sont cales sur l'en-tete (10 Te) : chaque trame doit etre lue exacte.
+     * Avec les anciens seuils fixes (680/190/1200/1600 us), 270 et 650 etaient perdus. */
+    {
+        static const int TES[3] = { 270, 400, 650 };
+        static const char *NOMS[3] = { "T6 Te 270 : bits exacts", "T6 Te 400 : bits exacts", "T6 Te 650 : bits exacts" };
+        for (int k = 0; k < 3; k++) {
+            static edge_t e[2048];
+            size_t n = 0;
+            g_te = TES[k]; g_skew = 0;
+            push_header(e, &n);
+            push_bits(e, &n, EXPECTED, true, -1);
+            int nb = run(e, n, out, NULL);
+            check(nb == 66 && strcmp(out, EXPECTED) == 0, NOMS[k], out);
+        }
+        g_te = TE; g_skew = 0;
     }
 
     printf(g_fail ? "\n%d test(s) en echec\n" : "\nTout passe\n", g_fail);
