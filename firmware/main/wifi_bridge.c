@@ -281,6 +281,9 @@ int wifi_bridge_start_fallback(const char *ap_ssid, void (*on_back)(void)) {
     return 0;
 }
 bool wifi_bridge_in_fallback(void) { return s_fallback; }
+static char s_hostname[33] = "openprofalux";
+void wifi_bridge_set_hostname(const char *host) { if (host && *host) strlcpy(s_hostname, host, sizeof(s_hostname)); }
+const char *wifi_bridge_hostname(void) { return s_hostname; }
 bool wifi_bridge_is_connected(void) {
     EventBits_t bits = xEventGroupGetBits(s_wifi_events);
     return (bits & WIFI_CONNECTED_BIT) != 0;
