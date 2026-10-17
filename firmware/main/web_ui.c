@@ -897,19 +897,48 @@ static esp_err_t h_diag(httpd_req_t *r) {
  * La version y est aussi : elle n'est plus dans l'en-tete de l'interface.
  * NVS : available = libre hors page reservee ; l'UI en tire "environ N volets de plus"
  * avec la taille reelle des volets enregistres (banc firmware/test/cfg_store, T13). ── */
+/* Occupation de la NVS par espace de noms : {"cfg":31,"shutters":138,...} (entrees, en-tetes
+ * compris). Les espaces sont decouverts en parcourant les entrees, y compris ceux d'ESP-IDF
+ * (pile Wi-Fi, calibration radio) : la NVS de 16 Ko est partagee, et c'est elle qui sature. */
+static void nvs_ns_usage(char *out, size_t cap) {
+    char names[16][16]; int nn = 0;
+    nvs_iterator_t it = NULL;
+    esp_err_t e = nvs_entry_find(NVS_DEFAULT_PART_NAME, NULL, NVS_TYPE_ANY, &it);
+    while (e == ESP_OK && it) {
+        nvs_entry_info_t info;
+        if (nvs_entry_info(it, &info) == ESP_OK) {
+            bool seen = false;
+            for (int i = 0; i < nn; i++) if (!strcmp(names[i], info.namespace_name)) { seen = true; break; }
+            if (!seen && nn < 16) strlcpy(names[nn++], info.namespace_name, sizeof(names[0]));
+        }
+        e = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+    int p = snprintf(out, cap, "{");
+    for (int i = 0; i < nn && p < (int)cap - 32; i++) {
+        size_t used = 0; nvs_handle_t h;
+        if (nvs_open(names[i], NVS_READONLY, &h) == ESP_OK) { nvs_get_used_entry_count(h, &used); nvs_close(h); }
+        p += snprintf(out + p, cap - p, "%s\"%s\":%u", i ? "," : "", names[i], (unsigned)used);
+    }
+    snprintf(out + p, cap - p, "}");
+}
+
 static esp_err_t h_health(httpd_req_t *r) {
     nvs_stats_t nv = {0}; nvs_get_stats(NULL, &nv);
+    char ns[400]; nvs_ns_usage(ns, sizeof(ns));
     int nvol = 0; size_t vent = cfg_store_volet_entries(&nvol);
     size_t sp_total = 0, sp_used = 0; esp_spiffs_info("storage", &sp_total, &sp_used);
     const esp_partition_t *run = esp_ota_get_running_partition();
-    char out[320];
+    char out[760];
     snprintf(out, sizeof(out),
              "{\"reset\":%d,\"heap\":%u,\"heap_min\":%u,\"heap_blk\":%u,"
-             "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"volets\":%d,\"volet_entries\":%u,"
+             "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"nvs_used\":%u,\"nvs_ns\":%s,"
+             "\"volets\":%d,\"volet_entries\":%u,"
              "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\"}",
              (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-             (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries, nvol, (unsigned)vent,
+             (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries,
+             (unsigned)nv.used_entries, ns, nvol, (unsigned)vent,
              (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
