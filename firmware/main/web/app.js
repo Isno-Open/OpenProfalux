@@ -615,6 +615,9 @@ async function loadPfx() {
   }
   const box = $('#pfx-ident'), steps = $('#pfx-steps');
   if (!box) return;
+  /* L'apprentissage n'est permis qu'apres une capture reussie dans cette tentative (issue #53). */
+  const lb = $('#pfx-learn');
+  if (lb) { lb.disabled = !d.learn_ok; lb.title = d.learn_ok ? '' : 'Capte d’abord la télécommande de ce volet'; }
   if (d.active) {
     box.hidden = false; steps.hidden = false; box.className = 'statline ok';
     box.querySelector('b').textContent = `Identité ${d.serial} · slot ${d.idx + 1}/63 · compteur ${d.counter}`
@@ -652,8 +655,9 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   else if (d.rc === 0 && d.new) { pfxCapStatus(`✅ Nouveau moteur - identité ${d.serial} attribuée (télécommande ${d.remote})`, 'ok'); pfxResetSteps(); }
   else if (d.rc === 0) pfxCapStatus(`✅ Moteur déjà connu - même identité ${d.serial} (télécommande ${d.remote})`, 'ok');
   else if (d.rc === -1) pfxCapStatus('⚠️ 63 identités déjà attribuées : oublie-en une pour libérer un slot.', 'bad');
-  else if (d.rc === -3) pfxCapStatus("⏱ Aucune trame captée - réessaie en appuyant sur la télécommande.", 'bad');
-  else pfxCapStatus('Télécommande non reconnue', 'bad');
+  /* Capture ratee : l'identite d'avant est deselectionnee, rien ne partira avec elle (issue #53). */
+  else if (d.rc === -3) pfxCapStatus("❌ La capture a échoué : le boîtier n'a rien reçu. Rapproche la télécommande du boîtier (moins d'un mètre), tiens le bouton une seconde, et recommence.", 'bad');
+  else pfxCapStatus("❌ La capture a échoué : télécommande non reconnue. Recommence avec la télécommande de ce volet.", 'bad');
   await loadPfx();
 };
 function pfxStatus(txt, cls) {
@@ -675,7 +679,7 @@ if ($('#pfx-learn')) $('#pfx-learn').onclick = async () => {
     if (r && r.ok) {
       pfxStatus('✅ Émission finie - fais les gestes ci-dessous MAINTENANT, puis attends le va-et-vient du moteur (~10 s) avant de tester.', 'ok');
       if (after) after.hidden = false;                     // révèle les gestes SEULEMENT à la fin
-    } else pfxStatus('Échec (radio occupée ?)', 'bad');
+    } else pfxStatus(r && r.err ? '❌ ' + r.err : 'Échec (radio occupée ?)', 'bad');   /* refus : pas de capture reussie */
   }
   catch (e) { clearInterval(timer); pfxStatus('Radio occupée, réessaie dans un instant.', 'bad'); }
   finally { b.disabled = false; b.textContent = o; setRadioBusy(false); await loadPfx(); }

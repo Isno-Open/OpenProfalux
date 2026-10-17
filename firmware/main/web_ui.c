@@ -4,6 +4,7 @@
 #include "web_ui.h"
 #include "shutters.h"
 #include "pfx_enrol.h"
+#include "enrol_gate.h"
 #include "radio.h"
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
@@ -924,6 +925,12 @@ static esp_err_t h_diag_tx(httpd_req_t *r) {   /* re-lance le self-test TX a la 
 
 /* ── /api/pfx : enrôlement d'une identité virtuelle 0x067 ── */
 /* Capture RX de la vraie télécommande -> alloue/rappelle l'identité du moteur (tâche dédiée). */
+/* Porte d'apprentissage (issue #53) : l'emission d'apprentissage n'est permise qu'apres une
+ * capture REUSSIE dans la tentative en cours. Une capture ratee ne laisse plus l'identite de la
+ * capture precedente selectionnee : elle partait avec, et finissait sur le mauvais moteur.
+ * Etat initial (zero) = EG_IDLE : au demarrage, une identite restee en NVS n'est pas apprenable. */
+static enrol_gate_t s_egate;
+
 static void pfx_capture_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
@@ -942,6 +949,7 @@ static void pfx_capture_task(void *arg) {
         s_pcap_remote = 0;
         ESP_LOGW(TAG, "PFX CAPTURE: aucune trame captee (n=%d)", n);
     }
+    eg_capture_result(&s_egate, n >= 60, s_pcap_rc, s_pcap_remote);
     s_pcap_done = true; s_pcap_active = false;
     vTaskDelete(NULL);
 }
@@ -955,8 +963,15 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     ESP_LOGW(TAG, "PFX CAPTURE: requete recue (model=%d, active=%d)", s_pcap_model, s_pcap_active);
     if (!s_pcap_active) {
         s_pcap_done = false; s_pcap_rc = 0; s_pcap_remote = 0; s_pcap_new = 0; s_pcap_active = true;
+        /* Nouvelle tentative : l'identite d'avant est deselectionnee TOUT DE SUITE (compteur conserve
+         * dans la table). Une capture ratee ne la remet pas : rien ne doit partir avec elle. */
+        eg_capture_start(&s_egate);
+        pfx_enrol_forget();
         BaseType_t ok = xTaskCreate(pfx_capture_task, "pfxcap", 4096, NULL, 6, NULL);
-        if (ok != pdPASS) { s_pcap_active = false; ESP_LOGE(TAG, "PFX CAPTURE: xTaskCreate ECHEC"); }
+        if (ok != pdPASS) {
+            s_pcap_active = false; eg_capture_result(&s_egate, false, -1, 0);
+            ESP_LOGE(TAG, "PFX CAPTURE: xTaskCreate ECHEC");
+        }
     }
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"ok\":1}");
@@ -975,8 +990,8 @@ static esp_err_t h_pfx_get(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     char out[720]; int p = 0;
     p += snprintf(out + p, sizeof(out) - p,
-                  "{\"active\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
-                  active ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
+                  "{\"active\":%d,\"learn_ok\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
+                  active ? 1 : 0, eg_learn_allowed(&s_egate) ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
     int nm = pfx_enrol_model_count();
     for (int i = 0; i < nm; i++) {
         const pfx_model_t *m = pfx_enrol_model(i);
@@ -988,8 +1003,19 @@ static esp_err_t h_pfx_get(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 static esp_err_t h_pfx_learn(httpd_req_t *r) {
-    int rc = pfx_enrol_emit_learn();
     httpd_resp_set_type(r, "application/json");
+    const char *why = eg_refusal(&s_egate);
+    if (why) {   /* pas de capture reussie dans cette tentative : on n'emet RIEN */
+        ESP_LOGW(TAG, "PFX APPRENTISSAGE refuse : %s", why);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "ok", 0);
+        cJSON_AddStringToObject(o, "err", why);
+        char *js = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+        esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+        free(js);
+        return e;
+    }
+    int rc = pfx_enrol_emit_learn();
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
 }
 static esp_err_t h_pfx_cmd(httpd_req_t *r) {
@@ -1003,6 +1029,7 @@ static esp_err_t h_pfx_cmd(httpd_req_t *r) {
 }
 static esp_err_t h_pfx_forget(httpd_req_t *r) {
     pfx_enrol_forget();
+    eg_reset(&s_egate);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"ok\":1}");
 }
@@ -1051,7 +1078,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     int rc = -1;
     if (active && name && *name)
         rc = shutters_create_virtual(name, id.serial, id.counter, pfx_enrol_model_te(id.model));
-    if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); }   /* moteur valide ; l'identite vit desormais dans le volet */
+    if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate); }   /* moteur valide ; l'identite vit desormais dans le volet */
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");

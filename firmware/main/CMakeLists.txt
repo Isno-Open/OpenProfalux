@@ -50,6 +50,7 @@ idf_component_register(
         "cfg_model.c"
         "keeloq.c"
         "keeloq_decode.c"
+        "enrol_gate.c"
         "freq_sweep.c"
         "pfx_keys.c"
         "pfx_enrol.c"
