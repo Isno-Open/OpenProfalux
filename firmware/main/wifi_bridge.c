@@ -8,6 +8,7 @@
 #include <esp_sntp.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <nvs.h>
 #include <time.h>
 #include <stdlib.h>
 #include <freertos/FreeRTOS.h>
@@ -146,12 +147,31 @@ static void wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
+/* La pile Wi-Fi d'ESP-IDF garde par defaut sa propre copie de la config en NVS (espace
+ * nvs.net80211) : ~85-100 entrees, un quart de la NVS de 16 Ko, pour rien, puisque le firmware
+ * lui redonne SSID et mot de passe a chaque demarrage depuis cfg. Saturee, la NVS refusait la
+ * calibration radio a chaque demarrage (store_cal_data, ESP_ERR_NVS_NOT_ENOUGH_SPACE). La pile
+ * travaille donc en RAM (nvs_enable = 0) et l'ancienne copie est effacee : une seule fois en
+ * pratique, ensuite l'espace est vide et rien n'est ecrit. */
+static void wifi_nvs_purge(void) {
+    nvs_handle_t h; size_t used = 0;
+    if (nvs_open("nvs.net80211", NVS_READONLY, &h) != ESP_OK) return;   /* espace absent : rien a faire */
+    nvs_get_used_entry_count(h, &used);
+    nvs_close(h);
+    if (!used || nvs_open("nvs.net80211", NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_erase_all(h) == ESP_OK && nvs_commit(h) == ESP_OK)
+        ESP_LOGW(TAG, "NVS : copie de la config Wi-Fi par la pile effacee (%u entrees liberees)", (unsigned)used);
+    nvs_close(h);
+}
+
 int wifi_bridge_init(void) {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     s_wifi_events = xEventGroupCreate();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.nvs_enable = 0;   /* config Wi-Fi en RAM : le firmware la redonne a chaque demarrage (cfg) */
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    wifi_nvs_purge();
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_cb, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_cb, NULL, NULL));
 #if BOARD_HAS_ETHERNET
