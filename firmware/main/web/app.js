@@ -540,7 +540,8 @@ function renderRemotes(s, rf) {
     row.innerHTML = `<code class="badge r-ser">${esc(serial)}</code>
       <input class="r-name" value="${esc(name)}" placeholder="nom…">
       <span class="r-sig">${sig(r)}</span>
-      <span class="hint r-used" title="${esc(used || '')}">${used ? esc(used) : ''}</span>
+      <span class="hint r-used" title="${esc(used || '')}">${used ? esc(used)
+        : '<button class="btn r-mk" title="Créer un volet avec ce nom, à partir des dernières trames ▲ ■ ▼ de cette télécommande dans le journal RF">➕ Créer le volet</button>'}</span>
       <span class="r-act"><button class="btn r-ign" title="Ignorer : ne plus l'enregistrer quand elle est captée">🚫</button><button class="btn danger r-del" title="Supprimer cette télécommande">🗑</button></span>`;
     const inp = row.querySelector('input');
     inp.onchange = () => api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
@@ -551,6 +552,36 @@ function renderRemotes(s, rf) {
       const rep = await fetch('/api/remote/delete', { method: 'POST', body: JSON.stringify({ serial }) });
       toast(rep.ok ? `${label} supprimée` : `Refusé : ${await rep.text()}`);
       await loadStatus();
+    };
+    /* Creer le volet : un champ « nom du volet » apparait dans la cellule, distinct du nom de la
+     * telecommande (prerempli avec celui-ci). ✓ ou Entree cree, Echap annule. */
+    const mk = row.querySelector('.r-mk');
+    if (mk) mk.onclick = () => {
+      const cell = mk.parentElement;
+      cell.classList.add('r-mkform');
+      cell.innerHTML = `<input class="r-vname" placeholder="nom du volet" spellcheck="false"><button class="btn r-mkok" title="Créer le volet">✓</button>`;
+      const vin = cell.querySelector('input');
+      vin.value = inp.value.trim();
+      vin.focus(); vin.select();
+      const create = async () => {
+        const vname = vin.value.trim();
+        if (!vname) { toast('Donne un nom au volet'); vin.focus(); return; }
+        if (isNewNameWithComma(vname)) { toast(COMMA_MSG); vin.focus(); return; }
+        const rep = await fetch('/api/remote/create_volet', { method: 'POST', body: JSON.stringify({ serial, name: vname }) });
+        if (!rep.ok) { toast(`Refusé : ${await rep.text()}`); vin.focus(); return; }
+        const d = await rep.json().catch(() => ({}));
+        const lab = { up: '▲', stop: '■', down: '▼' };
+        const got = (d.learned || '').split(',').filter(Boolean);
+        const miss = ['up', 'stop', 'down'].filter(a => !got.includes(a));
+        toast(`Volet « ${vname} » créé : ${got.map(a => lab[a]).join(' ')} appris`
+          + (miss.length ? ` · ${miss.map(a => lab[a]).join(' ')} à apprendre (aucune trame dans le journal)` : ''));
+        vin.blur(); await loadStatus();
+      };
+      cell.querySelector('.r-mkok').onclick = create;
+      vin.onkeydown = e => {
+        if (e.key === 'Enter') create();
+        else if (e.key === 'Escape') { vin.blur(); loadStatus(); }   /* annule : la ligne est redessinee */
+      };
     };
     row.querySelector('.r-ign').onclick = async () => {
       const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
