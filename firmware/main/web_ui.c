@@ -1035,7 +1035,7 @@ static void pfx_capture_task(void *arg) {
         s_pcap_remote = 0;
         ESP_LOGW(TAG, "PFX CAPTURE: aucune trame captee (n=%d)", n);
     }
-    eg_capture_result(&s_egate, n >= 60, s_pcap_rc, s_pcap_remote);
+    eg_capture_result(&s_egate, n >= 64, s_pcap_rc, s_pcap_remote);   /* trame confirmee (#39) */
     s_pcap_done = true; s_pcap_active = false;
     vTaskDelete(NULL);
 }
