@@ -26,6 +26,13 @@ void mdns_name_default(const uint8_t mac[6], char *out, size_t cap);
  * compte des majuscules) : il ne vaut pas choix de l'utilisateur. */
 bool mdns_name_is_default_device(const char *device);
 
+/* Identifiant annonce par le service _openprofalux._tcp (TXT id) : la MAC STATION en 12 caracteres
+ * hexadecimaux minuscules, fixe meme apres un effacement complet. Station, et non point d'acces :
+ * c'est celle qu'affiche la liste DHCP de la box (reservation d'adresse). Le SSID OpenProfalux_XXXX
+ * et le nom par defaut openprofalux-xxxx prennent, eux, la MAC du point d'acces (station + 1) :
+ * id et nom different donc d'une unite sur le dernier octet. cap >= 13. */
+void mdns_name_id(const uint8_t sta_mac[6], char *out, size_t cap);
+
 /* Nom a figer au premier demarrage : "openprofalux" si le boitier etait deja installe (un Wi-Fi
  * enregistre), sinon le nom par defaut a suffixe. */
 void mdns_name_first_boot(bool already_installed, const uint8_t mac[6], char *out, size_t cap);

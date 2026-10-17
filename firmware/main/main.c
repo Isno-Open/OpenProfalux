@@ -252,8 +252,21 @@ void app_main(void) {
     if (wifi_bridge_is_connected()) {
         if (mdns_init() == ESP_OK) {
             mdns_hostname_set(wifi_bridge_hostname());
-            mdns_instance_name_set(mdns_name_is_default_device(s_device_name) ? "OpenProfalux" : s_device_name);
+            /* Nom d'instance : le nom choisi, sinon le nom d'hote (unique par boitier). */
+            mdns_instance_name_set(mdns_name_is_default_device(s_device_name) ? wifi_bridge_hostname() : s_device_name);
             ESP_LOGI(TAG, "mDNS : %s.local", wifi_bridge_hostname());
+            /* Service _openprofalux._tcp : un client (script, domotique, outil reseau) retrouve le ou
+             * les boitiers sans connaitre leur nom ni leur IP. id (MAC station, voir mdns_name.h) les
+             * distingue ; ver et board disent ce qui tourne dessus. */
+            uint8_t sta[6] = {0}; esp_read_mac(sta, ESP_MAC_WIFI_STA);
+            char id[13]; mdns_name_id(sta, id, sizeof(id));
+            mdns_txt_item_t txt[] = {
+                { "id", id }, { "ver", esp_app_get_description()->version }, { "board", TARGET_NAME },
+            };
+            if (mdns_service_add(NULL, "_openprofalux", "_tcp", 80, txt, 3) == ESP_OK)
+                ESP_LOGI(TAG, "mDNS : service _openprofalux._tcp annonce (id %s)", id);
+            else
+                ESP_LOGW(TAG, "mDNS : service _openprofalux._tcp non annonce");
         }
     }
 

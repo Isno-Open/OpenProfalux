@@ -25,6 +25,10 @@ bool mdns_name_is_default_device(const char *device) {
     return !device || !*device || !strcasecmp(device, "openprofalux") || !strcasecmp(device, "volet_test");
 }
 
+void mdns_name_id(const uint8_t mac[6], char *out, size_t cap) {
+    snprintf(out, cap, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 void mdns_name_first_boot(bool already_installed, const uint8_t mac[6], char *out, size_t cap) {
     if (already_installed) snprintf(out, cap, "openprofalux");
     else mdns_name_default(mac, out, cap);
