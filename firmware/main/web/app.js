@@ -673,7 +673,7 @@ if ($('#pfx-learn')) $('#pfx-learn').onclick = async () => {
     const r = await api('/api/pfx/learn', { method: 'POST' });
     clearInterval(timer);
     if (r && r.ok) {
-      pfxStatus('✅ Émission finie - fais les gestes ci-dessous MAINTENANT.', 'ok');
+      pfxStatus('✅ Émission finie - fais les gestes ci-dessous MAINTENANT, puis attends le va-et-vient du moteur (~10 s) avant de tester.', 'ok');
       if (after) after.hidden = false;                     // révèle les gestes SEULEMENT à la fin
     } else pfxStatus('Échec (radio occupée ?)', 'bad');
   }

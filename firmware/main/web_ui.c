@@ -1014,7 +1014,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     int rc = -1;
     if (active && name && *name)
         rc = shutters_create_virtual(name, id.serial, id.counter, pfx_enrol_model_te(id.model));
-    if (rc == 0) pfx_enrol_forget();   /* l'identite vit desormais dans le volet */
+    if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); }   /* moteur valide ; l'identite vit desormais dans le volet */
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");

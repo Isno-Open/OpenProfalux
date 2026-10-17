@@ -14,6 +14,8 @@
 #include "cc1101.h"
 #include <string.h>
 #include "nvs.h"
+#include "cJSON.h"
+#include <stdlib.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -53,12 +55,31 @@ typedef struct __attribute__((packed)) {
 static pfx_entry_t s_map[PFX_MAP_MAX];
 static int         s_map_n;
 
+/* Slots dont le compteur de la table est SUR (bit = slot), NVS map_ok : identite neuve, compteur
+ * reporte a la suppression du volet, ou enrolement CONFIRME (volet virtuel cree, l'utilisateur a
+ * vu le moteur repondre). Une entree non confirmee (ancien firmware, ou re-enrolement pas encore
+ * confirme) peut etre en retard d'un nombre inconnu de commandes : son re-enrolement saute
+ * (voir pfx_enrol_capture). La marque n'est JAMAIS posee avant de savoir que le moteur a accepte :
+ * un echec ne doit pas consommer le saut (issue #45, retour terrain). La cle s'appelait map_sync
+ * dans un build de test qui marquait trop tot : elle est ignoree. */
+static uint64_t s_map_ok;
+static uint8_t  s_map_try[PFX_KEY_COUNT + 1];   /* sauts deja tentes par slot (NVS map_try) */
+/* Saut au re-enrolement d'une entree non confirmee, croissant a chaque essai rate. Un decodeur
+ * KeeLoq accepte un code au-dela de sa fenetre directe (+16) s'il recoit DEUX codes consecutifs
+ * (l'apprentissage n, puis la 1re commande n+1), jusqu'a sa fenetre de resync (32768 en standard).
+ * Prouve sur FranciaFlex M4G a +1024 ; on part petit au cas ou un recepteur aurait une fenetre plus
+ * etroite. A 16384, 3 essais au plus rattrapent n'importe quel compteur (fenetre de 32768). */
+static const uint16_t PFX_RESYNC_STEPS[] = { 1024, 4096, 16384 };
+#define N_RESYNC_STEPS ((int)(sizeof(PFX_RESYNC_STEPS) / sizeof(PFX_RESYNC_STEPS[0])))
+
 static void map_load(void) {
-    s_map_n = 0; memset(s_map, 0, sizeof(s_map));
+    s_map_n = 0; memset(s_map, 0, sizeof(s_map)); s_map_ok = 0; memset(s_map_try, 0, sizeof(s_map_try));
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
     size_t len = sizeof(s_map);
     if (nvs_get_blob(h, "map", s_map, &len) == ESP_OK) s_map_n = (int)(len / sizeof(pfx_entry_t));
+    nvs_get_u64(h, "map_ok", &s_map_ok);
+    len = sizeof(s_map_try); nvs_get_blob(h, "map_try", s_map_try, &len);
     nvs_close(h);
     if (s_map_n > PFX_MAP_MAX) s_map_n = PFX_MAP_MAX;
 }
@@ -66,8 +87,14 @@ static void map_save(void) {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_blob(h, "map", s_map, (size_t)s_map_n * sizeof(pfx_entry_t));
+    nvs_set_u64(h, "map_ok", s_map_ok);
+    nvs_set_blob(h, "map_try", s_map_try, sizeof(s_map_try));
     nvs_commit(h); nvs_close(h);
 }
+static inline bool map_slot_ok(uint8_t slot) { return slot >= 1 && slot <= PFX_KEY_COUNT; }
+/* Compteur sur : marque posee, tentatives remises a zero. */
+static inline void map_mark_ok(uint8_t slot) { if (map_slot_ok(slot)) { s_map_ok |= 1ULL << slot; s_map_try[slot] = 0; } }
+static inline bool map_is_ok(uint8_t slot)   { return map_slot_ok(slot) && (s_map_ok >> slot & 1); }
 /* Prochain slot libre [1,63] : ni dans la table, ni celui de l'identité active courante
  * (protège une identité pas encore dans la table). 0 si tous pris. */
 static uint8_t map_free_slot(void) {
@@ -86,6 +113,9 @@ static pfx_entry_t *map_find(uint32_t remote) {
     return NULL;
 }
 
+/* Compteur 16 bits qui reboucle : a est DEVANT b s'il le precede de moins d'un demi-tour. */
+static inline bool cnt_ahead(uint16_t a, uint16_t b) { return (int16_t)(a - b) > 0; }
+
 int                pfx_enrol_model_count(void) { return N_MODELS; }
 const pfx_model_t *pfx_enrol_model(int id)     { return (id >= 0 && id < N_MODELS) ? &MODELS[id] : NULL; }
 
@@ -103,7 +133,8 @@ static void save(void) {
     /* garde le compteur de la table à jour pour cette télécommande (compteur roulant par identité) */
     if (s_id.remote) {
         pfx_entry_t *e = map_find(s_id.remote);
-        if (e && e->counter != s_id.counter) { e->counter = s_id.counter; map_save(); }
+        /* suit le compteur emis, sans jamais le faire reculer ni marquer l'entree sure */
+        if (e && cnt_ahead(s_id.counter, e->counter)) { e->counter = s_id.counter; map_save(); }
     }
 }
 
@@ -146,8 +177,18 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
         uint32_t serial = ((uint32_t)e->slot << 12) | PFX_FAMILY_MARKER;
         uint16_t cnt = e->counter;
         uint16_t vc  = shutters_virt_counter_for_serial(serial);  /* compteur réellement émis par le volet */
-        if (vc > cnt) cnt = vc;                /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
-        e->counter = cnt; map_save();
+        if (vc && cnt_ahead(vc, cnt)) cnt = vc;   /* on repart TOUJOURS devant le moteur (jamais un rejeu) */
+        if (!map_is_ok(e->slot)) {             /* non confirmée : retard inconnu, saut croissant.
+                                                * Vaut aussi pour un volet restauré d'une sauvegarde,
+                                                * dont le compteur est une photo. */
+            uint8_t t = s_map_try[e->slot];
+            uint16_t step = PFX_RESYNC_STEPS[t < N_RESYNC_STEPS ? t : N_RESYNC_STEPS - 1];
+            ESP_LOGW(TAG, "slot %u : compteur %u non confirme, essai %u : saut de %u pour la resync KeeLoq",
+                     e->slot, cnt, (unsigned)t + 1, step);
+            cnt = (uint16_t)(cnt + step);
+            if (t < 255) s_map_try[e->slot] = t + 1;
+        }
+        e->counter = cnt; map_save();          /* marque posée seulement à la confirmation */
         load_slot(e->slot, cnt, model, remote);
         ESP_LOGW(TAG, "telecommande 0x%07X connue -> identite existante slot=%u serial=0x%07X cnt=%u",
                  (unsigned)remote, e->slot, (unsigned)s_id.serial, cnt);
@@ -157,12 +198,86 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
     uint8_t slot = map_free_slot();            /* moteur inconnu -> prochain slot libre */
     if (!slot) { ESP_LOGW(TAG, "aucun slot libre"); return -1; }
     s_map[s_map_n].remote = remote; s_map[s_map_n].counter = 2; s_map[s_map_n].slot = slot; s_map_n++;
+    map_mark_ok(slot);                         /* identité neuve : compteur sûr */
     map_save();                                /* mémorisé DÉFINITIVEMENT */
     load_slot(slot, 2, model, remote);
     if (is_new) *is_new = true;
     ESP_LOGW(TAG, "telecommande 0x%07X inconnue -> nouvelle identite slot=%u serial=0x%07X (memorisee)",
              (unsigned)remote, slot, (unsigned)s_id.serial);
     return 0;
+}
+
+void pfx_enrol_note_counter(uint32_t serial, uint16_t next) {
+    if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
+    uint8_t slot = (uint8_t)(serial >> 12);
+    for (int i = 0; i < s_map_n; i++) if (s_map[i].slot == slot) {
+        /* Compteur reporte ; la marque ne change pas : un volet cree depuis ce correctif a ete
+         * confirme a sa creation, un volet plus ancien ou restaure reste a confirmer. */
+        if (cnt_ahead(next, s_map[i].counter)) s_map[i].counter = next;
+        ESP_LOGI(TAG, "slot %u : compteur %u reporte (volet supprime)%s", slot, s_map[i].counter,
+                 map_is_ok(slot) ? "" : ", non confirme");
+        map_save();
+        return;
+    }
+}
+
+/* Sauvegarde : la table d'enrolement (telecommande -> slot + compteur). Sans elle, un
+ * effacement de la NVS faisait capter un moteur deja enrole comme un inconnu. */
+cJSON *pfx_enrol_export(void) {
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < s_map_n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        char rx[12]; snprintf(rx, sizeof(rx), "0x%07X", (unsigned)s_map[i].remote);
+        cJSON_AddStringToObject(o, "remote", rx);
+        cJSON_AddNumberToObject(o, "slot", s_map[i].slot);
+        cJSON_AddNumberToObject(o, "counter", s_map[i].counter);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return arr;
+}
+/* Restauration : fusion avec la table en place. Une sauvegarde est une photo : le moteur a pu
+ * avancer depuis. On garde le compteur le plus avance, et une entree qui vient de la sauvegarde
+ * est NON confirmee (son re-enrolement sautera). Une entree dont le slot est deja pris par une
+ * autre telecommande est ignoree (jamais deux telecommandes sur un slot). */
+void pfx_enrol_import(const cJSON *arr) {
+    if (!cJSON_IsArray(arr)) return;
+    const cJSON *o;
+    cJSON_ArrayForEach(o, arr) {
+        const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(o, "remote"));
+        const cJSON *js = cJSON_GetObjectItem(o, "slot"), *jc = cJSON_GetObjectItem(o, "counter");
+        if (!rs || !cJSON_IsNumber(js) || !cJSON_IsNumber(jc)) continue;
+        uint32_t remote = (uint32_t)strtoul(rs, NULL, 16);
+        uint8_t slot = (uint8_t)js->valuedouble; uint16_t cnt = (uint16_t)jc->valuedouble;
+        if (!remote || !map_slot_ok(slot)) continue;
+        pfx_entry_t *e = map_find(remote);
+        if (e) {
+            if (e->slot != slot) continue;
+            if (cnt_ahead(cnt, e->counter)) { e->counter = cnt; s_map_ok &= ~(1ULL << slot); }
+            continue;
+        }
+        bool taken = false;
+        for (int i = 0; i < s_map_n; i++) if (s_map[i].slot == slot) taken = true;
+        if (taken || s_map_n >= PFX_MAP_MAX) { ESP_LOGW(TAG, "restauration : slot %u deja pris, entree 0x%07X ignoree", slot, (unsigned)remote); continue; }
+        s_map[s_map_n].remote = remote; s_map[s_map_n].slot = slot; s_map[s_map_n].counter = cnt; s_map_n++;
+        s_map_ok &= ~(1ULL << slot); s_map_try[slot] = 0;
+    }
+    map_save();
+}
+/* Un volet virtuel restaure porte un compteur-photo : son identite redevient non confirmee. */
+void pfx_enrol_unconfirm(uint32_t serial) {
+    if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
+    uint8_t slot = (uint8_t)(serial >> 12);
+    if (!map_is_ok(slot)) return;
+    s_map_ok &= ~(1ULL << slot); map_save();
+}
+
+void pfx_enrol_confirm(void) {
+    if (!s_id.active || !s_id.remote) return;
+    pfx_entry_t *e = map_find(s_id.remote);
+    if (!e) return;
+    if (cnt_ahead(s_id.counter, e->counter)) e->counter = s_id.counter;
+    map_mark_ok(e->slot); map_save();
+    ESP_LOGI(TAG, "slot %u : enrolement confirme, compteur %u", e->slot, e->counter);
 }
 
 void pfx_enrol_forget(void) {
@@ -172,7 +287,7 @@ void pfx_enrol_forget(void) {
      * la récupère avec son compteur (jamais remis à zéro) -> un moteur strict l'accepte toujours. */
     if (rem) {                                 /* fige le dernier compteur avant de désélectionner */
         pfx_entry_t *e = map_find(rem);
-        if (e && e->counter != s_id.counter) { e->counter = s_id.counter; map_save(); }
+        if (e && cnt_ahead(s_id.counter, e->counter)) { e->counter = s_id.counter; map_save(); }
     }
     memset(&s_id, 0, sizeof(s_id)); save();
     ESP_LOGW(TAG, "identite deselectionnee (etait 0x%07X, telecommande 0x%07X : compteur conserve)",
@@ -240,12 +355,20 @@ static int emit(uint8_t button, uint16_t counter) {
 
 int pfx_enrol_emit_learn(void) {
     if (!s_id.active) return -1;
-    /* Trame d'apprentissage (btn5, compteur FIGÉ = 3) tenue ~5 s : on répète la même trame
-     * en salves, avec un yield entre chaque (nourrit le watchdog, évite un bit-bang bloquant
-     * de 5 s d'un coup). Le moteur ne fait son va-et-vient de confirmation qu'après ~5 s. */
+    /* Trame d'apprentissage (btn5) tenue ~5 s : on répète la même trame en salves, avec un
+     * yield entre chaque (nourrit le watchdog, évite un bit-bang bloquant de 5 s d'un coup).
+     * Le moteur ne fait son va-et-vient de confirmation qu'après ~5 s.
+     *
+     * Compteur = le compteur COURANT de l'identité : 3 pour une identité neuve (capture à 2),
+     * le compteur conservé pour un moteur déjà connu. Il était figé à 3, puis les commandes
+     * repartaient de 4 : ré-enrôler un moteur connu émettait DERRIÈRE son compteur, rejeté
+     * comme un rejeu (issue #45). Réserve-puis-émets, comme pfx_enrol_cmd. */
     const pfx_model_t *m = &MODELS[s_id.model];
+    uint16_t cnt = s_id.counter < 3 ? 3 : s_id.counter;
+    s_id.counter = cnt + 1;   /* commandes à partir du suivant */
+    save();
     char bits[68];
-    frame_with_key(s_id.serial, s_id.key, BTN_LEARN, 3, bits);
+    frame_with_key(s_id.serial, s_id.key, BTN_LEARN, cnt, bits);
     uint32_t prev_te = cfg_tx_te();
     cc1101_set_tx_te(m->te_us);
     for (int i = 0; i < PFX_LEARN_ROUNDS; i++) {
@@ -253,10 +376,8 @@ int pfx_enrol_emit_learn(void) {
         vTaskDelay(pdMS_TO_TICKS(15));
     }
     cc1101_set_tx_te(prev_te);
-    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=3 (~5s, %d salves) te=%u",
-             (unsigned)s_id.serial, PFX_LEARN_ROUNDS, m->te_us);
-    s_id.counter = 4;   /* commandes de test à partir de 4 */
-    save();
+    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=%u (~5s, %d salves) te=%u",
+             (unsigned)s_id.serial, cnt, PFX_LEARN_ROUNDS, m->te_us);
     return 0;
 }
 
