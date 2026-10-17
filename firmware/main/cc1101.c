@@ -775,6 +775,50 @@ int cc1101_rx_stop(void) {
     return 0;
 }
 
+/* Balayage RSSI (issue #51) : pour chaque frequence, IDLE -> FREQ -> RX (calibration auto du PLL,
+ * MCSM0 FS_AUTOCAL) puis RSSI max sur dwell_ms, soit au moins une trame entiere de la
+ * telecommande. Filtre RX resserre a 58 kHz pendant le balayage (sommet plus net), frequence et
+ * filtre restaures a la fin. RSSI en demi-dB (dBm = valeur / 2). L'appelant tient le radio
+ * (ecoute permanente en pause). Rend 0, ou -1 si la puce ne passe pas en RX. */
+int cc1101_rssi_scan(const uint32_t *khz, int n, int dwell_ms, int16_t *peak_hdb) {
+    const uint32_t f0 = s_freq_khz;
+    const uint8_t mdm4 = cc1101_read_reg(CC_MDMCFG4);
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
+    cc1101_write_reg(CC_IOCFG0, 0x0D);
+    cc1101_write_reg(0x1B, 0x04);   /* AGCCTRL2, AGCCTRL1, AGCCTRL0 : comme l'ecoute (rx_listen_bits) */
+    cc1101_write_reg(0x1C, 0x00);
+    cc1101_write_reg(0x1D, 0x92);
+    cc1101_write_reg(CC_MDMCFG4, (uint8_t)(0xF0 | (mdm4 & 0x0F)));   /* CHANBW 58 kHz, debit inchange */
+    int rc = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t w = radio_cc1101_freq_word(khz[i]);
+        strobe(CC_SIDLE);
+        cc1101_write_reg(CC_FREQ2, (w >> 16) & 0xFF);
+        cc1101_write_reg(CC_FREQ1, (w >> 8) & 0xFF);
+        cc1101_write_reg(CC_FREQ0, w & 0xFF);
+        strobe(0x34);   /* SRX (calibre le PLL au passage IDLE -> RX) */
+        int k = 0;
+        while ((cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F) != 0x0D && k++ < 20) esp_rom_delay_us(100);
+        if (k >= 20) { rc = -1; peak_hdb[i] = -256; continue; }
+        esp_rom_delay_us(500);   /* RSSI valide apres quelques echantillons */
+        int16_t best = -256;
+        int64_t t_end = esp_timer_get_time() + (int64_t)dwell_ms * 1000;
+        while (esp_timer_get_time() < t_end) {
+            int8_t raw = (int8_t)cc1101_read_reg(CC_RSSI | 0x40);
+            int16_t hdb = (int16_t)(raw - 148);   /* (raw/2 - 74) dBm, en demi-dB */
+            if (hdb > best) best = hdb;
+            esp_rom_delay_us(300);
+        }
+        peak_hdb[i] = best;
+        if ((i & 3) == 3) vTaskDelay(1);   /* nourrit le watchdog sur un long balayage */
+    }
+    strobe(CC_SIDLE);
+    cc1101_write_reg(CC_MDMCFG4, mdm4);
+    cc1101_set_freq_khz(f0);
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
+    return rc;
+}
+
 int8_t cc1101_get_rssi(void) {
     uint8_t r = cc1101_read_reg(CC_RSSI | 0x40);
     return (r >= 128) ? (int8_t)((r - 256) / 2 - 74) : (int8_t)(r / 2 - 74);

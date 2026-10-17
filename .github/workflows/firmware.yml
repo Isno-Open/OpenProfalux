@@ -145,6 +145,23 @@ jobs:
              -o keeloq_host_test
           ./keeloq_host_test
 
+  # Le balayage RSSI qui trouve la porteuse d'une telecommande (freq_sweep.c) :
+  # voir firmware/test/freq-sweep/README.md. Pur, un simple gcc suffit (issue #51).
+  banc-freq-sweep:
+    name: Banc de test du balayage RSSI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: freq_sweep sur courbes synthetiques (gcc + AddressSanitizer)
+        working-directory: firmware/test/freq-sweep
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/freq_sweep.c \
+             -o freq_sweep_host_test
+          ./freq_sweep_host_test
+
   # La politique TLS mqtts (mqtt_tls_policy.c) : quand lever le controle du nom (CN) du
   # certificat du broker. Pure, un simple gcc suffit. Issu de la revue codex sur #11 (P1).
   banc-mqtt-tls:
