@@ -69,6 +69,7 @@ broches, il n'en connaît aucune. Ajouter une carte, c'est ajouter un
 | `external` | ESP32-WROOM DevKit + CC1101 externe | `esp32` |
 | `d1-mini` | D1 mini ESP32 + CC1101 externe (GDO0 sur IO26, SPI 1 MHz) | `esp32` |
 | `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
+| `esp32-poe` | Olimex ESP32-POE + CC1101 externe (Ethernet LAN8720 en plus du Wi-Fi) | `esp32` |
 
 ```bash
 cd firmware
@@ -90,7 +91,7 @@ ne se tient pas à la main.
 
 ## Statut
 
-- ✅ Firmware produit **compile** (ESP-IDF v6.1, 1,29 Mo pour `isno-super`, 14 % libres, partitions OTA).
+- ✅ Firmware produit **compile** (ESP-IDF v6.1, 1,14 Mo pour `isno-super`, 24 % libres au 2026-10-18, partitions OTA).
 - ✅ **Rejeu validé au banc** (le moteur suit une trame rejouée, y compris après la vraie télécommande).
 - ⏳ À valider sur l'installation : calibration des temps de course, portée antenne, multi-volets.
 

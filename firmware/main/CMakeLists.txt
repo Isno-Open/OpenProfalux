@@ -9,7 +9,11 @@ set(BOARD_JSON "${CMAKE_CURRENT_LIST_DIR}/../../boards/${BOARD}.json")
 set(BOARD_HDR_DIR "${CMAKE_BINARY_DIR}/board")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(NOT EXISTS "${BOARD_JSON}")
-        message(FATAL_ERROR "carte inconnue : ${BOARD_JSON} n'existe pas (-DBOARD=isno-super | external | d1-mini | m5-atom-lite)")
+        # Les cartes connues sont lues dans boards/, comme en CI : la liste ne peut pas retarder.
+        file(GLOB cartes RELATIVE "${CMAKE_CURRENT_LIST_DIR}/../../boards" "${CMAKE_CURRENT_LIST_DIR}/../../boards/*.json")
+        list(TRANSFORM cartes REPLACE "\\.json$" "")
+        list(JOIN cartes " | " cartes)
+        message(FATAL_ERROR "carte inconnue : ${BOARD_JSON} n'existe pas (-DBOARD=${cartes})")
     endif()
     file(MAKE_DIRECTORY "${BOARD_HDR_DIR}")
     execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py" "${BOARD_JSON}" "${BOARD_HDR_DIR}/board_pins.h"

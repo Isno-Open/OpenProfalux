@@ -88,6 +88,19 @@ jobs:
               idf.py -B build-ci -DBOARD=${{ matrix.carte.board }} build
             "
 
+      - name: Versions des composants figees
+        run: |
+          # Le build doit avoir pris firmware/dependencies.lock.<puce> tel qu'il est commis.
+          # S'il l'a cree (puce nouvelle) ou recalcule (idf_component.yml modifie), les
+          # versions ne sont plus figees : commettre le fichier produit, ci-dessous.
+          lock="firmware/dependencies.lock.${{ matrix.carte.target }}"
+          if [ -n "$(git status --porcelain -- "$lock")" ]; then
+            echo "::error title=${{ matrix.carte.board }}::$lock cree ou recalcule par le build : le commettre"
+            git diff -- "$lock" || true
+            cat "$lock"
+            exit 1
+          fi
+
       - name: Taille de l'image
         run: |
           bin=$(ls firmware/build-ci/*.bin | grep -vE 'bootloader|partition' | head -1)
