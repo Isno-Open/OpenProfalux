@@ -1,4 +1,4 @@
-/* rx_confirm — voir rx_confirm.h. */
+/* rx_confirm : voir rx_confirm.h. */
 #include "rx_confirm.h"
 #include <string.h>
 

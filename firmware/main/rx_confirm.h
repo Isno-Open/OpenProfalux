@@ -1,5 +1,5 @@
 #pragma once
-/* rx_confirm — une trame recue n'est retenue que CONFIRMEE par une seconde trame identique.
+/* rx_confirm : une trame recue n'est retenue que CONFIRMEE par une seconde trame identique.
  *
  * Une vraie telecommande repete le meme mot de code tant que le bouton est tenu (meme code
  * tournant, seul le bit Repeat change). Une trame isolee, souvent faible, qui porte un ou deux
