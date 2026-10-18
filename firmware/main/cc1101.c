@@ -72,6 +72,10 @@ int cc1101_last_te(void) { return s_last_te; }
 static int     s_tx_ok   = -1;      /* -1=non teste, 0=HS, 1=OK (puce passe en TX) */
 static uint8_t s_partnum = 0xFF;    /* CC1101 attendu : PARTNUM 0x00, VERSION 0x04/0x14 */
 static uint8_t s_version = 0xFF;
+/* GDO0 libre (issue #60) : -1 = non teste, 1 = libre, 0 = tenu par un autre composant
+ * (s_gdo0_lvl = niveau auquel il est tenu). */
+static int s_gdo0 = -1, s_gdo0_lvl = -1;
+int cc1101_gdo0_state(int *level) { if (level) *level = s_gdo0_lvl; return s_gdo0; }
 void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version) {
     if (tx_ok)   *tx_ok   = s_tx_ok;
     if (partnum) *partnum = s_partnum;
@@ -321,7 +325,33 @@ int cc1101_set_freq_khz(uint32_t khz) {
 
 /* Auto-test d'emission : passe en TX, lit MARCSTATE (0x13 = porteuse ON),
  * module ~300 ms puis revient a IDLE. Prouve que la puce emet, sans recepteur. */
+/* GDO0 est-il libre pour l'emission ? Sur une carte non standard, le fil peut rejoindre un autre
+ * composant (Ebyte E07-900MBL : le STM8 de la carte, issue #59). Le CC1101 lache GDO0 (haute
+ * impedance), l'ESP32 le lit en entree avec son tirage interne vers le haut puis vers le bas :
+ * s'il suit les deux, rien ne le pilote ; s'il reste bloque, un autre composant le tient.
+ * On ne force jamais le fil : forcer et relire sa propre broche ne voit pas une sortie plus
+ * faible que celle de l'ESP32 (mesure, issue #60). Limite : ne voit ni un tampon a sens unique,
+ * ni un fil coupe. */
+static void gdo0_free_test(void) {
+    strobe(CC_SIDLE);
+    cc1101_write_reg(CC_IOCFG0, 0x2E);   /* GDO0 haute impedance cote CC1101 */
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(CC1101_PIN_GDO0, GPIO_PULLUP_ONLY);   esp_rom_delay_us(200);
+    int hi = gpio_get_level(CC1101_PIN_GDO0);
+    gpio_set_pull_mode(CC1101_PIN_GDO0, GPIO_PULLDOWN_ONLY); esp_rom_delay_us(200);
+    int lo = gpio_get_level(CC1101_PIN_GDO0);
+    gpio_set_pull_mode(CC1101_PIN_GDO0, GPIO_FLOATING);
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
+    gpio_set_level(CC1101_PIN_GDO0, 0);
+    cc1101_write_reg(CC_IOCFG0, 0x0D);   /* configuration normale */
+    s_gdo0 = (hi == 1 && lo == 0) ? 1 : 0;
+    s_gdo0_lvl = s_gdo0 ? -1 : hi;
+    if (s_gdo0) ESP_LOGI(TAG, "GDO0 libre (suit les tirages haut et bas)");
+    else ESP_LOGW(TAG, "GDO0 tenu a %d par un autre composant : l'emission n'atteindra pas le CC1101", hi);
+}
+
 int cc1101_tx_selftest(void) {
+    gdo0_free_test();
     strobe(CC_STX);
     esp_rom_delay_us(1000);
     uint8_t m1 = cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F;

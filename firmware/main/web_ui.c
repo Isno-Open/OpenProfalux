@@ -932,9 +932,10 @@ static esp_err_t h_diag(httpd_req_t *r) {
     cc1101_get_diag(&tx_ok, &partnum, &version);
     uint32_t retries = 0, fails = 0;
     cc1101_spi_stats(&retries, &fails);
-    char out[160];
-    snprintf(out, sizeof(out), "{\"tx_ok\":%d,\"partnum\":%d,\"version\":%d,\"spi_retries\":%u,\"spi_fails\":%u}",
-             tx_ok, partnum, version, (unsigned)retries, (unsigned)fails);
+    int gdo0_lvl = -1, gdo0 = cc1101_gdo0_state(&gdo0_lvl);
+    char out[192];
+    snprintf(out, sizeof(out), "{\"tx_ok\":%d,\"partnum\":%d,\"version\":%d,\"spi_retries\":%u,\"spi_fails\":%u,\"gdo0\":%d,\"gdo0_lvl\":%d}",
+             tx_ok, partnum, version, (unsigned)retries, (unsigned)fails, gdo0, gdo0_lvl);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
