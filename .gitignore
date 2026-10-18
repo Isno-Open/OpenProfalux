@@ -1,7 +1,7 @@
 # ESP-IDF build
 firmware/build/
 firmware/managed_components/
-firmware/dependencies.lock
+# firmware/dependencies.lock.<puce> est COMMIS : il fige les versions des composants.
 firmware/sdkconfig
 firmware/sdkconfig.old
 
@@ -31,7 +31,8 @@ firmware-capture-test/sdkconfig
 firmware-capture-test/sdkconfig.old
 firmware-capture-test/main/*.o
 
-# Sorties de scripts/release.sh
+# Sorties de firmware/build-release.sh
 firmware/build-*/
+firmware/release/
 firmware/sdkconfig.devkit
 dist/

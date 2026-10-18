@@ -11,6 +11,7 @@ inconnue fait échouer la configuration, elle ne compile pas avec de mauvaises b
 | `external` | ESP32-WROOM DevKit + CC1101 externe | `esp32` |
 | `d1-mini` | D1 mini ESP32 + CC1101 externe (GDO0 sur IO26, SPI 1 MHz) | `esp32` |
 | `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
+| `esp32-poe` | Olimex ESP32-POE + CC1101 externe (Ethernet LAN8720 en plus du Wi-Fi) | `esp32` |
 
 ## Compiler
 
@@ -35,8 +36,22 @@ docker compose run --rm esp-idf bash -c "
 "
 ```
 
-La même chose tourne en intégration continue à chaque poussée, pour les trois
-cartes : voir `.github/workflows/firmware.yml`.
+La même chose tourne en intégration continue à chaque poussée, pour chaque carte
+de `boards/` : voir `.github/workflows/firmware.yml`.
+
+## Versions des composants
+
+Les composants du registre (mdns, mqtt, cjson, lan87xx) sont figés dans un fichier
+**commis** par puce : `firmware/dependencies.lock.esp32` et
+`firmware/dependencies.lock.esp32s3`. Deux builds du même commit embarquent donc les
+mêmes versions, comme la version d'ESP-IDF est figée par l'image `espressif/idf:v6.1`.
+
+Monter une version se décide : effacer le fichier de la puce, puis
+`idf.py -B build-<carte> reconfigure` sur une carte de cette puce (il est recalculé ;
+un simple `build` ne le recrée pas), vérifier, commettre. `idf.py update-dependencies`
+ne convient pas, il ne connaît que le nom par défaut `dependencies.lock`. La CI échoue si
+un build a dû créer ou recalculer l'un de ces fichiers (manifeste `idf_component.yml`
+modifié, nouvelle puce) : commettre celui qu'elle affiche.
 
 ## Flasher + console série
 
@@ -61,13 +76,13 @@ mqtt:
 ## Config initiale ESP32 (=au premier boot)
 
 1. ESP32 démarre → boot log verbose via UART
-2. Aucun WiFi configuré → démarre SoftAP `OpenProfalux-Setup` (mdp `openprofalux`)
-3. Se connecter au SoftAP + ouvrir http://192.168.4.1
+2. Aucun WiFi configuré → point d'accès **ouvert** `OpenProfalux_XXXX` (fin de la MAC)
+3. Se connecter : le portail captif ouvre la page de configuration (sinon http://192.168.4.1)
 4. Configurer :
-   - Device name (=ex `volet_chambre_invitee`)
-   - WiFi SSID + password
-   - MQTT broker URI (=`mqtt://192.168.1.x:1883`)
-5. ESP32 reboot → connect WiFi → connect MQTT → HA discovery auto
+   - onglet **Wi-Fi** : SSID + password, nom du boîtier (=ex `volet_chambre_invitee`, facultatif)
+   - ESP32 reboot → connect WiFi, à l'adresse affichée (`http://<nom>.local`)
+   - onglet **MQTT** : broker URI (=`mqtt://192.168.1.x:1883`)
+5. ESP32 reboot → connect MQTT → HA discovery auto
 
 ## Debug depuis mon côté (=via MQTT)
 
@@ -75,30 +90,27 @@ mqtt:
 # Subscribe à tous les logs et frames émises
 mosquitto_sub -h 192.168.1.x -v -t 'openprofalux/#'
 
-# Trigger un pair
-mosquitto_pub -h 192.168.1.x -t 'openprofalux/volet_test/pair' -m '{}'
-
-# Voir le state
+# Voir le state du boîtier (<nom> = nom du boîtier, ex. volet_test)
 mosquitto_sub -h 192.168.1.x -t 'openprofalux/volet_test/state'
 
-# Envoyer commande
-mosquitto_pub -h 192.168.1.x -t 'openprofalux/volet_test/cmd' -m '{"btn":"UP"}'
+# Envoyer commande à un volet (<id> : voir les topics openprofalux/cover/+/state)
+mosquitto_pub -h 192.168.1.x -t 'openprofalux/cover/<id>/set' -m 'OPEN'
 
-# Capture RX pour analyse trames télécommande d'origine
-mosquitto_pub -h 192.168.1.x -t 'openprofalux/listen/start' -m ''
-mosquitto_sub -h 192.168.1.x -t 'openprofalux/listen/frame' -v
+# Capture RX pour analyse trames télécommande d'origine (écoute RF permanente)
+mosquitto_pub -h 192.168.1.x -t 'openprofalux/listen/set' -m 'ON'
+mosquitto_sub -h 192.168.1.x -t 'openprofalux/frames/#' -v
 # ... presser bouton sur télécommande d'origine, voir les trames captured ici ...
-mosquitto_pub -h 192.168.1.x -t 'openprofalux/listen/stop' -m ''
+mosquitto_pub -h 192.168.1.x -t 'openprofalux/listen/set' -m 'OFF'
 ```
 
 ## Logs disponibles
 
 Le firmware publie sur MQTT :
-- `openprofalux/log` — logs de toutes activités (=`{"lvl":"info","msg":"..."}`)
-- `openprofalux/{device}/state` — state actuel (=serial, counter, rssi, heap)
-- `openprofalux/{device}/pair_result` — résultat pairing (=success/timeout)
-- `openprofalux/listen/frame` — chaque trame RF captured en mode listen
-- `openprofalux/system/status` — heap free, uptime, target
+- `openprofalux/log` — topics reçus et connexion (=`{"lvl":"info","msg":"...","client":"..."}`)
+- `openprofalux/{device}/state` — state actuel (=dernière commande, rssi, heap)
+- `openprofalux/{device}/status` — `online` / `offline` (disponibilité HA)
+- `openprofalux/frames/last` et `openprofalux/frames/log/<n>` — trames RF captées (écoute activée)
+- `openprofalux/system/status` — version, target, heap free (à la connexion)
 
 Depuis mon côté (=Claude), je peux :
 1. Te demander de lancer `mosquitto_sub -h {ip} -v -t 'openprofalux/#' > /tmp/log.txt`
