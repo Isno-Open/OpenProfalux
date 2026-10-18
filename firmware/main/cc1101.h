@@ -59,6 +59,7 @@ uint32_t cc1101_get_tx_te(void);
 int cc1101_last_te(void);                    /* TE (us) mesure sur la derniere trame decodee */
 void cc1101_spi_stats(uint32_t *retries, uint32_t *fails); /* ecritures SPI reessayees / jamais prises */
 void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version); /* diag UI : puce + self-test TX */
+int  cc1101_gdo0_state(int *level);   /* GDO0 : -1 non teste, 1 libre, 0 tenu (*level = niveau) */
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
 
