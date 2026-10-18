@@ -1056,11 +1056,34 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
 }
 static esp_err_t h_pfx_capture_poll(httpd_req_t *r) {
     pfx_ident_t id; pfx_enrol_get(&id);
-    char out[144];
-    snprintf(out, sizeof(out),
-        "{\"active\":%d,\"done\":%d,\"rc\":%d,\"new\":%d,\"remote\":\"0x%07X\",\"serial\":\"0x%07X\",\"counter\":%d}",
-        s_pcap_active ? 1 : 0, s_pcap_done ? 1 : 0, s_pcap_rc, s_pcap_new,
-        (unsigned)s_pcap_remote, (unsigned)id.serial, id.counter);
+    char hex[12];
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "active", s_pcap_active ? 1 : 0);
+    cJSON_AddNumberToObject(o, "done", s_pcap_done ? 1 : 0);
+    cJSON_AddNumberToObject(o, "rc", s_pcap_rc);
+    cJSON_AddNumberToObject(o, "new", s_pcap_new);
+    snprintf(hex, sizeof(hex), "0x%07X", (unsigned)s_pcap_remote); cJSON_AddStringToObject(o, "remote", hex);
+    snprintf(hex, sizeof(hex), "0x%07X", (unsigned)id.serial);     cJSON_AddStringToObject(o, "serial", hex);
+    cJSON_AddNumberToObject(o, "counter", id.counter);
+    /* Identite reprise et deja portee par un volet virtuel : l'UI le signale et propose une
+     * identite neuve (issue #53, une identite partagee fait bouger plusieurs moteurs). */
+    char used[SH_ID_LEN];
+    if (s_pcap_done && s_pcap_rc == 0 && !s_pcap_new && shutters_virt_name_for_serial(id.serial, used, sizeof(used)))
+        cJSON_AddStringToObject(o, "used_by", used);
+    char *js = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{}");
+    free(js);
+    return e;
+}
+/* Identite neuve a la place de celle reprise, juste apres une capture reussie (issue #53). */
+static esp_err_t h_pfx_renew(httpd_req_t *r) {
+    pfx_ident_t id; pfx_enrol_get(&id);
+    int rc = -2;
+    if (eg_learn_allowed(&s_egate) && s_egate.remote == id.remote) rc = pfx_enrol_renew();
+    if (rc == 0) pfx_enrol_get(&id);
+    char out[96];
+    snprintf(out, sizeof(out), "{\"ok\":%d,\"rc\":%d,\"serial\":\"0x%07X\"}", rc == 0 ? 1 : 0, rc, (unsigned)id.serial);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
@@ -1338,6 +1361,7 @@ void web_ui_start(void) {
     reg(s, "/api/pfx",        HTTP_GET,  h_pfx_get);
     reg(s, "/api/pfx/capture", HTTP_POST, h_pfx_capture);
     reg(s, "/api/pfx/capture/poll", HTTP_GET, h_pfx_capture_poll);
+    reg(s, "/api/pfx/renew", HTTP_POST, h_pfx_renew);
     reg(s, "/api/pfx/learn",  HTTP_POST, h_pfx_learn);
     reg(s, "/api/pfx/cmd",    HTTP_POST, h_pfx_cmd);
     reg(s, "/api/pfx/forget", HTTP_POST, h_pfx_forget);

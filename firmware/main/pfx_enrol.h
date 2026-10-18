@@ -56,6 +56,11 @@ bool pfx_enrol_get(pfx_ident_t *out);   /* copie l'identité courante ; retourne
  * Retourne 0 (ok), -1 (plein : 63 identités déjà prises), -2 (remote invalide). */
 int  pfx_enrol_capture(uint32_t remote, int model, bool *is_new);
 
+/* Identité neuve pour la télécommande de l'identité active, au lieu de reprendre la sienne :
+ * l'ancienne reste réservée (jamais réattribuée). 0 ok, -1 plus de slot libre, -2 pas d'identité
+ * active issue d'une télécommande. */
+int  pfx_enrol_renew(void);
+
 /* Oublie l'identité courante : libère son slot dans la table (réattribuable) et efface l'état. */
 void pfx_enrol_forget(void);
 

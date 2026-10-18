@@ -111,6 +111,7 @@ bool shutters_prev_cfg_time(time_t *t);
 
 /* ── Identités virtuelles PFX (anti-conflit + resync compteur pour l'enrôlement) ── */
 bool     shutters_virt_serial_used(uint32_t serial);        /* serial 0x067 déjà pris par un volet ? */
+bool     shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap); /* volet virtuel de ce serial */
 uint16_t shutters_virt_counter_for_serial(uint32_t serial); /* compteur du volet de ce serial (0 si aucun) */
 
 #endif

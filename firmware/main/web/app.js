@@ -790,6 +790,7 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   const model = Number($('#pfx-model').value || 0);
   const wait = ms => new Promise(r => setTimeout(r, ms));
   b.disabled = true; setRadioBusy(true);
+  if ($('#pfx-renew-row')) $('#pfx-renew-row').hidden = true;
   const r = await api('/api/pfx/capture', { method: 'POST', body: JSON.stringify({ model }) }).catch(() => null);
   if (!r || !r.ok) { pfxCapStatus('Échec du démarrage de la capture', 'bad'); b.disabled = false; setRadioBusy(false); return; }
   let n = 15, d = null;
@@ -800,11 +801,28 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   b.disabled = false; b.textContent = o; setRadioBusy(false);
   if (!d || !d.done) pfxCapStatus('Aucune réponse du boîtier', 'bad');
   else if (d.rc === 0 && d.new) { pfxCapStatus(`✅ Nouveau moteur - identité ${d.serial} attribuée (télécommande ${d.remote})`, 'ok'); pfxResetSteps(); }
-  else if (d.rc === 0) pfxCapStatus(`✅ Moteur déjà connu - même identité ${d.serial} (télécommande ${d.remote})`, 'ok');
+  else if (d.rc === 0) {
+    /* Identite reprise : proposer une identite neuve, au cas ou d'autres moteurs la connaissent (issue #53). */
+    pfxCapStatus(`✅ Moteur déjà connu - même identité ${d.serial} (télécommande ${d.remote})`, 'ok',
+      d.used_by ? `⚠️ Cette identité pilote déjà le volet virtuel « <b>${esc(d.used_by)}</b> » : tout moteur qui la connaît bouge avec lui.` : '');
+    if ($('#pfx-renew-row')) $('#pfx-renew-row').hidden = false;
+  }
   else if (d.rc === -1) pfxCapStatus('⚠️ 63 identités déjà attribuées : oublie-en une pour libérer un slot.', 'bad');
   /* Capture ratee : l'identite d'avant est deselectionnee, rien ne partira avec elle (issue #53). */
   else if (d.rc === -3) pfxCapStatus("❌ La capture a échoué : le boîtier n'a rien reçu. Rapproche la télécommande du boîtier (moins d'un mètre), tiens le bouton une seconde, et recommence.", 'bad', radioProfileHelp());
   else pfxCapStatus("❌ La capture a échoué : télécommande non reconnue. Recommence avec la télécommande de ce volet.", 'bad');
+  await loadPfx();
+};
+if ($('#pfx-renew')) $('#pfx-renew').onclick = async () => {
+  const b = $('#pfx-renew'); b.disabled = true;
+  const r = await api('/api/pfx/renew', { method: 'POST' }).catch(() => null);
+  b.disabled = false;
+  if (r && r.ok) {
+    $('#pfx-renew-row').hidden = true;
+    pfxCapStatus(`✅ Identité neuve ${r.serial} attribuée : l'ancienne reste réservée, aucun autre moteur ne la recevra.`, 'ok');
+    pfxResetSteps();
+  } else if (r && r.rc === -1) pfxCapStatus('⚠️ 63 identités déjà attribuées : plus de slot libre pour une identité neuve.', 'bad');
+  else pfxCapStatus('❌ Refusé : refais la capture de la télécommande, puis recommence.', 'bad');
   await loadPfx();
 };
 function pfxStatus(txt, cls) {
