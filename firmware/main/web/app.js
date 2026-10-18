@@ -67,7 +67,7 @@ function activateMain(name) {
   const t = $(`.tab[data-t="${name}"]`); if (!t) return false;
   $$('.tab').forEach(x => x.classList.toggle('active', x === t));
   $$('.panel').forEach(p => p.classList.toggle('active', p.dataset.p === name));
-  if (['sys', 'wifi', 'mqtt', 'ota'].includes(name)) loadConfig();
+  if (['sys', 'wifi', 'mqtt', 'ota', 'remotes'].includes(name)) loadConfig();   /* remotes : profil radio rappele aux captures */
   return true;
 }
 function activateSub(sec, name) {
@@ -358,6 +358,47 @@ function renderVoletPicker() {
   box.appendChild(add);
 }
 
+/* ── Rappel du profil radio aux captures (issue #63) ──
+ * Une capture qui echoue vient souvent du mauvais profil (Eveno emet ~100 kHz plus bas que
+ * Profalux) : on rappelle le profil actif sur les ecrans de capture, et le message d'echec
+ * renvoie vers le choix du profil ou le calage sur la telecommande (balayage RSSI). */
+const PROFILE_NAMES = { profalux: 'Profalux', eveno: 'Eveno', custom: 'Personnalisé' };
+function radioProfileNow() {
+  const p = cfgCache.radio_profile || 'profalux';
+  const khz = cfgCache.freq_khz || (p === 'eveno' ? 868330 : 868425);
+  return { p, name: PROFILE_NAMES[p] || p, mhz: (khz / 1000).toFixed(3).replace('.', ',') + ' MHz' };
+}
+const RADIO_LINKS = '<a href="#sys/device" data-goto="sys-radioprof">Vérifier</a> · '
+                  + '<a href="#sys/device" data-goto="sys-sweep">Caler sur ma télécommande</a>';
+function refreshRadioReminder() {
+  const r = radioProfileNow();
+  $$('.radio-reminder').forEach(el => el.innerHTML = `📻 Profil radio : <b>${esc(r.name)} (${r.mhz})</b> · ${RADIO_LINKS}`);
+}
+function radioProfileHelp() {
+  const r = radioProfileNow();
+  const why = r.p === 'eveno' ? 'Profalux émet environ 100 kHz plus haut'
+            : r.p === 'custom' ? 'elle ne correspond peut-être pas à ta télécommande'
+            : 'Eveno émet environ 100 kHz plus bas';
+  return `Toujours rien ? Le profil radio est peut-être le mauvais (actuel : <b>${esc(r.name)}</b>, ${r.mhz}) : ${why}. ${RADIO_LINKS}`;
+}
+function learnFail(show, label) {
+  const el = $('#learn-fail'); if (!el) return;
+  el.hidden = !show;
+  if (show) el.querySelector('span:last-child').innerHTML =
+    `<b>Rien capté pour ${esc(label)}.</b> Rapproche la télécommande à moins d'un mètre, tiens le bouton une seconde, et réessaie.<br>${radioProfileHelp()}`;
+}
+/* Lien vers un reglage de Systeme > Appareil : ouvre l'onglet, amene le champ a l'ecran et
+ * l'allume un instant pour qu'on voie ou cliquer. */
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-goto]'); if (!a) return;
+  e.preventDefault();
+  location.hash = a.getAttribute('href');
+  setTimeout(() => {
+    const el = document.getElementById(a.dataset.goto); if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  }, 150);
+});
 function renderLearnSlots() {
   const box = $('#learn-slots'); if (!box) return;
   const id = activeVolet;
@@ -477,6 +518,7 @@ async function captureAction(action, btn) {
   if (isNewNameWithComma(id)) { toast(COMMA_MSG); return; }
   const label = LEARN_ACTIONS.find(x => x.a === action).lbl;
   learning = true; renderLearnSlots();
+  learnFail(false);
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
   await api('/api/learn/start', { method: 'POST', body: JSON.stringify({ action }) });
   const t0 = Date.now();
@@ -502,7 +544,7 @@ async function captureAction(action, btn) {
       await loadStatus();     // rafraîchit -> le slot passe en ✓
     } else if (Date.now() - t0 > 16000) {
       clearInterval(poll); learning = false;
-      toast(`Rien capté pour ${label}, rapproche-toi et réessaie`);
+      learnFail(true, label);
       renderLearnSlots();
     }
   }, 400);
@@ -737,10 +779,11 @@ function pfxResetSteps() {   // nouvelle identité -> on recache les gestes jusq
   const after = $('#pfx-after-emit'); if (after) after.hidden = true;
   const st = $('#pfx-learn-status'); if (st) st.hidden = true;
 }
-function pfxCapStatus(txt, cls) {
+function pfxCapStatus(txt, cls, moreHtml) {
   const st = $('#pfx-capture-status'); if (!st) return;
   st.hidden = false; st.className = 'statline' + (cls ? ' ' + cls : '');
   st.querySelector('b').textContent = txt;
+  st.querySelector('.more').innerHTML = moreHtml || '';
 }
 if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   const b = $('#pfx-capture'), o = b.textContent;
@@ -760,7 +803,7 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   else if (d.rc === 0) pfxCapStatus(`✅ Moteur déjà connu - même identité ${d.serial} (télécommande ${d.remote})`, 'ok');
   else if (d.rc === -1) pfxCapStatus('⚠️ 63 identités déjà attribuées : oublie-en une pour libérer un slot.', 'bad');
   /* Capture ratee : l'identite d'avant est deselectionnee, rien ne partira avec elle (issue #53). */
-  else if (d.rc === -3) pfxCapStatus("❌ La capture a échoué : le boîtier n'a rien reçu. Rapproche la télécommande du boîtier (moins d'un mètre), tiens le bouton une seconde, et recommence.", 'bad');
+  else if (d.rc === -3) pfxCapStatus("❌ La capture a échoué : le boîtier n'a rien reçu. Rapproche la télécommande du boîtier (moins d'un mètre), tiens le bouton une seconde, et recommence.", 'bad', radioProfileHelp());
   else pfxCapStatus("❌ La capture a échoué : télécommande non reconnue. Recommence avec la télécommande de ce volet.", 'bad');
   await loadPfx();
 };
@@ -899,6 +942,7 @@ async function loadConfig() {
       (rp.value === 'custom' ? ` (saisie en kHz, entre ${fq.min} et ${fq.max})` : '');
   }
   if ($('#mqtt-device')) $('#mqtt-device').value = c.device || '';
+  refreshRadioReminder();
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
   if ($('#ota-auto')) $('#ota-auto').checked = c.update_auto !== 0;   /* absent (ancien firmware) = active */
