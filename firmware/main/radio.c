@@ -5,6 +5,7 @@
 #include "cc1101.h"
 #include "freq_sweep.h"
 #include "hardware_config.h"
+#include "rx_confirm.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -45,14 +46,31 @@ void radio_tx(const char *bits, int repeats) {
     xSemaphoreGive(s_mtx);
 }
 
-int radio_listen_once(uint32_t timeout_ms, char *buf, int max) {
-    if (!s_mtx) return -1;
+int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
+    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
     bool was = s_paused; s_paused = true;   /* met la tache permanente en pause pendant l'ecoute dediee */
     xSemaphoreTake(s_mtx, portMAX_DELAY);
-    int n = cc1101_rx_listen_bits(timeout_ms, buf, max);
+    /* Fenetres successives jusqu'a deux trames identiques (rx_confirm.h, issue #39) : une
+     * trame isolee, souvent faible et a bits faux, n'est plus apprise. */
+    static rx_confirm_t c;   /* sous s_mtx : une seule ecoute dediee a la fois */
+    rx_confirm_reset(&c);
+    char bits[80];
+    int r = -1;
+    int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    for (int64_t now; (now = esp_timer_get_time()) < t_end; ) {
+        int n = cc1101_rx_listen_bits((uint32_t)((t_end - now) / 1000) + 1, bits, 79);
+        if (n < 64) continue;
+        bits[n] = 0;
+        if (!rx_confirm_push(&c, bits, n, esp_timer_get_time())) continue;
+        const char *ok = full ? c.full : c.last;   /* apprentissage : une trame complete de 66 bits */
+        if (!ok[0]) continue;                      /* confirmee mais coupee : on attend la suivante */
+        strlcpy(buf, ok, (size_t)max);
+        r = (int)strlen(buf);
+        break;
+    }
     xSemaphoreGive(s_mtx);
     s_paused = was;
-    return n;
+    return r;
 }
 
 void radio_pause_rx(bool pause) { s_paused = pause; }
@@ -192,14 +210,19 @@ void radio_set_listening(bool on) {
 static void rx_task(void *arg) {
     (void)arg;
     char bits[80];
+    static rx_confirm_t c;   /* serie en cours : une trame n'est transmise que confirmee (issue #39) */
+    rx_confirm_reset(&c);
     while (s_run) {
         if (!s_listen || s_paused) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }  /* veille tant que capture OFF ou TX en cours */
         xSemaphoreTake(s_mtx, portMAX_DELAY);
         int n = (!s_listen || s_paused) ? -1 : cc1101_rx_listen_bits(RX_WINDOW_MS, bits, 79);
         int8_t rssi = (n >= 64) ? cc1101_get_rssi() : 0;
         xSemaphoreGive(s_mtx);
-        if (n >= 64 && s_cb) {
-            bits[n] = 0;
+        if (n >= 64) bits[n] = 0;
+        /* Confirmee = identique a la precedente (64 premiers bits) : la 1re trame d'un appui
+         * attend la 2e (~125 ms). Les suivantes de la rafale passent toutes (le suivi de
+         * position et le journal RF dedupliquent). */
+        if (n >= 64 && rx_confirm_push(&c, bits, n, esp_timer_get_time()) && s_cb) {
             uint32_t serial = lsb(bits, 32, 28);
             uint32_t hop    = lsb(bits, 0, 32);
             uint8_t  button = (uint8_t)lsb(bits, 60, 4);

@@ -27,6 +27,9 @@ void shutters_init(void);
 /* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
 int  shutters_delete_volet(const char *id);
+int  shutters_delete_remote(const char *serial, const char **why);   /* refuse si un volet s'en sert (*why) */
+int  shutters_ignore_remote(const char *serial, const char **why);   /* retire + n'enregistre plus ; refuse si un volet s'en sert */
+int  shutters_unignore_remote(const char *serial);
 
 /* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet. Cree le volet si absent. */
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
@@ -52,6 +55,8 @@ int  shutters_remote_name(const char *serial, const char *name);
 void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rssi, uint32_t hop);
 /* Adopte une trame vue dans le journal RF (identifiee par serial+hop) et l'affecte a une action. */
 int  shutters_adopt(const char *id, const char *action, const char *serial, uint32_t hop);
+/* Volet cree depuis une telecommande du journal RF (derniere trame ▲ ■ ▼) ; learned = "up,stop,down". */
+int  shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why);
 /* Rejoue telle quelle une trame captee (serial+hop) depuis le journal RF (bouton "rejouer" du debug). */
 int  shutters_replay_frame(const char *serial, uint32_t hop);
 /* Journal RF pour /api/rf : la page [offset, offset + limit) des trames triees par date

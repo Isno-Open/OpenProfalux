@@ -425,8 +425,8 @@ function renderLearnSlots() {
   if (hint) hint.textContent = !id
     ? 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.'
     : (v && v.virt)
-      ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie une fois sur sa télécommande d'origine (< 1 m du boîtier). Facultatif.`
-      : `Volet « ${id} » : clique Capturer, puis appuie une fois sur le bouton de ta télécommande (< 1 m du boîtier).`;
+      ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie sur sa télécommande d'origine en tenant le bouton une seconde (< 1 m du boîtier). Facultatif.`
+      : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
   updateRemoteNameField();
 }
 
@@ -525,20 +525,114 @@ if (delVoletBtn) delVoletBtn.onclick = async () => {
 };
 
 /* ── Télécommandes ── */
-function renderRemotes(map, rf) {
+function renderRemotes(s, rf) {
   const box = $('#remotes-list'); if (!box) return;
-  const entries = Object.entries(map || {});
+  renderIgnored(s.remotes_ignored || []);
+  const ae = document.activeElement;   /* saisie d'un nom en cours : ne pas l'ecraser au poll */
+  if (ae && ae.tagName === 'INPUT' && box.contains(ae)) return;
+  const entries = Object.entries(s.remotes || {});
+  const max = s.remotes_max || 16;
   $('#remotes-empty').hidden = entries.length > 0;
+  $('#remotes-count').textContent = `${entries.length} / ${max}`;
+  /* Liste pleine : le firmware refuse les nouvelles et dit laquelle (issue #39). */
+  const full = $('#remotes-full');
+  full.hidden = entries.length < max;
+  full.querySelector('b').textContent = s.remote_refused
+    ? `Liste pleine : la télécommande ${s.remote_refused} n'a pas pu être enregistrée. Supprime une télécommande inutile.`
+    : `Liste pleine : une nouvelle télécommande ne pourra pas être enregistrée. Supprime une télécommande inutile.`;
   box.innerHTML = '';
   for (const [serial, name] of entries) {
     const r = rssiForSerials([serial], rf);
-    const row = document.createElement('div'); row.className = 'row'; row.style.alignItems = 'center';
-    row.innerHTML = `<code class="badge">${esc(serial)}</code>
-      <input style="flex:1" value="${esc(name)}" placeholder="nom…">${sig(r)}`;
+    const used = voletForSerial(serial);
+    /* Grille a colonnes fixes (style.css .remote-row) : cellules toujours presentes, meme
+     * vides, pour que le champ du nom ait la meme largeur sur toutes les lignes. */
+    const row = document.createElement('div'); row.className = 'remote-row';
+    row.innerHTML = `<code class="badge r-ser">${esc(serial)}</code>
+      <input class="r-name" value="${esc(name)}" placeholder="nom…">
+      <span class="r-sig">${sig(r)}</span>
+      <span class="hint r-used" title="${esc(used || '')}">${used ? esc(used)
+        : '<button class="btn r-mk" title="Créer un volet avec ce nom, à partir des dernières trames ▲ ■ ▼ de cette télécommande dans le journal RF">➕ Créer le volet</button>'}</span>
+      <span class="r-act"><button class="btn r-ign" title="Ignorer : ne plus l'enregistrer quand elle est captée">🚫</button><button class="btn danger r-del" title="Supprimer cette télécommande">🗑</button></span>`;
     const inp = row.querySelector('input');
     inp.onchange = () => api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
+    const label = name ? `« ${name} » (${serial})` : serial;
+    /* Sans confirmation : une telecommande supprimee ou ignoree se recupere d'un appui
+     * (ou d'un clic sur sa croix dans les ignorees). */
+    row.querySelector('.r-del').onclick = async () => {
+      const rep = await fetch('/api/remote/delete', { method: 'POST', body: JSON.stringify({ serial }) });
+      toast(rep.ok ? `${label} supprimée` : `Refusé : ${await rep.text()}`);
+      await loadStatus();
+    };
+    /* Creer le volet : un champ « nom du volet » apparait dans la cellule, distinct du nom de la
+     * telecommande (prerempli avec celui-ci). ✓ ou Entree cree, Echap annule. */
+    const mk = row.querySelector('.r-mk');
+    if (mk) mk.onclick = () => {
+      const cell = mk.parentElement;
+      cell.classList.add('r-mkform');
+      cell.innerHTML = `<input class="r-vname" placeholder="nom du volet" spellcheck="false"><button class="btn r-mkok" title="Créer le volet">✓</button>`;
+      const vin = cell.querySelector('input');
+      vin.value = inp.value.trim();
+      vin.focus(); vin.select();
+      const create = async () => {
+        const vname = vin.value.trim();
+        if (!vname) { toast('Donne un nom au volet'); vin.focus(); return; }
+        if (isNewNameWithComma(vname)) { toast(COMMA_MSG); vin.focus(); return; }
+        const rep = await fetch('/api/remote/create_volet', { method: 'POST', body: JSON.stringify({ serial, name: vname }) });
+        if (!rep.ok) { toast(`Refusé : ${await rep.text()}`); vin.focus(); return; }
+        const d = await rep.json().catch(() => ({}));
+        const lab = { up: '▲', stop: '■', down: '▼' };
+        const got = (d.learned || '').split(',').filter(Boolean);
+        const miss = ['up', 'stop', 'down'].filter(a => !got.includes(a));
+        toast(`Volet « ${vname} » créé : ${got.map(a => lab[a]).join(' ')} appris`
+          + (miss.length ? ` · ${miss.map(a => lab[a]).join(' ')} à apprendre (aucune trame dans le journal)` : ''));
+        vin.blur(); await loadStatus();
+      };
+      cell.querySelector('.r-mkok').onclick = create;
+      vin.onkeydown = e => {
+        if (e.key === 'Enter') create();
+        else if (e.key === 'Escape') { vin.blur(); loadStatus(); }   /* annule : la ligne est redessinee */
+      };
+    };
+    row.querySelector('.r-ign').onclick = async () => {
+      const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
+      toast(rep.ok ? `${label} ignorée` : `Refusé : ${await rep.text()}`);
+      await loadStatus();
+    };
     box.appendChild(row);
   }
+}
+
+/* Telecommandes ignorees : une bulle par serial (croix = ne plus l'ignorer), et un champ pour
+ * en ajouter une a la main. */
+function renderIgnored(list) {
+  const box = $('#ignored-box'); if (!box) return;
+  const inp = $('#ignored-input');
+  const key = list.join(',');
+  if (box.dataset.k === key) return;   /* inchange : ne pas recreer (garde la saisie) */
+  box.dataset.k = key;
+  $$('.tag', box).forEach(t => t.remove());
+  for (const serial of list) {
+    const t = document.createElement('span'); t.className = 'tag';
+    t.innerHTML = `<code>${esc(serial)}</code><button title="Ne plus ignorer">×</button>`;
+    t.querySelector('button').onclick = async (e) => {
+      e.stopPropagation();
+      await api('/api/remote/unignore', { method: 'POST', body: JSON.stringify({ serial }) }).catch(() => {});
+      toast(`${serial} n'est plus ignorée`);
+      await loadStatus();
+    };
+    box.insertBefore(t, inp);
+  }
+}
+if ($('#ignored-box')) {
+  $('#ignored-box').onclick = () => $('#ignored-input').focus();
+  $('#ignored-input').onkeydown = async (e) => {
+    if (e.key !== 'Enter') return;
+    const serial = e.target.value.trim(); if (!serial) return;
+    const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
+    toast(rep.ok ? 'Télécommande ignorée' : `Refusé : ${await rep.text()}`);
+    if (rep.ok) e.target.value = '';
+    await loadStatus();
+  };
 }
 const remoteName = s => (statusCache.remotes || {})[s] || s;
 
@@ -1237,6 +1331,7 @@ async function loadStatus() {
   renderVolets(s.volets || [], rf);
   renderCentralMembers();
   renderCentralsList();
+  renderRemotes(s, rf);
   fillVoletPickers(s.volets || []);
   if ((location.hash || '').includes('/calib') && !calibLive) fillCalib();   /* affiche les temps enregistres */
   if (!learning) { renderVoletPicker(); renderLearnSlots(); }

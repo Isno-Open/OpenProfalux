@@ -76,6 +76,7 @@
         <button class="subtab" data-s="enrol">Créer une télécommande</button>
         <button class="subtab" data-s="central">Centrale</button>
         <button class="subtab" data-s="calib">Calibration</button>
+        <button class="subtab" data-s="list">Liste</button>
       </nav>
 
       <div class="subpanel active" data-sp="learn">
@@ -96,8 +97,21 @@
             <p class="hint">Nord = 0 · Est = 90 · Sud = 180 · Ouest = 270. Laisser vide = non défini.</p>
           </div>
           <div class="row" id="del-volet-row" hidden><button id="del-volet" class="btn danger">🗑 Supprimer ce volet</button></div>
-          <p class="hint" id="learn-hint">Choisis un volet ci-dessus pour activer la capture. Place-toi à moins d'un mètre du boîtier et appuie une fois sur le bon bouton.</p>
+          <p class="hint" id="learn-hint">Choisis un volet ci-dessus pour activer la capture. Place-toi à moins d'un mètre du boîtier et appuie sur le bon bouton en le tenant une seconde.</p>
           <div class="statline" style="margin-top:14px"><span class="dot"></span><b>Le clonage ne pilote pas ton moteur ?</b> Certains moteurs refusent le rejeu (rolling code strict). Dans ce cas, <a href="#" id="goto-enrol"><b>crée une télécommande virtuelle</b></a> - ça nécessite aussi ta télécommande d'origine.</div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="list">
+        <div class="card">
+          <h2>Télécommandes enregistrées <span class="badge" id="remotes-count"></span></h2>
+          <p class="sub">Toute télécommande captée par le boîtier, même celle d'un voisin, s'enregistre ici (sans nom). Supprime celles qui ne servent pas : une télécommande supprimée revient si elle est de nouveau captée, une télécommande ignorée ne revient plus.</p>
+          <div class="statline bad" id="remotes-full" hidden><span class="dot"></span><b></b></div>
+          <div id="remotes-list"></div>
+          <p class="hint" id="remotes-empty" hidden>Aucune télécommande enregistrée.</p>
+          <h3>Télécommandes ignorées</h3>
+          <p class="sub">Le boîtier ne les enregistre plus quand il les capte (celle d'un voisin, par exemple). Retire-en une avec sa croix, ou ajoute un serial à la main.</p>
+          <div class="tagbox" id="ignored-box"><input id="ignored-input" placeholder="0x… puis Entrée" spellcheck="false" autocomplete="off"></div>
         </div>
       </div>
 

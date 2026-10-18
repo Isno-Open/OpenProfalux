@@ -209,6 +209,23 @@ jobs:
              -o mdns_name_host_test
           ./mdns_name_host_test
 
+  # La confirmation d'une trame recue par une seconde identique (rx_confirm.c) :
+  # voir firmware/test/rx-confirm/README.md. Pure, un simple gcc suffit (issue #39).
+  banc-rx-confirm:
+    name: Banc de test de la confirmation des trames
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: rx_confirm sur trames en bouchon (gcc + AddressSanitizer)
+        working-directory: firmware/test/rx-confirm
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/rx_confirm.c \
+             -o rx_confirm_host_test
+          ./rx_confirm_host_test
+
   # La politique TLS mqtts (mqtt_tls_policy.c) : quand lever le controle du nom (CN) du
   # certificat du broker. Pure, un simple gcc suffit. Issu de la revue codex sur #11 (P1).
   banc-mqtt-tls:

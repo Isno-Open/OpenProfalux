@@ -63,6 +63,98 @@ static bool     s_pos_dirty = false;     /* position d'un volet a changer/figer 
 #define LOCK()   xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_lock)
 
+/* ── Liste des telecommandes (SH_MAX_REMOTES places) ── Appeles sous LOCK. */
+static char s_remote_refused[SH_SERIAL_LEN];   /* derniere telecommande refusee, liste pleine ("" = aucune) */
+
+/* Telecommandes IGNOREES (bouton UI) : une trame confirmee ne les enregistre plus. Le suivi
+ * de position d'un volet n'en depend pas (il passe par les serials du volet). NVS cfg/rem_ignore,
+ * CSV. Appeles sous LOCK, sauf ignore_load (boot). */
+#define SH_MAX_IGNORED 32
+static char s_ignored[SH_MAX_IGNORED][SH_SERIAL_LEN];
+static int  s_nignored = 0;
+
+static bool ignored(const char *shex) {
+    for (int i = 0; i < s_nignored; i++) if (!strcmp(s_ignored[i], shex)) return true;
+    return false;
+}
+static void ignore_save(void) {
+    char csv[SH_MAX_IGNORED * SH_SERIAL_LEN + 1] = "";
+    for (int i = 0; i < s_nignored; i++) {
+        if (i) strlcat(csv, ",", sizeof(csv));
+        strlcat(csv, s_ignored[i], sizeof(csv));
+    }
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "rem_ignore", csv); nvs_commit(h); nvs_close(h);
+}
+static void ignore_load(void) {
+    char csv[SH_MAX_IGNORED * SH_SERIAL_LEN + 1] = ""; size_t sz = sizeof(csv);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) return;
+    if (nvs_get_str(h, "rem_ignore", csv, &sz) != ESP_OK) csv[0] = 0;
+    nvs_close(h);
+    s_nignored = 0;
+    for (char *p = csv, *t; s_nignored < SH_MAX_IGNORED && (t = strsep(&p, ",")); )
+        if (*t) strlcpy(s_ignored[s_nignored++], t, SH_SERIAL_LEN);
+}
+
+static remote_t *remote_find(const char *shex) {
+    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) return &s_remotes[i];
+    return NULL;
+}
+/* Trouve ou ajoute (sans nom). Liste pleine : refuse, le journalise et le signale a l'UI
+ * (/api/status remote_refused) au lieu de l'ignorer en silence (issue #39, zone 5 perdue). */
+static remote_t *remote_add(const char *shex) {
+    remote_t *rm = remote_find(shex);
+    if (rm) return rm;
+    if (s_nremotes >= SH_MAX_REMOTES) {
+        if (strcmp(s_remote_refused, shex)) {
+            ESP_LOGW(TAG, "liste des telecommandes pleine (%d) : %s non enregistree, supprimez-en une inutile",
+                     SH_MAX_REMOTES, shex);
+            strlcpy(s_remote_refused, shex, SH_SERIAL_LEN);
+        }
+        return NULL;
+    }
+    rm = &s_remotes[s_nremotes++];
+    memset(rm, 0, sizeof(*rm));
+    strlcpy(rm->serial, shex, SH_SERIAL_LEN);
+    return rm;
+}
+/* Serial (0x%07X) d'une trame stockee : bits[32..59], LSB en tete. "" si trame absente. */
+static void bits_serial_hex(const char *bits, char *out) {
+    out[0] = 0;
+    if ((int)strlen(bits) < 60) return;
+    uint32_t ser = 0;
+    for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
+    snprintf(out, SH_SERIAL_LEN, "0x%07X", (unsigned)ser);
+}
+/* Volet qui utilise cette telecommande (serial de suivi, identite virtuelle, ou commande
+ * apprise), NULL si aucun. */
+static const char *remote_user(const char *shex) {
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        for (int j = 0; j < v->n_serials; j++) if (!strcmp(v->serials[j], shex)) return v->id;
+        if (v->virt) {
+            char vx[SH_SERIAL_LEN]; snprintf(vx, sizeof(vx), "0x%07X", (unsigned)v->virt_serial);
+            if (!strcmp(vx, shex)) return v->id;
+        }
+        const char *cmds[3] = { v->up, v->down, v->stop };
+        for (int k = 0; k < 3; k++) {
+            char cx[SH_SERIAL_LEN]; bits_serial_hex(cmds[k], cx);
+            if (cx[0] && !strcmp(cx, shex)) return v->id;
+        }
+    }
+    return NULL;
+}
+/* Retire la telecommande d'index i (et son jeu de trames). */
+static void remote_remove(int i) {
+    free(s_remotes[i].hops);
+    memmove(&s_remotes[i], &s_remotes[i + 1], (size_t)(s_nremotes - i - 1) * sizeof(remote_t));
+    s_nremotes--;
+    memset(&s_remotes[s_nremotes], 0, sizeof(remote_t));
+    s_remote_refused[0] = 0;   /* une place s'est liberee */
+}
+
 /* ── Publication MQTT DIFFEREE (anti-deadlock) ──────────────────────────────
  * REGLE ABSOLUE : ne JAMAIS appeler mqtt_pub_raw sous le LOCK. Un handler MQTT
  * entrant (cover/set, set_position...) reprend ce meme LOCK ; publier sous LOCK
@@ -204,9 +296,9 @@ static bool load_frames(void) {
     int n = sz / (4 * sizeof(uint32_t));
     for (int i = 0; i < n; i++) {
         char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)buf[i * 4]);
-        remote_t *rm = NULL;
-        for (int j = 0; j < s_nremotes; j++) if (!strcmp(s_remotes[j].serial, shex)) { rm = &s_remotes[j]; break; }
-        if (!rm && s_nremotes < 16) { rm = &s_remotes[s_nremotes++]; memset(rm, 0, sizeof(*rm)); strlcpy(rm->serial, shex, SH_SERIAL_LEN); }
+        /* Telecommandes connues seulement : seule une trame confirmee en cree une (issue #39),
+         * et une telecommande supprimee ne doit pas revenir par son jeu de trames. */
+        remote_t *rm = remote_find(shex);
         if (!rm) continue;
         if (rm->nhops >= rm->caphops && rm->caphops < SH_MAX_HOPS) {
             uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32; if (nc > SH_MAX_HOPS) nc = SH_MAX_HOPS;
@@ -315,9 +407,7 @@ static void ring_fill_from_mqtt(int slot, const char *ser, uint8_t button, uint3
         strlcpy(r->serial, ser, SH_SERIAL_LEN);
         r->button = button; r->hop = hop; r->t = t; r->rssi = rssi;
         s_ring_dirty = true;
-        remote_t *rm = NULL;
-        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, ser)) { rm = &s_remotes[i]; break; }
-        if (!rm && s_nremotes < 16) { rm = &s_remotes[s_nremotes++]; memset(rm, 0, sizeof(*rm)); strlcpy(rm->serial, ser, SH_SERIAL_LEN); }
+        remote_t *rm = remote_find(ser);   /* connues seulement (cf load_frames) */
         if (rm) {
             bool isnew = true;
             for (int i = 0; i < rm->nhops; i++) if (rm->hops[i].hop == hop) { isnew = false; break; }
@@ -748,10 +838,8 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, u
      * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);
     /* Nomme quand meme l'identite virtuelle -> l'UI l'affiche par son NOM. */
-    int ri = -1;
-    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) { ri = i; break; }
-    if (ri < 0 && s_nremotes < 16) { ri = s_nremotes++; strlcpy(s_remotes[ri].serial, shex, SH_SERIAL_LEN); }
-    if (ri >= 0) strlcpy(s_remotes[ri].name, id, SH_ID_LEN);
+    remote_t *rm = remote_add(shex);
+    if (rm) strlcpy(rm->name, id, SH_ID_LEN);
     save_cfg();
     announce_one(v);
     UNLOCK();
@@ -832,6 +920,42 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
     return shutters_learn_assign(id, action, bits);   /* prend son propre LOCK */
 }
 
+/* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste) : pour chaque
+ * commande, la trame la plus recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les
+ * commandes absentes du journal restent a apprendre. *learned recoit "up,stop,down" (celles
+ * trouvees). Refuse un nom deja pris : on ne reecrit pas un volet existant. */
+int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
+    *why = NULL; if (cap) learned[0] = 0;
+    if (!id || !*id) { *why = "nom manquant"; return -1; }
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    static const struct { const char *action; uint8_t btn; } CMD[] = {
+        { "up", PFX_BTN_UP }, { "stop", PFX_BTN_STOP }, { "down", PFX_BTN_DOWN } };
+    char bits[3][SH_BITS_LEN] = {{0}};
+    LOCK();
+    if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
+    /* du plus recent au plus ancien : s_rfhead est la prochaine place libre de l'anneau */
+    for (int k = 1; k <= RF_RING; k++) {
+        rfrec_t *r = &s_rf[(s_rfhead - k + RF_RING) % RF_RING];
+        if (!r->serial[0] || strcmp(r->serial, serial)) continue;
+        for (int c = 0; c < 3; c++)
+            if (!bits[c][0] && r->button == CMD[c].btn)
+                build_frame_bits(bits[c], (uint32_t)strtoul(serial, NULL, 16), r->button, r->hop);
+    }
+    UNLOCK();
+    if (!bits[0][0] && !bits[1][0] && !bits[2][0]) { *why = "aucune trame ▲ ■ ▼ de cette telecommande dans le journal RF"; return -1; }
+    for (int c = 0; c < 3; c++) {
+        if (!bits[c][0]) continue;
+        if (shutters_learn_assign(id, CMD[c].action, bits[c]) != 0) { *why = "creation du volet impossible"; return -1; }
+        if (cap) { if (learned[0]) strlcat(learned, ",", cap); strlcat(learned, CMD[c].action, cap); }
+    }
+    LOCK();
+    remote_t *rm = remote_find(serial);
+    if (rm && !rm->name[0]) { strlcpy(rm->name, id, SH_ID_LEN); save_cfg(); }   /* nomme la telecommande comme le volet */
+    UNLOCK();
+    ESP_LOGW(TAG, "volet '%s' cree depuis la telecommande %s (journal RF) : %s", id, serial, learned);
+    return 0;
+}
+
 int shutters_calibrate(const char *id, uint32_t up_ms, uint32_t down_ms) {
     LOCK();
     volet_t *v = find_volet(id);
@@ -881,17 +1005,92 @@ int shutters_set_order(const char *ids_csv) {
 }
 
 int shutters_remote_name(const char *serial, const char *name) {
+    if (!serial || !*serial) return -1;
     LOCK();
-    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, serial)) {
-        strlcpy(s_remotes[i].name, name, SH_ID_LEN); save_cfg(); UNLOCK(); return 0;
-    }
-    if (s_nremotes < 16) {
-        strlcpy(s_remotes[s_nremotes].serial, serial, SH_SERIAL_LEN);
-        strlcpy(s_remotes[s_nremotes].name, name, SH_ID_LEN);
-        s_nremotes++; save_cfg();
+    remote_t *rm = remote_add(serial);
+    if (rm) { strlcpy(rm->name, name, SH_ID_LEN); save_cfg(); }
+    UNLOCK();
+    return rm ? 0 : -1;   /* -1 : liste pleine */
+}
+
+/* Supprime une telecommande de la liste (bouton UI). Refuse si un volet s'en sert : il faut
+ * d'abord supprimer ou reapprendre ce volet. Elle reviendra si elle est de nouveau captee. */
+int shutters_delete_remote(const char *serial, const char **why) {
+    *why = NULL;
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    LOCK();
+    int idx = -1;
+    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, serial)) { idx = i; break; }
+    const char *user = idx >= 0 ? remote_user(serial) : NULL;
+    static char msg[SH_ID_LEN + 40];
+    if (idx < 0) *why = "telecommande inconnue";
+    else if (user) { snprintf(msg, sizeof(msg), "utilisee par le volet %s", user); *why = msg; }
+    else { remote_remove(idx); save_cfg(); s_frames_dirty = true; }
+    UNLOCK();
+    if (*why) return -1;
+    save_frames();   /* tout de suite : sinon son jeu de trames la recreerait au prochain boot */
+    ESP_LOGW(TAG, "telecommande %s supprimee", serial);
+    return 0;
+}
+
+/* Ignore une telecommande : la retire de la liste (refuse si un volet s'en sert, comme la
+ * suppression) et n'enregistre plus ses trames. Un serial absent de la liste (saisi a la main)
+ * est simplement ajoute aux ignorees. Serial normalise en 0x%07X. */
+int shutters_ignore_remote(const char *serial, const char **why) {
+    *why = NULL;
+    char *end = NULL;
+    unsigned long v = serial ? strtoul(serial, &end, 16) : 0;
+    if (!serial || !*serial || *end || v == 0 || v > 0xFFFFFFFUL) { *why = "serial invalide (0x + 7 chiffres hexa)"; return -1; }
+    char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07lX", v);
+    LOCK();
+    const char *user = remote_user(shex);
+    static char msg[SH_ID_LEN + 40];
+    if (user) { snprintf(msg, sizeof(msg), "utilisee par le volet %s", user); *why = msg; }
+    else if (!ignored(shex) && s_nignored >= SH_MAX_IGNORED) *why = "liste des telecommandes ignorees pleine";
+    else {
+        if (!ignored(shex)) { strlcpy(s_ignored[s_nignored++], shex, SH_SERIAL_LEN); ignore_save(); }
+        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) {
+            remote_remove(i); save_cfg(); s_frames_dirty = true; break;
+        }
     }
     UNLOCK();
+    if (*why) return -1;
+    save_frames();
+    ESP_LOGW(TAG, "telecommande %s ignoree", shex);
     return 0;
+}
+int shutters_unignore_remote(const char *serial) {
+    int rc = -1;
+    LOCK();
+    for (int i = 0; i < s_nignored; i++) if (!strcasecmp(s_ignored[i], serial ? serial : "")) {
+        memmove(s_ignored[i], s_ignored[i + 1], (size_t)(s_nignored - i - 1) * SH_SERIAL_LEN);
+        s_nignored--; ignore_save(); rc = 0; break;
+    }
+    UNLOCK();
+    if (rc == 0) ESP_LOGI(TAG, "telecommande %s n'est plus ignoree", serial);
+    return rc;
+}
+
+/* Purge UNIQUE (cle NVS cfg/rem_purge) des telecommandes sans nom qu'aucun volet n'utilise :
+ * les fantomes enregistres avant la confirmation des trames (issue #39). Une vraie telecommande
+ * purgee revient d'elle-meme a son prochain appui. Au boot, apres load_cfg/load_frames. */
+static void purge_ghost_remotes_once(void) {
+    nvs_handle_t h; uint8_t done = 0;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_get_u8(h, "rem_purge", &done);
+    if (!done) {
+        int n = 0;
+        for (int i = 0; i < s_nremotes; ) {
+            if (!s_remotes[i].name[0] && !remote_user(s_remotes[i].serial)) {
+                ESP_LOGW(TAG, "purge : telecommande %s sans nom ni volet retiree", s_remotes[i].serial);
+                remote_remove(i); n++;
+            } else i++;
+        }
+        if (n) { save_cfg(); save_frames(); }
+        nvs_set_u8(h, "rem_purge", 1); nvs_commit(h);
+        ESP_LOGI(TAG, "purge unique des telecommandes fantomes : %d retiree(s)", n);
+    }
+    nvs_close(h);
 }
 
 /* ══ FONCTION 1 — Dataset slide (option MQTT "capture toutes les trames") ══
@@ -963,9 +1162,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
         s_rfhead = (s_rfhead + 1) % RF_RING;
         s_ring_dirty = true;
         /* auto-enregistre le serial vu (nom vide) */
-        bool known = false;
-        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) { known = true; break; }
-        if (!known && s_nremotes < 16) { strlcpy(s_remotes[s_nremotes].serial, shex, SH_SERIAL_LEN); s_remotes[s_nremotes].name[0] = 0; s_nremotes++; }
+        if (!ignored(shex)) remote_add(shex);   /* trame confirmee (radio.c) ; liste pleine -> signale a l'UI ; ignoree -> rien */
         if (s_log_frames && s_mqtt_ready) {
             dataset_log_frame(shex, button, hop, rssi, t);  /* dataset slide (dedup par hop, bouton+t) */
             /* On PREPARE le payload ici, mais on PUBLIE hors du LOCK (voir plus bas). */
@@ -1007,6 +1204,10 @@ char *shutters_status_json(void) {
     cJSON *root = cJSON_CreateObject();
     cJSON *rem = cJSON_AddObjectToObject(root, "remotes");
     for (int i = 0; i < s_nremotes; i++) cJSON_AddStringToObject(rem, s_remotes[i].serial, s_remotes[i].name);
+    cJSON_AddNumberToObject(root, "remotes_max", SH_MAX_REMOTES);
+    cJSON_AddStringToObject(root, "remote_refused", s_remote_refused);   /* "" = aucune refusee */
+    cJSON *ign = cJSON_AddArrayToObject(root, "remotes_ignored");
+    for (int i = 0; i < s_nignored; i++) cJSON_AddItemToArray(ign, cJSON_CreateString(s_ignored[i]));
     cJSON *vols = cJSON_AddArrayToObject(root, "volets");
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
@@ -1351,6 +1552,8 @@ void shutters_init(void) {
     else if (lay == CFG_LAYOUT_LEGACY) ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
     if (migrate_strip_virt_serial()) { save_cfg(); ESP_LOGI(TAG, "migration : identite 0x067 retiree de la liste des vraies telecommandes"); }
     load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
+    ignore_load();
+    purge_ghost_remotes_once();   /* une fois : fantomes d'avant la confirmation des trames (#39) */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
     xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, &s_upd_task);   /* check GitHub -> entite update HA */
     radio_init();
