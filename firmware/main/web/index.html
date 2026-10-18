@@ -83,12 +83,14 @@
         <div class="card">
           <h2>Cloner une télécommande</h2>
           <p class="sub">Tu as ta télécommande Profalux d'origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus. Une capture par commande suffit.</p>
+          <p class="hint radio-reminder"></p>
           <div class="field"><label>Volet</label><div id="volet-picker" class="chips"></div></div>
           <div class="field" id="new-volet-row" hidden><input id="new-volet" placeholder="Nom du nouveau volet"></div>
           <div class="field"><label>Nom de la télécommande</label>
             <div class="row" style="flex-wrap:nowrap"><input id="cap-name" placeholder="ex : Murale chambre parents" style="flex:1;min-width:0">
             <button id="rename-btn" class="btn" hidden>Renommer</button></div></div>
           <div id="learn-slots" class="slots"></div>
+          <div class="statline bad" id="learn-fail" hidden><span class="dot"></span><span></span></div>
           <p class="hint" id="learn-serial"></p>
           <div class="field" id="orient-row" hidden>
             <label>Orientation de la façade (azimut) - pour les automatisations soleil</label>
@@ -150,9 +152,10 @@
         <div class="card">
           <div class="statline"><span class="dot"></span><b>À utiliser si le clonage ne pilote pas ton moteur.</b> On crée une nouvelle télécommande virtuelle et on l'apprend au moteur. <b>Nécessite ta télécommande d'origine</b> (pour le geste de validation). Appuie dessus : le boîtier l'identifie et attribue une identité - <b>nouvelle</b> si le moteur est inconnu, <b>la même</b> s'il est déjà connu.</div>
           <h2>Créer une télécommande virtuelle</h2>
+          <p class="hint radio-reminder"></p>
           <div class="field"><label>Modèle de moteur</label><select id="pfx-model"></select></div>
           <div class="row"><button id="pfx-capture" class="btn primary">📡 Appuie sur ta télécommande d'origine</button></div>
-          <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b></div>
+          <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
           <div class="statline" id="pfx-ident" hidden><span class="dot"></span><b></b></div>
           <div id="pfx-steps" hidden>
             <h3>1. Enrôler l'identité sur le moteur</h3>

@@ -227,3 +227,7 @@ progress::-webkit-progress-value{background:var(--accent)}
 .log .e{color:var(--danger)}.log .w{color:var(--warn)}
 /* Mode secours Wi-Fi, a cote du titre */
 .brand h1 .hdr-fb{font-size:.8rem;font-weight:650;color:var(--warn)}
+/* Rappel du profil radio : le champ vise par un lien « Verifier » / « Caler » s'allume un instant */
+.flash{animation:flash 1.8s ease-out}
+@keyframes flash{0%,55%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}
+.statline .more{flex-basis:100%}
