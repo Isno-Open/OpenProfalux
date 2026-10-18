@@ -17,13 +17,11 @@
 /* Catalogue de modèles. L'index = l'id exposé à l'UI. */
 typedef struct {
     const char *name;      /* libellé affiché */
-    uint16_t    te_us;     /* TE d'émission (Profalux 455, FranciaFlex 415) */
     const char *routine;   /* "R6" | "R7" | "R8" — chorégraphie d'apprentissage */
 } pfx_model_t;
 
 int                 pfx_enrol_model_count(void);
 const pfx_model_t  *pfx_enrol_model(int id);   /* NULL si hors borne */
-uint16_t            pfx_enrol_model_te(int model);   /* TE d'émission du modèle (défaut 455) */
 
 /* Boutons PFX 0x067 — directions corrigées d'après test réel FranciaFlex M4G (2026-08-28).
  * Partagés avec shutters pour piloter un volet virtuel. */

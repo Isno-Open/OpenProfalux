@@ -35,7 +35,7 @@ int  shutters_unignore_remote(const char *serial);
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
 /* Cree un volet "virtuel PFX" a partir d'une identite 0x067 enrolee (pilote par generation,
  * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
-int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, uint16_t te);
+int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);

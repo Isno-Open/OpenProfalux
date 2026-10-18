@@ -41,7 +41,7 @@ static bool s_upd_auto   = true;    /* verification de mise a jour automatique (
 static bool s_tx_rpt     = false;   /* option UI : bit de repetition comme la telecommande */
 static bool s_tx_rmt     = false;   /* option UI : emission par le RMT (timing materiel) */
 static uint8_t s_rx_gain = 0x27;    /* plafond de gain RX (AGCCTRL2) reglable via l'UI ; defaut 0x27 */
-static uint32_t s_tx_te  = 455;     /* TE d'emission (us) reglable via l'UI ; defaut 455 (Profalux) */
+static uint32_t s_tx_te  = TX_TE_DEFAULT_US;   /* TE d'emission (us) reglable via l'UI ; defaut 400 */
 static uint8_t  s_radio_prof = RADIO_PROFILE_DEFAULT;   /* profil radio (radio_profile.h), via l'UI */
 static uint32_t s_freq_custom = 0;                      /* kHz, profil custom seulement */
 
@@ -70,10 +70,17 @@ static void load_config(void) {
     uint8_t rp = 0; nvs_get_u8(h, "tx_rpt", &rp); s_tx_rpt = rp;
     uint8_t rm = 0; nvs_get_u8(h, "tx_rmt", &rm); s_tx_rmt = rm;
     uint8_t rg = 0; if (nvs_get_u8(h, "rx_gain", &rg) == ESP_OK && rg) s_rx_gain = rg;
-    uint32_t te = 0; if (nvs_get_u32(h, "tx_te", &te) == ESP_OK && te) s_tx_te = te;
+    uint32_t te = 0; if (nvs_get_u32(h, "te_tx", &te) == ESP_OK && te) s_tx_te = te;
     nvs_get_u8(h, "radio_prof", &s_radio_prof);
     nvs_get_u32(h, "freq_khz", &s_freq_custom);
     nvs_close(h);
+    /* L'ancienne cle tx_te melait le reglage manuel et le TE cale automatiquement a chaque
+     * apprentissage, sans pouvoir les distinguer : effacee une fois, le boitier repart a 400
+     * (issue #64). Le reglage manuel vit desormais sous te_tx. */
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_erase_key(h, "tx_te") == ESP_OK) { nvs_commit(h); ESP_LOGW(TAG, "TE d'emission : ancien reglage efface, %u us", (unsigned)s_tx_te); }
+        nvs_close(h);
+    }
     /* Nom d'appareil vide -> defaut : sinon client_id MQTT vide + topic de disponibilite
      * qui ne coincide pas avec la decouverte HA. */
     if (!s_device_name[0]) strlcpy(s_device_name, "openprofalux", sizeof(s_device_name));

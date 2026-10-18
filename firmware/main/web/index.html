@@ -285,9 +285,9 @@
             <p class="hint" style="margin-top:8px"><button id="rxcal-btn" class="btn" type="button">Calibrer la réception (auto)</button>
               <span id="rxcal-status" style="margin-left:8px"></span></p>
             <p class="hint">Clique, puis <b>appuie en continu / répète les appuis</b> sur ta télécommande à moins d'1 m pendant tout le test (~25 s) : le boîtier teste chaque gain 6 s et verrouille le bon dès qu'il capte une trame valide. Presse à chaque changement de valeur affiché.</p></div>
-          <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio du rejeu</label>
-            <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="455">
-            <p class="hint"><b>Auto-réglé à l'apprentissage</b> : le boîtier mesure le tempo de ta télécommande et cale l'émission dessus (Profalux ≈ 455, FranciaFlex ≈ 415). Ce champ n'est qu'un <b>override manuel</b> si besoin.</p></div>
+          <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio des commandes</label>
+            <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="400">
+            <p class="hint"><b>400 µs par défaut</b>, la valeur nominale des télécommandes KeeLoq (HCS300 : 260 à 660 µs selon l'oscillateur). Les moteurs mesurent le TE de chaque trame et tolèrent toute cette plage : ne change cette valeur que si un moteur ignore les commandes du boîtier.</p></div>
           <label class="switch"><input type="checkbox" id="sys-txrpt"><span class="track"></span>
             <span class="lbl">Émettre comme la télécommande (bit de répétition)<small>Première trame d'un appui marquée « initiale », les suivantes « répétition », 18 ms entre trames, comme une télécommande KeeLoq. Sans cette option, le boîtier envoie des trames identiques. Les moteurs testés acceptent les deux : n'activer que si un moteur ignore les commandes du boîtier.</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-txrmt"><span class="track"></span>

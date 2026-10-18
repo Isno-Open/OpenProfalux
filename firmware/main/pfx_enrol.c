@@ -32,12 +32,13 @@ static const char *NVS_NS = "pfx_enrol";
 #define BTN_LEARN   0x5   /* trame d'apprentissage radio */
 
 /* Catalogue : tous routés canal PFX 0x636f, famille 0x067, même table de clés.
- * Seuls le TE et la chorégraphie (R6/R7/R8) diffèrent par modèle. */
+ * Seule la chorégraphie (R6/R7/R8) diffère par modèle ; le TE d'émission est celui du boîtier
+ * (400 µs par défaut, issue #64). */
 static const pfx_model_t MODELS[] = {
-    { "Profalux MAI-EMPX / MUR / NOE", 455, "R6" },
-    { "FranciaFlex M4G",               415, "R6" },
-    { "Profalux NeoSol",               455, "R8" },
-    { "Profalux MAI-RDPX / RDTELPX",   455, "R7" },
+    { "Profalux MAI-EMPX / MUR / NOE", "R6" },
+    { "FranciaFlex M4G",               "R6" },
+    { "Profalux NeoSol",               "R8" },
+    { "Profalux MAI-RDPX / RDTELPX",   "R7" },
 };
 #define N_MODELS ((int)(sizeof(MODELS) / sizeof(MODELS[0])))
 
@@ -326,30 +327,12 @@ int pfx_enrol_frame(uint32_t serial, uint8_t button, uint16_t counter, char out[
     return 0;
 }
 
-uint16_t pfx_enrol_model_te(int model) {
-    return (model >= 0 && model < N_MODELS) ? MODELS[model].te_us : 455;
-}
-
-/* Lit le TE d'émission configuré (cfg/tx_te) pour le restaurer après notre émission. */
-static uint32_t cfg_tx_te(void) {
-    uint32_t te = 455; nvs_handle_t h;
-    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
-        uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) te = t;
-        nvs_close(h);
-    }
-    return te;
-}
-
 static int emit(uint8_t button, uint16_t counter) {
     if (!s_id.active) return -1;
-    const pfx_model_t *m = &MODELS[s_id.model];
     char bits[68]; frame_with_key(s_id.serial, s_id.key, button, counter, bits);
-    uint32_t prev_te = cfg_tx_te();
-    cc1101_set_tx_te(m->te_us);          /* TE du modèle le temps de la rafale */
     radio_tx(bits, PFX_BURST);           /* rafale, compteur figé sur toute la rafale */
-    cc1101_set_tx_te(prev_te);           /* restaure le TE de rejeu configuré */
     ESP_LOGW(TAG, "TX 0x067 serial=0x%07X btn=0x%X cnt=%u te=%u",
-             (unsigned)s_id.serial, button, counter, m->te_us);
+             (unsigned)s_id.serial, button, counter, (unsigned)cc1101_get_tx_te());
     return 0;
 }
 
@@ -363,21 +346,17 @@ int pfx_enrol_emit_learn(void) {
      * le compteur conservé pour un moteur déjà connu. Il était figé à 3, puis les commandes
      * repartaient de 4 : ré-enrôler un moteur connu émettait DERRIÈRE son compteur, rejeté
      * comme un rejeu (issue #45). Réserve-puis-émets, comme pfx_enrol_cmd. */
-    const pfx_model_t *m = &MODELS[s_id.model];
     uint16_t cnt = s_id.counter < 3 ? 3 : s_id.counter;
     s_id.counter = cnt + 1;   /* commandes à partir du suivant */
     save();
     char bits[68];
     frame_with_key(s_id.serial, s_id.key, BTN_LEARN, cnt, bits);
-    uint32_t prev_te = cfg_tx_te();
-    cc1101_set_tx_te(m->te_us);
     for (int i = 0; i < PFX_LEARN_ROUNDS; i++) {
         radio_tx(bits, PFX_BURST);
         vTaskDelay(pdMS_TO_TICKS(15));
     }
-    cc1101_set_tx_te(prev_te);
     ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=%u (~5s, %d salves) te=%u",
-             (unsigned)s_id.serial, cnt, PFX_LEARN_ROUNDS, m->te_us);
+             (unsigned)s_id.serial, cnt, PFX_LEARN_ROUNDS, (unsigned)cc1101_get_tx_te());
     return 0;
 }
 

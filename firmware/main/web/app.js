@@ -714,7 +714,7 @@ async function loadPfx() {
   pfxModels = d.models || [];
   const sel = $('#pfx-model');
   if (sel && !sel.dataset.filled && pfxModels.length) {
-    sel.innerHTML = pfxModels.map((m, i) => `<option value="${i}">${esc(m.name)} · TE ${m.te}µs · ${esc(m.routine)}</option>`).join('');
+    sel.innerHTML = pfxModels.map((m, i) => `<option value="${i}">${esc(m.name)} · ${esc(m.routine)}</option>`).join('');
     sel.dataset.filled = '1';
   }
   const box = $('#pfx-ident'), steps = $('#pfx-steps');
@@ -887,7 +887,7 @@ async function loadConfig() {
   if ($('#sys-txrpt')) $('#sys-txrpt').checked = !!c.tx_repeat_bit;
   if ($('#sys-txrmt')) $('#sys-txrmt').checked = !!c.tx_rmt;
   if ($('#sys-rxgain')) $('#sys-rxgain').value = c.rx_gain || 39;
-  if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 455;
+  if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 400;
   const rp = $('#sys-radioprof'), fq = $('#sys-freq');
   if (rp && fq) {
     rp.value = c.radio_profile || 'profalux';
@@ -951,7 +951,7 @@ $('#mqtt-save').onclick = async () => {
 };
 if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
-  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 455, reboot: $('#sys-reboot').checked };
+  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 400, reboot: $('#sys-reboot').checked };
   if ($('#sys-txrpt')) b.tx_repeat_bit = $('#sys-txrpt').checked;
   if ($('#sys-txrmt')) b.tx_rmt = $('#sys-txrmt').checked;
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne

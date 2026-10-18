@@ -514,16 +514,7 @@ static uint8_t bits_button(const char *b) {
     return v;
 }
 
-/* TE d'emission configure (cfg/tx_te) pour restaurer apres une emission virtuelle. */
-static uint32_t sh_cfg_tx_te(void) {
-    uint32_t te = 455; nvs_handle_t h;
-    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
-        uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) te = t;
-        nvs_close(h);
-    }
-    return te;
-}
-/* Volet VIRTUEL : GENERE la trame (keeloq + compteur roulant) au TE du modele, l'emet,
+/* Volet VIRTUEL : GENERE la trame (keeloq + compteur roulant), l'emet au TE du boitier,
  * puis avance et persiste le compteur. */
 static void emit_virt(volet_t *v, uint8_t button) {
     char bits[68];
@@ -533,12 +524,9 @@ static void emit_virt(volet_t *v, uint8_t button) {
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
     v->virt_counter = cnt + 1;
     save_cfg();
-    uint32_t prev_te = sh_cfg_tx_te();
-    cc1101_set_tx_te(v->virt_te ? v->virt_te : 455);
     radio_tx(bits, PRESS_REPEATS);
-    cc1101_set_tx_te(prev_te);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
-             (unsigned)v->virt_serial, button, cnt, v->virt_te);
+             (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
 }
 
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
@@ -824,7 +812,7 @@ uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
 
 /* Cree (ou convertit) un volet VIRTUEL a partir d'une identite 0x067 enrolee : il apparait
  * dans l'onglet Volets + en cover HA, et pilote le moteur par generation (compteur roulant). */
-int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, uint16_t te) {
+int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     if (!id || !*id) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
@@ -832,7 +820,6 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, u
     v->virt = true;
     v->virt_serial = serial;
     v->virt_counter = counter;
-    v->virt_te = te;
     /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
      * qui pilotent le moteur, pour le suivi de position). L'y melanger bloquait l'ajout d'une vraie
      * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
@@ -844,8 +831,8 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, u
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u te=%u",
-             id, (unsigned)serial, counter, te);
+    ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u",
+             id, (unsigned)serial, counter);
     return 0;
 }
 

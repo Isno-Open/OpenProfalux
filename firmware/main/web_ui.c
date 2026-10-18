@@ -318,15 +318,6 @@ static esp_err_t h_learn_assign(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_learn_assign(jstr(j, "id"), jstr(j, "action"), jstr(j, "bits"));
     cJSON_Delete(j); s_lready = false;
-    if (rc == 0) {   /* AUTO : cale le TE d'emission sur le tempo de la trame captee (le champ UI reste un override) */
-        int te = cc1101_last_te();
-        if (te >= 350 && te <= 550) {   /* TE plausible d'une telecommande PFX (Profalux 455, FranciaFlex ~415) */
-            cc1101_set_tx_te((uint32_t)te);
-            nvs_handle_t h;
-            if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u32(h, "tx_te", (uint32_t)te); nvs_commit(h); nvs_close(h); }
-            ESP_LOGI(TAG, "TE d'emission auto-cale a %d us (mesure sur la trame captee)", te);
-        }
-    }
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
 }
@@ -471,7 +462,7 @@ static void cfg_get(nvs_handle_t h, const char *k, char *out, size_t cap) {
 static esp_err_t h_config_get(httpd_req_t *r) {
     char dev[32] = "", ssid[33] = "", uri[160] = "", user[128] = "", pass[256] = "";
     uint8_t logf = 0, dbg = 0, rg = 0x27;
-    uint32_t txte = 455;
+    uint32_t txte = TX_TE_DEFAULT_US;
     uint8_t rprof = RADIO_PROFILE_DEFAULT;
     uint32_t fcustom = 0;
     nvs_handle_t h;
@@ -482,7 +473,7 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         nvs_get_u8(h, "log_frames", &logf);
         nvs_get_u8(h, "debug", &dbg);
         uint8_t tmp; if (nvs_get_u8(h, "rx_gain", &tmp) == ESP_OK && tmp) rg = tmp;
-        uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) txte = t;
+        uint32_t t; if (nvs_get_u32(h, "te_tx", &t) == ESP_OK && t) txte = t;
         nvs_get_u8(h, "radio_prof", &rprof);
         nvs_get_u32(h, "freq_khz", &fcustom);
         nvs_close(h);
@@ -599,7 +590,7 @@ static esp_err_t h_config_post(httpd_req_t *r) {
         cJSON *tj = cJSON_GetObjectItem(j, "tx_te");
         if (cJSON_IsNumber(tj)) {
             uint32_t te = (uint32_t)tj->valuedouble;  /* TE d'emission (us) */
-            nvs_set_u32(h, "tx_te", te);
+            nvs_set_u32(h, "te_tx", te);
             cc1101_set_tx_te(te);      /* pris en compte a la prochaine emission */
         }
         if (rprof >= 0) {
@@ -1081,8 +1072,8 @@ static esp_err_t h_pfx_get(httpd_req_t *r) {
     int nm = pfx_enrol_model_count();
     for (int i = 0; i < nm; i++) {
         const pfx_model_t *m = pfx_enrol_model(i);
-        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"te\":%d,\"routine\":\"%s\"}",
-                      i ? "," : "", m->name, m->te_us, m->routine);
+        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"routine\":\"%s\"}",
+                      i ? "," : "", m->name, m->routine);
     }
     snprintf(out + p, sizeof(out) - p, "]}");
     httpd_resp_set_type(r, "application/json");
@@ -1163,7 +1154,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     int rc = -1;
     if (active && name && *name)
-        rc = shutters_create_virtual(name, id.serial, id.counter, pfx_enrol_model_te(id.model));
+        rc = shutters_create_virtual(name, id.serial, id.counter);
     if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate); }   /* moteur valide ; l'identite vit desormais dans le volet */
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");

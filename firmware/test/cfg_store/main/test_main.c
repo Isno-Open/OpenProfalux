@@ -226,7 +226,7 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
     return !strcmp(a->up, b->up) && !strcmp(a->down, b->down) && !strcmp(a->stop, b->stop)
         && a->up_btn == b->up_btn && a->down_btn == b->down_btn && a->stop_btn == b->stop_btn
         && a->virt == b->virt && a->virt_serial == b->virt_serial
-        && a->virt_counter == b->virt_counter && a->virt_te == b->virt_te
+        && a->virt_counter == b->virt_counter
         && a->central == b->central && !strcmp(a->members ? a->members : "", b->members ? b->members : "")
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
@@ -385,7 +385,7 @@ static int central_store(store_t *s, int k, int idlen) {
         else                        snprintf(id, sizeof(id), "Baie vitree salon n%03u", (unsigned)i % 1000u);
         volet_t *v = mk_volet(s, id, 40u + (unsigned)i, 21000, 20500);
         v->up[0] = v->down[0] = v->stop[0] = 0; v->up_btn = v->down_btn = v->stop_btn = 0;
-        v->virt = true; v->virt_serial = 0x0670200u + (unsigned)i; v->virt_counter = 100; v->virt_te = 455;
+        v->virt = true; v->virt_serial = 0x0670200u + (unsigned)i; v->virt_counter = 100;
         snprintf(v->serials[0], SH_SERIAL_LEN, "0x%07X", (unsigned)v->virt_serial);
         p += snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", id);
     }
@@ -419,7 +419,7 @@ int main(void) {
         volet_t *q = mk_volet(&g_ref, "Volet \"sud\" \\ 2", 7, 15000, 14000);   /* guillemets et antislash */
         snprintf(q->serials[1], SH_SERIAL_LEN, "0x0ABCDEF"); q->n_serials = 2; q->orientation = 180;
         volet_t *v = mk_volet(&g_ref, "Virtuel", 8, 0, 0);                        /* volet virtuel */
-        v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321; v->virt_te = 455;
+        v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321;
         char *js = cfg_model_export(&g_ref.m);
         cJSON *root = cJSON_Parse(js);
         store_reset(&g_tmp);
