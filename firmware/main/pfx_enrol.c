@@ -46,7 +46,9 @@ static pfx_ident_t s_id;
 
 /* Table persistante des moteurs enrôlés : chaque vraie télécommande (remote serial) est
  * associée DÉFINITIVEMENT à un slot 0x067 + son compteur roulant. Sert d'allocateur sans
- * conflit (un slot pris n'est jamais réattribué) et de rappel (remote connu -> même identité). */
+ * conflit (un slot pris n'est jamais réattribué) et de rappel (remote connu -> même identité).
+ * Une entrée DÉTACHÉE (remote = 0) garde son slot réservé sans plus être rappelée : c'est
+ * l'ancienne identité d'une télécommande passée à une identité neuve (pfx_enrol_renew). */
 typedef struct __attribute__((packed)) {
     uint32_t remote;    /* serial 28b de la vraie télécommande (clé) */
     uint16_t counter;   /* compteur roulant courant de l'identité */
@@ -208,6 +210,29 @@ int pfx_enrol_capture(uint32_t remote, int model, bool *is_new) {
     return 0;
 }
 
+/* Identité neuve pour la télécommande de l'identité active (issue #53). Une identité apprise par
+ * plusieurs moteurs (capture ratée qui la laissait sélectionnée) les fait bouger ensemble :
+ * reprendre la même au réenrôlement ne sépare rien. L'ancienne entrée est détachée (remote = 0) :
+ * son slot reste réservé, jamais réattribué, puisque des moteurs le connaissent. La télécommande
+ * est rattachée à un slot libre, compteur neuf. */
+int pfx_enrol_renew(void) {
+    if (!s_id.active || !s_id.remote) return -2;
+    pfx_entry_t *e = map_find(s_id.remote);
+    if (!e) return -2;
+    if (s_map_n >= PFX_MAP_MAX) { ESP_LOGW(TAG, "table pleine : 63 identites deja prises"); return -1; }
+    uint8_t slot = map_free_slot();            /* exclut l'identité active et toute la table */
+    if (!slot) { ESP_LOGW(TAG, "aucun slot libre"); return -1; }
+    uint32_t remote = s_id.remote; uint8_t old = e->slot;
+    e->remote = 0;                             /* ancienne identité : réservée, plus rappelée */
+    s_map[s_map_n].remote = remote; s_map[s_map_n].counter = 2; s_map[s_map_n].slot = slot; s_map_n++;
+    map_mark_ok(slot);                         /* identité neuve : compteur sûr */
+    map_save();
+    load_slot(slot, 2, -1, remote);
+    ESP_LOGW(TAG, "telecommande 0x%07X : identite neuve slot=%u serial=0x%07X (ancien slot %u reserve)",
+             (unsigned)remote, slot, (unsigned)s_id.serial, old);
+    return 0;
+}
+
 void pfx_enrol_note_counter(uint32_t serial, uint16_t next) {
     if ((serial & 0x3FF) != PFX_FAMILY_MARKER) return;
     uint8_t slot = (uint8_t)(serial >> 12);
@@ -239,7 +264,8 @@ cJSON *pfx_enrol_export(void) {
 /* Restauration : fusion avec la table en place. Une sauvegarde est une photo : le moteur a pu
  * avancer depuis. On garde le compteur le plus avance, et une entree qui vient de la sauvegarde
  * est NON confirmee (son re-enrolement sautera). Une entree dont le slot est deja pris par une
- * autre telecommande est ignoree (jamais deux telecommandes sur un slot). */
+ * autre telecommande est ignoree (jamais deux telecommandes sur un slot). Une entree detachee
+ * (remote 0) est reprise telle quelle si son slot est libre : il reste reserve. */
 void pfx_enrol_import(const cJSON *arr) {
     if (!cJSON_IsArray(arr)) return;
     const cJSON *o;
@@ -249,8 +275,8 @@ void pfx_enrol_import(const cJSON *arr) {
         if (!rs || !cJSON_IsNumber(js) || !cJSON_IsNumber(jc)) continue;
         uint32_t remote = (uint32_t)strtoul(rs, NULL, 16);
         uint8_t slot = (uint8_t)js->valuedouble; uint16_t cnt = (uint16_t)jc->valuedouble;
-        if (!remote || !map_slot_ok(slot)) continue;
-        pfx_entry_t *e = map_find(remote);
+        if (!map_slot_ok(slot)) continue;
+        pfx_entry_t *e = map_find(remote);       /* NULL pour une entree detachee */
         if (e) {
             if (e->slot != slot) continue;
             if (cnt_ahead(cnt, e->counter)) { e->counter = cnt; s_map_ok &= ~(1ULL << slot); }

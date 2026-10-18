@@ -802,6 +802,12 @@ bool shutters_virt_serial_used(uint32_t serial) {
         if (s_volets[i].virt && s_volets[i].virt_serial == serial) return true;
     return false;
 }
+bool shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap) {
+    if (cap) out[0] = 0;
+    for (int i = 0; i < s_nvolets; i++)
+        if (s_volets[i].virt && s_volets[i].virt_serial == serial) { strlcpy(out, s_volets[i].id, cap); return true; }
+    return false;
+}
 /* Compteur roulant courant du volet virtuel de ce serial (0 si aucun). Sert a resynchroniser
  * l'identite d'enrolement sur la valeur reellement emise par le volet (toujours devant le moteur). */
 uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
