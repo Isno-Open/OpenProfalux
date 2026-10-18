@@ -54,7 +54,7 @@ void cc1101_set_tx_repeat_bit(bool on);      /* imite la telecommande : RPT 0 pu
 bool cc1101_get_tx_repeat_bit(void);
 void cc1101_set_tx_rmt(bool on);              /* emission par le RMT (timing materiel) au lieu du bit-bang */
 bool cc1101_get_tx_rmt(void);
-void cc1101_set_tx_te(uint32_t te_us);       /* TE d'emission (us) reglable ; defaut 455 (Profalux) */
+void cc1101_set_tx_te(uint32_t te_us);       /* TE d'emission (us) reglable ; defaut TX_TE_DEFAULT_US (400) */
 uint32_t cc1101_get_tx_te(void);
 int cc1101_last_te(void);                    /* TE (us) mesure sur la derniere trame decodee */
 void cc1101_spi_stats(uint32_t *retries, uint32_t *fails); /* ecritures SPI reessayees / jamais prises */

@@ -41,10 +41,12 @@ bool cc1101_get_rx_debug(void)    { return s_rx_debug; }
 static volatile uint8_t s_rx_gain = 0x27;
 void cc1101_set_rx_gain(uint8_t v) { s_rx_gain = v; ESP_LOGW(TAG, "RX gain AGCCTRL2=0x%02X", v); }
 uint8_t cc1101_get_rx_gain(void)   { return s_rx_gain; }
-/* Timing d'EMISSION reglable : TE (temps elementaire). Defaut 455 us (Profalux). Les autres
- * variantes PFX roulent a un TE different (ex FranciaFlex ~415). On derive bit '1'=TE, '0'=2*TE,
- * preambule=TE, entete=10 TE. Permet au rejeu de matcher le timing du recepteur. */
-static volatile uint32_t s_tx_te = PROFALUX_TE_US;
+/* Timing d'EMISSION : TE (temps elementaire), 400 us par defaut, le nominal de la datasheet HCS300
+ * (plage garantie 260-660 us). Le TE d'une vraie telecommande depend de son oscillateur RC ; les
+ * moteurs le mesurent sur chaque trame et acceptent toute la plage. On n'imite donc pas le TE de la
+ * telecommande captee (issue #64), mais le reglage reste possible (Systeme > Appareil). On derive
+ * bit '1'=TE, '0'=2*TE, preambule=TE, entete=10 TE. */
+static volatile uint32_t s_tx_te = TX_TE_DEFAULT_US;
 /* Bit de repetition (bit 65 de la trame KeeLoq). Mesure 2026-10-10 au YARD Stick One sur les
  * murales Eveno (HCS30x) : la 1re trame d'un appui porte RPT=0, toutes les repetitions RPT=1
  * (meme code tournant), ~18 ms de silence entre trames. Le rejeu envoyait jusqu'ici N trames
@@ -62,8 +64,8 @@ void cc1101_set_tx_rmt(bool on) { s_tx_rmt = on; ESP_LOGW(TAG, "TX par RMT %s", 
 bool cc1101_get_tx_rmt(void)    { return s_tx_rmt; }
 void cc1101_set_tx_te(uint32_t te) { if (te >= 200 && te <= 900) { s_tx_te = te; ESP_LOGW(TAG, "TX TE=%u us", (unsigned)te); } }
 uint32_t cc1101_get_tx_te(void)    { return s_tx_te; }
-/* TE (us) mesure sur la DERNIERE trame decodee (periode de bit / 3). Sert a auto-caler
- * le TE d'emission a l'apprentissage (le rejeu matche le tempo de la telecommande captee). */
+/* TE (us) mesure sur la DERNIERE trame decodee (periode de bit / 3). Diagnostic seulement
+ * (te= sur la ligne RX) : il ne regle plus l'emission. */
 static volatile int s_last_te = 455;
 int cc1101_last_te(void) { return s_last_te; }
 /* Diagnostic radio expose a l'UI : detection de la puce + resultat du self-test TX. */
@@ -570,7 +572,7 @@ int cc1101_capture_init(void) {
 /* decode_rmt : fin wrapper autour du decodeur PUR keeloq_decode() (unite keeloq_decode.c,
  * testee sur hote dans firmware/test/keeloq). On caste le buffer RMT en kq_sym_t (meme
  * disposition binaire, cf _Static_assert plus haut) et on met a jour le TE mesure
- * (auto-calage du rejeu). Tout le decodage (de-glitch, scan entetes, vote) vit dans l'unite. */
+ * (diagnostic). Tout le decodage (de-glitch, scan entetes, vote) vit dans l'unite. */
 static int decode_rmt(const rmt_symbol_word_t *raw, size_t n, char *out, int max_bits) {
     int te = 0;
     int r = keeloq_decode((const kq_sym_t *)raw, n, out, max_bits, &te);

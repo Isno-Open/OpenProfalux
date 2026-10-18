@@ -67,7 +67,6 @@ static cJSON *volet_to_json(const volet_t *v) {
         cJSON_AddBoolToObject(o, "virt", true);
         cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
         cJSON_AddNumberToObject(o, "virt_counter", v->virt_counter);
-        cJSON_AddNumberToObject(o, "virt_te", v->virt_te);
     }
     if (v->central) {   /* centrale : liste des volets membres (CSV) */
         cJSON_AddBoolToObject(o, "central", true);
@@ -169,7 +168,6 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         v->virt         = true;
         v->virt_serial  = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_serial"));
         v->virt_counter = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_counter"));
-        v->virt_te      = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_te"));
     }
     if (cJSON_IsTrue(cJSON_GetObjectItem(o, "central"))) {
         v->central = true;
