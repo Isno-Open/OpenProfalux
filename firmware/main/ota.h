@@ -2,12 +2,14 @@
  * OpenProfalux - OTA firmware update (repris d'OpenXtraflame, éprouvé).
  *
  * Écrit le firmware entrant sur la partition OTA inactive puis bascule le boot.
- * Rollback automatique si le nouveau firmware ne se valide pas (PENDING_VERIFY).
+ * Retour automatique a la version precedente si la nouvelle redemarre avant d'etre validee,
+ * quand le bootloader a l'option (voir ota_rollback.h et firmware/README.md).
  *  - HTTP POST /api/ota/upload : upload binaire direct depuis l'UI
  *  - URL HTTPS : ota_pull_from_url()
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -46,3 +48,12 @@ const char *ota_latest_url(void);       /* "" si pas encore verifie */
 uint32_t    ota_check_count(void);      /* nombre de verifications terminees (reussies ou non) */
 esp_err_t ota_rollback(void);
 esp_err_t ota_mark_valid(void);
+
+/* Etat du retour automatique, pour l'onglet OTA. */
+typedef struct {
+    int8_t rb_auto;        /* 1 actif, 0 inactif (bootloader d'avant l'option), -1 inconnu */
+    bool   on_trial;       /* version en cours en essai, pas encore validee */
+    char   discarded[32];  /* version de la derniere image ecartee ("" : aucune) */
+    bool   discarded_auto; /* ecartee par le bootloader : elle n'a pas demarre */
+} ota_rb_info_t;
+void ota_rb_info(ota_rb_info_t *out);

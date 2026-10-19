@@ -38,6 +38,12 @@ CONFIG_FREERTOS_HZ=1000
 
 # Bootloader
 CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
+# Retour automatique : une mise a jour demarre en essai ; si elle redemarre avant d'etre
+# validee (~60 s, voir ota.c), le bootloader repart sur la version precedente. Vit dans le
+# BOOTLOADER, que l'OTA ne remplace pas : un boitier deja installe l'obtient par USB
+# (firmware/README.md). +64 o de bootloader sur ESP32 (2,4 Ko restent libres).
+# Surtout PAS CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK : il grave des efuses, sans retour possible.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Task watchdog
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=30

@@ -165,7 +165,7 @@ void app_main(void) {
         nvs_flash_erase(); nvs_flash_init();
     }
 
-    /* 1b. OTA (rollback safety : marque l'image valide plus bas apres ~60 s) */
+    /* 1b. OTA (retour automatique : l'image en essai est validee plus bas apres ~60 s) */
     ota_init();
 
     /* 2. Config */
@@ -298,8 +298,9 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "PRET (%s). Pilotage via HA/MQTT + UI web. Capture/replay actif.", TARGET_NAME);
 
-    /* Boucle de fond : heartbeat MQTT (~60 s) + validation de l'image OTA apres ~60 s
-     * (rollback safety). Le capture/replay + le suivi de position tournent dans le
+    /* Boucle de fond : heartbeat MQTT (~60 s) + validation de l'image OTA apres ~60 s sans
+     * plantage (retour automatique, voir ota.c : un redemarrage voulu ou une nouvelle mise a
+     * jour la valident aussi). Le capture/replay + le suivi de position tournent dans le
      * module radio et la tache shutters. */
     uint32_t hb = 0; bool ota_marked = false;
     while (1) {

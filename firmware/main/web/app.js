@@ -994,6 +994,7 @@ async function loadConfig() {
   refreshRadioReminder();
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
+  otaRetour(st);
   if ($('#ota-auto')) $('#ota-auto').checked = c.update_auto !== 0;   /* absent (ancien firmware) = active */
 }
 if ($('#ota-auto')) $('#ota-auto').onchange = async (e) => {
@@ -1194,6 +1195,25 @@ $('#ota-btn').onclick = async () => {
   xhr.onerror = () => { $('#ota-msg').textContent = '✗ échec de l\'envoi (lien coupé ?)'; $('#ota-btn').disabled = false; };
   xhr.send(buf);
 };
+/* Retour automatique apres une mise a jour (voir ota_rollback.h) : actif, inactif (bootloader
+ * d'avant l'option), version en essai, et la mise a jour qu'il vient d'annuler. */
+function otaRetour(st) {
+  const l = $('#ota-rb'), a = $('#ota-annulee');
+  if (!l || st.rb_auto === undefined) return;   /* firmware d'avant : rien a afficher */
+  l.hidden = false;
+  l.className = 'statline' + (st.rb_auto === 1 && st.img !== 'essai' ? ' ok' : '');
+  l.querySelector('b').textContent = st.img === 'essai'
+    ? 'Version en essai : validée après 1 min sans plantage, sinon retour automatique à la précédente.'
+    : st.rb_auto === 1 ? 'Retour automatique : actif (une mise à jour qui plante au démarrage est annulée toute seule).'
+    : st.rb_auto === 0 ? 'Retour automatique : inactif sur ce boîtier (bootloader d\'avant, voir le README du firmware pour l\'activer).'
+    : 'Retour automatique : vérifié à la prochaine mise à jour.';
+  if (a) {
+    a.hidden = !(st.annulee && st.annulee_auto);
+    if (!a.hidden) a.querySelector('b').textContent =
+      `La mise à jour ${st.annulee} n'a pas démarré correctement : le boîtier est revenu tout seul à la version précédente.`;
+  }
+  if (st.img === 'essai') setTimeout(async () => otaRetour(await api('/api/ota/status').catch(() => ({}))), 65000);
+}
 $('#ota-rollback').onclick = async () => {
   if (!confirm('Revenir à la version précédente et redémarrer ?')) return;
   await api('/api/ota/rollback', { method: 'POST' }).catch(() => {});
