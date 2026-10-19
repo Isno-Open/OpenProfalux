@@ -214,6 +214,8 @@
       <div class="card">
         <h2>Mise à jour (OTA)</h2>
         <p class="sub">Version courante : <code id="ota-version">…</code></p>
+        <div class="statline" id="ota-rb" hidden><span class="dot"></span><b style="flex:1;min-width:0"></b></div>
+        <div class="statline bad" id="ota-annulee" hidden><span class="dot"></span><b style="flex:1;min-width:0"></b></div>
         <h3>Depuis GitHub</h3>
         <div class="row"><button id="ota-check" class="btn">Vérifier la dernière version</button>
           <button id="ota-github" class="btn primary" hidden>Installer depuis GitHub</button></div>
@@ -224,7 +226,7 @@
         <div class="field"><label>Fichier firmware (.bin)</label><input type="file" id="ota-file" accept=".bin"></div>
         <div class="row"><button id="ota-btn" class="btn primary">Flasher</button><button id="ota-rollback" class="btn danger">↩ Version précédente</button></div>
         <div id="ota-prog" hidden style="margin-top:12px"><progress id="ota-bar" max="100" value="0"></progress> <span class="hint" id="ota-msg"></span></div>
-        <p class="hint" style="margin-top:12px">Écrit sur la partition inactive ; rollback automatique si le démarrage échoue.</p>
+        <p class="hint" style="margin-top:12px">Écrit sur la partition inactive, puis redémarre dessus. Si la nouvelle version plante dans sa première minute, le boîtier revient tout seul à l'ancienne (retour automatique actif). Ne pas le débrancher pendant cette minute : il reviendrait aussi à l'ancienne version.</p>
       </div>
     </section>
 

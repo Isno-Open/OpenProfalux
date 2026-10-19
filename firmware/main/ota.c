@@ -11,9 +11,17 @@
 #include "esp_https_ota.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
+#include "esp_system.h"
+#include "nvs.h"
+#include "ota_rollback.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+
+_Static_assert(ORB_NEW == ESP_OTA_IMG_NEW && ORB_PENDING_VERIFY == ESP_OTA_IMG_PENDING_VERIFY &&
+               ORB_VALID == ESP_OTA_IMG_VALID && ORB_INVALID == ESP_OTA_IMG_INVALID &&
+               ORB_ABORTED == ESP_OTA_IMG_ABORTED && ORB_UNDEFINED == ESP_OTA_IMG_UNDEFINED,
+               "ota_rollback.h doit reprendre les valeurs d'esp_ota_img_states_t");
 
 static const char *TAG = "OTA";
 
@@ -22,6 +30,44 @@ static ota_status_t status;
 static esp_ota_handle_t update_handle;
 static const esp_partition_t *update_partition;
 
+/* Retour automatique (voir ota_rollback.h) : 1 actif, 0 inactif, -1 inconnu. Retenu en NVS
+ * (cfg/ota_rb) : on ne le voit qu'au premier demarrage d'une mise a jour. */
+static int8_t s_rb_auto = -1;
+static char s_discarded[32];          /* version de la derniere image ecartee ("" : aucune) */
+static bool s_discarded_auto;         /* ecartee par le bootloader (elle n'a pas demarre) */
+
+static bool running_state(uint32_t *st)
+{
+    esp_ota_img_states_t s;
+    if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &s) != ESP_OK) return false;
+    *st = (uint32_t)s;
+    return true;
+}
+
+static void validate_if_on_trial(const char *why)
+{
+    uint32_t st = ORB_UNDEFINED; bool known = running_state(&st);
+    if (orb_validate_now(known, st) && esp_ota_mark_app_valid_cancel_rollback() == ESP_OK)
+        ESP_LOGI(TAG, "version en essai validee (%s)", why);
+}
+
+/* esp_restart() appelle les fonctions d'arret, ce que ne font ni une panique ni une coupure :
+ * un redemarrage VOULU (retour du Wi-Fi apres le mode secours, config enregistree, chien de
+ * garde Wi-Fi) prouve que la version tourne. Sans cela, il ferait abandonner une bonne
+ * version pendant sa minute d'essai. */
+static void on_restart(void) { validate_if_on_trial("redemarrage voulu"); }
+
+static void rb_auto_load_and_observe(bool known, uint32_t st)
+{
+    nvs_handle_t h; uint8_t v = 0xFF;
+    int8_t stored = -1;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_get_u8(h, "ota_rb", &v) == ESP_OK && v <= 1) stored = (int8_t)v;
+    s_rb_auto = orb_auto_observe(known, st, stored);
+    if (s_rb_auto >= 0 && s_rb_auto != stored) { nvs_set_u8(h, "ota_rb", (uint8_t)s_rb_auto); nvs_commit(h); }
+    nvs_close(h);
+}
+
 esp_err_t ota_init(void)
 {
     ota_mutex = xSemaphoreCreateMutex();
@@ -29,13 +75,36 @@ esp_err_t ota_init(void)
     status.state = OTA_STATE_IDLE;
     const esp_app_desc_t *desc = esp_app_get_description();
     if (desc) strncpy(status.active_version, desc->version, sizeof(status.active_version) - 1);
-    /* Ne PAS marquer valide ici : ota_mark_valid() est appelé depuis main.c
-     * une fois le firmware prouvé stable (Wi-Fi up + ~60 s). Sinon rollback auto. */
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_ota_img_states_t s;
-    if (esp_ota_get_state_partition(running, &s) == ESP_OK && s == ESP_OTA_IMG_PENDING_VERIFY)
-        ESP_LOGW(TAG, "slot PENDING_VERIFY : rollback si crash avant ota_mark_valid()");
+    /* Ne PAS valider ici : main.c valide l'image apres ~60 s sans plantage (ota_mark_valid),
+     * ou plus tot sur un redemarrage voulu ou une nouvelle mise a jour (ci-dessous). */
+    uint32_t st = ORB_UNDEFINED; bool known = running_state(&st);
+    rb_auto_load_and_observe(known, st);
+    if (orb_on_trial(known, st))
+        ESP_LOGW(TAG, "version en essai : si elle redemarre avant d'etre validee (~60 s), retour automatique a la precedente");
+    else if (known && st == ORB_NEW)
+        ESP_LOGW(TAG, "bootloader sans retour automatique (anterieur a l'option) : voir firmware/README.md");
+    const esp_partition_t *bad = esp_ota_get_last_invalid_partition();
+    esp_ota_img_states_t bs; esp_app_desc_t bd;
+    if (bad && esp_ota_get_state_partition(bad, &bs) == ESP_OK && esp_ota_get_partition_description(bad, &bd) == ESP_OK) {
+        orb_discard_t k = orb_discarded(true, (uint32_t)bs);
+        if (k != ORB_DISCARD_NONE) {
+            strncpy(s_discarded, bd.version, sizeof(s_discarded) - 1);
+            s_discarded_auto = (k == ORB_DISCARD_AUTO);
+            if (s_discarded_auto) ESP_LOGW(TAG, "la mise a jour %s n'a pas demarre : retour automatique a la version precedente", s_discarded);
+        }
+    }
+    esp_register_shutdown_handler(on_restart);
     return ESP_OK;
+}
+
+void ota_rb_info(ota_rb_info_t *out)
+{
+    uint32_t st = ORB_UNDEFINED; bool known = running_state(&st);
+    out->rb_auto = s_rb_auto;
+    out->on_trial = orb_on_trial(known, st);
+    strncpy(out->discarded, s_discarded, sizeof(out->discarded) - 1);
+    out->discarded[sizeof(out->discarded) - 1] = 0;
+    out->discarded_auto = s_discarded_auto;
 }
 
 void ota_get_status(ota_status_t *out)
@@ -48,6 +117,9 @@ void ota_get_status(ota_status_t *out)
 
 esp_err_t ota_upload_begin(size_t total_bytes)
 {
+    /* En essai, esp_ota_begin refuse toute ecriture (ESP_ERR_OTA_ROLLBACK_INVALID_STATE) :
+     * qui envoie une mise a jour a montre que la version actuelle tourne, on la valide. */
+    validate_if_on_trial("nouvelle mise a jour");
     update_partition = esp_ota_get_next_update_partition(NULL);
     if (!update_partition) return ESP_FAIL;
     esp_err_t err = esp_ota_begin(update_partition, total_bytes, &update_handle);
@@ -116,6 +188,7 @@ esp_err_t ota_pull_from_url(const char *url)
                                           .buffer_size = 4096, .buffer_size_tx = 1024 };
     esp_https_ota_config_t ota_cfg = { .http_config = &http_cfg };
     esp_https_ota_handle_t handle = NULL;
+    validate_if_on_trial("nouvelle mise a jour");   /* comme ota_upload_begin */
     esp_err_t err = esp_https_ota_begin(&ota_cfg, &handle);
     if (err != ESP_OK) { status.state = OTA_STATE_FAILED; return err; }
     status.state = OTA_STATE_RECEIVING;
