@@ -1,5 +1,5 @@
 #pragma once
-/* ota_rollback — ce que le firmware conclut des etats OTA pour le retour automatique.
+/* ota_rollback : ce que le firmware conclut des etats OTA pour le retour automatique.
  *
  * Avec CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE (sdkconfig.defaults), une mise a jour demarre EN
  * ESSAI (PENDING_VERIFY) : si elle redemarre avant d'etre validee (plantage, chien de garde),

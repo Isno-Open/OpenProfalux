@@ -1,4 +1,4 @@
-/* ota_rollback — voir ota_rollback.h. */
+/* ota_rollback : voir ota_rollback.h. */
 #include "ota_rollback.h"
 
 int8_t orb_auto_observe(bool known, uint32_t state, int8_t stored) {
