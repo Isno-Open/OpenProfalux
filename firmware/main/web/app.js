@@ -731,17 +731,17 @@ const PFX_GESTURES = {
     'Monte le volet jusqu\'en butée haute.',
     'Descends de ~4 lames.',
     'Remonte jusqu\'en butée haute.',
-    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ ci-dessous.',
+    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même : beaucoup de moteurs confirment sans bouger.',
   ],
   R7: [
     'Monte → descends ~4 lames → remonte (procédure proche, à confirmer).',
-    'Va-et-vient = enrôlé. Teste ▲ ■ ▼. Rapporte le résultat sur GitHub.',
+    'Va-et-vient = enrôlé. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.',
   ],
   R8: [
     'Montée → laisse le volet s\'arrêter seul en butée haute.',
     'Descente → laisse ~4 lames apparentes.',
     'Montée → laisse s\'arrêter seul.',
-    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ et rapporte le résultat sur GitHub.',
+    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.',
   ],
 };
 /* Geste PHYSIQUE à faire AVANT l'émission (certains modèles l'exigent, ex. NeoSol :
@@ -842,7 +842,7 @@ if ($('#pfx-learn')) $('#pfx-learn').onclick = async () => {
     const r = await api('/api/pfx/learn', { method: 'POST' });
     clearInterval(timer);
     if (r && r.ok) {
-      pfxStatus('✅ Émission finie - fais les gestes ci-dessous MAINTENANT, puis attends le va-et-vient du moteur (~10 s) avant de tester.', 'ok');
+      pfxStatus('✅ Émission finie. Fais les gestes ci-dessous MAINTENANT, puis attends ~10 s avant de tester. Le moteur fait souvent un va-et-vient de confirmation, parfois rien de visible : les deux sont normaux.', 'ok');
       if (after) after.hidden = false;                     // révèle les gestes SEULEMENT à la fin
     } else pfxStatus(r && r.err ? '❌ ' + r.err : 'Échec (radio occupée ?)', 'bad');   /* refus : pas de capture reussie */
   }
