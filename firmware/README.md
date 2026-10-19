@@ -13,7 +13,7 @@ existante (capture + rejeu) — le moteur accepte le rejeu (rolling code non con
 - **Multi-télécommandes** par volet (serials multiples).
 - **Sauvegarde / restauration** : export JSON (noms + trames de référence + calibration).
 - **Capture de trames** optionnelle vers MQTT (dédup par serial).
-- **OTA** : upload web + pull MQTT + rollback (2 partitions OTA).
+- **OTA** : upload web + pull MQTT, 2 partitions ; **retour automatique** à la version précédente si la nouvelle plante au démarrage (voir plus bas), et bouton « Version précédente ».
 - **Config UI** : Wi-Fi + MQTT (persistés en NVS).
 
 ## Matériel
@@ -68,6 +68,21 @@ ou pousser son URL via MQTT (`openprofalux/ota/pull`).
 # le repertoire de build de SA carte (voir Build) : sans -B, idf.py prend build/, isno-super par defaut
 idf.py -B build-m5-atom-lite -p /dev/ttyUSB0 flash monitor
 ```
+
+## Retour automatique après une mise à jour
+Une mise à jour démarre **en essai**. Elle est validée après une minute sans plantage, ou plus tôt
+si le boîtier redémarre de lui-même (Wi-Fi revenu, configuration enregistrée) ou reçoit une
+nouvelle mise à jour. Si elle plante avant, le bootloader l'abandonne et le boîtier repart **tout
+seul** sur la version précédente ; l'onglet **OTA** le signale.
+- Débranché pendant cette minute, le boîtier revient aussi à l'ancienne version : refaire la mise à jour.
+- Une version qui se bloque sans planter n'est pas rattrapée : bouton « Version précédente » de l'onglet OTA.
+- Le retour automatique vit dans le **bootloader**, que l'OTA ne remplace jamais. L'onglet OTA dit
+  s'il est actif. Un boîtier installé avant cette version l'obtient une fois, par USB, en ne
+  flashant que le bootloader (configuration et firmware gardés) :
+  ```bash
+  idf.py -B build-m5-atom-lite -p /dev/ttyUSB0 -b 115200 bootloader-flash
+  ```
+  ou en réinstallant le `-full.bin`, qui efface la configuration (exporter la sauvegarde avant).
 
 ## Premier démarrage
 1. Pas de Wi-Fi configuré → l'ESP32 ouvre un point d'accès **ouvert** `OpenProfalux_XXXX`

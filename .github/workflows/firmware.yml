@@ -192,6 +192,23 @@ jobs:
              -o enrol_gate_host_test
           ./enrol_gate_host_test
 
+  # Le retour automatique apres une mise a jour (ota_rollback.c) : ce que le firmware conclut
+  # des etats OTA. Voir firmware/test/ota-rollback. Pur, un simple gcc suffit.
+  banc-ota-rollback:
+    name: Banc de test du retour automatique
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ota_rollback (gcc + AddressSanitizer)
+        working-directory: firmware/test/ota-rollback
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/ota_rollback.c \
+             -o ota_rollback_host_test
+          ./ota_rollback_host_test
+
   # Le nom mDNS du boitier (mdns_name.c) : nettoyage du nom choisi, nom par defaut a suffixe
   # pour un boitier neuf. Voir firmware/test/mdns-name.
   banc-mdns-name:

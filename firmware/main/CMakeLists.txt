@@ -63,6 +63,7 @@ idf_component_register(
         "pfx_enrol.c"
         "web_ui.c"
         "ota.c"
+        "ota_rollback.c"
         "radio.c"
         "radio_profile.c"
         "log_ring.c"
