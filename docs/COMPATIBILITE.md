@@ -6,17 +6,25 @@ Une ligne = un retour vérifié.
 - **rejeu** : capturer une commande de la télécommande d'origine puis la réémettre.
 - **enrôlement** : créer une identité que le moteur apprend, pour piloter sans capturer.
 
-| Marque | Modèle | Fréquence | Méthode confirmée | Compteur roulant | Source |
-|---|---|---|---|---|---|
-| Profalux | gamme PFX (référence du projet) | 868 MHz (868,350 à 868,425 selon la génération) | rejeu, enrôlement | variable selon la génération du moteur | mainteneur, issue #34 |
-| Eveno | Zuni-R (installation 2015) | 868,33 MHz (profil radio `eveno`) | rejeu | non observé (une vingtaine de rejeux successifs acceptés) | issue #3, azriek |
-| Profalux | NeoSol S300 Stella AT | 868 MHz | enrôlement : essais en cours, non confirmé | à déterminer | issue #1, eleroy |
-| FranciaFlex | M4G | 868 MHz | enrôlement | variable | forum HACF, Lecanard38 |
+| Marque | Modèle | Année | Fréquence | Profil radio | Méthode confirmée | Compteur roulant | Carte / module testés | Source |
+|---|---|---|---|---|---|---|---|---|
+| Profalux | gamme PFX (référence du projet) | non précisé | 868,350 à 868,425 MHz (selon la génération) | `profalux` (défaut) | rejeu, enrôlement | variable selon la génération du moteur | banc du mainteneur | mainteneur, issue #34 |
+| Eveno | Zuni-R | 2015 | 868,33 MHz | `eveno` | rejeu | non observé (une vingtaine de rejeux successifs acceptés) | non précisé | issue #3, azriek |
+| Profalux | NeoSol S300 Stella AT | non précisé | 868 MHz (défaut) | `profalux` + bit de répétition | enrôlement | à déterminer (TE mesuré ~400 µs) | XIAO ESP32-S3 + CC1101 | issue #1, eleroy |
+| Profalux | MOT-PX3R10 (moteur solaire) | non précisé | 868 MHz (défaut) | preset Profalux Neosol R8 + bit de répétition | enrôlement | à déterminer | carte `external` (ESP32 + CC1101), puis module Ebyte E07-900MBL-01 | issue #59, joha38 |
+| FranciaFlex | M4G | non précisé | 868 MHz | non précisé | enrôlement | variable | non précisé | forum HACF, Lecanard38 |
 
-Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année, la fréquence,
-et ce qui a fonctionné (rejeu, enrôlement, ou les deux).
+Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année d'installation,
+la fréquence, le profil radio choisi, la carte et le module utilisés, et ce qui a fonctionné
+(rejeu, enrôlement, ou les deux).
 
 ## Particularités connues
+
+**NeoSol et moteurs solaires, bit de répétition** : sur NeoSol S300 et sur le moteur
+solaire MOT-PX3R10, l'enrôlement et le pilotage sont plus fiables en cochant **« Émettre
+comme la télécommande (bit de répétition) »** (Système > Appareil), fréquence Profalux par
+défaut. Deux retours concordants : eleroy sur NeoSol 300 (issue #1) et joha38 sur MOT-PX3R10
+(issue #59), ce dernier confirmé sur deux modules radio différents.
 
 **FranciaFlex M4G** : le moteur n'accepte qu'un **nombre limité de télécommandes**. Une
 fois ce nombre atteint, l'enrôlement d'un nouvel émetteur échoue sans message, et il faut
