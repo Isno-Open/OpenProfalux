@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 # Version affichee au boot, dans l'UI (header) et en MQTT. A BUMPER a chaque release.
 # Alimente esp_app_get_description()->version (app descriptor).
-set(PROJECT_VER "0.2.11")
+set(PROJECT_VER "0.2.12")
 # Build de test : la variable d'environnement OPF_VERSION (ex. "0.2.12-test9") surcharge la
 # version sans toucher ce fichier, pour que le testeur VOIE dans l'UI qu'il est bien sur la
 # build de test (sinon tout s'annonce 0.2.11 et personne ne peut verifier son flash). Les
