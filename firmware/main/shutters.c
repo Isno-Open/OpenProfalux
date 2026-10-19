@@ -606,8 +606,9 @@ static void zone_follow(volet_t *z, int dir) {
     for (const char *p = cfg_members_next(z->members, mid); p; p = cfg_members_next(p, mid)) {
         volet_t *m = find_volet(mid);
         if (!m || m == z || m->central || is_zone(m)) continue;   /* volets simples seulement */
-        if (dir == 0) { if (m->dir != 0) freeze(m); }
-        else if (m->dir != dir) track_move(m, dir);   /* deja en route dans ce sens (suivi ou notre commande) : inchange */
+        /* Seuls les suiveurs qui changent d'etat sont publies : un STOP arrive en rafale. */
+        if (dir == 0) { if (m->dir == 0) continue; freeze(m); }
+        else { if (m->dir == dir) continue; track_move(m, dir); }   /* deja en route dans ce sens (suivi ou notre commande) : inchange */
         publish_volet_state(m);
     }
 }
@@ -1201,7 +1202,10 @@ static void track_shutter_position(const char *shex, uint8_t button) {
         /* Profalux = appui + stop : ▲/▼ lance le moteur vers la butee, STOP le fige.
          * On demarre le suivi au 1er appui (repetitions du burst ignorees), on fige au STOP. */
         if (v->stop_btn && button == v->stop_btn) {
-            if (v->dir != 0) zone_follow(v, 0);   /* une seule fois par STOP (repetitions ignorees) */
+            /* Toujours, meme si la zone est deja a l'arret : un suiveur plus lent qu'elle roule
+             * encore quand elle a atteint sa butee estimee, et le STOP de la piece l'arrete aussi.
+             * zone_follow ne fige que les suiveurs en mouvement : les repetitions sont sans effet. */
+            zone_follow(v, 0);
             freeze(v);
         } else if (v->up_btn && button == v->up_btn) {
             if (!v->own_move && v->dir != +1) { track_move(v, +1); zone_follow(v, +1); }
