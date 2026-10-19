@@ -731,17 +731,17 @@ const PFX_GESTURES = {
     'Monte le volet jusqu\'en butée haute.',
     'Descends de ~4 lames.',
     'Remonte jusqu\'en butée haute.',
-    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ ci-dessous.',
+    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même : beaucoup de moteurs confirment sans bouger.',
   ],
   R7: [
     'Monte → descends ~4 lames → remonte (procédure proche, à confirmer).',
-    'Va-et-vient = enrôlé. Teste ▲ ■ ▼. Rapporte le résultat sur GitHub.',
+    'Va-et-vient = enrôlé. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.',
   ],
   R8: [
     'Montée → laisse le volet s\'arrêter seul en butée haute.',
     'Descente → laisse ~4 lames apparentes.',
     'Montée → laisse s\'arrêter seul.',
-    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ et rapporte le résultat sur GitHub.',
+    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.',
   ],
 };
 /* Geste PHYSIQUE à faire AVANT l'émission (certains modèles l'exigent, ex. NeoSol :
@@ -750,6 +750,7 @@ const PFX_PREGESTURES = {
   R8: 'NeoSol : AVANT d\'émettre, descends le volet et laisse ~4 lames apparentes.',
 };
 let pfxModels = [];
+let pfxTestLocked = true;   // dpad de test (▲ ■ ▼) verrouille tant que le delai de confirmation du moteur n'est pas ecoule
 async function loadPfx() {
   const d = await api('/api/pfx').catch(() => null);
   if (!d) return;
@@ -778,6 +779,19 @@ async function loadPfx() {
 function pfxResetSteps() {   // nouvelle identité -> on recache les gestes jusqu'à la prochaine émission
   const after = $('#pfx-after-emit'); if (after) after.hidden = true;
   const st = $('#pfx-learn-status'); if (st) st.hidden = true;
+  const w = $('#pfx-wait'); if (w) w.hidden = true;
+  const go = $('#pfx-gestes-ok'); if (go) { go.hidden = false; go.disabled = false; }
+  pfxLockTest(true);
+}
+/* Verrouille/déverrouille le dpad de test (▲ ■ ▼) pendant le délai de confirmation du moteur. */
+function pfxLockTest(locked) {
+  pfxTestLocked = locked;
+  ['#pfx-up', '#pfx-stop', '#pfx-down'].forEach(s => { const b = $(s); if (b) b.disabled = locked; });
+}
+function pfxWait(txt, cls) {
+  const w = $('#pfx-wait'); if (!w) return;
+  w.hidden = false; w.className = 'statline' + (cls ? ' ' + cls : '');
+  w.querySelector('b').textContent = txt;
 }
 function pfxCapStatus(txt, cls, moreHtml) {
   const st = $('#pfx-capture-status'); if (!st) return;
@@ -842,14 +856,18 @@ if ($('#pfx-learn')) $('#pfx-learn').onclick = async () => {
     const r = await api('/api/pfx/learn', { method: 'POST' });
     clearInterval(timer);
     if (r && r.ok) {
-      pfxStatus('✅ Émission finie - fais les gestes ci-dessous MAINTENANT, puis attends le va-et-vient du moteur (~10 s) avant de tester.', 'ok');
+      pfxStatus('✅ Émission finie. Fais les gestes ci-dessous MAINTENANT, puis clique « J\'ai fait les gestes ».', 'ok');
       if (after) after.hidden = false;                     // révèle les gestes SEULEMENT à la fin
+      pfxLockTest(true);                                   // le test reste bloqué jusqu'à la fin du délai de confirmation
+      const go = $('#pfx-gestes-ok'); if (go) { go.hidden = false; go.disabled = false; }
+      const w = $('#pfx-wait'); if (w) w.hidden = true;
     } else pfxStatus(r && r.err ? '❌ ' + r.err : 'Échec (radio occupée ?)', 'bad');   /* refus : pas de capture reussie */
   }
   catch (e) { clearInterval(timer); pfxStatus('Radio occupée, réessaie dans un instant.', 'bad'); }
   finally { b.disabled = false; b.textContent = o; setRadioBusy(false); await loadPfx(); }
 };
 async function pfxCmd(cmd, btn) {
+  if (pfxTestLocked) return;   // délai de confirmation du moteur pas encore écoulé
   if (radioBusy) return;
   setRadioBusy(true); if (btn) btn.classList.add('sending');
   try { await api('/api/pfx/cmd', { method: 'POST', body: JSON.stringify({ cmd }) }); }
@@ -859,6 +877,19 @@ async function pfxCmd(cmd, btn) {
 if ($('#pfx-up')) $('#pfx-up').onclick = () => pfxCmd('up', $('#pfx-up'));
 if ($('#pfx-stop')) $('#pfx-stop').onclick = () => pfxCmd('stop', $('#pfx-stop'));
 if ($('#pfx-down')) $('#pfx-down').onclick = () => pfxCmd('down', $('#pfx-down'));
+/* Les gestes faits : on force le délai de confirmation du moteur (~10 s) avant d'autoriser le test. */
+if ($('#pfx-gestes-ok')) $('#pfx-gestes-ok').onclick = () => {
+  const go = $('#pfx-gestes-ok'); go.disabled = true; go.hidden = true;
+  pfxLockTest(true);
+  let n = 10;
+  pfxWait('⏳ Le moteur confirme, patiente… ' + n + ' s');
+  const t = setInterval(() => {
+    n = Math.max(0, n - 1);
+    if (n > 0) { pfxWait('⏳ Le moteur confirme, patiente… ' + n + ' s'); return; }
+    clearInterval(t); pfxLockTest(false);
+    pfxWait('✅ Tu peux tester maintenant avec ▲ ■ ▼.', 'ok');
+  }, 1000);
+};
 if ($('#pfx-save-volet')) $('#pfx-save-volet').onclick = async () => {
   const name = ($('#pfx-volet-name').value || '').trim();
   if (!name) { toast('Donne un nom au volet'); return; }
