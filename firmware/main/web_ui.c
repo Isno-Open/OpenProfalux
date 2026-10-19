@@ -1139,31 +1139,57 @@ static esp_err_t h_pfx_forget(httpd_req_t *r) {
     return httpd_resp_sendstr(r, "{\"ok\":1}");
 }
 /* Enregistre l'identite virtuelle enrolee comme volet (onglet Volets + cover HA). */
-/* Cree une centrale : {id, members:[id1,id2,...]} -> diffuse aux volets membres. */
-static esp_err_t h_central(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
-    cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
-    const char *id = jstr(j, "id");
-    /* Une liste qui ne tient pas est refusee, pas tronquee : les membres coupes ne
-     * recevraient plus les commandes de la centrale, sans que rien ne le dise.
-     * Une liste de volets existants tient toujours (SH_MEMBERS_LEN). */
-    char csv[SH_MEMBERS_LEN] = ""; int p = 0;
-    const char *err = NULL;
+/* members:[id1,id2,...] -> CSV (SH_MEMBERS_LEN). Une liste qui ne tient pas est
+ * refusee, pas tronquee : les membres coupes seraient oublies sans que rien ne le
+ * dise. Une liste de volets existants tient toujours. Renvoie la raison d'un refus,
+ * NULL si la liste est bonne. */
+static const char *members_csv(cJSON *j, char csv[SH_MEMBERS_LEN]) {
+    int p = 0;
+    csv[0] = 0;
     cJSON *mem = cJSON_GetObjectItem(j, "members"), *m;
     if (cJSON_IsArray(mem)) cJSON_ArrayForEach(m, mem) {
         const char *s = cJSON_GetStringValue(m);
         if (!s || !*s) continue;
         /* Un nom avec une virgule serait coupe en deux dans la liste : ce membre
          * ne recevrait rien. Refuse, avec la raison. */
-        if (strchr(s, ',')) { err = "un volet membre a une virgule dans son nom"; break; }
-        int n = snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", s);
-        if (n >= (int)sizeof(csv) - p) { err = "trop de membres"; break; }
+        if (strchr(s, ',')) return "un volet membre a une virgule dans son nom";
+        int n = snprintf(csv + p, SH_MEMBERS_LEN - p, "%s%s", p ? "," : "", s);
+        if (n >= SH_MEMBERS_LEN - p) return "trop de membres";
         p += n;
     }
+    return NULL;
+}
+/* Cree une centrale : {id, members:[id1,id2,...]} -> diffuse aux volets membres. */
+static esp_err_t h_central(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    char csv[SH_MEMBERS_LEN];
+    const char *err = members_csv(j, csv);
     int rc = (id && *id && !err) ? shutters_create_central(id, csv) : -1;
     if (rc != 0 && !err && id && strchr(id, ',')) err = "virgule dans le nom";
     if (err) ESP_LOGW(TAG, "centrale '%s' refusee : %s", id ? id : "", err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (err) cJSON_AddStringToObject(o, "err", err);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
+/* Zone : {id, members:[id1,...]} -> les volets qui suivent ses mouvements ([] = aucun). */
+static esp_err_t h_followers(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    char csv[SH_MEMBERS_LEN];
+    const char *err = members_csv(j, csv);
+    int rc = (id && *id && !err) ? shutters_set_followers(id, csv, &err) : -1;
+    if (err) ESP_LOGW(TAG, "suiveurs de '%s' refuses : %s", id ? id : "", err);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
     if (err) cJSON_AddStringToObject(o, "err", err);
@@ -1334,6 +1360,7 @@ void web_ui_start(void) {
     reg(s, "/api/rf/replay", HTTP_POST, h_rf_replay);
     reg(s, "/api/calibrate", HTTP_POST, h_calibrate);
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
+    reg(s, "/api/volet/followers", HTTP_POST, h_followers);
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
     reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);

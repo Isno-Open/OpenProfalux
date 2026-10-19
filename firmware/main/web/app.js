@@ -287,10 +287,11 @@ function renderVolets(list, rf) {
     const el = document.createElement('div');
     el.className = 'card volet' + (reorderMode ? ' draggable' : '');
     const isC = !!v.central;
-    const showP = showPos && !isC;
+    const isZ = !isC && !!v.zone;   /* zone : comme une centrale, pas de position */
+    const showP = showPos && !isC && !isZ;
     if (reorderMode) { el.draggable = true; el.dataset.id = v.id; }
     el.innerHTML = `
-      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : ''}</span>${
+      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : isZ ? ' <span class="badge">zone</span>' : ''}</span>${
         reorderMode ? '<span class="reorder"><button data-mv="up" title="Monter">▲</button><button data-mv="down" title="Descendre">▼</button></span>'
                     : (showP ? `<span class="pct">${v.position ?? '?'}%</span>` : '')}</div>
       <div class="dpad"><button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button></div>
@@ -301,7 +302,8 @@ function renderVolets(list, rf) {
             ? 'identité : <code>' + esc(remoteName(v.virt_serial)) + '</code>'
               + ((v.serials || []).length ? ' · télécommandes : ' + v.serials.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') : '')
             : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') || 'aucun'))
-          + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')}</div>`;
+          + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')
+          + (isZ ? `<br>suiveurs : ${esc(v.members)}` : (v.follows || []).length ? `<br>suit : ${esc(v.follows.join(', '))}` : '')}</div>`;
     /* En mode reorganisation, le pilotage est NEUTRALISE : un clic mal place ne
        doit pas faire partir un volet pendant qu'on range l'affichage. */
     el.querySelectorAll('[data-cmd]').forEach(b => {
@@ -405,6 +407,7 @@ function renderLearnSlots() {
   const v = (statusCache.volets || []).find(x => x.id === id);
   if (v && v.central) {   // une centrale n'a pas de télécommande propre
     box.innerHTML = `<div class="statline ok"><span class="dot"></span><b>C'est une centrale</b> (groupe de volets) - pas d'apprentissage. Gère ses membres dans <b>Volets → Créer une centrale</b>.</div>`;
+    renderZoneMembers(v);   /* masque la zone (pas de suiveurs pour une centrale) */
     return;
   }
   const cmd = (v && v.cmd) || {};
@@ -460,6 +463,7 @@ function renderLearnSlots() {
   const orientInp = $('#orient-input');
   if (orientInp && v && document.activeElement !== orientInp)
     orientInp.value = (v.orientation != null && v.orientation >= 0) ? v.orientation : '';
+  renderZoneMembers(v);
   const delRow = $('#del-volet-row');
   if (delRow) delRow.hidden = !v;
   const hint = $('#learn-hint');
@@ -491,6 +495,39 @@ if (renameBtn) renameBtn.onclick = async () => {
   if (!serial) return;
   await api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
   toast('Télécommande renommée'); await loadStatus();
+};
+/* Zone : volets suiveurs du volet choisi (cases a cocher). On ne coche que des
+ * volets simples : ni centrale, ni zone. Un volet qui suit deja une zone ne peut
+ * pas en etre une. Les coches en cours survivent au polling tant que le volet
+ * choisi ne change pas. */
+let zoneFor = null;
+function renderZoneMembers(v) {
+  const row = $('#zone-row'), box = $('#zone-members'), save = $('#zone-save'); if (!row || !box) return;
+  row.hidden = !v || !!v.central;
+  if (row.hidden) { zoneFor = null; return; }
+  const follows = v.follows || [];
+  if (follows.length) {
+    zoneFor = null;
+    if (save) save.hidden = true;
+    box.innerHTML = `<span class="hint">Ce volet suit ${follows.map(z => `« ${esc(z)} »`).join(', ')} : il ne peut pas être une zone. Décoche-le d'abord dans ${follows.length > 1 ? 'ces zones' : 'cette zone'}.</span>`;
+    return;
+  }
+  if (save) save.hidden = false;
+  const saved = (v.members || '').split(',').map(s => s.trim()).filter(Boolean);
+  const checked = zoneFor === v.id ? new Set($$('#zone-members input:checked').map(c => c.value)) : new Set(saved);
+  zoneFor = v.id;
+  const vols = (statusCache.volets || []).filter(x => !x.central && !x.zone && x.id !== v.id);
+  box.innerHTML = vols.length
+    ? vols.map(x => `<label class="chip" style="cursor:pointer"><input type="checkbox" value="${esc(x.id)}"${checked.has(x.id) ? ' checked' : ''} style="margin-right:5px">${esc(x.id)}</label>`).join('')
+    : '<span class="hint">Aucun volet simple à cocher.</span>';
+}
+const zoneSave = $('#zone-save');
+if (zoneSave) zoneSave.onclick = async () => {
+  if (!activeVolet) return;
+  const members = $$('#zone-members input:checked').map(c => c.value);
+  const r = await api('/api/volet/followers', { method: 'POST', body: JSON.stringify({ id: activeVolet, members }) }).catch(() => null);
+  if (r && r.ok) { toast(members.length ? 'Zone enregistrée' : 'Plus de volets suiveurs'); zoneFor = null; await loadStatus(); }
+  else toast('Échec de l\'enregistrement' + (r && r.err ? ' : ' + r.err : ''));
 };
 const orientSave = $('#orient-save');
 if (orientSave) orientSave.onclick = async () => {
@@ -1332,7 +1369,7 @@ async function loadPrevCfg() {
 /* ── Statut global (polling) ── */
 let statusCache = { volets: [], rf: [], remotes: {} };
 function fillVoletPickers(volets) {
-  const ids = (volets || []).filter(v => !v.central).map(v => v.id);   /* pas de calibration pour une centrale */
+  const ids = (volets || []).filter(v => !v.central && !v.zone).map(v => v.id);   /* pas de calibration pour une centrale ni une zone (pas de position) */
   const sel = $('#calib-id');
   if (sel) { const cur = sel.value; sel.innerHTML = ids.map(id => `<option>${esc(id)}</option>`).join(''); if (ids.includes(cur)) sel.value = cur; }
   const dl = $('#volet-list'); if (dl) dl.innerHTML = ids.map(id => `<option value="${esc(id)}">`).join('');

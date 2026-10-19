@@ -195,6 +195,21 @@ static volet_t *find_volet(const char *id) {
     for (int i = 0; i < s_nvolets; i++) if (!strcmp(s_volets[i].id, id)) return &s_volets[i];
     return NULL;
 }
+/* ZONE : volet appris qui a des suiveurs (voir zone_follow). Une zone n'est
+ * jamais suiveuse, et un suiveur n'est jamais une zone : on ne coche que des
+ * volets simples. */
+static bool is_zone(const volet_t *v) { return !v->central && v->members && *v->members; }
+/* Vrai si id figure dans la liste de membres csv. */
+static bool in_members(const char *csv, const char *id) {
+    char mid[SH_ID_LEN];
+    for (const char *p = cfg_members_next(csv, mid); p; p = cfg_members_next(p, mid)) if (!strcmp(mid, id)) return true;
+    return false;
+}
+/* Une zone (ou NULL) dont v est suiveur ; il peut en suivre plusieurs. */
+static volet_t *zone_of(const volet_t *v) {
+    for (int i = 0; i < s_nvolets; i++) if (is_zone(&s_volets[i]) && in_members(s_volets[i].members, v->id)) return &s_volets[i];
+    return NULL;
+}
 static volet_t *get_or_create(const char *id) {
     volet_t *v = find_volet(id);
     if (v) return v;
@@ -529,6 +544,8 @@ static void emit_virt(volet_t *v, uint8_t button) {
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
 }
 
+static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suiveurs d'une zone */
+
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
  * On integre juste la position ensuite ; l'arret se fait par do_stop (rafale STOP) au bon moment. */
 static void start_move(volet_t *v, int dir) {
@@ -537,11 +554,13 @@ static void start_move(volet_t *v, int dir) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     if (v->virt) emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
     else         emit_press(dir > 0 ? v->up : v->down);
+    zone_follow(v, dir);
 }
 static void do_stop(volet_t *v) {
     v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
     if (v->virt) emit_virt(v, PFX_BTN_STOP);
     else         emit_press(v->stop);    /* rafale STOP = fige le moteur a la position voulue */
+    zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
@@ -575,6 +594,24 @@ static void publish_volet_state(volet_t *v) {
     pub_defer(topic, st, 0, 1);
     v->pub_pos = (int)(v->position + 0.5f); v->pub_dir = v->dir;
 }
+/* ZONE : un volet appris dont la trame fait bouger plusieurs volets a la fois
+ * (telecommande de piece). Ses suiveurs (members) reproduisent ses mouvements
+ * SANS emettre : sa trame les a deja actionnes. Chacun integre sa position avec
+ * ses propres temps de course et s'arrete a sa propre butee ; un STOP de la zone
+ * les fige tous. dir = +1 monte, -1 descend, 0 STOP. Un suivi ne se propage pas
+ * plus loin : un suiveur n'est jamais une zone (shutters_set_followers). Appele sous LOCK. */
+static void zone_follow(volet_t *z, int dir) {
+    if (z->central || !z->members) return;
+    char mid[SH_ID_LEN];
+    for (const char *p = cfg_members_next(z->members, mid); p; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (!m || m == z || m->central || is_zone(m)) continue;   /* volets simples seulement */
+        /* Seuls les suiveurs qui changent d'etat sont publies : un STOP arrive en rafale. */
+        if (dir == 0) { if (m->dir == 0) continue; freeze(m); }
+        else { if (m->dir == dir) continue; track_move(m, dir); }   /* deja en route dans ce sens (suivi ou notre commande) : inchange */
+        publish_volet_state(m);
+    }
+}
 /* Publie la config HA discovery d'un cover (retained). Appele sous LOCK. */
 static void announce_one(volet_t *v) {
     if (!s_mqtt_ready) return;
@@ -599,7 +636,9 @@ static void announce_one(volet_t *v) {
     const char *devname = (!s_device[0] || !strcmp(s_device, "openprofalux")) ? "OpenProfalux" : s_device;
     /* Position seulement si ecoute permanente (sinon % non fiable) */
     char pos[240] = "";
-    if (s_log_frames && !v->central)   /* une centrale n'a pas de position (juste ouvrir/fermer/stop) */
+    /* Ni centrale ni zone n'ont de position (juste ouvrir/fermer/stop) : la leur ne
+     * serait celle d'aucun volet, et un seul STOP arrete des volets de vitesses differentes. */
+    if (s_log_frames && !v->central && !is_zone(v))
         snprintf(pos, sizeof(pos),
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
@@ -706,6 +745,10 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         publish_volet_state(v);
         UNLOCK(); pub_flush();
         return 0;
+    }
+    if (!strcmp(cmd, "pos") && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
+        ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
+        UNLOCK(); return -1;
     }
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
     if (!strcmp(cmd, "up"))        { v->target = 0;   start_move(v, +1); }   /* ouvrir : monter vers 0 */
@@ -839,6 +882,43 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     pub_flush();
     ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u",
              id, (unsigned)serial, counter);
+    return 0;
+}
+
+/* ZONE : fixe les suiveurs d'un volet appris (CSV d'ids, "" = plus aucun).
+ * Suiveurs : des volets simples existants, ni la zone elle-meme, ni une centrale,
+ * ni une autre zone. Une zone ne peut pas non plus etre elle-meme suiveuse.
+ * *why recoit la raison d'un refus. */
+int shutters_set_followers(const char *id, const char *members_csv, const char **why) {
+    const char *err = NULL;
+    if (!id || !*id) { if (why) *why = "volet inconnu"; return -1; }
+    LOCK();
+    volet_t *v = find_volet(id), *z;
+    char mid[SH_ID_LEN];
+    bool any = false;
+    if (!v) err = "volet inconnu";
+    else if (v->central) err = "une centrale ne peut pas etre une zone";
+    else for (const char *p = cfg_members_next(members_csv, mid); p && !err; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (!m) err = "suiveur inconnu";
+        else if (m == v) err = "une zone ne peut pas se suivre elle-meme";
+        else if (m->central) err = "une centrale ne peut pas etre suiveuse";
+        else if (is_zone(m)) err = "une zone ne peut pas etre suiveuse";
+        any = true;
+    }
+    if (!err && any && (z = zone_of(v)) && z != v) err = "ce volet suit une zone, il ne peut pas en etre une";
+    if (!err && cfg_volet_set_members(v, members_csv) != 0) err = "trop de suiveurs";
+    if (err) {
+        UNLOCK();
+        ESP_LOGW(TAG, "zone '%s' refusee : %s", id, err);
+        if (why) *why = err;
+        return -1;
+    }
+    save_cfg();
+    announce_one(v);   /* zone <-> volet simple : la position apparait ou disparait dans HA */
+    ESP_LOGW(TAG, "zone '%s' : suiveurs=[%s]", id, v->members ? v->members : "");
+    UNLOCK();
+    pub_flush();
     return 0;
 }
 
@@ -1122,11 +1202,15 @@ static void track_shutter_position(const char *shex, uint8_t button) {
         /* Profalux = appui + stop : ▲/▼ lance le moteur vers la butee, STOP le fige.
          * On demarre le suivi au 1er appui (repetitions du burst ignorees), on fige au STOP. */
         if (v->stop_btn && button == v->stop_btn) {
+            /* Toujours, meme si la zone est deja a l'arret : un suiveur plus lent qu'elle roule
+             * encore quand elle a atteint sa butee estimee, et le STOP de la piece l'arrete aussi.
+             * zone_follow ne fige que les suiveurs en mouvement : les repetitions sont sans effet. */
+            zone_follow(v, 0);
             freeze(v);
         } else if (v->up_btn && button == v->up_btn) {
-            if (!v->own_move && v->dir != +1) track_move(v, +1);
+            if (!v->own_move && v->dir != +1) { track_move(v, +1); zone_follow(v, +1); }
         } else if (v->down_btn && button == v->down_btn) {
-            if (!v->own_move && v->dir != -1) track_move(v, -1);
+            if (!v->own_move && v->dir != -1) { track_move(v, -1); zone_follow(v, -1); }
         }
         /* v->own_move : notre propre echo (meme serial rejoue) -> ignore.
          * PAS de break : un meme serial (telecommande GENERALE) peut piloter plusieurs volets
@@ -1211,7 +1295,14 @@ char *shutters_status_json(void) {
             char vhex[SH_SERIAL_LEN]; snprintf(vhex, sizeof(vhex), "0x%07X", (unsigned)v->virt_serial);
             cJSON_AddStringToObject(o, "virt_serial", vhex);   /* identite d'emission du volet (0x067) */
         }
-        if (v->central) { cJSON_AddBoolToObject(o, "central", true); cJSON_AddStringToObject(o, "members", v->members ? v->members : ""); }
+        if (v->central) cJSON_AddBoolToObject(o, "central", true);
+        if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");   /* centrale : membres ; zone : suiveurs */
+        if (is_zone(v)) cJSON_AddBoolToObject(o, "zone", true);
+        if (zone_of(v)) {   /* zones que ce volet suit (il peut en suivre plusieurs) */
+            cJSON *fl = cJSON_AddArrayToObject(o, "follows");
+            for (int k = 0; k < s_nvolets; k++)
+                if (is_zone(&s_volets[k]) && in_members(s_volets[k].members, v->id)) cJSON_AddItemToArray(fl, cJSON_CreateString(s_volets[k].id));
+        }
         cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
         cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);     /* pour reafficher la calibration dans l'UI */
         cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);

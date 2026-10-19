@@ -33,7 +33,10 @@ typedef struct {
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
-                              * Ne s'ecrit que par cfg_volet_set_members(). */
+                              * Ne s'ecrit que par cfg_volet_set_members().
+                              * Centrale : les volets a qui la commande est diffusee.
+                              * Volet appris (ZONE) : ses SUIVEURS. Sa propre trame les fait
+                              * bouger tous ; ils suivent ses mouvements sans rien emettre. */
     uint32_t travel_up_ms, travel_down_ms;
     int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
@@ -65,7 +68,7 @@ typedef struct {
     volet_t  *volets;   int *nvolets;     /* SH_MAX_VOLETS places */
 } cfg_model_t;
 
-/* ── Membres d'une centrale ──
+/* ── Membres d'une centrale (ou suiveurs d'une zone) ──
  * La liste vit sur le tas, et seulement pour une centrale : un tampon fixe dans
  * volet_t se payait sur chacun des SH_MAX_VOLETS volets, et a 384 octets il
  * tronquait en silence les listes longues (les volets coupes ne recevaient plus

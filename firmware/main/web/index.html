@@ -98,6 +98,12 @@
             <button id="orient-save" class="btn">Enregistrer</button></div>
             <p class="hint">Nord = 0 · Est = 90 · Sud = 180 · Ouest = 270. Laisser vide = non défini.</p>
           </div>
+          <div class="field" id="zone-row" hidden>
+            <label>Zone : volets actionnés aussi par cette télécommande</label>
+            <div id="zone-members" class="chips"></div>
+            <div class="row" style="margin-top:6px"><button id="zone-save" class="btn">Enregistrer</button></div>
+            <p class="hint">Pour une télécommande de pièce (un seul serial, plusieurs volets). Les volets cochés suivent ses mouvements dans l'application, sans émission supplémentaire. Coche directement les volets, pas une autre zone. Une zone n'a pas de position, comme une centrale.</p>
+          </div>
           <div class="row" id="del-volet-row" hidden><button id="del-volet" class="btn danger">🗑 Supprimer ce volet</button></div>
           <p class="hint" id="learn-hint">Choisis un volet ci-dessus pour activer la capture. Place-toi à moins d'un mètre du boîtier et appuie sur le bon bouton en le tenant une seconde.</p>
           <div class="statline" style="margin-top:14px"><span class="dot"></span><b>Le clonage ne pilote pas ton moteur ?</b> Certains moteurs refusent le rejeu (rolling code strict). Dans ce cas, <a href="#" id="goto-enrol"><b>crée une télécommande virtuelle</b></a> - ça nécessite aussi ta télécommande d'origine.</div>
