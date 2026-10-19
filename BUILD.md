@@ -1,4 +1,4 @@
-# Build & flash — OpenProfalux
+# Build & flash : OpenProfalux
 
 ## Choisir sa carte
 
@@ -38,6 +38,27 @@ docker compose run --rm esp-idf bash -c "
 
 La même chose tourne en intégration continue à chaque poussée, pour chaque carte
 de `boards/` : voir `.github/workflows/firmware.yml`.
+
+## Builds de test (version identifiable)
+
+Une build de test doit s'annoncer avec une version **distincte de la release**, sinon le
+testeur voit le même `0.2.11` que l'ancienne version et ne peut pas vérifier son flash.
+
+`firmware/build-test.sh` s'en charge : il compile chaque carte de `boards/` avec une
+version `<prochaine release>-<label>` (ex. `0.2.12-test9`), affichée au boot et dans
+l'en-tête de l'UI.
+
+```bash
+./build-test.sh test9
+```
+
+Produit dans `firmware/release-test/` : `openprofalux-<carte>-test9.bin` (app seule, pour
+l'onglet OTA) et `-test9-full.bin` (flash USB à 0x0). À publier en **pré-release** GitHub
+(exclue de `/releases/latest`, donc pas d'OTA automatique proposée).
+
+Sous le capot, la version vient de la variable d'environnement `OPF_VERSION` que
+`CMakeLists.txt` lit si elle est définie ; `PROJECT_VER` (le numéro des releases) n'est
+pas touché. Une release normale, elle, passe par `build-release.sh` et garde `PROJECT_VER`.
 
 ## Versions des composants
 
@@ -106,11 +127,11 @@ mosquitto_pub -h 192.168.1.x -t 'openprofalux/listen/set' -m 'OFF'
 ## Logs disponibles
 
 Le firmware publie sur MQTT :
-- `openprofalux/log` — topics reçus et connexion (=`{"lvl":"info","msg":"...","client":"..."}`)
-- `openprofalux/{device}/state` — state actuel (=dernière commande, rssi, heap)
-- `openprofalux/{device}/status` — `online` / `offline` (disponibilité HA)
-- `openprofalux/frames/last` et `openprofalux/frames/log/<n>` — trames RF captées (écoute activée)
-- `openprofalux/system/status` — version, target, heap free (à la connexion)
+- `openprofalux/log` : topics reçus et connexion (=`{"lvl":"info","msg":"...","client":"..."}`)
+- `openprofalux/{device}/state` : state actuel (=dernière commande, rssi, heap)
+- `openprofalux/{device}/status` : `online` / `offline` (disponibilité HA)
+- `openprofalux/frames/last` et `openprofalux/frames/log/<n>` : trames RF captées (écoute activée)
+- `openprofalux/system/status` : version, target, heap free (à la connexion)
 
 Depuis mon côté (=Claude), je peux :
 1. Te demander de lancer `mosquitto_sub -h {ip} -v -t 'openprofalux/#' > /tmp/log.txt`
