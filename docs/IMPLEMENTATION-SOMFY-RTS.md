@@ -71,6 +71,26 @@ quand 868 l'est, les deux sur la Super. Une carte qui n'a pas la bande **refuse 
 l'émission correspondante : pas d'émission hors bande, pas de supposition silencieuse
 (même esprit que le contrôle `bands_allowed_khz` du launcher).
 
+Réglages CC1101 **repris d'ESPSomfy-RTS** (lus dans `Transceiver`, lib ELECHOUSE) : on
+suit la source prouvée, c'est le même mode **OOK brut sur GDO0** que notre capture Profalux.
+
+| Réglage | Valeur ESPSomfy | Sens |
+|---|---|---|
+| Fréquence | 433,42 MHz (Somfy) | `setMHZ` |
+| Modulation | ASK/OOK | `setModulation(2)` |
+| Format paquet | série asynchrone, données sur GDO0 | `setPktFormat(3)` |
+| Synchro | détection de porteuse, pas de préambule | `setSyncMode(4)` |
+| Bande RX | large (défaut 812,5 kHz) | `setRxBW`, capture robuste |
+| CRC / adresse | désactivés | `setCrc(0)`, `setAdrChk(0)` |
+| Débit `setDRate` | non utilisé | l'émission bit-bang GDO0 par `delayMicroseconds` |
+
+À noter : l'émission ne passe pas par le moteur de paquets, c'est du **bit-bang sur GDO0**
+avec les durées de la section 3.2. La réception est le même mode série asynchrone GDO0 que
+pour Profalux, mais à 433 et en bande RX large. On a déjà ce modèle (GDO0 série) côté
+Profalux : l'ajout Somfy = 433,42 + OOK + bande large + le timing Somfy (déjà aligné) + le
+décodage Manchester (déjà fait). Côté `cc1101.c`, il faudra traduire ces réglages
+ELECHOUSE en valeurs de registres (MDMCFG, PKTCTRL, FREQ), à faire et mesurer au banc.
+
 ### 3.2 L'émission
 
 Construire la forme d'onde complète à partir de la sortie du codec :
@@ -114,6 +134,11 @@ Procédure Somfy standard : mettre le **moteur en mode apprentissage** (mainteni
 une télécommande déjà appairée, ou la procédure d'usine), puis **émettre une commande PROG**
 (0x8) depuis OpenProfalux avec l'adresse de la télécommande virtuelle. Le moteur fait un
 va-et-vient de confirmation. Ensuite les commandes UP/DOWN/MY fonctionnent.
+
+Côté code, rien de spécial : chez ESPSomfy-RTS, `Prog` **s'émet comme n'importe quelle
+commande** (une trame via `sendFrame`, mise en file avec ses répétitions). Il n'y a pas de
+séquence radio particulière pour l'appairage : toute la « procédure » est côté moteur
+(mise en mode apprentissage par l'utilisateur).
 
 ### 3.7 Intégration dans le firmware
 
