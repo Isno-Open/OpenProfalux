@@ -223,6 +223,42 @@ static void t8_tx_pulses(void) {
     CHECK(somfy_rts_tx_pulses(wire, true, tiny, 4) == -1, "tampon trop court -> -1");
 }
 
+/* T9 : telecommande virtuelle. Calee sur l'etat exact des deux vecteurs open-rts,
+ * elle doit produire la trame bit pour bit du fil (donc cle = quartet bas du code
+ * roulant, et pack correct), puis le code roulant avance et se replie. */
+static void t9_remote_next(void) {
+    printf("T9 telecommande virtuelle (code roulant + cle)\n");
+    somfy_rts_remote_t r1 = { .address = 0x421FEEu, .rolling_code = 0x1E63 };
+    uint8_t w1[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_remote_next(&r1, SOMFY_RTS_CMD_UP, w1);
+    const uint8_t wire1[SOMFY_RTS_FRAME_BYTES] = { 0xA3, 0x8A, 0x94, 0xF7, 0x19, 0x06, 0x44 };
+    CHECK(memcmp(w1, wire1, SOMFY_RTS_FRAME_BYTES) == 0, "v1 : trame = A3 8A 94 F7 19 06 44");
+    CHECK(r1.rolling_code == 0x1E64, "v1 : code roulant incremente a 0x1E64");
+
+    somfy_rts_remote_t r2 = { .address = 0xFACADEu, .rolling_code = 0x007B };
+    uint8_t w2[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_remote_next(&r2, SOMFY_RTS_CMD_UP, w2);
+    const uint8_t wire2[SOMFY_RTS_FRAME_BYTES] = { 0xAB, 0x84, 0x84, 0xFF, 0x21, 0xEB, 0x11 };
+    CHECK(memcmp(w2, wire2, SOMFY_RTS_FRAME_BYTES) == 0, "v2 : trame = AB 84 84 FF 21 EB 11");
+    CHECK(r2.rolling_code == 0x007C, "v2 : code roulant incremente a 0x007C");
+
+    /* Repli du compteur apres 0xFFFF. */
+    somfy_rts_remote_t r3 = { .address = 0x000001u, .rolling_code = 0xFFFF };
+    uint8_t w3[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_remote_next(&r3, SOMFY_RTS_CMD_MY, w3);
+    CHECK(r3.rolling_code == 0x0000, "code roulant se replie a 0 apres 0xFFFF");
+
+    /* Deux trames successives : codes roulants consecutifs, memes adresse, chacune relue. */
+    somfy_rts_remote_t r4 = { .address = 0x0A1B2Cu, .rolling_code = 0x0100 };
+    uint8_t a[SOMFY_RTS_FRAME_BYTES], b[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_remote_next(&r4, SOMFY_RTS_CMD_DOWN, a);
+    somfy_rts_remote_next(&r4, SOMFY_RTS_CMD_DOWN, b);
+    somfy_rts_frame_t ga, gb;
+    CHECK(somfy_rts_unpack(a, &ga) && somfy_rts_unpack(b, &gb), "les deux trames se relisent");
+    CHECK(ga.rolling_code == 0x0100 && gb.rolling_code == 0x0101, "codes roulants 0x0100 puis 0x0101");
+    CHECK(ga.address == 0x0A1B2Cu && gb.address == 0x0A1B2Cu, "meme adresse");
+}
+
 int main(void) {
     printf("== Banc Somfy RTS (codec logique) ==\n");
     t0_checksum();
@@ -234,6 +270,7 @@ int main(void) {
     t6_commandes();
     t7_vecteurs_reels();
     t8_tx_pulses();
+    t9_remote_next();
     if (g_fail) {
         printf("\n%d verification(s) en echec.\n", g_fail);
         return 1;
