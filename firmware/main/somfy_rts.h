@@ -100,4 +100,33 @@ bool somfy_rts_unpack(const uint8_t in[SOMFY_RTS_FRAME_BYTES], somfy_rts_frame_t
  * ecrits, ou -1 si `max` est trop court. */
 int somfy_rts_manchester(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], char *out, int max);
 
+/* Une impulsion OOK : un niveau tenu pendant `us` microsecondes. */
+typedef struct {
+    uint8_t  level;   /* 0 = bas, 1 = haut */
+    uint32_t us;      /* duree, en microsecondes */
+} somfy_rts_pulse_t;
+
+/* Majorant du nombre d'impulsions d'UNE trame, avant fusion : sync materiel
+ * (2 impulsions par paire, au plus HW_SYNC_REPEAT paires) + sync logiciel (2) +
+ * donnees (au plus une impulsion par demi-symbole = 2*FRAME_BITS). */
+#define SOMFY_RTS_MAX_PULSES  (2 * SOMFY_RTS_HW_SYNC_REPEAT + 2 + 2 * SOMFY_RTS_FRAME_BITS)
+
+/* Construit la sequence d'impulsions OOK d'UNE trame, prete a jouer sur le RMT :
+ * sync materiel (HW_SYNC_FIRST paires a la 1re trame, HW_SYNC_REPEAT aux
+ * repetitions), sync logiciel, puis les 56 bits en Manchester. Les niveaux
+ * identiques adjacents sont FUSIONNES (le bas du sync logiciel et un premier
+ * demi-symbole bas ne font qu'une impulsion). N'inclut NI le wakeup (en tete de
+ * transmission) NI le silence inter-trame (entre deux trames) : ce sont des
+ * elements d'enveloppe, laisses a la boucle d'emission.
+ *
+ * `bytes` = les 7 octets DEJA empaquetes (obscurcis), sortie de somfy_rts_pack.
+ * Ecrit au plus `max` impulsions (prevoir SOMFY_RTS_MAX_PULSES). Rend le nombre
+ * d'impulsions ecrites, ou -1 si un pointeur est nul ou `max` trop petit.
+ *
+ * Unite PURE, sans radio : la STRUCTURE (ordre, durees des constantes) est testee
+ * sur PC. La polarite reelle a l'antenne et la jonction sync logiciel / premier bit
+ * restent A VALIDER au banc (issue #73). */
+int somfy_rts_tx_pulses(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], bool first,
+                        somfy_rts_pulse_t *out, int max);
+
 #endif
