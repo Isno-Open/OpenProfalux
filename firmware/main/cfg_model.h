@@ -19,6 +19,15 @@
 
 #define SH_MAX_REMOTES 16
 
+/* Protocole d'emission d'un volet VIRTUEL (qui GENERE sa trame). Profalux/KeeLoq est le
+ * seul cable aujourd'hui, et vaut 0 : les volets deja persistes, sans ce champ, le
+ * prennent par defaut. Les autres protocoles (Somfy RTS - issue #73 - ou d'autres)
+ * s'ajoutent ici et se cablent dans emit_virt (shutters.c). */
+typedef enum {
+    VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
+    VOLET_PROTO_SOMFY_RTS = 1,   /* reserve, pas encore cable */
+} volet_proto_t;
+
 typedef struct {
     char id[SH_ID_LEN];
     char serials[SH_MAX_SERIALS][SH_SERIAL_LEN];
@@ -30,6 +39,7 @@ typedef struct {
     bool     virt;
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
+    uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
