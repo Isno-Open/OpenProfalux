@@ -1277,7 +1277,13 @@ static esp_err_t h_session(httpd_req_t *r) {
  * oubliee : c'est le seul endroit ou les handlers sont enregistres. Les assets
  * statiques (/, style.css, app.js) passent par reg_open() : le navigateur doit
  * pouvoir afficher la page qui DEMANDE le mot de passe. */
-#define MAX_ROUTES 48
+/* Places des deux tables : routes protegees (reg, ci-dessous) et routes ouvertes (reg_open).
+ * Le serveur web en deduit sa propre limite (max_uri_handlers, web_ui_start) : un seul nombre a
+ * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
+ * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
+ * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
+#define MAX_ROUTES      64
+#define MAX_OPEN_ROUTES 12
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
 
@@ -1322,9 +1328,8 @@ static esp_err_t h_not_found(httpd_req_t *r, httpd_err_code_t err) {
 
 void web_ui_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 56;   /* marge > nb de routes (38 : 35 protegees + 3 assets). Si trop bas, les dernieres
-                                    routes echouent EN SILENCE (ex /api/restore mort a 28). reg() loggue
-                                    desormais les echecs pour ne plus jamais rater ca. */
+    cfg.max_uri_handlers = MAX_ROUTES + MAX_OPEN_ROUTES;   /* voir MAX_ROUTES : trop bas, les dernieres
+                                    routes ne s'enregistrent pas (404) ; reg() et reg_open() le journalisent. */
     cfg.stack_size = 6144;   /* esp_ota_end() consomme la pile en fin d'upload */
     /* ROOT CAUSE "web UI morte au bout d'un moment" : sans lru_purge, une fois les
      * max_open_sockets pris (SPA qui poll en keep-alive), le httpd REFUSE toute nouvelle

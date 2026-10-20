@@ -57,6 +57,9 @@ jobs:
           PY
       - name: Resume
         run: echo '${{ steps.lire.outputs.matrice }}'
+      # Une route de trop n'est pas enregistree (404) : /api/central dehors depuis #42, en v0.2.12.
+      - name: Places des tables de routes (web_ui.c)
+        run: python3 tools/check_routes.py
 
   build:
     needs: cartes
