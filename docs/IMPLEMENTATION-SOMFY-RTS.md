@@ -4,6 +4,16 @@ But : piloter des volets **Somfy RTS** (433,42 MHz) en plus du Profalux (868 MHz
 idéalement depuis une seule carte (issue #73). Ce document décrit ce qui existe, ce
 qu'il reste à faire, et dans quel ordre. Il sert de plan avant de coder la partie radio.
 
+On prévoit **deux cartes dès le départ** :
+
+- une **carte 433 dédiée** (ESP32 + CC1101 433), Somfy seul ;
+- l'**ISNO Super**, qui porte Profalux **et** Somfy sur antenne unique grâce à son
+  diplexeur 433+868.
+
+Aucune bande n'est supposée en dur : chaque carte **déclare ses bandes dans
+`boards/<carte>.json`**, le firmware les lit et active Somfy et/ou Profalux en
+conséquence.
+
 ## 1. Le protocole en bref
 
 - **Radio** : 433,42 MHz, modulation **OOK**, codage **Manchester** (convention G.E.
@@ -40,21 +50,26 @@ recevoir sur une vraie puce.
 
 ## 3. Ce qu'il reste à implémenter
 
-### 3.1 La radio 433,42 MHz (le point dur)
+### 3.1 La radio 433,42 MHz (le point dur), et les deux cartes
 
 Profalux est à **868**, Somfy à **433**. Une seule CC1101 sait se re-régler entre les
 deux bandes, **mais le frontend RF (balun, antenne, matching) est spécifique à une
 bande** : un module CC1101 868 ne rayonne pas correctement à 433, et inversement.
 
-Trois options, selon la carte :
+On prévoit donc les deux cartes, et c'est la **déclaration de carte** qui décide, pas
+une valeur en dur :
 
-1. **Carte 433 dédiée** (ex. ESP32 + CC1101 433 de Machin77) : Somfy seul, simple.
-2. **Deux modules radio** (un 433, un 868) : Profalux + Somfy en parallèle.
-3. **ISNO Super** : son **diplexeur LC 433+868** sur antenne unique permet une seule
-   radio re-réglable qui couvre les deux bandes. C'est la voie « une seule carte » de #73.
+- **Carte 433 dédiée** : `boards/<carte>.json` déclare la bande **433**. Somfy actif,
+  Profalux inactif (pas de 868).
+- **ISNO Super** : déclare **433 et 868** (diplexeur LC sur antenne unique). Une seule
+  radio re-réglable couvre les deux ; le re-réglage de fréquence se fait sous le mutex
+  de `radio.c`, avant/après émission.
+- **Cartes Profalux actuelles** (868 seul) : inchangées, Somfy reste inactif chez elles.
 
-Décision à acter avant de coder : pour la cible « une seule carte », viser le chemin
-Super (diplexeur). Pour un premier essai terrain, une carte 433 dédiée suffit.
+Le firmware **lit les bandes déclarées** et active Somfy quand 433 est présent, Profalux
+quand 868 l'est, les deux sur la Super. Une carte qui n'a pas la bande **refuse proprement**
+l'émission correspondante : pas d'émission hors bande, pas de supposition silencieuse
+(même esprit que le contrôle `bands_allowed_khz` du launcher).
 
 ### 3.2 L'émission
 
@@ -69,7 +84,7 @@ Construire la forme d'onde complète à partir de la sortie du codec :
    sync, les répétitions 7).
 
 À générer par le RMT (timing matériel), comme l'émission Profalux. Piloter OOK sur le
-CC1101 réglé à 433,42 MHz.
+CC1101 réglé à 433,42 MHz (sur la Super, après re-réglage depuis 868).
 
 ### 3.3 La réception / capture
 
@@ -105,16 +120,27 @@ va-et-vient de confirmation. Ensuite les commandes UP/DOWN/MY fonctionnent.
 - **Dimension protocole** (#76) : `volet_proto_t` existe déjà, Profalux vaut 0 ; ajouter
   une valeur Somfy RTS. `emit_virt` aiguille déjà sur `proto` ; brancher le chemin Somfy
   à côté du chemin Profalux (`emit_virt_profalux`).
-- **Arbitrage radio** : réutiliser le mutex RX/TX de `radio.c`. Si la même puce sert 433
-  et 868 (Super), prévoir le re-réglage de fréquence sous mutex avant/après émission.
-- **UI** : choix du protocole à la création du volet virtuel, bouton PROG/appairage,
-  gestion du code roulant.
+- **Bandes de la carte** : lire les bandes déclarées (`boards/<carte>.json`), exposer à
+  l'UI quels protocoles sont disponibles sur cette carte, et refuser à l'émission un
+  protocole dont la bande n'est pas câblée.
+- **Arbitrage radio** : réutiliser le mutex RX/TX de `radio.c`. Sur la Super (une puce,
+  deux bandes), re-régler la fréquence sous mutex avant/après émission.
+- **UI** : choix du protocole à la création du volet virtuel (filtré par les bandes de la
+  carte), bouton PROG/appairage, gestion du code roulant.
 
-## 4. La carte
+## 4. Les deux cartes, en clair
 
-- **Somfy seul** : ESP32 + **CC1101 433 MHz** (antenne/matching 433). C'est le matériel de
-  Machin77 (#73 : ESP32-WROOM + CC1101 433).
-- **Profalux + Somfy sur une carte** : **ISNO Super** (diplexeur 433+868), ou deux modules.
+| Carte | Bandes déclarées | Profalux | Somfy RTS | Radio |
+|---|---|---|---|---|
+| Carte 433 dédiée (ESP32 + CC1101 433) | 433 | non | oui | CC1101 433 |
+| Carte Profalux actuelle (M5, DevKit, ...) | 868 | oui | non | CC1101 868 |
+| **ISNO Super** | 433 + 868 | oui | oui | 1 radio re-réglable + diplexeur LC |
+
+- La **433 dédiée** est le matériel de Machin77 (#73 : ESP32-WROOM + CC1101 433), idéale
+  pour la première mise au point Somfy.
+- La **Super** est la vraie « une seule carte » de #73 : Profalux et Somfy ensemble.
+- Rien n'est figé dans le code : on ajoute `boards/433-dedie.json` et on complète la
+  déclaration de la Super ; le firmware s'adapte.
 
 ## 5. Plan de test
 
@@ -123,8 +149,9 @@ va-et-vient de confirmation. Ensuite les commandes UP/DOWN/MY fonctionnent.
   décodeur de référence (rtl_433, open-rts) ou une capture RTL-SDR.
 - **Matériel réel** : Machin77 a des volets Somfy RTS + un CC1101 433. Dès qu'une build
   capture/émet du Somfy, lui faire tester la **capture** d'une vraie télécommande puis
-  l'**appairage** d'une virtuelle.
-- **Étape finale** : UP/DOWN/MY et PROG validés sur un vrai moteur Somfy.
+  l'**appairage** d'une virtuelle. La Super servira à valider le double (Profalux + Somfy).
+- **Étape finale** : UP/DOWN/MY et PROG validés sur un vrai moteur Somfy, sur les deux
+  cartes.
 
 ## 6. Questions ouvertes et risques
 
@@ -133,18 +160,24 @@ va-et-vient de confirmation. Ensuite les commandes UP/DOWN/MY fonctionnent.
   logique et le signal rayonné (à valider au banc, cf `somfy_rts.h`).
 - **Endianness de l'adresse** : convention open-rts/rtl_433 retenue ; une capture
   comparée à ESPSomfy/Nickduino doit être lue dans la bonne convention.
-- **Partage 433/868** sur une seule puce : coût du re-réglage, et surtout antenne/matching
-  (d'où le diplexeur Super).
+- **Partage 433/868 sur la Super** : coût du re-réglage, et performances du diplexeur sur
+  les deux bandes (à mesurer au banc EVT).
 - **Fenêtre de code roulant** : ne pas désynchroniser le compteur du moteur.
 - **Timings wakeup et inter-trame** : divergent entre sources (Pushstack vs Nickduino),
   restent à valider au banc (issue #73).
 
 ## 7. Ordre proposé
 
-1. Décider la cible matérielle du premier essai (carte 433 dédiée recommandée pour
-   commencer, puis Super pour la carte unique).
-2. Émission : générer la forme d'onde RMT à 433 et la vérifier au banc / RTL-SDR.
+Les deux cartes sont prévues dès le départ ; l'ordre ne fait que choisir par quoi on
+amorce, le code reste piloté par la déclaration de carte.
+
+1. Déclarer les bandes dans `boards/<carte>.json` : ajouter la carte 433 dédiée,
+   compléter la Super (433 + 868).
+2. Émission : générer la forme d'onde RMT à 433 et la vérifier au banc / RTL-SDR
+   (mise au point sur la carte 433 dédiée, la plus simple).
 3. Appairage PROG sur un vrai moteur (Machin77), puis UP/DOWN/MY.
 4. Réception/capture d'une vraie télécommande Somfy (clonage).
-5. Intégration UI + code roulant persistant + dimension protocole (#76).
-6. Carte unique Profalux + Somfy via le diplexeur Super.
+5. Intégration UI + code roulant persistant + dimension protocole (#76), avec filtrage
+   des protocoles par les bandes de la carte.
+6. Double Profalux + Somfy sur la **Super** (re-réglage de fréquence + diplexeur), la
+   carte unique de #73.
