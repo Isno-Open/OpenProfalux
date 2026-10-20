@@ -100,6 +100,14 @@ bool somfy_rts_unpack(const uint8_t in[SOMFY_RTS_FRAME_BYTES], somfy_rts_frame_t
  * ecrits, ou -1 si `max` est trop court. */
 int somfy_rts_manchester(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], char *out, int max);
 
+/* Inverse de somfy_rts_manchester (sens RECEPTION) : relit 2*SOMFY_RTS_FRAME_BITS
+ * symboles '0'/'1' (chaine terminee par '\0') et recompose les 7 octets du fil. Chaque
+ * paire doit etre une transition : '0''1' -> bit 1, '1''0' -> bit 0. Rend 0 si tout est
+ * valide, ou -1 si la longueur n'est pas 2*FRAME_BITS ou si une paire n'est pas une
+ * transition (demi-symbole manquant ou bruite). Les 7 octets rendus sont ceux du fil
+ * (obscurcis) : les repasser a somfy_rts_unpack pour obtenir les champs. */
+int somfy_rts_demanchester(const char *sym, uint8_t out[SOMFY_RTS_FRAME_BYTES]);
+
 /* Une impulsion OOK : un niveau tenu pendant `us` microsecondes. */
 typedef struct {
     uint8_t  level;   /* 0 = bas, 1 = haut */

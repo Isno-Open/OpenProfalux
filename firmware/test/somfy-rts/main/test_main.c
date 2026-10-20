@@ -259,6 +259,42 @@ static void t9_remote_next(void) {
     CHECK(ga.address == 0x0A1B2Cu && gb.address == 0x0A1B2Cu, "meme adresse");
 }
 
+/* T10 : demanchester (sens RX), inverse de manchester. Aller-retour identite,
+ * vecteur open-rts relu jusqu'aux champs, et rejet d'une paire invalide / mauvaise
+ * longueur. */
+static void t10_demanchester(void) {
+    printf("T10 demanchester (RX : symboles -> octets)\n");
+    const somfy_rts_frame_t f = {
+        .key = 0xA7, .cmd = SOMFY_RTS_CMD_DOWN, .rolling_code = 0xABCD, .address = 0x0A1B2C
+    };
+    uint8_t wire[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_pack(&f, wire);
+    char sym[2 * SOMFY_RTS_FRAME_BITS + 1];
+    somfy_rts_manchester(wire, sym, (int)sizeof(sym));
+    uint8_t back[SOMFY_RTS_FRAME_BYTES];
+    CHECK(somfy_rts_demanchester(sym, back) == 0, "demanchester rend 0");
+    CHECK(memcmp(back, wire, SOMFY_RTS_FRAME_BYTES) == 0, "aller-retour manchester = identite");
+
+    /* Vecteur open-rts : les symboles de A3 8A 94 F7 19 06 44 se relisent en ces octets,
+     * et la trame relue se decode en ses champs. */
+    const uint8_t wire1[SOMFY_RTS_FRAME_BYTES] = { 0xA3, 0x8A, 0x94, 0xF7, 0x19, 0x06, 0x44 };
+    char sym1[2 * SOMFY_RTS_FRAME_BITS + 1];
+    somfy_rts_manchester(wire1, sym1, (int)sizeof(sym1));
+    uint8_t back1[SOMFY_RTS_FRAME_BYTES];
+    CHECK(somfy_rts_demanchester(sym1, back1) == 0 && memcmp(back1, wire1, SOMFY_RTS_FRAME_BYTES) == 0,
+          "vecteur open-rts relu octet pour octet");
+    somfy_rts_frame_t g;
+    CHECK(somfy_rts_unpack(back1, &g) && g.address == 0x421FEEu && g.rolling_code == 0x1E63,
+          "octets relus -> adresse 0x421FEE, code 0x1E63");
+
+    /* Paire invalide (deux memes niveaux = demi-symbole manquant) -> -1. */
+    char bad[2 * SOMFY_RTS_FRAME_BITS + 1];
+    somfy_rts_manchester(wire1, bad, (int)sizeof(bad));
+    bad[0] = bad[1];
+    CHECK(somfy_rts_demanchester(bad, back1) == -1, "paire invalide refusee");
+    CHECK(somfy_rts_demanchester("0101", back1) == -1, "longueur fausse refusee");
+}
+
 int main(void) {
     printf("== Banc Somfy RTS (codec logique) ==\n");
     t0_checksum();
@@ -271,6 +307,7 @@ int main(void) {
     t7_vecteurs_reels();
     t8_tx_pulses();
     t9_remote_next();
+    t10_demanchester();
     if (g_fail) {
         printf("\n%d verification(s) en echec.\n", g_fail);
         return 1;

@@ -32,6 +32,7 @@ Le programme rend 0 si tout passe, 1 sinon.
 | T7 | Vecteurs réels d'open-rts (implémentation tierce) | `unpack` et `pack` concordent bit à bit sur deux trames réelles |
 | T8 | Séquence d'impulsions d'émission (structure) | Sync matériel, sync logiciel à 4550, niveaux adjacents différents, durée totale = somme attendue |
 | T9 | Télécommande virtuelle (adresse + code roulant) | Reproduit bit à bit les trames open-rts (clé = quartet bas du code roulant), le code roulant avance et se replie |
+| T10 | Démanchester (réception : symboles vers octets) | Aller-retour identité avec `manchester`, vecteur open-rts relu jusqu'aux champs, paire invalide et mauvaise longueur refusées |
 
 ## Ce qui N'EST PAS testé ici (attend le banc, issue #73)
 
