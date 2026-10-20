@@ -1,5 +1,5 @@
 /*
- * somfy_rts.c — codec logique Somfy RTS (voir somfy_rts.h). Pur, teste sur PC.
+ * somfy_rts.c : codec logique Somfy RTS (voir somfy_rts.h). Pur, teste sur PC.
  */
 #include "somfy_rts.h"
 #include <string.h>

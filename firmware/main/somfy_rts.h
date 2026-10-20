@@ -1,5 +1,5 @@
 /*
- * somfy_rts.h — codec logique du protocole Somfy RTS (433,42 MHz, OOK).
+ * somfy_rts.h : codec logique du protocole Somfy RTS (433,42 MHz, OOK).
  *
  * Prepare le terrain pour piloter des volets Somfy RTS depuis la meme carte que
  * Profalux (issue #73). Ce module est le NIVEAU LOGIQUE de la trame : il construit
