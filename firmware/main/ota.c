@@ -35,6 +35,24 @@ static const esp_partition_t *update_partition;
 static int8_t s_rb_auto = -1;
 static char s_discarded[32];          /* version de la derniere image ecartee ("" : aucune) */
 static bool s_discarded_auto;         /* ecartee par le bootloader (elle n'a pas demarre) */
+/* Bouton Version precedente : une version valide attend-elle dans l'autre partition ?
+ * esp_ota_check_rollback_is_possible verifie TOUTE son image (~1,2 Mo relus) : calcule une fois
+ * au demarrage, pas a chaque lecture de l'etat. Ne change qu'avec un redemarrage, ou une mise a
+ * jour, qui efface l'autre partition (ota_upload_begin, ota_pull_from_url). */
+static bool s_rb_possible;
+static char s_previous[32];           /* sa version ("" : aucune) */
+
+static void previous_load(void)
+{
+    esp_app_desc_t d;
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    s_rb_possible = esp_ota_check_rollback_is_possible();
+    s_previous[0] = 0;
+    if (s_rb_possible && other && esp_ota_get_partition_description(other, &d) == ESP_OK)
+        strncpy(s_previous, d.version, sizeof(s_previous) - 1);
+}
+
+static void previous_erased(void) { s_rb_possible = false; s_previous[0] = 0; }
 
 static bool running_state(uint32_t *st)
 {
@@ -93,6 +111,7 @@ esp_err_t ota_init(void)
             if (s_discarded_auto) ESP_LOGW(TAG, "la mise a jour %s n'a pas demarre : retour automatique a la version precedente", s_discarded);
         }
     }
+    previous_load();
     esp_register_shutdown_handler(on_restart);
     return ESP_OK;
 }
@@ -105,7 +124,12 @@ void ota_rb_info(ota_rb_info_t *out)
     strncpy(out->discarded, s_discarded, sizeof(out->discarded) - 1);
     out->discarded[sizeof(out->discarded) - 1] = 0;
     out->discarded_auto = s_discarded_auto;
+    out->rb_possible = s_rb_possible;
+    strncpy(out->previous, s_previous, sizeof(out->previous) - 1);
+    out->previous[sizeof(out->previous) - 1] = 0;
 }
+
+bool ota_rollback_possible(void) { return esp_ota_check_rollback_is_possible(); }
 
 void ota_get_status(ota_status_t *out)
 {
@@ -120,6 +144,7 @@ esp_err_t ota_upload_begin(size_t total_bytes)
     /* En essai, esp_ota_begin refuse toute ecriture (ESP_ERR_OTA_ROLLBACK_INVALID_STATE) :
      * qui envoie une mise a jour a montre que la version actuelle tourne, on la valide. */
     validate_if_on_trial("nouvelle mise a jour");
+    previous_erased();   /* esp_ota_begin efface l'autre partition */
     update_partition = esp_ota_get_next_update_partition(NULL);
     if (!update_partition) return ESP_FAIL;
     esp_err_t err = esp_ota_begin(update_partition, total_bytes, &update_handle);
@@ -189,6 +214,7 @@ esp_err_t ota_pull_from_url(const char *url)
     esp_https_ota_config_t ota_cfg = { .http_config = &http_cfg };
     esp_https_ota_handle_t handle = NULL;
     validate_if_on_trial("nouvelle mise a jour");   /* comme ota_upload_begin */
+    previous_erased();
     esp_err_t err = esp_https_ota_begin(&ota_cfg, &handle);
     if (err != ESP_OK) { status.state = OTA_STATE_FAILED; return err; }
     status.state = OTA_STATE_RECEIVING;

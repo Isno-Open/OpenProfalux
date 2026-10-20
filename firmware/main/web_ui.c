@@ -806,10 +806,12 @@ static esp_err_t h_ota_status(httpd_req_t *r) {
      * img / rb_auto / annulee : retour automatique (ota_rollback.h). */
     snprintf(out, sizeof(out), "{\"state\":%d,\"total\":%u,\"written\":%u,\"msg\":\"%s\",\"version\":\"%s\",\"target\":\"" TARGET_NAME "\","
              "\"latest\":\"%s\",\"latest_url\":\"%s\",\"checks\":%u,"
-             "\"img\":\"%s\",\"rb_auto\":%d,\"annulee\":\"%s\",\"annulee_auto\":%d}",
+             "\"img\":\"%s\",\"rb_auto\":%d,\"annulee\":\"%s\",\"annulee_auto\":%d,"
+             "\"rb_possible\":%d,\"precedente\":\"%s\"}",
              st.state, (unsigned)st.total_bytes, (unsigned)st.written_bytes, st.message, st.active_version,
              ota_latest_version(), ota_latest_url(), (unsigned)ota_check_count(),
-             rb.on_trial ? "essai" : "validee", rb.rb_auto, rb.discarded, rb.discarded_auto ? 1 : 0);
+             rb.on_trial ? "essai" : "validee", rb.rb_auto, rb.discarded, rb.discarded_auto ? 1 : 0,
+             rb.rb_possible ? 1 : 0, rb.previous);
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -849,6 +851,13 @@ static esp_err_t h_ota_upload(httpd_req_t *r) {
 }
 /* ── /api/ota/rollback : rebascule sur la partition precedente (comme OpenXtraflame) ── */
 static esp_err_t h_ota_rollback(httpd_req_t *r) {
+    /* Sans version valide dans l'autre partition (premiere installation, mise a jour annulee),
+     * ota_rollback() echouait en silence apres un "ok" : on le dit, sans redemarrer. */
+    if (!ota_rollback_possible()) {
+        httpd_resp_set_status(r, "409 Conflict");
+        httpd_resp_set_type(r, "application/json");
+        return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"Pas de version précédente valide sur ce boîtier.\"}");
+    }
     /* On repond AVANT : ota_rollback() reboote immediatement si l'etat le permet. */
     httpd_resp_sendstr(r, "{\"ok\":1}");
     vTaskDelay(pdMS_TO_TICKS(300));

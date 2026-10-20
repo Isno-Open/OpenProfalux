@@ -55,5 +55,9 @@ typedef struct {
     bool   on_trial;       /* version en cours en essai, pas encore validee */
     char   discarded[32];  /* version de la derniere image ecartee ("" : aucune) */
     bool   discarded_auto; /* ecartee par le bootloader : elle n'a pas demarre */
+    bool   rb_possible;    /* bouton Version precedente : une version valide attend dans l'autre partition */
+    char   previous[32];   /* sa version ("" : aucune) */
 } ota_rb_info_t;
 void ota_rb_info(ota_rb_info_t *out);
+/* Verification complete, au moment du clic (relit l'image de l'autre partition). */
+bool ota_rollback_possible(void);

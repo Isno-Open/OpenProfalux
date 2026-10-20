@@ -1232,6 +1232,8 @@ $('#ota-btn').onclick = async () => {
   xhr.onerror = () => { $('#ota-msg').textContent = '✗ échec de l\'envoi (lien coupé ?)'; $('#ota-btn').disabled = false; };
   xhr.send(buf);
 };
+const OTA_RB_NON = 'Pas de version précédente valide sur ce boîtier : rien vers quoi revenir (première installation, ou mise à jour annulée).';
+let otaPrecedente = '';
 /* Retour automatique apres une mise a jour (voir ota_rollback.h) : actif, inactif (bootloader
  * d'avant l'option), version en essai, et la mise a jour qu'il vient d'annuler. */
 function otaRetour(st) {
@@ -1250,10 +1252,22 @@ function otaRetour(st) {
       `La mise à jour ${st.annulee} n'a pas démarré correctement : le boîtier est revenu tout seul à la version précédente.`;
   }
   if (st.img === 'essai') setTimeout(async () => otaRetour(await api('/api/ota/status').catch(() => ({}))), 65000);
+  /* Bouton Version precedente : grise quand aucune version valide n'attend dans l'autre partition
+   * (premiere installation, mise a jour annulee). Firmware d'avant : champ absent, bouton inchange. */
+  const rb = $('#ota-rollback'), why = $('#ota-rb-why');
+  otaPrecedente = st.precedente || '';
+  if (rb && st.rb_possible !== undefined) {
+    rb.disabled = !st.rb_possible;
+    if (why) { why.hidden = !!st.rb_possible; why.textContent = OTA_RB_NON; }
+  }
 }
 $('#ota-rollback').onclick = async () => {
-  if (!confirm('Revenir à la version précédente et redémarrer ?')) return;
-  await api('/api/ota/rollback', { method: 'POST' }).catch(() => {});
+  if (!confirm(otaPrecedente ? `Revenir à la version ${otaPrecedente} et redémarrer ?` : 'Revenir à la version précédente et redémarrer ?')) return;
+  await api('/api/ota/rollback', { method: 'POST' }).catch(e => {
+    if (e !== 409) return;   /* refus : aucune version precedente valide (le boitier ne redemarre pas) */
+    $('#ota-rollback').disabled = true;
+    const why = $('#ota-rb-why'); if (why) { why.hidden = false; why.textContent = OTA_RB_NON; }
+  });
 };
 /* OTA depuis GitHub (la dernière release publique) */
 let githubUrl = null;

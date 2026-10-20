@@ -3,6 +3,7 @@
 # boards/*.json, depuis le commit courant. Produit dans ./release/ :
 #   openprofalux-<carte>-ota.bin   app seule, pour l'onglet OTA du boitier / HA
 #   openprofalux-<carte>-full.bin  bootloader + table + app, a flasher a 0x0
+#   openprofalux-<carte>-bootloader.bin  bootloader seul, a flasher a 0x0 (garde la config)
 #
 # Prerequis : un environnement ESP-IDF v6.1 actif (idf.py sur le PATH), la meme
 # version que la CI (espressif/idf:v6.1). Les cartes et leur cible viennent de
@@ -58,7 +59,14 @@ for f in ../boards/*.json; do
   idf.py -B "$bdir" -DBOARD="$board" build >/dev/null
   cp "$bdir/openprofalux.bin" "$REL/openprofalux-$board-ota.bin"
   idf.py -B "$bdir" merge-bin -o "$REL/openprofalux-$board-full.bin" >/dev/null
-  echo "   ota=$(stat -c%s "$REL/openprofalux-$board-ota.bin") o  full=$(stat -c%s "$REL/openprofalux-$board-full.bin") o"
+  # Bootloader seul : le retour automatique vit dans le bootloader, que l'OTA ne remplace
+  # jamais. Image calee a 0x0 comme le -full.bin, sur toutes les puces (bootloader a 0x1000
+  # sur ESP32, a 0x0 sur ESP32-S3 : offset lu dans flasher_args.json). Une adresse unique
+  # evite qu'un bootloader ESP32 ecrit a 0x0 ecrase l'ancien en decale. L'image s'arrete
+  # avant la table de partitions : configuration et firmware restent.
+  boff="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['bootloader']['offset'])" "$bdir/flasher_args.json")"
+  esptool --chip "$target" merge-bin -o "$REL/openprofalux-$board-bootloader.bin" "$boff" "$bdir/bootloader/bootloader.bin" >/dev/null
+  echo "   ota=$(stat -c%s "$REL/openprofalux-$board-ota.bin") o  full=$(stat -c%s "$REL/openprofalux-$board-full.bin") o  bootloader=$(stat -c%s "$REL/openprofalux-$board-bootloader.bin") o"
 done
 
 # Les boitiers en v0.2.3 (avant boards/<carte>.json) cherchent leur mise a jour
