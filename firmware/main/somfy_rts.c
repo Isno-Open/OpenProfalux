@@ -109,3 +109,17 @@ int somfy_rts_tx_pulses(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], bool first,
     }
     return n;
 }
+
+void somfy_rts_remote_next(somfy_rts_remote_t *r, somfy_rts_cmd_t cmd,
+                           uint8_t out[SOMFY_RTS_FRAME_BYTES]) {
+    if (!r || !out)
+        return;
+    const somfy_rts_frame_t f = {
+        .key          = (uint8_t)(SOMFY_RTS_KEY_PREFIX | (r->rolling_code & 0x0F)),
+        .cmd          = cmd,
+        .rolling_code = r->rolling_code,
+        .address      = r->address & 0xFFFFFFu,
+    };
+    somfy_rts_pack(&f, out);
+    r->rolling_code++;   /* repli naturel a 0 apres 0xFFFF (uint16_t) */
+}

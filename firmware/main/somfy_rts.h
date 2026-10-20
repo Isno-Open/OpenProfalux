@@ -129,4 +129,20 @@ typedef struct {
 int somfy_rts_tx_pulses(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], bool first,
                         somfy_rts_pulse_t *out, int max);
 
+/* Telecommande virtuelle Somfy : adresse 24 bits + code roulant 16 bits. Le quartet
+ * de cle n'est PAS un etat a part : c'est le quartet BAS du code roulant (verifie sur
+ * les vecteurs open-rts : code 0x1E63 -> cle 0xA3, code 0x007B -> cle 0xAB). */
+typedef struct {
+    uint32_t address;       /* adresse de la telecommande, 24 bits */
+    uint16_t rolling_code;  /* compteur anti-rejeu, 16 bits */
+} somfy_rts_remote_t;
+
+/* Produit la trame empaquetee (obscurcie) de la commande `cmd` pour la telecommande
+ * `r`, avec son code roulant COURANT, puis INCREMENTE le code roulant (repli a 0 apres
+ * 0xFFFF). `out` recoit les 7 octets prets a emettre. Le moteur accepte une fenetre de
+ * codes en avance : ne pas sauter le compteur hors de cette fenetre, et le persister en
+ * NVS cote firmware. */
+void somfy_rts_remote_next(somfy_rts_remote_t *r, somfy_rts_cmd_t cmd,
+                           uint8_t out[SOMFY_RTS_FRAME_BYTES]);
+
 #endif
