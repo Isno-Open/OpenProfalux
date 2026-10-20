@@ -45,8 +45,13 @@ typedef enum {
     SOMFY_RTS_CMD_FLAG     = 0xA,
 } somfy_rts_cmd_t;
 
-/* Durees d'emission, en microsecondes. DECLAREES d'apres les references
- * publiques, A VALIDER au banc (issue #73) : rien ne les consomme encore. */
+/* Durees d'emission, en microsecondes. Valeurs du camp Pushstack + rtl_433
+ * (demi-symbole 604, sync materiel 2416, bit 1208), coherentes entre elles.
+ * Nickduino et ESPSomfy-RTS emploient 640/2560/1280 (ecart ~6 %, tolere par les
+ * moteurs) : on choisit une source, on ne moyenne pas. Le wakeup et le silence
+ * inter-trame, eux, DIVERGENT vraiment selon les sources (ESPSomfy mesure 10920
+ * sans long silence, et ~27434 d'inter-trame) : ces deux-la restent A VALIDER au
+ * banc (issue #73). Rien ne les consomme encore. */
 #define SOMFY_RTS_WAKEUP_HIGH_US    9415
 #define SOMFY_RTS_WAKEUP_LOW_US    89565
 #define SOMFY_RTS_HW_SYNC_US        2416   /* demi-periode du preambule materiel */
@@ -57,12 +62,21 @@ typedef enum {
 #define SOMFY_RTS_HW_SYNC_FIRST        2   /* paires de sync materiel, 1re trame */
 #define SOMFY_RTS_HW_SYNC_REPEAT       7   /* paires de sync materiel, repetitions */
 
-/* Une trame RTS, cote logique (avant obscurcissement). */
+/* Une trame RTS, cote logique (avant obscurcissement). Disposition sur le fil :
+ * octet 0 = cle, octet 1 = commande (quartet haut) + somme de controle (quartet
+ * bas), octets 2-3 = code roulant en big-endian, octets 4-6 = adresse en
+ * little-endian (octet 4 = poids faible).
+ *
+ * ATTENTION a la convention d'adresse : open-rts et rtl_433 lisent l'octet 4 en
+ * poids faible (celle retenue ici), Nickduino et ESPSomfy-RTS en poids fort. Les
+ * memes octets sur le fil donnent donc un entier `address` inverse d'un camp a
+ * l'autre. Un vecteur de test emprunte a l'autre convention passerait en inversant
+ * l'adresse en silence : on s'aligne sur open-rts/rtl_433. */
 typedef struct {
     uint8_t         key;           /* octet de cle : SOMFY_RTS_KEY_PREFIX | nibble roulant */
     somfy_rts_cmd_t cmd;           /* commande (quartet) */
-    uint16_t        rolling_code;  /* code tournant, 16 bits */
-    uint32_t        address;       /* adresse de la telecommande, 24 bits */
+    uint16_t        rolling_code;  /* code tournant, 16 bits (octets 2-3, big-endian) */
+    uint32_t        address;       /* adresse telecommande, 24 bits (octets 4-6, little-endian) */
 } somfy_rts_frame_t;
 
 /* Somme de controle RTS : XOR de tous les quartets des 7 octets, le quartet de
@@ -79,9 +93,11 @@ bool somfy_rts_unpack(const uint8_t in[SOMFY_RTS_FRAME_BYTES], somfy_rts_frame_t
 
 /* Deplie les 56 bits (poids fort en tete) en symboles Manchester : deux niveaux
  * '0'/'1' par bit de donnee. Convention : un bit a 1 = bas puis haut, un bit a 0 =
- * haut puis bas (polarite A VALIDER au banc). Ecrit 2*SOMFY_RTS_FRAME_BITS
- * caracteres puis le '\0'. Rend le nombre de symboles ecrits, ou -1 si `max` est
- * trop court. */
+ * haut puis bas. C'est la convention des references (G.E. Thomas, front montant =
+ * 1 ; Pushstack, rtl_433, Nickduino, ESPSomfy concordent). Reste a confirmer au
+ * banc une eventuelle inversion de polarite entre ce niveau logique et l'antenne.
+ * Ecrit 2*SOMFY_RTS_FRAME_BITS caracteres puis le '\0'. Rend le nombre de symboles
+ * ecrits, ou -1 si `max` est trop court. */
 int somfy_rts_manchester(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], char *out, int max);
 
 #endif
