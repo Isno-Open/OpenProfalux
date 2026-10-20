@@ -45,20 +45,20 @@ typedef enum {
     SOMFY_RTS_CMD_FLAG     = 0xA,
 } somfy_rts_cmd_t;
 
-/* Durees d'emission, en microsecondes. Valeurs du camp Pushstack + rtl_433
- * (demi-symbole 604, sync materiel 2416, bit 1208), coherentes entre elles.
- * Nickduino et ESPSomfy-RTS emploient 640/2560/1280 (ecart ~6 %, tolere par les
- * moteurs) : on choisit une source, on ne moyenne pas. Le wakeup et le silence
- * inter-trame, eux, DIVERGENT vraiment selon les sources (ESPSomfy mesure 10920
- * sans long silence, et ~27434 d'inter-trame) : ces deux-la restent A VALIDER au
- * banc (issue #73). Rien ne les consomme encore. */
-#define SOMFY_RTS_WAKEUP_HIGH_US    9415
-#define SOMFY_RTS_WAKEUP_LOW_US    89565
-#define SOMFY_RTS_HW_SYNC_US        2416   /* demi-periode du preambule materiel */
-#define SOMFY_RTS_SW_SYNC_US        4550   /* sync logiciel */
-#define SOMFY_RTS_SYMBOL_US         1208   /* periode d'un bit Manchester */
-#define SOMFY_RTS_HALF_SYMBOL_US     604   /* demi-symbole Manchester */
-#define SOMFY_RTS_INTER_FRAME_US   30415   /* silence entre deux trames repetees */
+/* Durees d'emission, en microsecondes. ALIGNEES sur ESPSomfy-RTS (rstrouse), le
+ * projet Somfy le plus utilise, valide sur des milliers de moteurs : on suit sa
+ * methode (Transceiver::sendFrame) plutot que de reinventer. Demi-symbole 640, bit
+ * 1280, sync materiel 2560 (= 4 demi-symboles), sync logiciel 4850. Le wakeup (haut
+ * 10920, bas 7357, sans long silence) et l'inter-trame (27434) sont aussi ceux
+ * d'ESPSomfy : ce sont les deux points ou les sources divergeaient le plus. Les
+ * moteurs tolerent ~6 % d'ecart sur le symbole, mais on prend la source prouvee. */
+#define SOMFY_RTS_WAKEUP_HIGH_US   10920
+#define SOMFY_RTS_WAKEUP_LOW_US     7357
+#define SOMFY_RTS_HW_SYNC_US        2560   /* demi-periode du preambule materiel (= 4 demi-symboles) */
+#define SOMFY_RTS_SW_SYNC_US        4850   /* sync logiciel */
+#define SOMFY_RTS_SYMBOL_US         1280   /* periode d'un bit Manchester */
+#define SOMFY_RTS_HALF_SYMBOL_US     640   /* demi-symbole Manchester */
+#define SOMFY_RTS_INTER_FRAME_US   27434   /* silence entre deux trames repetees */
 #define SOMFY_RTS_HW_SYNC_FIRST        2   /* paires de sync materiel, 1re trame */
 #define SOMFY_RTS_HW_SYNC_REPEAT       7   /* paires de sync materiel, repetitions */
 
