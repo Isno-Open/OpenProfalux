@@ -630,7 +630,7 @@ int cc1101_rx_probe(void) {
     if (!s_cap && cc1101_capture_init() != 0) return -1;
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(0x02, 0x0D); cc1101_write_reg(0x0B, 0x06); cc1101_write_reg(0x19, 0x14);
-    cc1101_write_reg(0x1B, 0x04); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x92);   /* AGC OOK TI DN022 (idem ecoute) */
+    cc1101_write_reg(0x1B, s_rx_gain); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x91);   /* AGC : meme reglage que l'ecoute (rx_listen_bits) */
     strobe(CC_SIDLE); esp_rom_delay_us(200);
     strobe(0x33); vTaskDelay(pdMS_TO_TICKS(3));
     strobe(0x3A); strobe(0x34);
@@ -693,16 +693,14 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     cc1101_write_reg(0x02, 0x0D);   /* IOCFG0 = donnee serie demodulee sur GDO0 */
     cc1101_write_reg(0x0B, 0x06);   /* FSCTRL1 */
     cc1101_write_reg(0x19, 0x14);   /* FOCCFG  */
-    cc1101_write_reg(0x1B, 0x04);   /* AGCCTRL2 = config OOK recommandee TI DN022 (MAGN_TARGET=4/36 dB,
-                                     * MAX_LNA_GAIN=0 plein, MAX_DVGA_GAIN=0) : l'AGC s'adapte sur toute la
-                                     * plage -40..-90 dBm. Remplace 0x27/NVS rx_gain qui ne couvrait qu'une
-                                     * bande etroite (decrochages hors ~-60/-68 dBm). (void)s_rx_gain. */
-    (void)s_rx_gain;
+    cc1101_write_reg(0x1B, s_rx_gain);   /* AGCCTRL2 : plafond de gain RX REGLABLE via l'UI (defaut 0x27)
+                                     * et resultat de la calibration. Le 0x04 fige "TI DN022" introduit en
+                                     * v0.2.6 degradait la reception en terrain : l'ancienne valeur recoit
+                                     * mieux (retours issues #1 eleroy et #59 joha38, rollback = RX revient).
+                                     * On restaure donc le reglage. Voir cc1101_set_rx_gain(). */
     cc1101_write_reg(0x1C, 0x00);   /* AGCCTRL1 */
-    cc1101_write_reg(0x1D, 0x92);   /* AGCCTRL0 : FILTER_LENGTH=10 => frontiere de decision
-                                     * ASK/OOK a 12 dB (vs 8 dB en 0x91). Un '0' doit etre >=24 dB
-                                     * sous le '1' : le bruit pres du plancher ne declenche plus de
-                                     * fausses transitions (TI DN022). Profalux = OOK plein, marge OK. */
+    cc1101_write_reg(0x1D, 0x91);   /* AGCCTRL0 : frontiere de decision ASK/OOK a 8 dB. Le passage a 12 dB
+                                     * (0x92) en v0.2.6 ratait des trames faibles a l'enrolement, on revient a 8. */
     strobe(CC_SIDLE); esp_rom_delay_us(200);
     strobe(0x33);     /* SCAL */
     vTaskDelay(pdMS_TO_TICKS(3));
@@ -817,9 +815,9 @@ int cc1101_rssi_scan(const uint32_t *khz, int n, int dwell_ms, int16_t *peak_hdb
     const uint8_t mdm4 = cc1101_read_reg(CC_MDMCFG4);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(CC_IOCFG0, 0x0D);
-    cc1101_write_reg(0x1B, 0x04);   /* AGCCTRL2, AGCCTRL1, AGCCTRL0 : comme l'ecoute (rx_listen_bits) */
+    cc1101_write_reg(0x1B, s_rx_gain);   /* AGCCTRL2, AGCCTRL1, AGCCTRL0 : comme l'ecoute (rx_listen_bits) */
     cc1101_write_reg(0x1C, 0x00);
-    cc1101_write_reg(0x1D, 0x92);
+    cc1101_write_reg(0x1D, 0x91);
     cc1101_write_reg(CC_MDMCFG4, (uint8_t)(0xF0 | (mdm4 & 0x0F)));   /* CHANBW 58 kHz, debit inchange */
     int rc = 0;
     for (int i = 0; i < n; i++) {
