@@ -69,6 +69,28 @@ int somfy_rts_manchester(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], char *out, 
     return k;
 }
 
+int somfy_rts_demanchester(const char *sym, uint8_t out[SOMFY_RTS_FRAME_BYTES]) {
+    if (!sym || !out)
+        return -1;
+    if ((int)strlen(sym) != SOMFY_RTS_FRAME_BITS * 2)
+        return -1;
+    for (int i = 0; i < SOMFY_RTS_FRAME_BYTES; i++)
+        out[i] = 0;
+    for (int bit = 0; bit < SOMFY_RTS_FRAME_BITS; bit++) {
+        char a = sym[2 * bit], b = sym[2 * bit + 1];
+        int value;
+        if (a == '0' && b == '1')       value = 1;   /* bas puis haut = bit 1 */
+        else if (a == '1' && b == '0')  value = 0;   /* haut puis bas = bit 0 */
+        else                            return -1;   /* pas une transition : bruit */
+        if (value) {
+            int byte  = bit >> 3;
+            int shift = 7 - (bit & 7);
+            out[byte] |= (uint8_t)(1u << shift);
+        }
+    }
+    return 0;
+}
+
 /* Ajoute une impulsion (level, us), en fusionnant avec la precedente si elle porte
  * deja ce niveau. Rend false si la place manque pour une NOUVELLE impulsion. */
 static bool push_pulse(somfy_rts_pulse_t *out, int *n, int max, uint8_t level, uint32_t us) {
