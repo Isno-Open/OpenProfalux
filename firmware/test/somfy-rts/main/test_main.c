@@ -3,8 +3,9 @@
  *
  * On ne teste ici que ce qui est PROUVABLE sans radio : construction des octets,
  * somme de controle, reversibilite de l'obscurcissement, aller-retour des champs,
- * et depliage Manchester. La polarite a l'antenne et les durees d'emission restent
- * a valider au banc (issue #73) et ne sont pas testees ici.
+ * depliage Manchester, et STRUCTURE de la sequence d'emission (T8 : ordre des
+ * elements, durees des constantes, fusion des niveaux). La polarite reelle a
+ * l'antenne reste, elle, a valider au banc (issue #73).
  *
  * T7 confronte en plus le codec a des VRAIS vecteurs tires des tests unitaires
  * d'open-rts (une implementation tierce), pas a lui-meme : c'est ce qui prouve que
@@ -179,6 +180,49 @@ static void t7_vecteurs_reels(void) {
     CHECK(memcmp(out2, wire2, SOMFY_RTS_FRAME_BYTES) == 0, "v2 pack -> AB 84 84 FF 21 EB 11");
 }
 
+/* T8 : sequence d'impulsions d'emission. Sans radio on ne prouve pas la polarite,
+ * mais on prouve la STRUCTURE : debut en sync materiel (paires a HW_SYNC_US), sync
+ * logiciel a SW_SYNC_US, niveaux adjacents toujours differents (fusion), et duree
+ * totale egale a la somme attendue des elements. */
+static void t8_tx_pulses(void) {
+    printf("T8 sequence d'impulsions d'emission\n");
+    const somfy_rts_frame_t f = {
+        .key = 0xA3, .cmd = SOMFY_RTS_CMD_UP, .rolling_code = 0x1E63, .address = 0x421FEEu
+    };
+    uint8_t wire[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_pack(&f, wire);
+    somfy_rts_pulse_t p[SOMFY_RTS_MAX_PULSES];
+
+    /* 1re trame : HW_SYNC_FIRST (2) paires de sync materiel. */
+    int n = somfy_rts_tx_pulses(wire, true, p, SOMFY_RTS_MAX_PULSES);
+    CHECK(n > 0 && n <= SOMFY_RTS_MAX_PULSES, "1re trame : n valide");
+    CHECK(p[0].level == 1 && p[0].us == SOMFY_RTS_HW_SYNC_US, "[0] = haut 2416 (sync materiel)");
+    CHECK(p[1].level == 0 && p[1].us == SOMFY_RTS_HW_SYNC_US, "[1] = bas 2416");
+    CHECK(p[2].level == 1 && p[3].level == 0, "deux paires de sync materiel");
+    CHECK(p[4].level == 1 && p[4].us == SOMFY_RTS_SW_SYNC_US, "[4] = sync logiciel haut 4550");
+    int alt = 1;
+    for (int i = 1; i < n; i++) if (p[i].level == p[i - 1].level) alt = 0;
+    CHECK(alt, "niveaux adjacents toujours differents (fusion)");
+    unsigned long tot = 0; for (int i = 0; i < n; i++) tot += p[i].us;
+    const unsigned long att1 = 2ul * SOMFY_RTS_HW_SYNC_FIRST * SOMFY_RTS_HW_SYNC_US
+        + SOMFY_RTS_SW_SYNC_US + SOMFY_RTS_HALF_SYMBOL_US
+        + 2ul * SOMFY_RTS_FRAME_BITS * SOMFY_RTS_HALF_SYMBOL_US;
+    CHECK(tot == att1, "duree totale 1re trame = somme attendue");
+
+    /* Repetition : HW_SYNC_REPEAT (7) paires, le reste identique. */
+    int m = somfy_rts_tx_pulses(wire, false, p, SOMFY_RTS_MAX_PULSES);
+    CHECK(m > n, "repetition : plus d'impulsions (7 paires contre 2)");
+    unsigned long totr = 0; for (int i = 0; i < m; i++) totr += p[i].us;
+    const unsigned long attr = 2ul * SOMFY_RTS_HW_SYNC_REPEAT * SOMFY_RTS_HW_SYNC_US
+        + SOMFY_RTS_SW_SYNC_US + SOMFY_RTS_HALF_SYMBOL_US
+        + 2ul * SOMFY_RTS_FRAME_BITS * SOMFY_RTS_HALF_SYMBOL_US;
+    CHECK(totr == attr, "duree totale repetition = somme attendue");
+
+    /* Tampon trop court : refus sans debordement. */
+    somfy_rts_pulse_t tiny[4];
+    CHECK(somfy_rts_tx_pulses(wire, true, tiny, 4) == -1, "tampon trop court -> -1");
+}
+
 int main(void) {
     printf("== Banc Somfy RTS (codec logique) ==\n");
     t0_checksum();
@@ -189,6 +233,7 @@ int main(void) {
     t5_manchester_court();
     t6_commandes();
     t7_vecteurs_reels();
+    t8_tx_pulses();
     if (g_fail) {
         printf("\n%d verification(s) en echec.\n", g_fail);
         return 1;

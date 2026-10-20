@@ -29,10 +29,13 @@ Le programme rend 0 si tout passe, 1 sinon.
 | T4 | Dépliage Manchester d'une trame | 112 symboles, chaque paire est une transition `01`/`10`, recomposition exacte |
 | T5 | Tampon Manchester trop court | Rend `-1`, rien n'est écrit |
 | T6 | Les 9 commandes RTS | Chaque commande survit à l'aller-retour |
+| T7 | Vecteurs réels d'open-rts (implémentation tierce) | `unpack` et `pack` concordent bit à bit sur deux trames réelles |
+| T8 | Séquence d'impulsions d'émission (structure) | Sync matériel, sync logiciel à 4550, niveaux adjacents différents, durée totale = somme attendue |
 
 ## Ce qui N'EST PAS testé ici (attend le banc, issue #73)
 
-La **polarité Manchester à l'antenne** et les **durées d'émission** (préambule
-matériel, sync logiciel, inter-trame) sont déclarées dans `somfy_rts.h` d'après
-les références publiques, mais ne sont pas prouvables sans un vrai moteur Somfy.
-Elles seront validées sur une capture réelle avant toute prétention d'interop.
+La **structure** de la séquence d'émission (ordre des éléments, durées des
+constantes, fusion des niveaux) est testée sur PC (T8). En revanche la **polarité
+réelle à l'antenne** et la jonction sync logiciel / premier bit ne sont pas
+prouvables sans un vrai moteur Somfy : elles seront validées sur une capture réelle
+avant toute prétention d'interop.
