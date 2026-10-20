@@ -67,6 +67,10 @@ static cJSON *volet_to_json(const volet_t *v) {
         cJSON_AddBoolToObject(o, "virt", true);
         cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
         cJSON_AddNumberToObject(o, "virt_counter", v->virt_counter);
+        /* Protocole : omis quand il vaut Profalux (0), pour garder le JSON et les
+         * sauvegardes existantes a l'identique. */
+        if (v->proto != VOLET_PROTO_PROFALUX)
+            cJSON_AddNumberToObject(o, "proto", v->proto);
     }
     if (v->central) cJSON_AddBoolToObject(o, "central", true);
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
@@ -168,6 +172,8 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         v->virt         = true;
         v->virt_serial  = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_serial"));
         v->virt_counter = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_counter"));
+        cJSON *pr       = cJSON_GetObjectItem(o, "proto");   /* absent -> Profalux (0) */
+        v->proto        = pr ? (uint8_t)cJSON_GetNumberValue(pr) : (uint8_t)VOLET_PROTO_PROFALUX;
     }
     v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
     /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le

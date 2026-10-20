@@ -529,9 +529,9 @@ static uint8_t bits_button(const char *b) {
     return v;
 }
 
-/* Volet VIRTUEL : GENERE la trame (keeloq + compteur roulant), l'emet au TE du boitier,
- * puis avance et persiste le compteur. */
-static void emit_virt(volet_t *v, uint8_t button) {
+/* Volet VIRTUEL Profalux : GENERE la trame (keeloq + compteur roulant), l'emet au TE du
+ * boitier, puis avance et persiste le compteur. */
+static void emit_virt_profalux(volet_t *v, uint8_t button) {
     char bits[68];
     uint16_t cnt = v->virt_counter;
     if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return;
@@ -542,6 +542,21 @@ static void emit_virt(volet_t *v, uint8_t button) {
     radio_tx(bits, PRESS_REPEATS);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
+}
+
+/* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq est le seul
+ * cable ; les autres (Somfy RTS - issue #73 - ou d'autres) s'ajouteront ici, sans toucher
+ * au chemin Profalux. `button` est un code PFX_BTN_*, traduit par protocole le moment venu. */
+static void emit_virt(volet_t *v, uint8_t button) {
+    switch ((volet_proto_t)v->proto) {
+    case VOLET_PROTO_PROFALUX:
+        emit_virt_profalux(v, button);
+        break;
+    default:
+        ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
+                 v->id, (unsigned)v->proto);
+        break;
+    }
 }
 
 static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suiveurs d'une zone */
@@ -867,6 +882,7 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
     v->virt = true;
+    v->proto = VOLET_PROTO_PROFALUX;   /* seul generateur cable aujourd'hui */
     v->virt_serial = serial;
     v->virt_counter = counter;
     /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
