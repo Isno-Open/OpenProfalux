@@ -5,6 +5,10 @@
  * somme de controle, reversibilite de l'obscurcissement, aller-retour des champs,
  * et depliage Manchester. La polarite a l'antenne et les durees d'emission restent
  * a valider au banc (issue #73) et ne sont pas testees ici.
+ *
+ * T7 confronte en plus le codec a des VRAIS vecteurs tires des tests unitaires
+ * d'open-rts (une implementation tierce), pas a lui-meme : c'est ce qui prouve que
+ * notre disposition d'octets, notre checksum et notre obscurcissement sont justes.
  */
 #include "somfy_rts.h"
 #include <stdio.h>
@@ -132,6 +136,49 @@ static void t6_commandes(void) {
     CHECK(all, "les 9 commandes survivent a l'aller-retour");
 }
 
+/* T7 : vecteurs REELS d'open-rts (loopj/open-rts, test/openrts/test_rts_frame.c).
+ * On verifie les deux sens contre une implementation tierce : unpack(octets du fil)
+ * rend les bons champs, et pack(champs) reproduit les memes octets du fil. Si notre
+ * codec divergeait sur un point, ces vecteurs casseraient.
+ *
+ * Convention d'adresse = celle d'open-rts (octet 4 = poids faible), voir somfy_rts.h.
+ * Adresses non symetriques (0x421FEE, 0xFACADE) : une inversion poids fort/faible se
+ * verrait. */
+static void t7_vecteurs_reels(void) {
+    printf("T7 vecteurs reels (open-rts)\n");
+    /* Vecteur 1 : UP, code 0x1E63, adresse 0x421FEE, cle 0xA3.
+     * Clair A3 29 1E 63 EE 1F 42, obscurci (sur le fil) A3 8A 94 F7 19 06 44. */
+    const uint8_t wire1[SOMFY_RTS_FRAME_BYTES] = { 0xA3, 0x8A, 0x94, 0xF7, 0x19, 0x06, 0x44 };
+    somfy_rts_frame_t g1;
+    CHECK(somfy_rts_unpack(wire1, &g1), "v1 unpack rend true");
+    CHECK(g1.key == 0xA3, "v1 cle 0xA3");
+    CHECK(g1.cmd == SOMFY_RTS_CMD_UP, "v1 commande UP");
+    CHECK(g1.rolling_code == 0x1E63, "v1 code roulant 0x1E63");
+    CHECK(g1.address == 0x421FEEu, "v1 adresse 0x421FEE");
+    const somfy_rts_frame_t f1 = {
+        .key = 0xA3, .cmd = SOMFY_RTS_CMD_UP, .rolling_code = 0x1E63, .address = 0x421FEEu
+    };
+    uint8_t out1[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_pack(&f1, out1);
+    CHECK(memcmp(out1, wire1, SOMFY_RTS_FRAME_BYTES) == 0, "v1 pack -> A3 8A 94 F7 19 06 44");
+
+    /* Vecteur 2 : UP, code 0x007B, adresse 0xFACADE, cle 0xAB.
+     * Clair AB 2F 00 7B DE CA FA, obscurci AB 84 84 FF 21 EB 11. */
+    const uint8_t wire2[SOMFY_RTS_FRAME_BYTES] = { 0xAB, 0x84, 0x84, 0xFF, 0x21, 0xEB, 0x11 };
+    somfy_rts_frame_t g2;
+    CHECK(somfy_rts_unpack(wire2, &g2), "v2 unpack rend true");
+    CHECK(g2.key == 0xAB, "v2 cle 0xAB");
+    CHECK(g2.cmd == SOMFY_RTS_CMD_UP, "v2 commande UP");
+    CHECK(g2.rolling_code == 0x007B, "v2 code roulant 0x007B");
+    CHECK(g2.address == 0xFACADEu, "v2 adresse 0xFACADE");
+    const somfy_rts_frame_t f2 = {
+        .key = 0xAB, .cmd = SOMFY_RTS_CMD_UP, .rolling_code = 0x007B, .address = 0xFACADEu
+    };
+    uint8_t out2[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_pack(&f2, out2);
+    CHECK(memcmp(out2, wire2, SOMFY_RTS_FRAME_BYTES) == 0, "v2 pack -> AB 84 84 FF 21 EB 11");
+}
+
 int main(void) {
     printf("== Banc Somfy RTS (codec logique) ==\n");
     t0_checksum();
@@ -141,6 +188,7 @@ int main(void) {
     t4_manchester();
     t5_manchester_court();
     t6_commandes();
+    t7_vecteurs_reels();
     if (g_fail) {
         printf("\n%d verification(s) en echec.\n", g_fail);
         return 1;
