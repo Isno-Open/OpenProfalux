@@ -1,5 +1,5 @@
 /*
- * CC1101 driver — Profalux 868.425 MHz OOK
+ * CC1101 driver : Profalux 868.425 MHz OOK
  *
  * NOTE: This is a functional skeleton. Config registers below are
  * validated against SmartRF Studio output for OOK 868.425 MHz ~1550 baud
@@ -223,6 +223,27 @@ uint8_t cc1101_read_reg(uint8_t addr) {
 static void strobe(uint8_t s) {
     uint8_t tx = s, rx;
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
+}
+
+/* ── Acces FIFO et strobes pour les protocoles en mode PAQUET (io-homecontrol FSK). ──
+ * Le chemin Profalux/OOK n'en a pas besoin (il passe par le RMT). Les transferts burst sont
+ * bornes a 31 octets utiles (max_transfer_sz = 32, en-tete compris) : les trames io tiennent. */
+void cc1101_strobe_cmd(uint8_t s) { strobe(s); }
+
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 31) return;
+    uint8_t tx[32], rx[32];
+    tx[0] = addr | 0x40;   /* bit burst */
+    for (size_t i = 0; i < len; i++) tx[i + 1] = buf[i];
+    cs_low(); spi_xfer(tx, rx, len + 1); cs_high();
+}
+
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 31) return;
+    uint8_t tx[32] = {0}, rx[32];
+    tx[0] = addr | 0xC0;   /* bits burst + lecture */
+    cs_low(); spi_xfer(tx, rx, len + 1); cs_high();
+    for (size_t i = 0; i < len; i++) buf[i] = rx[i + 1];
 }
 
 int cc1101_init(void) {

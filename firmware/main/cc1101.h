@@ -1,10 +1,10 @@
 /*
- * CC1101 driver — TX + RX for Profalux 868.35 MHz OOK
+ * CC1101 driver : TX + RX for Profalux 868.35 MHz OOK
  *
  * Provides:
  *   - Init SPI + register config for OOK 868.35 MHz ~1550 baud
  *   - TX single frame (=synthesize OOK signal via GDO0 bit-banging)
- *   - RX capture — invokes callback for each detected frame
+ *   - RX capture : invokes callback for each detected frame
  */
 #ifndef CC1101_H
 #define CC1101_H
@@ -62,5 +62,10 @@ void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version); /* diag UI
 int  cc1101_gdo0_state(int *level);   /* GDO0 : -1 non teste, 1 libre, 0 tenu (*level = niveau) */
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
+/* Acces mode paquet (FIFO + strobes), pour les protocoles FSK comme io-homecontrol.
+ * Transferts burst bornes a 31 octets utiles. Le chemin OOK n'en a pas besoin. */
+void cc1101_strobe_cmd(uint8_t strobe);
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len);
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len);
 
 #endif

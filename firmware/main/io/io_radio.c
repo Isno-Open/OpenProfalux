@@ -2,8 +2,24 @@
 #include "io_radio.h"
 #include "cc1101.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
+#include "esp_timer.h"
 
 static const char *TAG = "io_radio";
+
+/* Strobes et registres CC1101 en mode paquet (adresses standard). Les registres d'etat se
+ * lisent avec le bit burst (via cc1101_read_reg(addr | 0x40)). */
+#define CC_SIDLE        0x36
+#define CC_STX          0x35
+#define CC_SRX          0x34
+#define CC_SFRX         0x3A
+#define CC_SFTX         0x3B
+#define CC_TXFIFO       0x3F
+#define CC_RXFIFO       0x3F
+#define CC_REG_PKTLEN   0x06
+#define CC_STAT_MARC    0x35   /* MARCSTATE */
+#define CC_STAT_RXBYTES 0x3B   /* RXBYTES (7 bits bas = octets en FIFO) */
+#define MARC_IDLE       0x01
 
 /* Table de registres CC1101 pour io-homecontrol, d'apres iohc-flipper radio_cc1101_regs.h (MIT) :
  * 2-FSK, DRATE ~38 383 bps, deviation ~19 kHz, sync 16 bits 0x57FD (queue de preambule + 0xFF
@@ -64,16 +80,40 @@ void io_radio_config(void) {
 }
 
 int io_radio_tx_packet(const uint8_t *buf, size_t len) {
-    (void)buf; (void)len;
-    /* A CABLER : ecriture TXFIFO (acces burst) + strobe STX, via des primitives FIFO a exposer
-     * dans cc1101.c. Reference : iohc-flipper radio_cc1101.c (MIT). */
-    ESP_LOGW(TAG, "io_radio_tx_packet : FIFO pas encore cablee");
+    if (!buf || len == 0 || len > 31) return -1;
+    cc1101_strobe_cmd(CC_SIDLE);
+    cc1101_strobe_cmd(CC_SFTX);                       /* vide la TXFIFO */
+    cc1101_write_reg(CC_REG_PKTLEN, (uint8_t)len);    /* longueur fixe = ce paquet */
+    cc1101_write_burst(CC_TXFIFO, buf, len);
+    cc1101_strobe_cmd(CC_STX);
+    for (int i = 0; i < 200; i++) {                   /* MCSM1 TXOFF=IDLE : retour IDLE = paquet parti */
+        if ((cc1101_read_reg(CC_STAT_MARC | 0x40) & 0x1F) == MARC_IDLE) return 0;
+        esp_rom_delay_us(500);
+    }
+    cc1101_strobe_cmd(CC_SIDLE);
     return -1;
 }
 
 int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms) {
-    (void)buf; (void)max; (void)timeout_ms;
-    /* A CABLER : strobe SRX, attente de GDO0 (sync word), lecture RXFIFO. Reference : phy_rx.c (MIT). */
-    ESP_LOGW(TAG, "io_radio_rx_packet : FIFO pas encore cablee");
-    return -1;
+    if (!buf || max == 0) return -1;
+    if (max > 31) max = 31;
+    cc1101_strobe_cmd(CC_SIDLE);
+    cc1101_strobe_cmd(CC_SFRX);                       /* vide la RXFIFO */
+    cc1101_strobe_cmd(CC_SRX);
+    int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    /* Premier jet : on attend des octets dans la RXFIFO et on les lit. Le cadrage exact (sync
+     * sur GDO0, longueur depuis l'en-tete io, lecture en flux longueur infinie) est a affiner
+     * au banc selon l'unframer du protocole (ref iohc-flipper phy_rx.c). */
+    while (esp_timer_get_time() < end) {
+        uint8_t n = cc1101_read_reg(CC_STAT_RXBYTES | 0x40) & 0x7F;
+        if (n > 0) {
+            if (n > max) n = (uint8_t)max;
+            cc1101_read_burst(CC_RXFIFO, buf, n);
+            cc1101_strobe_cmd(CC_SIDLE);
+            return (int)n;
+        }
+        esp_rom_delay_us(500);
+    }
+    cc1101_strobe_cmd(CC_SIDLE);
+    return 0;   /* rien recu dans le delai */
 }
