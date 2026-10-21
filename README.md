@@ -28,8 +28,10 @@ s'est révélée inutile pour piloter par rejeu.
 
 - **Rejeu** : capturer une commande de la vraie télécommande, puis la réémettre. Aucune clé, et
   ça fonctionne dès qu'une télécommande d'origine est à portée du boîtier.
-- **Enrôlement** : créer une identité que le moteur apprend, pour piloter sans avoir à capturer.
-  Selon la génération du moteur, c'est la méthode la plus fiable.
+- **Enrôlement** : après avoir capté une fois la télécommande d'origine du volet, le boîtier crée
+  sa propre identité que le moteur apprend, puis génère lui-même ses trames à code tournant. Il n'a
+  plus besoin de rejouer les trames captées, et selon la génération du moteur c'est la méthode la
+  plus fiable.
 
 Le choix dépend du moteur : voir la compatibilité ci-dessous.
 
