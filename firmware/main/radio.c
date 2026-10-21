@@ -59,13 +59,19 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
     /* Derniere trame complete et valide vue, a defaut de paire confirmee. */
     char repli[RXC_FULL_BITS + 1]; repli[0] = 0;
     const int need = full ? RXC_FULL_BITS : RXC_CMP_BITS;
+    int64_t repli_us = 0;   /* instant de la 1re trame complete vue (delai de grace, issue #1) */
     int r = -1;
     int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     for (int64_t now; (now = esp_timer_get_time()) < t_end; ) {
-        int n = cc1101_rx_listen_bits((uint32_t)((t_end - now) / 1000) + 1, bits, 79);
+        /* Trame complete deja captee et courte grace ecoulee : on la prend sans attendre la fin de
+         * la fenetre. On laisse d'abord une chance a une paire, mais on ne fait pas patienter. */
+        if (repli[0] && now - repli_us > 1500000) break;
+        uint32_t w = (uint32_t)((t_end - now) / 1000) + 1;
+        if (w > 300) w = 300;   /* fenetres courtes : la grace ci-dessus reagit vite */
+        int n = cc1101_rx_listen_bits(w, bits, 79);
         if (n < 64) continue;
         bits[n] = 0;
-        if (n >= need && n <= RXC_FULL_BITS) strlcpy(repli, bits, sizeof repli);
+        if (n >= need && n <= RXC_FULL_BITS) { strlcpy(repli, bits, sizeof repli); if (!repli_us) repli_us = now; }
         if (!rx_confirm_push(&c, bits, n, esp_timer_get_time())) continue;
         const char *ok = full ? c.full : c.last;   /* apprentissage : une trame complete de 66 bits */
         if (!ok[0]) continue;                      /* confirmee mais coupee : on attend la suivante */
