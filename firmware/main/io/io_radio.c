@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
+#include "io_unframer.h"
 
 static const char *TAG = "io_radio";
 
@@ -94,25 +95,41 @@ int io_radio_tx_packet(const uint8_t *buf, size_t len) {
     return -1;
 }
 
+/* Recoit UNE trame io et la rend DESASSEMBLEE (octets io, pas les octets FIFO encapsules UART).
+ * Le CC1101 n'ecrit dans la RXFIFO qu'apres detection du sync 0x57FD (donc aligne sur l'octet) ;
+ * on vide la FIFO par morceaux (burst borne a 31) et on alimente l'unframer, qui termine la trame
+ * a la longueur lue dans l'en-tete io. Modele repris de iohc-flipper phy_rx.c (MIT). Reste a
+ * affiner au banc : erratum "ne pas lire le dernier octet FIFO en cours de reception". */
 int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms) {
     if (!buf || max == 0) return -1;
-    if (max > 31) max = 31;
     cc1101_strobe_cmd(CC_SIDLE);
-    cc1101_strobe_cmd(CC_SFRX);                       /* vide la RXFIFO */
+    cc1101_strobe_cmd(CC_SFRX);
     cc1101_strobe_cmd(CC_SRX);
+    IohcUnframer u;
+    iohc_unframer_reset(&u);
     int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
-    /* Premier jet : on attend des octets dans la RXFIFO et on les lit. Le cadrage exact (sync
-     * sur GDO0, longueur depuis l'en-tete io, lecture en flux longueur infinie) est a affiner
-     * au banc selon l'unframer du protocole (ref iohc-flipper phy_rx.c). */
     while (esp_timer_get_time() < end) {
-        uint8_t n = cc1101_read_reg(CC_STAT_RXBYTES | 0x40) & 0x7F;
-        if (n > 0) {
-            if (n > max) n = (uint8_t)max;
-            cc1101_read_burst(CC_RXFIFO, buf, n);
-            cc1101_strobe_cmd(CC_SIDLE);
-            return (int)n;
+        uint8_t avail = cc1101_read_reg(CC_STAT_RXBYTES | 0x40) & 0x7F;
+        if (avail == 0) { esp_rom_delay_us(1000); continue; }
+        uint8_t n = avail > 31 ? 31 : avail;   /* burst borne a 31 (max_transfer_sz) */
+        uint8_t fifo[31];
+        cc1101_read_burst(CC_RXFIFO, fifo, n);
+        for (uint8_t i = 0; i < n; i++) {
+            IohcUnframerResult r = iohc_unframer_feed_byte(&u, fifo[i]);
+            if (r == IohcUnframerFrameDone) {
+                size_t len = u.frame_pos < max ? u.frame_pos : max;
+                for (size_t k = 0; k < len; k++) buf[k] = u.frame[k];
+                cc1101_strobe_cmd(CC_SIDLE);
+                return (int)len;
+            }
+            if (r == IohcUnframerFramingError || r == IohcUnframerOverflow) {
+                iohc_unframer_reset(&u);            /* bruit ou desync : on repart propre */
+                cc1101_strobe_cmd(CC_SIDLE);
+                cc1101_strobe_cmd(CC_SFRX);
+                cc1101_strobe_cmd(CC_SRX);
+                break;                              /* relire RXBYTES apres re-armement */
+            }
         }
-        esp_rom_delay_us(500);
     }
     cc1101_strobe_cmd(CC_SIDLE);
     return 0;   /* rien recu dans le delai */
