@@ -1,5 +1,5 @@
 /*
- * radio.c — arbitrage RX/TX de l'unique CC1101 (voir radio.h).
+ * radio.c : arbitrage RX/TX de l'unique CC1101 (voir radio.h).
  */
 #include "radio.h"
 #include "cc1101.h"
@@ -50,17 +50,22 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
     if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
     bool was = s_paused; s_paused = true;   /* met la tache permanente en pause pendant l'ecoute dediee */
     xSemaphoreTake(s_mtx, portMAX_DELAY);
-    /* Fenetres successives jusqu'a deux trames identiques (rx_confirm.h, issue #39) : une
-     * trame isolee, souvent faible et a bits faux, n'est plus apprise. */
+    /* Fenetres successives : on prefere deux trames identiques (rx_confirm.h, issue #39), mais a
+     * defaut on accepte une trame complete (repli ci-dessous, issue #1), car ici l'utilisateur a
+     * lance la capture expres et tient le bouton. */
     static rx_confirm_t c;   /* sous s_mtx : une seule ecoute dediee a la fois */
     rx_confirm_reset(&c);
     char bits[80];
+    /* Derniere trame complete et valide vue, a defaut de paire confirmee. */
+    char repli[RXC_FULL_BITS + 1]; repli[0] = 0;
+    const int need = full ? RXC_FULL_BITS : RXC_CMP_BITS;
     int r = -1;
     int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     for (int64_t now; (now = esp_timer_get_time()) < t_end; ) {
         int n = cc1101_rx_listen_bits((uint32_t)((t_end - now) / 1000) + 1, bits, 79);
         if (n < 64) continue;
         bits[n] = 0;
+        if (n >= need && n <= RXC_FULL_BITS) strlcpy(repli, bits, sizeof repli);
         if (!rx_confirm_push(&c, bits, n, esp_timer_get_time())) continue;
         const char *ok = full ? c.full : c.last;   /* apprentissage : une trame complete de 66 bits */
         if (!ok[0]) continue;                      /* confirmee mais coupee : on attend la suivante */
@@ -68,6 +73,10 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
         r = (int)strlen(buf);
         break;
     }
+    /* Pas de paire confirmee dans la fenetre, mais une trame complete est passee : on l'accepte.
+     * La double trame reste de rigueur pour l'ecoute permanente (telecommandes fantomes, #39) ;
+     * ici la capture est explicite, une trame bien formee suffit (issue #1). */
+    if (r < 0 && repli[0]) { strlcpy(buf, repli, (size_t)max); r = (int)strlen(buf); }
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
