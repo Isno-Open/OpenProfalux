@@ -7,12 +7,9 @@
 #include "iohome_crypto.h"
 #include <string.h>
 
-// Include mbedTLS for AES (available in ESP32 Arduino Core)
-#ifdef ARDUINO
-  #include <mbedtls/aes.h>
-#else
-  #include <mbedtls/aes.h>
-#endif
+// AES-128 via PSA Crypto. Mbed TLS 4 (ESP-IDF v6.1) makes mbedtls/aes.h private and
+// mandates the PSA API, so we follow the tool instead of forcing the private header.
+#include "psa/crypto.h"
 
 namespace iohome {
 namespace crypto {
@@ -158,24 +155,30 @@ void construct_iv_2w(
 // AES-128 Encryption/Decryption
 // ============================================================================
 
+// One raw AES-128 ECB block via PSA (no IV, no padding: the io protocol's block primitive).
+static bool aes128_ecb_block(const uint8_t *input, const uint8_t *key, uint8_t *output, bool encrypt) {
+  if (psa_crypto_init() != PSA_SUCCESS) return false;   // idempotent
+  psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+  psa_set_key_usage_flags(&attr, encrypt ? PSA_KEY_USAGE_ENCRYPT : PSA_KEY_USAGE_DECRYPT);
+  psa_set_key_algorithm(&attr, PSA_ALG_ECB_NO_PADDING);
+  psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
+  psa_set_key_bits(&attr, 128);
+  psa_key_id_t kid = 0;
+  if (psa_import_key(&attr, key, AES_KEY_SIZE, &kid) != PSA_SUCCESS) return false;
+  size_t olen = 0;
+  psa_status_t st = encrypt
+    ? psa_cipher_encrypt(kid, PSA_ALG_ECB_NO_PADDING, input, AES_BLOCK_SIZE, output, AES_BLOCK_SIZE, &olen)
+    : psa_cipher_decrypt(kid, PSA_ALG_ECB_NO_PADDING, input, AES_BLOCK_SIZE, output, AES_BLOCK_SIZE, &olen);
+  psa_destroy_key(kid);
+  return st == PSA_SUCCESS && olen == AES_BLOCK_SIZE;
+}
+
 bool aes128_encrypt(
   const uint8_t input[AES_BLOCK_SIZE],
   const uint8_t key[AES_KEY_SIZE],
   uint8_t output[AES_BLOCK_SIZE]
 ) {
-  mbedtls_aes_context aes;
-  mbedtls_aes_init(&aes);
-
-  int ret = mbedtls_aes_setkey_enc(&aes, key, 128);
-  if (ret != 0) {
-    mbedtls_aes_free(&aes);
-    return false;
-  }
-
-  ret = mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input, output);
-
-  mbedtls_aes_free(&aes);
-  return (ret == 0);
+  return aes128_ecb_block(input, key, output, true);
 }
 
 bool aes128_decrypt(
@@ -183,19 +186,7 @@ bool aes128_decrypt(
   const uint8_t key[AES_KEY_SIZE],
   uint8_t output[AES_BLOCK_SIZE]
 ) {
-  mbedtls_aes_context aes;
-  mbedtls_aes_init(&aes);
-
-  int ret = mbedtls_aes_setkey_dec(&aes, key, 128);
-  if (ret != 0) {
-    mbedtls_aes_free(&aes);
-    return false;
-  }
-
-  ret = mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, input, output);
-
-  mbedtls_aes_free(&aes);
-  return (ret == 0);
+  return aes128_ecb_block(input, key, output, false);
 }
 
 // ============================================================================

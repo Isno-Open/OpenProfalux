@@ -68,7 +68,10 @@ idf_component_register(
         "radio.c"
         "radio_profile.c"
         "log_ring.c"
-    INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
+        "io/iohome_frame.cpp"
+        "io/iohome_crypto.cpp"
+        "io/iohome_2w.cpp"
+    INCLUDE_DIRS "." "io" "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
         "${WEB_GZ_DIR}/style.css.gz"

@@ -26,6 +26,7 @@
 typedef enum {
     VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
     VOLET_PROTO_SOMFY_RTS = 1,   /* reserve, pas encore cable */
+    VOLET_PROTO_IO        = 2,   /* io-homecontrol : FSK 868 chiffre AES (module io/, en cours, #87) */
 } volet_proto_t;
 
 typedef struct {
