@@ -3,6 +3,8 @@
 #include "io_radio.h"
 #include "io_framer.h"
 #include "iohome_frame.h"
+#include "iohome_constants.h"
+#include <cstring>
 
 using namespace iohome::frame;
 
@@ -26,4 +28,12 @@ extern "C" int io_hc_send_1w(const uint8_t src[3], const uint8_t dst[3],
     if (m == 0 || m > 60) return -1;
 
     return io_radio_tx_packet(fifo, m);
+}
+
+extern "C" int io_cmd_for_action(const char *action) {
+    if (!action) return -1;
+    if (!strcmp(action, "up"))   return iohome::CMD_OPEN;    /* ouvrir = monter */
+    if (!strcmp(action, "down")) return iohome::CMD_CLOSE;   /* fermer = descendre */
+    if (!strcmp(action, "stop")) return iohome::CMD_STOP;
+    return -1;
 }

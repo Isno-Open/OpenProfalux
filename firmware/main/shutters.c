@@ -1,5 +1,5 @@
 /*
- * shutters.c — modele cover OpenProfalux (clone/replay + position time-based).
+ * shutters.c : modele cover OpenProfalux (clone/replay + position time-based).
  * Config persistee en NVS, un document JSON par volet (voir cfg_store.h). Le
  * dataset de trames et le ring RF vivent en SPIFFS (partition "storage").
  */
@@ -24,6 +24,7 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
+#include "io/io_send.h"   /* io_cmd_for_action : action volet -> code de commande io */
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
 #include "ota.h"
@@ -765,6 +766,18 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
+    if (v->proto == VOLET_PROTO_IO) {   /* io-homecontrol : emission directe (pas de rejeu de trame) */
+        const uint8_t dst[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
+        int ioc = io_cmd_for_action(cmd);
+        if (ioc < 0) { UNLOCK(); return -1; }
+        int rc = radio_io_send(dst, (uint8_t)ioc);
+        if      (!strcmp(cmd, "up"))   { v->target = 0;   v->position = 0; }
+        else if (!strcmp(cmd, "down")) { v->target = 100; v->position = 100; }
+        v->dir = 0;
+        publish_volet_state(v);
+        UNLOCK(); pub_flush();
+        return rc;
+    }
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
     if (!strcmp(cmd, "up"))        { v->target = 0;   start_move(v, +1); }   /* ouvrir : monter vers 0 */
     else if (!strcmp(cmd, "down")) { v->target = 100; start_move(v, -1); }   /* fermer : descendre vers 100 */
@@ -898,6 +911,23 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     pub_flush();
     ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u",
              id, (unsigned)serial, counter);
+    return 0;
+}
+
+int shutters_create_io_volet(const char *id, uint32_t node) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = true;
+    v->proto = VOLET_PROTO_IO;
+    v->virt_serial = node & 0xFFFFFF;   /* node (3 o) du moteur io dans les 24 bits bas */
+    v->virt_counter = 0;                /* io : compteur roulant commun a la carte (io_store), pas par volet */
+    save_cfg();
+    announce_one(v);
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "volet io '%s' cree : node 0x%06X", id, (unsigned)(node & 0xFFFFFF));
     return 0;
 }
 
@@ -1182,7 +1212,7 @@ static void purge_ghost_remotes_once(void) {
     nvs_close(h);
 }
 
-/* ══ FONCTION 1 — Dataset slide (option MQTT "capture toutes les trames") ══
+/* ══ FONCTION 1 : Dataset slide (option MQTT "capture toutes les trames") ══
  * Publie un hop UNIQUEMENT s'il n'est pas deja dans le set enregistre de ce serial.
  * Sert a collecter les 65536 hops distincts pour l'attaque slide-MITM. Appele sous LOCK. */
 static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, int8_t rssi, uint32_t t) {
@@ -1206,7 +1236,7 @@ static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, in
      * Le dataset slide (hops distincts) reste construit ici en RAM/NVS pour l'export /api/frames. */
 }
 
-/* ══ FONCTION 2 — Suivi de position via telecommandes ENREGISTREES ══
+/* ══ FONCTION 2 : Suivi de position via telecommandes ENREGISTREES ══
  * Independante de l'option MQTT : des qu'un volet a appris ce serial+bouton, on suit
  * sa position quand la VRAIE telecommande l'actionne. Appele sous LOCK. */
 static void track_shutter_position(const char *shex, uint8_t button) {

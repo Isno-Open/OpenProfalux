@@ -13,6 +13,10 @@ extern "C" {
 int io_hc_send_1w(const uint8_t src[3], const uint8_t dst[3],
                   const uint8_t key[16], uint16_t rolling, uint8_t cmd);
 
+/* Traduit une action de volet ("up" | "down" | "stop") en code de commande io (ouvrir/fermer/
+ * stop, declares une seule fois dans iohome_constants.h). Rend -1 si l'action est inconnue. */
+int io_cmd_for_action(const char *action);
+
 #ifdef __cplusplus
 }
 #endif

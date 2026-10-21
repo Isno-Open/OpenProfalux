@@ -1374,8 +1374,12 @@ static esp_err_t h_io_pair(httpd_req_t *r) {
         snprintf(out, sizeof out, "{\"ok\":0,\"rc\":%d}", rc);
         return httpd_resp_sendstr(r, out);
     }
-    char out[64];
-    snprintf(out, sizeof out, "{\"ok\":1,\"node\":\"%02X%02X%02X\"}", dst[0], dst[1], dst[2]);
+    char id[16];
+    snprintf(id, sizeof id, "io-%02X%02X%02X", dst[0], dst[1], dst[2]);
+    uint32_t node = ((uint32_t)dst[0] << 16) | ((uint32_t)dst[1] << 8) | dst[2];
+    shutters_create_io_volet(id, node);   /* le volet io rejoint la liste, pilotable comme les autres */
+    char out[80];
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"node\":\"%02X%02X%02X\"}", id, dst[0], dst[1], dst[2]);
     return httpd_resp_sendstr(r, out);
 }
 

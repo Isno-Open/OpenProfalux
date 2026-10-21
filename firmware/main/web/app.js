@@ -1195,6 +1195,19 @@ if ($('#io-sniff-btn')) $('#io-sniff-btn').onclick = async () => {
   if (d && d.ok) st.innerHTML = `✅ Trame io captée (${d.len} octets) : <code>${esc(d.frame)}</code>`;
   else st.innerHTML = '❌ Rien capté. io est expérimental (canal et alignement à affiner). Réessaie en faisant agir l\'appareil io tout près.';
 };
+if ($('#io-pair-btn')) $('#io-pair-btn').onclick = async () => {
+  const btn = $('#io-pair-btn'), st = $('#io-pair-status');
+  btn.disabled = true; setRadioBusy(true);
+  st.className = 'hint'; st.textContent = '🔗 Appairage io ~12 s : mets ton moteur io en mode appairage maintenant...';
+  const d = await api('/api/io/pair', { method: 'POST' }).catch(() => null);
+  btn.disabled = false; setRadioBusy(false);
+  if (d && d.ok) {
+    st.innerHTML = `✅ Volet io créé : <code>${esc(d.id)}</code> (node ${esc(d.node)}). Il apparaît dans la liste, pilotable Haut/Stop/Bas.`;
+    if (typeof loadStatus === 'function') loadStatus();
+  } else {
+    st.innerHTML = '❌ Aucun appareil io trouvé. io est expérimental. Mets le moteur en appairage, tout près, et réessaie.';
+  }
+};
 if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {
   const btn = $('#diag-rx-btn'), st = $('#diag-rx-status');
   btn.disabled = true; setRadioBusy(true);
