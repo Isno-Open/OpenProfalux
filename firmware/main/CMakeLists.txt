@@ -71,6 +71,7 @@ idf_component_register(
         "io/iohome_frame.cpp"
         "io/iohome_crypto.cpp"
         "io/iohome_2w.cpp"
+        "io/io_radio.c"
     INCLUDE_DIRS "." "io" "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"

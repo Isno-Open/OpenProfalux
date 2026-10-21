@@ -12,10 +12,17 @@ Fichiers repris tels quels (portables : mbedTLS, parties Arduino derriere `#ifde
 - `iohome_2w.*` : machine d'etat bidirectionnelle (2W).
 - `iohome_constants.h`, `iown_mac.h`, `iown_frame.h` : definitions communes.
 
-A ecrire (ne vient PAS d'iown-home, qui utilise un SX1276 via RadioLib) :
+Backend radio CC1101 (`io_radio.c/.h`) : la config registres 2-FSK est reprise de
+**samr037/iohc-flipper** (`radio_cc1101_regs.h`, licence **MIT**), qui pilote de l'io sur un
+vrai CC1101. Valeurs prouvees : 2-FSK, ~38 383 bps, deviation ~19 kHz, sync **0x57FD** (queue
+de preambule + 0xFF encode UART, pas 0xFD99), canaux 868,25 / 868,95 / 869,85 MHz, FIFO
+longueur fixe. `io_radio_config()` et `io_radio_set_channel()` sont poses ; l'emission/reception
+par la FIFO reste a cabler (le chemin OOK actuel passe par le RMT, pas la FIFO).
 
-- backend **radio CC1101 en 2-FSK** (38 400 bps, deviation 19,2 kHz, sync 0xFD99,
-  canaux 868,25 / 868,95 / 869,85), sauts de canal, TX/RX paquet ;
+Reste a ecrire :
+
+- primitives **FIFO/strobe** dans `cc1101.c` puis `io_radio_tx_packet` / `io_radio_rx_packet`
+  (reference : iohc-flipper `radio_cc1101.c` / `phy_rx.c`, MIT) ;
 - integration dans le modele volet : dimension `VOLET_PROTO_IO` (comme Somfy RTS),
   mais bidirectionnelle (RX + TX) ;
 - banc de test hote (frame + crypto), sur le patron de `firmware/test/keeloq`.
