@@ -31,6 +31,10 @@
 /* Quartet haut constant de l'octet de cle (0xA pour le RTS). */
 #define SOMFY_RTS_KEY_PREFIX  0xA0
 
+/* Porteuse RTS, en kHz : un FAIT du protocole (comme 868,35 pour Profalux), pas un
+ * reglage. La legalite de l'emission se verifie cote carte contre bands_allowed_khz. */
+#define SOMFY_RTS_FREQ_KHZ  433420
+
 /* Commandes RTS : quartet haut de l'octet 1. Valeurs du protocole, nommees une
  * fois ici plutot que recopiees en litteraux. */
 typedef enum {
