@@ -1,11 +1,12 @@
 /*
- * radio.c — arbitrage RX/TX de l'unique CC1101 (voir radio.h).
+ * radio.c : arbitrage RX/TX de l'unique CC1101 (voir radio.h).
  */
 #include "radio.h"
 #include "cc1101.h"
 #include "freq_sweep.h"
 #include "hardware_config.h"
 #include "rx_confirm.h"
+#include "io/io_radio.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -74,6 +75,23 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
 }
 
 void radio_pause_rx(bool pause) { s_paused = pause; }
+
+/* Sniffer io-homecontrol : passe la radio en FSK io (config + canal CH2), ecoute UNE trame
+ * desassemblee, puis RESTAURE la modulation OOK Profalux et la porteuse. Sous mutex, ecoute
+ * permanente en pause (comme l'ecoute dediee). Rend le nb d'octets io, 0 si rien, -1 si erreur. */
+int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
+    if (!s_mtx || !buf || max <= 0) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();                         /* FSK io + canal CH2 */
+    int n = io_radio_rx_packet(buf, (size_t)max, timeout_ms);
+    cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
+    cc1101_set_freq_khz(back);                 /* restaure la porteuse */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return n;
+}
 
 /* Relance le self-test TX a la demande (bouton UI), sous mutex/pause pour ne pas
  * entrer en collision avec l'ecoute. Retourne 0 si la puce passe en TX, -1 sinon. */

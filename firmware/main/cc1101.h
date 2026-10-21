@@ -67,5 +67,7 @@ void   cc1101_write_reg(uint8_t addr, uint8_t val);
 void cc1101_strobe_cmd(uint8_t strobe);
 void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len);
 void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len);
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
+void cc1101_apply_config_ook(void);
 
 #endif

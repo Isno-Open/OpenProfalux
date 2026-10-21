@@ -246,6 +246,16 @@ void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len) {
     for (size_t i = 0; i < len; i++) buf[i] = rx[i + 1];
 }
 
+/* Reapplique la config OOK/Profalux (table s_regs) sans SRES ni re-init SPI. Sert a RESTAURER
+ * la radio apres un passage en FSK (io-homecontrol), qui reecrit la modulation ; le retune RTS,
+ * lui, ne touche que la frequence (il reste en OOK) et n'en a pas besoin. L'appelant restaure
+ * ensuite la porteuse (cc1101_set_freq_khz). A appeler sous le mutex radio. */
+void cc1101_apply_config_ook(void) {
+    strobe(CC_SIDLE);
+    for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++)
+        cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
+}
+
 int cc1101_init(void) {
     /* GPIO CS + GDO0 */
     gpio_config_t io_cs = { .pin_bit_mask = 1ULL << CC1101_PIN_CS,
