@@ -32,6 +32,7 @@
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include "cfg_store.h"       /* place des volets en NVS */
+#include "req_guard.h"       /* envois venus d'un autre site (CSRF) */
 #include <inttypes.h>
 
 #ifndef MIN
@@ -154,6 +155,30 @@ static bool ui_auth_ok(httpd_req_t *r) {
     httpd_resp_set_status(r, "401 Unauthorized");
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"auth\"}");
+    return false;
+}
+
+/* Valeur d'un en-tete, NULL s'il est absent (tronquee si trop longue : elle reste presente). */
+static const char *hdr_or_null(httpd_req_t *r, const char *name, char *buf, size_t cap) {
+    esp_err_t e = httpd_req_get_hdr_value_str(r, name, buf, cap);
+    return (e == ESP_OK || e == ESP_ERR_HTTPD_RESULT_TRUNC) ? buf : NULL;
+}
+
+/* true si l'envoi est accepte. Un POST lance depuis la page d'un AUTRE site (CSRF : sans mot de
+ * passe, une page piegee pouvait piloter le boitier) recoit 403 ; l'interface, une iframe dans Home
+ * Assistant, Home Assistant en REST et les scripts passent comme avant. Regles : req_guard.h. */
+static bool req_guard_ok(httpd_req_t *r) {
+    if (r->method != HTTP_POST) return true;   /* une autre page ne peut pas lire les reponses */
+    char sfs[24], origin[96], host[96];
+    const char *f = hdr_or_null(r, "Sec-Fetch-Site", sfs, sizeof(sfs));
+    const char *o = hdr_or_null(r, "Origin", origin, sizeof(origin));
+    const char *h = hdr_or_null(r, "Host", host, sizeof(host));
+    if (rg_write_ok(f, o, h)) return true;
+    ESP_LOGW(TAG, "envoi refuse (autre site) : %s, Sec-Fetch-Site=%s Origin=%s Host=%s",
+             r->uri, f ? f : "-", o ? o : "-", h ? h : "-");
+    httpd_resp_set_status(r, "403 Forbidden");
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"origine\"}");
     return false;
 }
 
@@ -1230,6 +1255,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
  * rien. /api/session ne dit que si une protection existe et si l'appelant
  * est deja connecte. */
 static esp_err_t h_login(httpd_req_t *r) {
+    if (!req_guard_ok(r)) return ESP_OK;   /* 403 deja envoye */
     char *body = read_body(r);
     httpd_resp_set_type(r, "application/json");
     if (!body) return httpd_resp_sendstr(r, "{\"ok\":0}");
@@ -1263,6 +1289,7 @@ static esp_err_t h_login(httpd_req_t *r) {
 }
 
 static esp_err_t h_logout(httpd_req_t *r) {
+    if (!req_guard_ok(r)) return ESP_OK;   /* 403 deja envoye */
     char tok[UI_TOKEN_LEN + 1] = "";
     if (ui_cookie_get(r, tok, sizeof(tok))) ui_sess_drop(tok);
     httpd_resp_set_hdr(r, "Set-Cookie", "opfx_sess=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
@@ -1299,6 +1326,7 @@ static int s_nroutes = 0;
 static esp_err_t auth_trampoline(httpd_req_t *r) {
     int idx = (int)(intptr_t)r->user_ctx;
     if (idx < 0 || idx >= s_nroutes) return ESP_FAIL;
+    if (!req_guard_ok(r)) return ESP_OK;   /* 403 deja envoye */
     if (!ui_auth_ok(r)) return ESP_OK;   /* 401 deja envoye */
     return s_route_h[idx](r);
 }

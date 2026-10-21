@@ -229,6 +229,23 @@ jobs:
              -o mdns_name_host_test
           ./mdns_name_host_test
 
+  # Les envois venus de la page d'un autre site (req_guard.c) : refuses, sans toucher a
+  # l'interface, a Home Assistant ni aux scripts. Voir firmware/test/req-guard.
+  banc-req-guard:
+    name: Banc de test des envois venus d'un autre site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: req_guard (gcc + AddressSanitizer)
+        working-directory: firmware/test/req-guard
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/req_guard.c \
+             -o req_guard_host_test
+          ./req_guard_host_test
+
   # La confirmation d'une trame recue par une seconde identique (rx_confirm.c) :
   # voir firmware/test/rx-confirm/README.md. Pure, un simple gcc suffit (issue #39).
   banc-rx-confirm:
