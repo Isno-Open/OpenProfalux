@@ -62,6 +62,7 @@ idf_component_register(
         "pfx_keys.c"
         "pfx_enrol.c"
         "web_ui.c"
+        "req_guard.c"
         "ota.c"
         "ota_rollback.c"
         "radio.c"

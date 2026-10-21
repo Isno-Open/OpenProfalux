@@ -101,6 +101,13 @@ seul** sur la version précédente ; l'onglet **OTA** le signale.
 5. Onglet **Télécommandes** : « Cloner une télécommande » (capturer ▲/▼/■, nommer le volet),
    puis « Calibrer la position » (chronométrer une course complète pour la position en %).
 
+## Sécurité de l'interface
+- Le boîtier refuse les envois (POST `/api/...`) qu'une page d'un **autre site** ferait faire au navigateur :
+  une page piégée ne peut plus piloter les volets ni changer la configuration (réponse 403, `"err":"origine"`).
+- Rien ne change pour l'interface (y compris dans une iframe Home Assistant), Home Assistant (MQTT ou REST),
+  curl et les scripts.
+- Un mot de passe (Système → Appareil) protège en plus l'accès à l'interface et à la sauvegarde.
+
 ## Topics MQTT
 | Topic | Sens | Payload |
 |---|---|---|
