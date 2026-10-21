@@ -81,11 +81,12 @@ void io_radio_config(void) {
 }
 
 int io_radio_tx_packet(const uint8_t *buf, size_t len) {
-    if (!buf || len == 0 || len > 31) return -1;
+    if (!buf || len == 0 || len > 60) return -1;     /* trame io encapsulee ~40 o, < taille FIFO 64 */
     cc1101_strobe_cmd(CC_SIDLE);
     cc1101_strobe_cmd(CC_SFTX);                       /* vide la TXFIFO */
     cc1101_write_reg(CC_REG_PKTLEN, (uint8_t)len);    /* longueur fixe = ce paquet */
-    cc1101_write_burst(CC_TXFIFO, buf, len);
+    for (size_t i = 0; i < len; i++)                  /* FIFO un octet a la fois : fiable au-dela du burst */
+        cc1101_write_reg(CC_TXFIFO, buf[i]);
     cc1101_strobe_cmd(CC_STX);
     for (int i = 0; i < 200; i++) {                   /* MCSM1 TXOFF=IDLE : retour IDLE = paquet parti */
         if ((cc1101_read_reg(CC_STAT_MARC | 0x40) & 0x1F) == MARC_IDLE) return 0;

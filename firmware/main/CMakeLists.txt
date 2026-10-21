@@ -73,6 +73,8 @@ idf_component_register(
         "io/iohome_2w.cpp"
         "io/io_radio.c"
         "io/io_unframer.c"
+        "io/io_framer.c"
+        "io/io_send.cpp"
     INCLUDE_DIRS "." "io" "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
