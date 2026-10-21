@@ -231,6 +231,7 @@
         <h3>Depuis un fichier</h3>
         <div class="field"><label>Fichier firmware (.bin)</label><input type="file" id="ota-file" accept=".bin"></div>
         <div class="row"><button id="ota-btn" class="btn primary">Flasher</button><button id="ota-rollback" class="btn danger">↩ Version précédente</button></div>
+        <p class="hint" id="ota-rb-why" hidden style="margin:6px 0 0"></p>
         <div id="ota-prog" hidden style="margin-top:12px"><progress id="ota-bar" max="100" value="0"></progress> <span class="hint" id="ota-msg"></span></div>
         <p class="hint" style="margin-top:12px">Écrit sur la partition inactive, puis redémarre dessus. Si la nouvelle version plante dans sa première minute, le boîtier revient tout seul à l'ancienne (retour automatique actif). Ne pas le débrancher pendant cette minute : il reviendrait aussi à l'ancienne version.</p>
       </div>

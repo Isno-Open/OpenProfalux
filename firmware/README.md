@@ -47,6 +47,9 @@ broches SPI diffèrent, un binaire d'une carte ne marchera pas sur l'autre :
 | **Olimex ESP32-POE** (Ethernet) | `openprofalux-esp32-poe-full.bin` | `openprofalux-esp32-poe-ota.bin` |
 | **ISNO Super** (ESP32-S3, `--chip esp32s3`) | `openprofalux-isno-super-full.bin` | `openprofalux-isno-super-ota.bin` |
 
+> Chaque release publie aussi `openprofalux-<carte>-bootloader.bin`, le bootloader seul : il active
+> le retour automatique sur un boîtier déjà installé (voir plus bas).
+
 > **Le `-full.bin` efface la configuration** (Wi-Fi, MQTT, volets, télécommandes clonées) : sa zone
 > de configuration est vide. Sur un boîtier déjà configuré, exporter d'abord la sauvegarde (onglet
 > **Système** → Sauvegarde), ou passer par l'OTA, qui la garde.
@@ -78,11 +81,14 @@ seul** sur la version précédente ; l'onglet **OTA** le signale.
 - Une version qui se bloque sans planter n'est pas rattrapée : bouton « Version précédente » de l'onglet OTA.
 - Le retour automatique vit dans le **bootloader**, que l'OTA ne remplace jamais. L'onglet OTA dit
   s'il est actif. Un boîtier installé avant cette version l'obtient une fois, par USB, en ne
-  flashant que le bootloader (configuration et firmware gardés) :
+  flashant que le bootloader : **configuration et firmware gardés**. Avec le
+  `openprofalux-<carte>-bootloader.bin` de la release, à la même adresse que le `-full.bin` :
   ```bash
-  idf.py -B build-m5-atom-lite -p /dev/ttyUSB0 -b 115200 bootloader-flash
+  esptool.py --chip esp32 -p /dev/ttyUSB0 --baud 115200 write_flash 0x0 openprofalux-m5-atom-lite-bootloader.bin
   ```
-  ou en réinstallant le `-full.bin`, qui efface la configuration (exporter la sauvegarde avant).
+  Windows (PowerShell) : `esptool.exe --chip esp32 --port COM4 --baud 115200 write_flash 0x0 openprofalux-m5-atom-lite-bootloader.bin`.
+  ISNO Super : `--chip esp32s3`. Depuis les sources : `idf.py -B build-<carte> -p /dev/ttyUSB0 -b 115200 bootloader-flash`.
+  Le `-full.bin` le donne aussi, mais il efface la configuration (exporter la sauvegarde avant).
 
 ## Premier démarrage
 1. Pas de Wi-Fi configuré → l'ESP32 ouvre un point d'accès **ouvert** `OpenProfalux_XXXX`
