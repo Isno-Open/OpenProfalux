@@ -1349,6 +1349,20 @@ static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (
     else s_nroutes++;
 }
 
+/* Sniff io-homecontrol (experimental) : ecoute UNE trame io (FSK 868) et la rend DESASSEMBLEE
+ * en hexa, puis la radio repasse en OOK Profalux. Sert a capturer un volet io reel (issue #87). */
+static esp_err_t h_io_sniff(httpd_req_t *r) {
+    uint8_t frame[32];
+    int n = radio_io_sniff(frame, sizeof frame, 8000);   /* 8 s d'ecoute */
+    httpd_resp_set_type(r, "application/json");
+    if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    char hex[2 * sizeof(frame) + 1];
+    for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
+    char out[128];
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
+    return httpd_resp_sendstr(r, out);
+}
+
 /* Portail captif : point d'acces actif (configuration ou secours), toute adresse inconnue
  * (dont les tests de connexion des telephones : generate_204, hotspot-detect.html, connecttest.txt)
  * est redirigee vers la page de configuration ; le telephone ouvre alors le portail tout seul.
@@ -1440,5 +1454,6 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/forget", HTTP_POST, h_pfx_forget);
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
+    reg(s, "/api/io/sniff", HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

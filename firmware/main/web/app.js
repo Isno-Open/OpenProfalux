@@ -1186,6 +1186,15 @@ if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   await api('/api/diag/tx', { method: 'POST' }).catch(() => {});
   await loadDiag(); btn.disabled = false;
 };
+if ($('#io-sniff-btn')) $('#io-sniff-btn').onclick = async () => {
+  const btn = $('#io-sniff-btn'), st = $('#io-sniff-status');
+  btn.disabled = true; setRadioBusy(true);
+  st.className = 'hint'; st.textContent = '📡 Écoute io ~8 s : fais agir ton volet ou ta box io maintenant...';
+  const d = await api('/api/io/sniff', { method: 'POST' }).catch(() => null);
+  btn.disabled = false; setRadioBusy(false);
+  if (d && d.ok) st.innerHTML = `✅ Trame io captée (${d.len} octets) : <code>${esc(d.frame)}</code>`;
+  else st.innerHTML = '❌ Rien capté. io est expérimental (canal et alignement à affiner). Réessaie en faisant agir l\'appareil io tout près.';
+};
 if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {
   const btn = $('#diag-rx-btn'), st = $('#diag-rx-status');
   btn.disabled = true; setRadioBusy(true);
