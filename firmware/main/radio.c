@@ -9,6 +9,7 @@
 #include "io/io_radio.h"
 #include "io/io_send.h"
 #include "io/io_store.h"
+#include "io/io_pair.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -109,6 +110,23 @@ int radio_io_send(const uint8_t dst[3], uint8_t cmd) {
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
     int r = io_hc_send_1w(src, dst, key, rolling, cmd);
+    cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
+    cc1101_set_freq_khz(back);                 /* restaure la porteuse */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
+/* Appairage 2W io : passe la radio en FSK io, lance la decouverte + le transfert de cle (io_pair),
+ * puis RESTAURE l'OOK Profalux. Sous mutex, ecoute permanente en pause (l'appairage peut durer
+ * plusieurs secondes). Rend 0 et remplit out_dst si emis, -1 si rien trouve, -2 sur erreur. */
+int radio_io_pair(uint8_t out_dst[3], uint32_t timeout_ms) {
+    if (!s_mtx || !out_dst) return -2;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();                         /* FSK io */
+    int r = io_hc_pair(out_dst, timeout_ms);
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
     xSemaphoreGive(s_mtx);

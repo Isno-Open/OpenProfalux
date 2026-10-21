@@ -33,6 +33,7 @@ void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permane
 int  radio_set_freq_khz(uint32_t khz); /* frequence porteuse a chaud (sous mutex) ; 0=OK, -1=non prise */
 int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms); /* ecoute UNE trame io (FSK), restaure l'OOK apres */
 int  radio_io_send(const uint8_t dst[3], uint8_t cmd);           /* emet UNE commande io 1W vers dst, restaure l'OOK apres */
+int  radio_io_pair(uint8_t out_dst[3], uint32_t timeout_ms);     /* appairage 2W io (decouverte + transfert de cle), restaure l'OOK apres */
 int  radio_tx_selftest(void);          /* relance le self-test TX (sous mutex) ; 0=OK, -1=HS */
 int  radio_calibrate_start(void);      /* 0=lance, 1=deja en cours, -1=erreur */
 void radio_calibrate_status(int *state, uint8_t *testing, uint8_t *result); /* state:0 idle/1 run/2 ok/3 echec */

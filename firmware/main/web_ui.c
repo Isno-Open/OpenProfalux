@@ -1363,6 +1363,22 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* Appairage 2W io (experimental, #87) : decouvre un moteur mis en appairage et lui transfere la
+ * cle du reseau. Rend le node du moteur en cas de succes (a utiliser pour creer un volet io). */
+static esp_err_t h_io_pair(httpd_req_t *r) {
+    uint8_t dst[3];
+    int rc = radio_io_pair(dst, 12000);   /* jusqu'a 12 s de decouverte */
+    httpd_resp_set_type(r, "application/json");
+    if (rc != 0) {
+        char out[48];
+        snprintf(out, sizeof out, "{\"ok\":0,\"rc\":%d}", rc);
+        return httpd_resp_sendstr(r, out);
+    }
+    char out[64];
+    snprintf(out, sizeof out, "{\"ok\":1,\"node\":\"%02X%02X%02X\"}", dst[0], dst[1], dst[2]);
+    return httpd_resp_sendstr(r, out);
+}
+
 /* Portail captif : point d'acces actif (configuration ou secours), toute adresse inconnue
  * (dont les tests de connexion des telephones : generate_204, hotspot-detect.html, connecttest.txt)
  * est redirigee vers la page de configuration ; le telephone ouvre alors le portail tout seul.
@@ -1455,5 +1471,6 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/io/sniff", HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
+    reg(s, "/api/io/pair", HTTP_POST, h_io_pair);     /* io-homecontrol : appairage 2W (experimental, #87) */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

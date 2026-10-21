@@ -76,6 +76,7 @@ idf_component_register(
         "io/io_framer.c"
         "io/io_send.cpp"
         "io/io_store.c"
+        "io/io_pair.cpp"
     INCLUDE_DIRS "." "io" "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
