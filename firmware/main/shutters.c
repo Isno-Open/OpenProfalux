@@ -1,5 +1,5 @@
 /*
- * shutters.c — modele cover OpenProfalux (clone/replay + position time-based).
+ * shutters.c : modele cover OpenProfalux (clone/replay + position time-based).
  * Config persistee en NVS, un document JSON par volet (voir cfg_store.h). Le
  * dataset de trames et le ring RF vivent en SPIFFS (partition "storage").
  */
@@ -24,6 +24,7 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
+#include "somfy_tx.h"
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
 #include "ota.h"
@@ -544,13 +545,33 @@ static void emit_virt_profalux(volet_t *v, uint8_t button) {
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
 }
 
-/* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq est le seul
- * cable ; les autres (Somfy RTS - issue #73 - ou d'autres) s'ajouteront ici, sans toucher
- * au chemin Profalux. `button` est un code PFX_BTN_*, traduit par protocole le moment venu. */
+/* Volet VIRTUEL Somfy RTS : GENERE la trame (adresse + code roulant), puis l'emet a
+ * 433,42 MHz par le module somfy_tx, sans toucher au chemin Profalux. virt_serial sert
+ * d'adresse (24 bits) et virt_counter de code roulant : memes champs que la telecommande
+ * virtuelle Profalux, reinterpretes par protocole. Reserve-puis-emet comme Profalux : on
+ * persiste le PROCHAIN code AVANT d'emettre (au pire un code saute, jamais un rejeu). */
+static void emit_virt_somfy(volet_t *v, uint8_t button) {
+    uint16_t code = v->virt_counter;
+    somfy_rts_remote_t r = { .address = v->virt_serial & 0xFFFFFF, .rolling_code = code };
+    uint8_t frame[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_remote_next(&r, somfy_tx_cmd_from_button(button), frame);   /* trame + incrementation */
+    v->virt_counter = r.rolling_code;
+    save_cfg();
+    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
+    ESP_LOGW(TAG, "TX VIRT SOMFY addr=0x%06X btn=0x%X code=%u",
+             (unsigned)(v->virt_serial & 0xFFFFFF), button, (unsigned)code);
+}
+
+/* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
+ * (issue #73) sont cables ; chaque protocole porte sa propre radio, sans toucher aux
+ * autres. `button` est un code PFX_BTN_*, traduit par protocole. */
 static void emit_virt(volet_t *v, uint8_t button) {
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:
         emit_virt_profalux(v, button);
+        break;
+    case VOLET_PROTO_SOMFY_RTS:
+        emit_virt_somfy(v, button);
         break;
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
@@ -1182,7 +1203,7 @@ static void purge_ghost_remotes_once(void) {
     nvs_close(h);
 }
 
-/* ══ FONCTION 1 — Dataset slide (option MQTT "capture toutes les trames") ══
+/* ══ FONCTION 1 : Dataset slide (option MQTT "capture toutes les trames") ══
  * Publie un hop UNIQUEMENT s'il n'est pas deja dans le set enregistre de ce serial.
  * Sert a collecter les 65536 hops distincts pour l'attaque slide-MITM. Appele sous LOCK. */
 static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, int8_t rssi, uint32_t t) {
@@ -1206,7 +1227,7 @@ static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, in
      * Le dataset slide (hops distincts) reste construit ici en RAM/NVS pour l'export /api/frames. */
 }
 
-/* ══ FONCTION 2 — Suivi de position via telecommandes ENREGISTREES ══
+/* ══ FONCTION 2 : Suivi de position via telecommandes ENREGISTREES ══
  * Independante de l'option MQTT : des qu'un volet a appris ce serial+bouton, on suit
  * sa position quand la VRAIE telecommande l'actionne. Appele sous LOCK. */
 static void track_shutter_position(const char *shex, uint8_t button) {
