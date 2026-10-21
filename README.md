@@ -1,8 +1,5 @@
 # OpenProfalux
 
-> Matériel testé : voir [docs/COMPATIBILITE.md](docs/COMPATIBILITE.md).
-
-
 **Piloter ses volets roulants Profalux depuis Home Assistant avec un ESP32 à ~15 €, sans la clé constructeur.**
 
 Firmware ESP32 + CC1101 open-source pour les volets **Profalux 868 MHz** (moteurs MAI-EMPX /
@@ -20,18 +17,44 @@ chose la plus bête, celle que j'aurais dû essayer en premier :
 
 > **Le moteur accepte une trame rejouée.** Le compteur anti-rejeu n'est **pas** vérifié par le
 > récepteur : une trame capturée puis réémise fait bouger le volet, même après avoir utilisé la
-> vraie télécommande entre-temps. Donc **aucune clé n'est nécessaire.**
+> vraie télécommande entre-temps. Donc **aucune clé n'est nécessaire** pour piloter par rejeu.
 
 OpenProfalux **clone** donc une télécommande, sans crypto : on capture les trames ▲ / ■ / ▼
 d'une vraie télécommande, on les nomme, et on les rejoue à la demande depuis Home Assistant.
 C'est tout. La clé constructeur, explorée longuement (cf. `firmware-capture-test/` et `docs/`),
-s'est révélée inutile pour le pilotage.
+s'est révélée inutile pour piloter par rejeu.
+
+## Deux méthodes de pilotage
+
+- **Rejeu** : capturer une commande de la vraie télécommande, puis la réémettre. Aucune clé, et
+  ça fonctionne dès qu'une télécommande d'origine est à portée du boîtier.
+- **Enrôlement** : après avoir capté une fois la télécommande d'origine du volet, le boîtier crée
+  sa propre identité que le moteur apprend, puis génère lui-même ses trames à code tournant. Il n'a
+  plus besoin de rejouer les trames captées, et selon la génération du moteur c'est la méthode la
+  plus fiable.
+
+Le choix dépend du moteur : voir la compatibilité ci-dessous.
+
+## Compatibilité
+
+Matériel confirmé par des retours d'utilisateurs (conditions et détails dans
+[docs/COMPATIBILITE.md](docs/COMPATIBILITE.md)) :
+
+| Marque | Modèles | Méthode confirmée |
+|---|---|---|
+| Profalux | gamme PFX, NeoSol S300, moteur solaire MOT-PX3R10 | rejeu et/ou enrôlement selon la génération |
+| Eveno | Zuni-R | rejeu (profil radio Eveno, 868,33 MHz) |
+| FranciaFlex | M4G | enrôlement (le moteur limite le nombre de télécommandes) |
+
+La porteuse Profalux varie selon la génération (**868,350 à 868,425 MHz**). Pour un volet
+ancien ou une autre marque, un profil radio ou une fréquence personnalisée se règle dans l'UI
+(symptômes et marche à suivre dans [docs/COMPATIBILITE.md](docs/COMPATIBILITE.md)).
 
 ## Ce que fait le firmware (`firmware/`)
 
 - **Cover Home Assistant** par volet (MQTT discovery) : ouvrir / fermer / stop / position.
 - **UI web embarquée** : pilotage, apprentissage, calibration, moniteur RF, config.
-- **Apprentissage** : capture ▲/▼/■ d'une vraie télécommande, nommage du volet.
+- **Apprentissage** : capture ▲/▼/■ d'une vraie télécommande, ou enrôlement d'un volet.
 - **Position** estimée par le temps (calibration montée/descente, recalage aux butées).
 - **Suivi de la vraie télécommande** : ▲/▼ lance le moteur, ■ fige (modèle appui + stop).
 - **Multi-télécommandes** par volet.
@@ -49,11 +72,11 @@ s'est révélée inutile pour le pilotage.
 
 | Composant | Réf | Coût |
 |-----------|-----|------|
-| ESP32 (M5Stack ATOM Lite ou DevKit) | ESP32-WROOM / PICO | ~5-12 € |
-| Module CC1101 868 MHz | petit module vert 868 (pastilles au pas de 2 mm, pas le 2.54) | ~3 € |
-| Antenne 868 MHz | fil 8.6 cm quart d'onde, ou hélicoïdale SMA | ~2 € |
+| ESP32 (M5Stack ATOM Lite ou DevKit) | ESP32-WROOM / PICO | ~5 à 12 € |
+| Module CC1101 868 MHz | petit module vert 868 (pastilles au pas de 2 mm, pas le 2,54) | ~3 € |
+| Antenne 868 MHz | fil 8,6 cm quart d'onde, ou hélicoïdale SMA | ~2 € |
 
-Fréquence mesurée : **868.425 MHz** OOK (cf. `docs/`). **CC1101 = 3.3 V max, jamais 5 V.**
+**CC1101 = 3,3 V max, jamais 5 V.** Fréquence selon la génération du volet (voir Compatibilité).
 
 ## Cartes et construction
 
@@ -84,15 +107,20 @@ ne se tient pas à la main.
 
 | Dossier | Rôle |
 |---------|------|
-| `firmware/` | **Firmware produit** : cover HA, UI, clone/replay, OTA, sauvegarde |
+| `firmware/` | **Firmware produit** : cover HA, UI, clone/replay, enrôlement, OTA, sauvegarde |
+| `firmware/test/` | Bancs de test hôte (PC) : KeeLoq, confirmation RX, Somfy, persistance, OTA |
 | `firmware-capture-test/` | Firmware de **banc / reverse** : capture RF, tests KeeLoq, mesures |
-| `docs/` | Architecture, mesures RF, synthèses de la recherche |
+| `boards/` | Déclaration des cartes (`<carte>.json`), lue par le firmware |
+| `docs/` | Architecture, mesures RF, compatibilité, synthèses de la recherche |
+| `research/` | Notes et données brutes de la recherche |
 | `sim/` | Harness de vérification KeeLoq (cipher + codec) côté PC |
+| `tools/` | Scripts (génération des broches, vérifications CI) |
 
 ## Statut
 
 - ✅ Firmware produit **compile** (ESP-IDF v6.1, 1,14 Mo pour `isno-super`, 24 % libres au 2026-10-18, partitions OTA).
 - ✅ **Rejeu validé au banc** (le moteur suit une trame rejouée, y compris après la vraie télécommande).
+- ✅ **Enrôlement confirmé par des utilisateurs** (NeoSol S300, moteur solaire MOT-PX3R10, FranciaFlex M4G).
 - ⏳ À valider sur l'installation : calibration des temps de course, portée antenne, multi-volets.
 
 ## Extensions possibles
