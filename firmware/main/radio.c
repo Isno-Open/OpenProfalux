@@ -7,6 +7,8 @@
 #include "hardware_config.h"
 #include "rx_confirm.h"
 #include "io/io_radio.h"
+#include "io/io_send.h"
+#include "io/io_store.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -91,6 +93,27 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return n;
+}
+
+/* Emetteur io-homecontrol : passe la radio en FSK io, emet UNE commande 1W vers le node dst
+ * (source + cle reseau + compteur roulant lus dans io_store), puis RESTAURE l'OOK Profalux et
+ * la porteuse. Sous mutex, ecoute permanente en pause. Rend 0 si emis, -1 sinon (pas d'identite
+ * io enregistree, ou echec radio). */
+int radio_io_send(const uint8_t dst[3], uint8_t cmd) {
+    if (!s_mtx || !dst) return -1;
+    uint8_t src[3], key[16];
+    if (!io_store_get(src, key)) return -1;    /* la carte n'a pas encore rejoint de reseau io */
+    uint16_t rolling = io_store_next_rolling();
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();                         /* FSK io + canal CH2 */
+    int r = io_hc_send_1w(src, dst, key, rolling, cmd);
+    cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
+    cc1101_set_freq_khz(back);                 /* restaure la porteuse */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
 }
 
 /* Relance le self-test TX a la demande (bouton UI), sous mutex/pause pour ne pas
