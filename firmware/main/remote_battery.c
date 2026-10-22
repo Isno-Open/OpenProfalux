@@ -1,5 +1,5 @@
 /*
- * remote_battery.c — alerte pile faible des telecommandes (voir remote_battery.h). Pur.
+ * remote_battery.c : alerte pile faible des telecommandes (voir remote_battery.h). Pur.
  */
 #include "remote_battery.h"
 
