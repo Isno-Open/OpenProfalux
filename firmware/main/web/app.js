@@ -300,8 +300,8 @@ function renderVolets(list, rf) {
         ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
         : (v.virt
             ? 'identité : <code>' + esc(remoteName(v.virt_serial)) + '</code>'
-              + ((v.serials || []).length ? ' · télécommandes : ' + v.serials.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') : '')
-            : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') || 'aucun'))
+              + ((v.serials || []).length ? ' · télécommandes : ' + v.serials.map(s => `<code>${esc(remoteName(s))}</code>${battIcon(s)}`).join(' ') : '')
+            : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>${battIcon(s)}`).join(' ') || 'aucun'))
           + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')
           + (isZ ? `<br>suiveurs : ${esc(v.members)}` : (v.follows || []).length ? `<br>suit : ${esc(v.follows.join(', '))}` : '')}</div>`;
     /* En mode reorganisation, le pilotage est NEUTRALISE : un clic mal place ne
@@ -714,6 +714,15 @@ if ($('#ignored-box')) {
   };
 }
 const remoteName = s => (statusCache.remotes || {})[s] || s;
+/* Pile d'une telecommande (bit VLOW des trames) : rien tant qu'aucune trame complete n'a ete
+   vue depuis le demarrage du boitier. */
+function battIcon(s) {
+  const b = (statusCache.remote_battery || {})[s];
+  if (!b) return '';
+  return b.low
+    ? ' <span class="badge" style="color:var(--danger)" title="Bit « pile faible » vu sur plusieurs appuis d\'affilée">🪫 pile faible</span>'
+    : ' <span title="Pile OK (dernière trame reçue)">🔋</span>';
+}
 
 /* ── Calibration ── */
 let calT = {}, calStart = 0, calibLive = false;   /* calibLive : true pendant un chrono -> ne pas ecraser l'affichage */
