@@ -46,11 +46,29 @@ int main(void) {
     rx_confirm_push(&c, BASE "10", 66, 0);
     check(rx_confirm_push(&c, BASE "01", 66, 125000), "T2 VLOW et Repeat differents : confirmee");
 
-    /* T3 : hors fenetre -> c'est un nouvel appui, pas une confirmation. */
+    /* T3 : fenetre ADAPTATIVE. Reception dense = confirmation rapide (weak=false). Reception
+     * clairsemee = confirmation lente jusqu'a RXC_WINDOW_MAX_US (weak=true). Au-dela, nouvel appui. */
     rx_confirm_reset(&c);
     rx_confirm_push(&c, BASE "00", 66, 0);
-    check(!rx_confirm_push(&c, BASE "01", 66, RXC_WINDOW_US + 1), "T3 2e trame trop tardive : non confirmee");
-    check(rx_confirm_push(&c, BASE "01", 66, RXC_WINDOW_US + 125001), "T3 la suivante, dans la fenetre : confirmee");
+    check(rx_confirm_push(&c, BASE "01", 66, 125000), "T3 repeat rapide : confirmee");
+    check(!c.weak, "T3 repeat rapide : mode normal (weak faux)");
+
+    rx_confirm_reset(&c);
+    rx_confirm_push(&c, BASE "00", 66, 0);
+    check(rx_confirm_push(&c, BASE "01", 66, RXC_WINDOW_US + 1), "T3 repeat lent : confirmee (reception faible)");
+    check(c.weak, "T3 repeat lent : mode reception faible (weak vrai)");
+
+    rx_confirm_reset(&c);
+    rx_confirm_push(&c, BASE "00", 66, 0);
+    check(!rx_confirm_push(&c, BASE "01", 66, RXC_WINDOW_MAX_US + 1), "T3 au-dela du plafond : nouvel appui, non confirmee");
+
+    /* T3bis : la securite de #39 tient avec la fenetre longue. Une trame isolee, puis une trame
+     * DIFFERENTE une seconde plus tard, ne confirment jamais : pas de fantome, pas d'apprentissage
+     * corrompu. Il faut toujours DEUX trames identiques. */
+    rx_confirm_reset(&c);
+    check(!rx_confirm_push(&c, BASE "00", 66, 0), "T3bis trame isolee : non confirmee");
+    check(!rx_confirm_push(&c, flip(40), 66, 1000000), "T3bis trame differente 1 s apres : non confirmee");
+    check(!c.weak, "T3bis non confirmee : weak faux");
 
     /* T4 : trames coupees. Moins de 64 bits : ignoree. 64 bits : confirme, mais pas de
      * trame complete tant qu'aucune des deux n'a 66 bits. */
