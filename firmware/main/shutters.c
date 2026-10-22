@@ -6,6 +6,7 @@
 #include "shutters.h"
 #include "cfg_store.h"
 #include "cfg_model.h"
+#include "remote_battery.h"
 #include "pfx_enrol.h"
 #include <string.h>
 #include <strings.h>
@@ -628,6 +629,52 @@ static void zone_follow(volet_t *z, int dir) {
     }
 }
 /* Publie la config HA discovery d'un cover (retained). Appele sous LOCK. */
+/* ── Pile des telecommandes (bit VLOW) : un binary_sensor HA par telecommande NOMMEE ──
+ * ON = pile faible. Etat retenu sur openprofalux/remote/<serial>/battery, publie des qu'une
+ * trame complete a ete vue depuis le demarrage. Appele sous LOCK (publication differee). */
+static const char *remote_slug(const char *serial) {
+    return (serial[0] == '0' && (serial[1] == 'x' || serial[1] == 'X')) ? serial + 2 : serial;
+}
+static void publish_batt_state(remote_t *r) {
+    if (!s_mqtt_ready || !r->name[0] || !r->batt.known) return;
+    char topic[64];
+    snprintf(topic, sizeof(topic), "openprofalux/remote/%s/battery", remote_slug(r->serial));
+    pub_defer(topic, r->batt.low ? "ON" : "OFF", 0, 1);
+}
+static void announce_batt(remote_t *r) {
+    if (!s_mqtt_ready) return;
+    const char *sl = remote_slug(r->serial);
+    char topic[96], uid[48], st[64];
+    snprintf(topic, sizeof(topic), "homeassistant/binary_sensor/openprofalux_remote_%s_battery/config", sl);
+    if (!r->name[0]) { pub_defer(topic, "", 1, 1); return; }   /* sans nom : pas d'entite (retire l'ancienne) */
+    snprintf(uid, sizeof(uid), "openprofalux_remote_%s_battery", sl);
+    snprintf(st, sizeof(st), "openprofalux/remote/%s/battery", sl);
+    char name[SH_ID_LEN + 8]; snprintf(name, sizeof(name), "Pile %s", r->name);
+    char avail[64]; snprintf(avail, sizeof(avail), "openprofalux/%s/status", s_device);
+    const char *devname = (!s_device[0] || !strcmp(s_device, "openprofalux")) ? "OpenProfalux" : s_device;
+    cJSON *o = cJSON_CreateObject();   /* cJSON : un nom avec guillemets ne casse pas le JSON */
+    cJSON_AddStringToObject(o, "name", name);
+    cJSON_AddStringToObject(o, "unique_id", uid);
+    cJSON_AddStringToObject(o, "object_id", uid);
+    cJSON_AddStringToObject(o, "device_class", "battery");
+    cJSON_AddStringToObject(o, "entity_category", "diagnostic");
+    cJSON_AddStringToObject(o, "state_topic", st);
+    cJSON_AddStringToObject(o, "payload_on", "ON");
+    cJSON_AddStringToObject(o, "payload_off", "OFF");
+    cJSON_AddStringToObject(o, "availability_topic", avail);
+    cJSON_AddStringToObject(o, "payload_available", "online");
+    cJSON_AddStringToObject(o, "payload_not_available", "offline");
+    cJSON *dv = cJSON_AddObjectToObject(o, "device");
+    cJSON *ids = cJSON_AddArrayToObject(dv, "identifiers"); cJSON_AddItemToArray(ids, cJSON_CreateString("openprofalux"));
+    cJSON_AddStringToObject(dv, "name", devname);
+    cJSON_AddStringToObject(dv, "manufacturer", "isno.fr");
+    cJSON_AddStringToObject(dv, "model", "OpenProfalux");
+    char *pl = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (pl) { pub_defer(topic, pl, 1, 1); free(pl); }
+    publish_batt_state(r);
+}
+
 static void announce_one(volet_t *v) {
     if (!s_mqtt_ready) return;
     char topic[160], *pl = malloc(1536);
@@ -1097,8 +1144,9 @@ int shutters_remote_name(const char *serial, const char *name) {
     if (!serial || !*serial) return -1;
     LOCK();
     remote_t *rm = remote_add(serial);
-    if (rm) { strlcpy(rm->name, name, SH_ID_LEN); save_cfg(); }
+    if (rm) { strlcpy(rm->name, name, SH_ID_LEN); save_cfg(); announce_batt(rm); }   /* nommee : capteur pile annonce ; nom vide : entite retiree */
     UNLOCK();
+    pub_flush();
     return rm ? 0 : -1;   /* -1 : liste pleine */
 }
 
@@ -1243,7 +1291,8 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
     bool do_pub = false; int pub_slot = -1; char pub_lf[128];   /* publie APRES UNLOCK (anti-deadlock) */
     LOCK();
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);
-    (void)bits;   /* plus stocke : les 66 bits sont reconstruits a la demande (rejeu/adoption) */
+    /* Les 66 bits ne sont pas stockes (reconstruits a la demande pour le rejeu/adoption) ; seul
+     * le bit 64 (VLOW, pile faible) est exploite, une fois par appui, ci-dessous. */
     /* DEDUP : meme (serial, hop) deja vu -> repetition d'un meme appui, on n'ajoute rien (ni ring ni MQTT). */
     if (!ring_contains(shex, hop)) {
         int slot = s_rfhead;   /* emplacement -> topic MQTT recuperable frames/log/<slot> */
@@ -1256,6 +1305,18 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
         s_ring_dirty = true;
         /* auto-enregistre le serial vu (nom vide) */
         if (!ignored(shex)) remote_add(shex);   /* trame confirmee (radio.c) ; liste pleine -> signale a l'UI ; ignoree -> rien */
+        /* Pile : une fois par appui (nouveau hop), sur trame COMPLETE uniquement (bit 64 = VLOW). */
+        if (bits && strlen(bits) >= 66) {
+            for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) {
+                remote_t *rm = &s_remotes[i];
+                rm->batt_t = t;
+                if (batt_on_press(&rm->batt, bits[64] == '1')) {
+                    if (rm->batt.low) ESP_LOGW(TAG, "pile FAIBLE : telecommande %s (%s)", shex, rm->name);
+                    publish_batt_state(rm);   /* differe, publie apres UNLOCK */
+                }
+                break;
+            }
+        }
         if (s_log_frames && s_mqtt_ready) {
             dataset_log_frame(shex, button, hop, rssi, t);  /* dataset slide (dedup par hop, bouton+t) */
             /* On PREPARE le payload ici, mais on PUBLIE hors du LOCK (voir plus bas). */
@@ -1266,6 +1327,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
     }
     track_shutter_position(shex, button);   /* toujours (idempotent sur les repetitions) */
     UNLOCK();
+    pub_flush();   /* etat pile eventuel (empile sous LOCK) */
     /* DEADLOCK FIX : ne JAMAIS publier en MQTT sous le LOCK. Un publish QoS1 retained peut
      * bloquer (outbox pleine pendant une rafale d'apprentissage) ; or l'ESP est abonne a
      * frames/log/# et recoit ses propres publications -> la tache MQTT reprend ce meme LOCK
@@ -1301,6 +1363,13 @@ char *shutters_status_json(void) {
     cJSON_AddStringToObject(root, "remote_refused", s_remote_refused);   /* "" = aucune refusee */
     cJSON *ign = cJSON_AddArrayToObject(root, "remotes_ignored");
     for (int i = 0; i < s_nignored; i++) cJSON_AddItemToArray(ign, cJSON_CreateString(s_ignored[i]));
+    cJSON *rb = cJSON_AddObjectToObject(root, "remote_battery");   /* pile : telecommandes vues depuis le boot */
+    for (int i = 0; i < s_nremotes; i++) {
+        if (!s_remotes[i].batt.known) continue;
+        cJSON *b = cJSON_AddObjectToObject(rb, s_remotes[i].serial);
+        cJSON_AddBoolToObject(b, "low", s_remotes[i].batt.low);
+        cJSON_AddNumberToObject(b, "t", s_remotes[i].batt_t);
+    }
     cJSON *vols = cJSON_AddArrayToObject(root, "volets");
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
@@ -1482,6 +1551,7 @@ void shutters_mqtt_announce(const char *device) {
     for (int i = 0; i < s_nvolets; i++) announce_one(&s_volets[i]);
     announce_extras();           /* switch "Ecoute RF permanente" + capteur "Derniere trame" */
     announce_update();           /* entite update HA (firmware) */
+    for (int i = 0; i < s_nremotes; i++) if (s_remotes[i].name[0]) announce_batt(&s_remotes[i]);   /* pile des telecommandes nommees */
     UNLOCK();
     pub_flush();                 /* publie la decouverte HORS LOCK (anti-deadlock a la connexion) */
     /* NB : plus de flush en masse du ring ici. Les frames/log/<slot> sont QoS1 RETAINED
