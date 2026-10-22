@@ -110,6 +110,13 @@ constexpr uint8_t CMD_DISCOVER_CONTROLLER = 0x2B;
 // Key Exchange Commands (0x30-0x39)
 constexpr uint8_t CMD_KEY_TRANSFER_1W = 0x30;
 constexpr uint8_t CMD_KEY_TRANSFER_2W = 0x31;
+constexpr uint8_t CMD_ANNOUNCE_1W     = 0x39;   // annonce d'appairage 1W (samr037 tx_runner.c)
+
+// Marqueur fabricant dans la trame d'appairage 0x30 (different de l'octet bouton) :
+// samr037 observe 0x02 pour Somfy, 0x01 pour Velux (frame_build.h).
+constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x02;
+constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
+constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01
 
 // Authentication Commands (0x3C-0x3D)
 constexpr uint8_t CMD_CHALLENGE_REQUEST = 0x3C;
@@ -187,5 +194,9 @@ enum class DeviceType : uint8_t {
 // ============================================================================
 
 constexpr uint8_t BROADCAST_ADDRESS[NODE_ID_SIZE] = {0x00, 0x00, 0x00};
+
+// Adresse de diffusion Somfy en 1W : une telecommande emet vers 00 00 3F, le moteur
+// filtre par la source qu'il a appairee (samr037 tx_runner.c BROADCAST_DST).
+constexpr uint8_t SOMFY_BROADCAST_ADDR[NODE_ID_SIZE] = {0x00, 0x00, 0x3F};
 
 } // namespace iohome

@@ -1195,17 +1195,30 @@ if ($('#io-sniff-btn')) $('#io-sniff-btn').onclick = async () => {
   if (d && d.ok) st.innerHTML = `✅ Trame io captée (${d.len} octets) : <code>${esc(d.frame)}</code>`;
   else st.innerHTML = '❌ Rien capté. io est expérimental (canal et alignement à affiner). Réessaie en faisant agir l\'appareil io tout près.';
 };
+if ($('#io-pair1w-btn')) $('#io-pair1w-btn').onclick = async () => {
+  const btn = $('#io-pair1w-btn'), st = $('#io-pair-status');
+  btn.disabled = true; setRadioBusy(true);
+  st.className = 'hint'; st.textContent = '🔗 Appairage 1W : mets ton moteur io en mode appairage (PROG) maintenant...';
+  const d = await api('/api/io/pair/1w', { method: 'POST' }).catch(() => null);
+  btn.disabled = false; setRadioBusy(false);
+  if (d && d.ok) {
+    st.innerHTML = `✅ Volet io créé : <code>${esc(d.id)}</code> (source ${esc(d.src)}). Il apparaît dans la liste, pilotable Haut/Stop/Bas. Teste le moteur ; si rien ne bouge, recommence (io est expérimental).`;
+    if (typeof loadStatus === 'function') loadStatus();
+  } else {
+    st.innerHTML = '❌ Appairage 1W non confirmé. io est expérimental. Mets le moteur en PROG, tout près, et réessaie.';
+  }
+};
 if ($('#io-pair-btn')) $('#io-pair-btn').onclick = async () => {
   const btn = $('#io-pair-btn'), st = $('#io-pair-status');
   btn.disabled = true; setRadioBusy(true);
-  st.className = 'hint'; st.textContent = '🔗 Appairage io ~12 s : mets ton moteur io en mode appairage maintenant...';
+  st.className = 'hint'; st.textContent = '🔗 Appairage 2W ~12 s : mets ton moteur io en mode appairage maintenant...';
   const d = await api('/api/io/pair', { method: 'POST' }).catch(() => null);
   btn.disabled = false; setRadioBusy(false);
   if (d && d.ok) {
     st.innerHTML = `✅ Volet io créé : <code>${esc(d.id)}</code> (node ${esc(d.node)}). Il apparaît dans la liste, pilotable Haut/Stop/Bas.`;
     if (typeof loadStatus === 'function') loadStatus();
   } else {
-    st.innerHTML = '❌ Aucun appareil io trouvé. io est expérimental. Mets le moteur en appairage, tout près, et réessaie.';
+    st.innerHTML = '❌ 2W non confirmé (réception + saut de fréquence à finir). Préfère le 1W pour l’instant.';
   }
 };
 if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {

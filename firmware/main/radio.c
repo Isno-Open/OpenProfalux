@@ -96,20 +96,37 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
     return n;
 }
 
-/* Emetteur io-homecontrol : passe la radio en FSK io, emet UNE commande 1W vers le node dst
- * (source + cle reseau + compteur roulant lus dans io_store), puis RESTAURE l'OOK Profalux et
- * la porteuse. Sous mutex, ecoute permanente en pause. Rend 0 si emis, -1 sinon (pas d'identite
- * io enregistree, ou echec radio). */
-int radio_io_send(const uint8_t dst[3], uint8_t button) {
-    if (!s_mtx || !dst) return -1;
-    uint8_t src[3], key[16];
-    if (!io_store_get(src, key)) return -1;    /* la carte n'a pas encore rejoint de reseau io */
-    uint16_t rolling = io_store_next_rolling();
+/* Emetteur io-homecontrol : passe la radio en FSK io, emet UN appui bouton 1W depuis la source
+ * src du volet (sa cle + son compteur roulant lus dans io_store), diffuse vers le broadcast
+ * Somfy, puis RESTAURE l'OOK Profalux et la porteuse. Sous mutex, ecoute permanente en pause.
+ * Rend 0 si emis, -1 sinon (source inconnue dans io_store, ou echec radio). */
+int radio_io_send(const uint8_t src[3], uint8_t button) {
+    if (!s_mtx || !src) return -1;
+    uint8_t key[16];
+    if (!io_store_get_key(src, key)) return -1;    /* ce volet n'a pas d'identite io appairee */
+    uint16_t rolling = io_store_next_rolling(src);
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
-    int r = io_hc_send_shutter_1w(src, dst, key, rolling, button);
+    int r = io_hc_send_shutter_1w(src, key, rolling, button);
+    cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
+    cc1101_set_freq_khz(back);                 /* restaure la porteuse */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
+/* Appairage 1W io (poussee de cle vers un moteur en mode PROG) : passe la radio en FSK io,
+ * lance io_hc_pair_1w, puis RESTAURE l'OOK Profalux. Sous mutex, ecoute en pause. Rend 0 et
+ * remplit out_src (identite d'emetteur creee pour ce volet) si emis, -2 sur erreur. */
+int radio_io_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
+    if (!s_mtx || !out_src) return -2;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();                         /* FSK io */
+    int r = io_hc_pair_1w(out_src, timeout_ms);
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
     xSemaphoreGive(s_mtx);

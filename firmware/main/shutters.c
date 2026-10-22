@@ -767,10 +767,10 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         UNLOCK(); return -1;
     }
     if (v->proto == VOLET_PROTO_IO) {   /* io-homecontrol : emission directe (pas de rejeu de trame) */
-        const uint8_t dst[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
+        const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
         int btn = io_button_for_action(cmd);
         if (btn < 0) { UNLOCK(); return -1; }
-        int rc = radio_io_send(dst, (uint8_t)btn);
+        int rc = radio_io_send(src, (uint8_t)btn);   /* diffuse depuis la source du volet */
         if      (!strcmp(cmd, "up"))   { v->target = 0;   v->position = 0; }
         else if (!strcmp(cmd, "down")) { v->target = 100; v->position = 100; }
         v->dir = 0;
@@ -914,20 +914,20 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     return 0;
 }
 
-int shutters_create_io_volet(const char *id, uint32_t node) {
+int shutters_create_io_volet(const char *id, uint32_t src) {
     if (!id || !*id) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
     v->virt = true;
     v->proto = VOLET_PROTO_IO;
-    v->virt_serial = node & 0xFFFFFF;   /* node (3 o) du moteur io dans les 24 bits bas */
-    v->virt_counter = 0;                /* io : compteur roulant commun a la carte (io_store), pas par volet */
+    v->virt_serial = src & 0xFFFFFF;    /* source (3 o) de CE volet, identite propre dans io_store */
+    v->virt_counter = 0;                /* io 1W : compteur roulant par source, tenu dans io_store */
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "volet io '%s' cree : node 0x%06X", id, (unsigned)(node & 0xFFFFFF));
+    ESP_LOGW(TAG, "volet io '%s' cree : source 0x%06X", id, (unsigned)(src & 0xFFFFFF));
     return 0;
 }
 

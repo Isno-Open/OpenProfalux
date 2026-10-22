@@ -1363,8 +1363,30 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* Appairage 1W io (#87) : la carte se presente comme une nouvelle telecommande et pousse sa cle
+ * vers un moteur mis en mode PROG. Cree un volet io avec sa propre source, pilotable aussitot.
+ * Mettre le moteur en appairage AVANT d'appeler (bouton PROG). */
+static esp_err_t h_io_pair_1w(httpd_req_t *r) {
+    uint8_t src[3];
+    int rc = radio_io_pair_1w(src, 0);
+    httpd_resp_set_type(r, "application/json");
+    if (rc != 0) {
+        char out[48];
+        snprintf(out, sizeof out, "{\"ok\":0,\"rc\":%d}", rc);
+        return httpd_resp_sendstr(r, out);
+    }
+    char id[16];
+    snprintf(id, sizeof id, "io-%02X%02X%02X", src[0], src[1], src[2]);
+    uint32_t s = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
+    shutters_create_io_volet(id, s);   /* le volet io rejoint la liste, pilotable comme les autres */
+    char out[80];
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"src\":\"%02X%02X%02X\"}", id, src[0], src[1], src[2]);
+    return httpd_resp_sendstr(r, out);
+}
+
 /* Appairage 2W io (experimental, #87) : decouvre un moteur mis en appairage et lui transfere la
- * cle du reseau. Rend le node du moteur en cas de succes (a utiliser pour creer un volet io). */
+ * cle du reseau. Rend le node du moteur en cas de succes (a utiliser pour creer un volet io).
+ * Encore incomplet (reception + saut de frequence a finir), a valider au banc. */
 static esp_err_t h_io_pair(httpd_req_t *r) {
     uint8_t dst[3];
     int rc = radio_io_pair(dst, 12000);   /* jusqu'a 12 s de decouverte */
@@ -1475,6 +1497,7 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/io/sniff", HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
+    reg(s, "/api/io/pair/1w", HTTP_POST, h_io_pair_1w); /* io-homecontrol : appairage 1W, telecommande (#87) */
     reg(s, "/api/io/pair", HTTP_POST, h_io_pair);     /* io-homecontrol : appairage 2W (experimental, #87) */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

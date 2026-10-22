@@ -1,19 +1,23 @@
 #pragma once
-/* Appairage 2W io-homecontrol. La carte, en controleur, decouvre un moteur mis en appairage
- * puis lui transfere la cle du reseau (generee ou reutilisee, memorisee dans io_store). Protocole
- * repris de iown-home (classes mode2w). La radio doit deja etre en config io (l'appelant orchestre
- * via radio.c).
- *
- * EXPERIMENTAL : la sequence vive (saut de canal, aller-retour defi-reponse, acquittement du
- * moteur) reste a valider au banc avec un vrai appareil io ; l'emission est prouvee, pas le
- * dialogue complet. Rend 0 et remplit out_dst (node du moteur, 3 o) si le transfert est emis, -1
- * si aucun appareil n'est trouve avant le delai, -2 sur erreur. */
+/* Appairage io-homecontrol. La radio doit deja etre en config io (l'appelant orchestre via
+ * radio.c). Deux modes, voir io_pair.cpp. */
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers un
+ * moteur mis en mode PROG (bouton physique). CC1101 seul, ni reception ni saut de frequence.
+ * Cree une identite d'emetteur neuve pour ce volet, la memorise, et la rend dans out_src (3 o).
+ * Rend 0 si emis, -2 sur erreur. A valider au banc sur un vrai moteur io. */
+int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms);
+
+/* Appairage 2W : la carte, en controleur, decouvre un moteur en appairage puis lui transfere la
+ * cle du reseau (protocole mode2w de iown-home).
+ * EXPERIMENTAL : la sequence vive (saut de canal, aller-retour defi-reponse, acquittement du
+ * moteur) reste a valider au banc ; l'emission est prouvee, pas le dialogue complet. Rend 0 et
+ * remplit out_dst (node du moteur, 3 o) si le transfert est emis, -1 si rien trouve, -2 sur erreur. */
 int io_hc_pair(uint8_t out_dst[3], uint32_t timeout_ms);
 
 #ifdef __cplusplus

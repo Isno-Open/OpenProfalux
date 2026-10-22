@@ -1,7 +1,11 @@
-/* io_pair : voir io_pair.h. Orchestration d'appairage 2W, d'apres iown-home (classes mode2w). */
+/* io_pair : voir io_pair.h. Orchestration de l'appairage io, d'apres iown-home (classes
+ * mode2w) et la capture 1W de samr037/iohc-flipper. Deux modes :
+ *  - 1W (io_hc_pair_1w) : on POUSSE notre cle vers un moteur en mode PROG. CC1101 seul.
+ *  - 2W (io_hc_pair) : decouverte + transfert de cle 2W. Reception + saut de frequence (a finir). */
 #include "io_pair.h"
 #include <cstring>
 #include "iohome_2w.h"
+#include "iohome_crypto.h"
 #include "iohome_frame.h"
 #include "iohome_constants.h"
 #include "io_radio.h"
@@ -28,17 +32,84 @@ static bool tx_frame(const IoFrame *f) {
     return io_radio_tx_packet(fifo, m) == 0;
 }
 
+/* Emet des octets io deja assembles a la main (trame 0x30 sans HMAC) : encapsule -> FIFO. */
+static bool tx_raw(const uint8_t *io_bytes, uint8_t n) {
+    uint8_t fifo[64];
+    size_t m = io_frame_to_fifo(io_bytes, n, fifo, sizeof fifo);
+    if (m == 0 || m > 60) return false;
+    return io_radio_tx_packet(fifo, m) == 0;
+}
+
+/* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers
+ * un moteur mis en mode PROG. Sequence calquee sur samr037/iohc-flipper (tx_runner.c) :
+ *  1) annonce 0x39 (1W signee) x4,
+ *  2) transfert de cle 0x30 (cle enveloppee, SANS HMAC, l'appairage est garde par le bouton
+ *     du moteur) x6.
+ * Aucune reception ni saut de frequence : un seul CC1101 suffit. Cree une identite d'emetteur
+ * neuve (propre a CE volet), la memorise et la rend dans out_src. Rend 0 si emis, -2 sur erreur. */
+extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
+    (void)timeout_ms;
+    if (!out_src) return -2;
+
+    uint8_t src[NODE_ID_SIZE], key[AES_KEY_SIZE];
+    esp_fill_random(src, sizeof src);
+    esp_fill_random(key, sizeof key);
+
+    io_radio_set_channel(IO_CH2);   /* canal 1W primaire (868,95 MHz) */
+
+    /* 1) Annonce 0x39, 1W signee avec notre cle. */
+    for (int i = 0; i < 4; i++) {
+        IoFrame ann;
+        init_frame(&ann, true);
+        set_source(&ann, src);
+        set_destination(&ann, SOMFY_BROADCAST_ADDR);
+        uint8_t data = 0x00;
+        if (set_command(&ann, CMD_ANNOUNCE_1W, &data, 1) && finalize_frame(&ann, key, nullptr))
+            tx_frame(&ann);
+        esp_rom_delay_us(14000);
+    }
+
+    /* 2) Transfert de cle 0x30, assemble a la main (notre IoFrame ajoute toujours un HMAC,
+     *    absent de cette trame). Disposition samr037 : ctrlb1 ctrlb2 dst src 0x30 cle[16]
+     *    man_id data seq[2] crc[2], soit msg_len = 28 et total = 31 octets. */
+    uint8_t enc[AES_KEY_SIZE];
+    if (!crypto::encrypt_1w_key(key, src, enc)) return -2;
+
+    for (int i = 0; i < 6; i++) {
+        uint8_t f[FRAME_MAX_SIZE];
+        const uint8_t msg_len = 28;   /* du ctrl byte 1 jusqu'au dernier octet avant le CRC */
+        f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | 0x80 | 0x40 | CTRL0_PROTOCOL_MASK);  /* end+start+1W */
+        f[1] = 0x00;                                      /* ctrl byte 1 */
+        memcpy(&f[2], SOMFY_BROADCAST_ADDR, NODE_ID_SIZE);
+        memcpy(&f[5], src, NODE_ID_SIZE);
+        f[8] = CMD_KEY_TRANSFER_1W;                       /* 0x30 */
+        memcpy(&f[9], enc, AES_KEY_SIZE);                 /* cle enveloppee (16 o) */
+        f[25] = MANUFACTURER_SOMFY_PAIR;                  /* 0x02 */
+        f[26] = PAIR_STATUS_BYTE;                         /* 0x01 */
+        uint16_t seq = (uint16_t)(esp_random() & 0xFFFF);
+        f[27] = (uint8_t)(seq >> 8);
+        f[28] = (uint8_t)(seq & 0xFF);
+        uint16_t crc = crypto::compute_crc16(f, 1 + msg_len);   /* CRC-16/KERMIT sur ctrlb1..data */
+        f[29] = (uint8_t)(crc & 0xFF);                    /* LSB d'abord */
+        f[30] = (uint8_t)(crc >> 8);
+        tx_raw(f, 31);
+        esp_rom_delay_us(20000);
+    }
+
+    io_store_set(src, key);
+    memcpy(out_src, src, NODE_ID_SIZE);
+    ESP_LOGW(TAG, "appairage 1W : cle poussee, identite emetteur %02X%02X%02X memorisee",
+             src[0], src[1], src[2]);
+    return 0;
+}
+
 extern "C" int io_hc_pair(uint8_t out_dst[3], uint32_t timeout_ms) {
     if (!out_dst) return -2;
 
-    /* Identite de controleur : on REUTILISE la cle du reseau si la carte en a deja une (on ajoute
-     * l'appareil au meme reseau), sinon on genere une source et une cle neuves. */
+    /* Identite de controleur neuve pour cet appairage 2W. */
     uint8_t src[NODE_ID_SIZE], key[AES_KEY_SIZE];
-    if (!io_store_get(src, key)) {
-        esp_fill_random(src, sizeof src);
-        esp_fill_random(key, sizeof key);
-        ESP_LOGW(TAG, "nouvelle identite io (aucun reseau existant)");
-    }
+    esp_fill_random(src, sizeof src);
+    esp_fill_random(key, sizeof key);
 
     mode2w::DiscoveryManager disc;
     disc.begin(src);

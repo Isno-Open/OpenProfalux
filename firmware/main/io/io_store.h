@@ -1,9 +1,9 @@
 #pragma once
-/* Identite io-homecontrol de CETTE carte, vue comme un controleur du reseau io.
- * Partagee par tous les volets io : un node source (3 o), la cle AES du reseau (16 o,
- * obtenue a l'appairage 2W), et un compteur roulant commun a la source. Persistee en NVS
- * (namespace dedie, comme l'enrolement Profalux). Le node du MOTEUR (destination) vit, lui,
- * dans virt_serial du volet (24 bits). */
+/* Identites io-homecontrol de CETTE carte, UNE PAR VOLET io (comme les canaux d'une
+ * telecommande multi). Chaque identite = un node source (3 o) + une cle AES (16 o) + un
+ * compteur roulant propre. En 1W, le volet diffuse vers le broadcast et c'est la source
+ * qui l'identifie aupres du moteur ; la source du volet est rangee dans virt_serial (24 bits).
+ * Persiste en NVS (namespace "iohc"), une entree cle/compteur par source. */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -11,14 +11,12 @@
 extern "C" {
 #endif
 
-/* Rend true et remplit src/key si une identite io est enregistree. */
-bool io_store_get(uint8_t src[3], uint8_t key[16]);
-/* true si la carte a deja rejoint un reseau io (une cle est posee). */
-bool io_store_has(void);
-/* Enregistre l'identite io (source + cle reseau). Initialise le compteur roulant si absent. */
+/* Rend true et remplit key si une cle est enregistree pour cette source. */
+bool io_store_get_key(const uint8_t src[3], uint8_t key[16]);
+/* Enregistre (ou remplace) la cle de cette source et initialise son compteur roulant. */
 void io_store_set(const uint8_t src[3], const uint8_t key[16]);
-/* Rend le compteur roulant courant puis l'incremente et le persiste (anti-rejeu). */
-uint16_t io_store_next_rolling(void);
+/* Rend le compteur roulant courant de cette source puis l'incremente et le persiste. */
+uint16_t io_store_next_rolling(const uint8_t src[3]);
 
 #ifdef __cplusplus
 }

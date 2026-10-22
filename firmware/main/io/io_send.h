@@ -8,11 +8,11 @@
 extern "C" {
 #endif
 
-/* Emet un appui bouton de volet Somfy io en 1W : source et destination (3 octets chacun),
- * cle AES du reseau (16 o, obtenue a l'appairage), code roulant, et code bouton (sens :
- * voir iohome_constants.h : BTN_UP/BTN_DOWN/BTN_STOP). Construit la trame commande 0x00 +
- * charge utile Somfy courte. Rend 0 si emis, -1 sinon. */
-int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t dst[3],
+/* Emet un appui bouton de volet Somfy io en 1W : source du volet (3 o), cle AES de cette
+ * source (16 o), code roulant, et code bouton (sens : voir iohome_constants.h :
+ * BTN_UP/BTN_DOWN/BTN_STOP). Diffuse vers le broadcast Somfy (le moteur filtre par la
+ * source). Construit la trame commande 0x00 + charge utile courte. Rend 0 si emis, -1 sinon. */
+int io_hc_send_shutter_1w(const uint8_t src[3],
                           const uint8_t key[16], uint16_t rolling, uint8_t button);
 
 /* Traduit une action de volet ("up" | "down" | "stop") en code bouton io (BTN_*, declare
