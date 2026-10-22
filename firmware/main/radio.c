@@ -77,6 +77,8 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
         if (!ok[0]) continue;                      /* confirmee mais coupee : on attend la suivante */
         strlcpy(buf, ok, (size_t)max);
         r = (int)strlen(buf);
+        ESP_LOGW(TAG, "ecoute dediee : trame confirmee (%s)",
+                 c.weak ? "reception faible, repetition lente" : "repetition normale");
         break;
     }
     /* Pas de paire confirmee dans la fenetre, mais une trame complete est passee : on l'accepte.
@@ -238,6 +240,7 @@ static void rx_task(void *arg) {
          * attend la 2e (~125 ms). Les suivantes de la rafale passent toutes (le suivi de
          * position et le journal RF dedupliquent). */
         if (n >= 64 && rx_confirm_push(&c, bits, n, esp_timer_get_time()) && s_cb) {
+            if (c.weak) ESP_LOGW(TAG, "trame confirmee en reception faible (repetition lente)");
             uint32_t serial = lsb(bits, 32, 28);
             uint32_t hop    = lsb(bits, 0, 32);
             uint8_t  button = (uint8_t)lsb(bits, 60, 4);
