@@ -246,14 +246,35 @@ void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len) {
     for (size_t i = 0; i < len; i++) buf[i] = rx[i + 1];
 }
 
-/* Reapplique la config OOK/Profalux (table s_regs) sans SRES ni re-init SPI. Sert a RESTAURER
- * la radio apres un passage en FSK (io-homecontrol), qui reecrit la modulation ; le retune RTS,
- * lui, ne touche que la frequence (il reste en OOK) et n'en a pas besoin. L'appelant restaure
- * ensuite la porteuse (cc1101_set_freq_khz). A appeler sous le mutex radio. */
+/* Ecrit le PATABLE OOK (burst, verifie) : index0 = 0x00 (eteint), index1 = 0xC0 (puissance).
+ * En OOK le PA bascule entre ces deux niveaux (FREND0 = PA_POWER = 1). Partage par l'init et par
+ * la restauration apres io, pour que ce reglage n'ait qu'une seule definition. */
+static void write_patable_ook(void) {
+    for (int i = 0; ; i++) {   /* ecriture verifiee (relue en burst), voir cc1101_write_reg */
+        uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
+        cs_low(); spi_xfer(tx, rx, 3); cs_high();
+        uint8_t tr[3] = { CC_PATABLE | 0xC0, 0, 0 }, rr[3];
+        cs_low(); spi_xfer(tr, rr, 3); cs_high();
+        if (rr[1] == 0x00 && rr[2] == 0xC0) break;
+        if (i == 5) {
+            s_spi_fails++;
+            ESP_LOGE(TAG, "PATABLE non pris (lu %02X,%02X) : puissance d'emission fausse", rr[1], rr[2]);
+            break;
+        }
+        s_spi_retries++;
+        esp_rom_delay_us(1000);
+    }
+}
+
+/* Reapplique la config OOK/Profalux (table s_regs + PATABLE OOK) sans SRES ni re-init SPI. Sert a
+ * RESTAURER la radio apres un passage en FSK (io-homecontrol), qui reecrit la modulation ET le
+ * PATABLE ; le retune RTS, lui, ne touche que la frequence (il reste en OOK) et n'en a pas besoin.
+ * L'appelant restaure ensuite la porteuse (cc1101_set_freq_khz). A appeler sous le mutex radio. */
 void cc1101_apply_config_ook(void) {
     strobe(CC_SIDLE);
     for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++)
         cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
+    write_patable_ook();   /* io_radio_config a ecrase PATABLE[0] : le remettre a 0x00/0xC0 */
 }
 
 int cc1101_init(void) {
@@ -288,20 +309,7 @@ int cc1101_init(void) {
         cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
     }
     /* PATABLE (burst) pour OOK : index0=eteint (bit 0), index1=puissance (bit 1). */
-    for (int i = 0; ; i++) {   /* ecriture verifiee (relue en burst), voir cc1101_write_reg */
-        uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
-        cs_low(); spi_xfer(tx, rx, 3); cs_high();
-        uint8_t tr[3] = { CC_PATABLE | 0xC0, 0, 0 }, rr[3];
-        cs_low(); spi_xfer(tr, rr, 3); cs_high();
-        if (rr[1] == 0x00 && rr[2] == 0xC0) break;
-        if (i == 5) {
-            s_spi_fails++;
-            ESP_LOGE(TAG, "PATABLE non pris (lu %02X,%02X) : puissance d'emission fausse", rr[1], rr[2]);
-            break;
-        }
-        s_spi_retries++;
-        esp_rom_delay_us(1000);
-    }
+    write_patable_ook();
     uint8_t partnum = cc1101_read_reg(CC_PARTNUM | 0x40);
     uint8_t version = cc1101_read_reg(0x31 | 0x40);   /* VERSION : ~0x04/0x14 sur un vrai CC1101 */
     uint8_t marc    = cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F;
