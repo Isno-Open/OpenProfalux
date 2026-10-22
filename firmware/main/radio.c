@@ -100,7 +100,7 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
  * (source + cle reseau + compteur roulant lus dans io_store), puis RESTAURE l'OOK Profalux et
  * la porteuse. Sous mutex, ecoute permanente en pause. Rend 0 si emis, -1 sinon (pas d'identite
  * io enregistree, ou echec radio). */
-int radio_io_send(const uint8_t dst[3], uint8_t cmd) {
+int radio_io_send(const uint8_t dst[3], uint8_t button) {
     if (!s_mtx || !dst) return -1;
     uint8_t src[3], key[16];
     if (!io_store_get(src, key)) return -1;    /* la carte n'a pas encore rejoint de reseau io */
@@ -109,7 +109,7 @@ int radio_io_send(const uint8_t dst[3], uint8_t cmd) {
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
-    int r = io_hc_send_1w(src, dst, key, rolling, cmd);
+    int r = io_hc_send_shutter_1w(src, dst, key, rolling, button);
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
     xSemaphoreGive(s_mtx);

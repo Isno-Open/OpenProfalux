@@ -24,7 +24,7 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
-#include "io/io_send.h"   /* io_cmd_for_action : action volet -> code de commande io */
+#include "io/io_send.h"   /* io_button_for_action : action volet -> code bouton io */
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
 #include "ota.h"
@@ -768,9 +768,9 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
     }
     if (v->proto == VOLET_PROTO_IO) {   /* io-homecontrol : emission directe (pas de rejeu de trame) */
         const uint8_t dst[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
-        int ioc = io_cmd_for_action(cmd);
-        if (ioc < 0) { UNLOCK(); return -1; }
-        int rc = radio_io_send(dst, (uint8_t)ioc);
+        int btn = io_button_for_action(cmd);
+        if (btn < 0) { UNLOCK(); return -1; }
+        int rc = radio_io_send(dst, (uint8_t)btn);
         if      (!strcmp(cmd, "up"))   { v->target = 0;   v->position = 0; }
         else if (!strcmp(cmd, "down")) { v->target = 100; v->position = 100; }
         v->dir = 0;

@@ -122,10 +122,31 @@ constexpr uint8_t CMD_GET_INFO = 0x52;
 constexpr uint8_t CMD_SET_INFO = 0x53;
 
 // Actuator Control Commands
-constexpr uint8_t CMD_SET_POSITION = 0x60;      // TBD: verify from docs
-constexpr uint8_t CMD_STOP = 0x61;              // TBD: verify from docs
-constexpr uint8_t CMD_OPEN = 0x62;              // TBD: verify from docs
-constexpr uint8_t CMD_CLOSE = 0x63;             // TBD: verify from docs
+//
+// Correction 2026-10-22 : monter/descendre/stop ne sont PAS des octets de commande.
+// Les anciens 0x61/0x62/0x63 etaient des placeholders "TBD" herites de
+// rspaargaren/iown-home (qui emet aussi en aveugle : stop = 0x61, open/close =
+// set_position). Le seul referentiel MESURE est samr037/iohc-flipper, qui capture et
+// re-emet de vraies telecommandes Somfy io.
+//
+// Forme reelle (samr037, trames courtes "p0x00_14" de 25 octets vers le broadcast
+// 00 00 3F, cf. docs/phase2_updown_capture.csv + src/state/tx_runner.c) :
+//   cmd = CMD_EXECUTE (0x00), puis charge utile = [origin, fabricant, code_bouton, 0, 0, 0]
+// Le sens est donc un unique "code bouton", pas un parametre de 2 octets.
+constexpr uint8_t CMD_EXECUTE  = 0x00;          // "Activate/Execute function" (appui bouton)
+constexpr uint8_t CMD_SET_MODE = 0x01;          // "Activate mode"
+
+// Marqueur fabricant, 2e octet de la charge utile (samr037 tx_runner.h).
+constexpr uint8_t MANUFACTURER_SOMFY = 0x43;
+constexpr uint8_t MANUFACTURER_VELUX = 0x61;
+
+// 1er octet de la charge utile ("data"/origin), observe a 0x01 sur Somfy io.
+constexpr uint8_t BUTTON_ORIGIN = 0x01;
+
+// Code bouton (1 octet, 3e octet de la charge utile), mesure chez samr037 (tx_runner.h).
+constexpr uint8_t BTN_UP   = 0x00;              // monter
+constexpr uint8_t BTN_DOWN = 0xC8;              // descendre
+constexpr uint8_t BTN_STOP = 0xD2;              // stop
 
 // Bootloader Commands (0xE0-0xE1)
 constexpr uint8_t CMD_BOOTLOADER_START = 0xE0;

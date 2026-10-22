@@ -8,14 +8,16 @@
 extern "C" {
 #endif
 
-/* Emet une commande 1W : source et destination (3 octets chacun), cle AES du reseau (16 o,
- * obtenue a l'appairage), code roulant, et code de commande io. Rend 0 si emis, -1 sinon. */
-int io_hc_send_1w(const uint8_t src[3], const uint8_t dst[3],
-                  const uint8_t key[16], uint16_t rolling, uint8_t cmd);
+/* Emet un appui bouton de volet Somfy io en 1W : source et destination (3 octets chacun),
+ * cle AES du reseau (16 o, obtenue a l'appairage), code roulant, et code bouton (sens :
+ * voir iohome_constants.h : BTN_UP/BTN_DOWN/BTN_STOP). Construit la trame commande 0x00 +
+ * charge utile Somfy courte. Rend 0 si emis, -1 sinon. */
+int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t dst[3],
+                          const uint8_t key[16], uint16_t rolling, uint8_t button);
 
-/* Traduit une action de volet ("up" | "down" | "stop") en code de commande io (ouvrir/fermer/
- * stop, declares une seule fois dans iohome_constants.h). Rend -1 si l'action est inconnue. */
-int io_cmd_for_action(const char *action);
+/* Traduit une action de volet ("up" | "down" | "stop") en code bouton io (BTN_*, declare
+ * une seule fois dans iohome_constants.h). Rend -1 si l'action est inconnue, sinon 0..255. */
+int io_button_for_action(const char *action);
 
 #ifdef __cplusplus
 }
