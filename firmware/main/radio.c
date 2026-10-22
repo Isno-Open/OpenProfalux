@@ -104,12 +104,11 @@ int radio_io_send(const uint8_t src[3], uint8_t button) {
     if (!s_mtx || !src) return -1;
     uint8_t key[16];
     if (!io_store_get_key(src, key)) return -1;    /* ce volet n'a pas d'identite io appairee */
-    uint16_t rolling = io_store_next_rolling(src);
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
-    int r = io_hc_send_shutter_1w(src, key, rolling, button);
+    int r = io_hc_send_shutter_1w(src, key, button);
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
     xSemaphoreGive(s_mtx);

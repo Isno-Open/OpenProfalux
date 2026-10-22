@@ -110,10 +110,16 @@ constexpr uint8_t CMD_DISCOVER_CONTROLLER = 0x2B;
 // Key Exchange Commands (0x30-0x39)
 constexpr uint8_t CMD_KEY_TRANSFER_1W = 0x30;
 constexpr uint8_t CMD_KEY_TRANSFER_2W = 0x31;
-constexpr uint8_t CMD_ANNOUNCE_1W     = 0x39;   // annonce d'appairage 1W (samr037 tx_runner.c)
+// Ceremonie d'appairage 1W Somfy, calquee sur une capture Situo reelle
+// (danielpetrovic/somfy-io-bridge iohc_remote1w.cpp) : 0x30 (cle) puis une RAFALE de
+// 0x20 (private-write) puis 0x2e (confirmation). Un 0x30 seul fait tressaillir le moteur
+// mais ne le bonde pas. 0x39 n'est PAS une annonce : c'est le DEPAIRAGE (retrait de cle 1W).
+constexpr uint8_t CMD_PRIVATE_WRITE = 0x20;     // "private write" de la ceremonie / trame compagnon
+constexpr uint8_t CMD_PAIR_CONFIRM  = 0x2e;     // confirmation de pairage (close de la ceremonie)
+constexpr uint8_t CMD_REMOVE_1W     = 0x39;     // depairage (retrait d'une cle 1W)
 
 // Marqueur fabricant dans la trame d'appairage 0x30 (different de l'octet bouton) :
-// samr037 observe 0x02 pour Somfy, 0x01 pour Velux (frame_build.h).
+// 0x02 pour Somfy, 0x01 pour Velux (samr037 frame_build.h, danielpetrovic manufacturer_).
 constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x02;
 constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
 constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01

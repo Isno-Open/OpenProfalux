@@ -40,13 +40,31 @@ static bool tx_raw(const uint8_t *io_bytes, uint8_t n) {
     return io_radio_tx_packet(fifo, m) == 0;
 }
 
-/* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers
- * un moteur mis en mode PROG. Sequence calquee sur samr037/iohc-flipper (tx_runner.c) :
- *  1) annonce 0x39 (1W signee) x4,
- *  2) transfert de cle 0x30 (cle enveloppee, SANS HMAC, l'appairage est garde par le bouton
- *     du moteur) x6.
- * Aucune reception ni saut de frequence : un seul CC1101 suffit. Cree une identite d'emetteur
- * neuve (propre a CE volet), la memorise et la rend dans out_src. Rend 0 si emis, -2 sur erreur. */
+/* Construit une trame 1W signee (cmd + charge utile + code roulant + HMAC) et l'emet. Le code
+ * roulant vient du compteur par-source de io_store (croissant, anti-rejeu). */
+static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16],
+                           uint8_t cmd, const uint8_t *payload, size_t n) {
+    IoFrame f;
+    init_frame(&f, true);
+    set_source(&f, src);
+    set_destination(&f, SOMFY_BROADCAST_ADDR);
+    if (!set_command(&f, cmd, payload, n)) return false;
+    set_rolling_code(&f, io_store_next_rolling(src));
+    if (!finalize_frame(&f, key, nullptr)) return false;
+    return tx_frame(&f);
+}
+
+/* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers un
+ * moteur mis en mode PROG. Ceremonie calquee sur une capture Situo reelle
+ * (danielpetrovic/somfy-io-bridge), la seule prouvee sur un vrai moteur Somfy :
+ *  1) 0x30 : cle enveloppee, SANS HMAC (l'appairage est garde par le bouton du moteur),
+ *  2) rafale 0x20 "private-write" signee : (main 0x0C00), puis 0x05xx (xx = 02..08) et un 0xFF,
+ *  3) 0x2e : confirmation de pairage, signee.
+ * Un 0x30 seul fait tressaillir le moteur mais ne le bonde pas ; la rafale + le 0x2e closent
+ * l'enrolement, comme la rafale rituelle de l'enrolement Profalux. Aucune reception ni saut de
+ * frequence : un seul CC1101 suffit. Cree une identite d'emetteur neuve (propre a CE volet), la
+ * memorise et la rend dans out_src. Rend 0 si emis, -2 sur erreur.
+ * EXPERIMENTAL : une partie de la rafale 0x20 est reproduite d'une seule capture, a valider au banc. */
 extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
     (void)timeout_ms;
     if (!out_src) return -2;
@@ -54,28 +72,16 @@ extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
     uint8_t src[NODE_ID_SIZE], key[AES_KEY_SIZE];
     esp_fill_random(src, sizeof src);
     esp_fill_random(key, sizeof key);
+    io_store_set(src, key);   /* pose l'identite + initialise le compteur roulant par-source */
 
     io_radio_set_channel(IO_CH2);   /* canal 1W primaire (868,95 MHz) */
 
-    /* 1) Annonce 0x39, 1W signee avec notre cle. */
-    for (int i = 0; i < 4; i++) {
-        IoFrame ann;
-        init_frame(&ann, true);
-        set_source(&ann, src);
-        set_destination(&ann, SOMFY_BROADCAST_ADDR);
-        uint8_t data = 0x00;
-        if (set_command(&ann, CMD_ANNOUNCE_1W, &data, 1) && finalize_frame(&ann, key, nullptr))
-            tx_frame(&ann);
-        esp_rom_delay_us(14000);
-    }
-
-    /* 2) Transfert de cle 0x30, assemble a la main (notre IoFrame ajoute toujours un HMAC,
-     *    absent de cette trame). Disposition samr037 : ctrlb1 ctrlb2 dst src 0x30 cle[16]
-     *    man_id data seq[2] crc[2], soit msg_len = 28 et total = 31 octets. */
+    /* 1) Transfert de cle 0x30, assemble a la main (notre IoFrame ajoute toujours un HMAC,
+     *    absent de cette trame). Disposition : ctrlb1 ctrlb2 dst src 0x30 cle[16] man_id data
+     *    seq[2] crc[2], soit msg_len = 28 et total = 31 octets. */
     uint8_t enc[AES_KEY_SIZE];
     if (!crypto::encrypt_1w_key(key, src, enc)) return -2;
-
-    for (int i = 0; i < 6; i++) {
+    {
         uint8_t f[FRAME_MAX_SIZE];
         const uint8_t msg_len = 28;   /* du ctrl byte 1 jusqu'au dernier octet avant le CRC */
         f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | 0x80 | 0x40 | CTRL0_PROTOCOL_MASK);  /* end+start+1W */
@@ -86,7 +92,7 @@ extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
         memcpy(&f[9], enc, AES_KEY_SIZE);                 /* cle enveloppee (16 o) */
         f[25] = MANUFACTURER_SOMFY_PAIR;                  /* 0x02 */
         f[26] = PAIR_STATUS_BYTE;                         /* 0x01 */
-        uint16_t seq = (uint16_t)(esp_random() & 0xFFFF);
+        uint16_t seq = io_store_next_rolling(src);
         f[27] = (uint8_t)(seq >> 8);
         f[28] = (uint8_t)(seq & 0xFF);
         uint16_t crc = crypto::compute_crc16(f, 1 + msg_len);   /* CRC-16/KERMIT sur ctrlb1..data */
@@ -96,9 +102,29 @@ extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
         esp_rom_delay_us(20000);
     }
 
-    io_store_set(src, key);
+    /* 2) Rafale "private-write" 0x20 (signee), charge utile = origin, acei, main[2], fp1.
+     *    Valeurs reproduites de la capture Situo : (main0,main1) = (0x0C,0x00), puis (0x05, xx)
+     *    pour xx dans 02..08, puis (0x05, 0xFF). */
+    {
+        const uint8_t steps[] = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xFF};
+        uint8_t pw[5] = {0x02 /*origin*/, 0x03 /*acei*/, 0x0C /*main0*/, 0x00 /*main1*/, 0x00 /*fp1*/};
+        send_signed_1w(src, key, CMD_PRIVATE_WRITE, pw, sizeof pw);
+        esp_rom_delay_us(14000);
+        for (size_t i = 0; i < sizeof steps; i++) {
+            pw[2] = 0x05; pw[3] = steps[i];
+            send_signed_1w(src, key, CMD_PRIVATE_WRITE, pw, sizeof pw);
+            esp_rom_delay_us(14000);
+        }
+    }
+
+    /* 3) Confirmation de pairage 0x2e (signee), charge utile = un octet de donnee a 0x00. */
+    {
+        uint8_t data = 0x00;
+        send_signed_1w(src, key, CMD_PAIR_CONFIRM, &data, 1);
+    }
+
     memcpy(out_src, src, NODE_ID_SIZE);
-    ESP_LOGW(TAG, "appairage 1W : cle poussee, identite emetteur %02X%02X%02X memorisee",
+    ESP_LOGW(TAG, "appairage 1W : ceremonie emise, identite emetteur %02X%02X%02X memorisee",
              src[0], src[1], src[2]);
     return 0;
 }
