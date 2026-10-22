@@ -40,18 +40,35 @@ static bool tx_raw(const uint8_t *io_bytes, uint8_t n) {
     return io_radio_tx_packet(fifo, m) == 0;
 }
 
-/* Construit une trame 1W signee (cmd + charge utile + code roulant + HMAC) et l'emet. Le code
- * roulant vient du compteur par-source de io_store (croissant, anti-rejeu). */
-static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16],
+/* Construit une trame 1W signee (cmd + charge utile + code roulant + HMAC) vers dst et l'emet. Le
+ * code roulant vient du compteur par-source de io_store (croissant, anti-rejeu). */
+static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const uint8_t dst[3],
                            uint8_t cmd, const uint8_t *payload, size_t n) {
     IoFrame f;
     init_frame(&f, true);
     set_source(&f, src);
-    set_destination(&f, SOMFY_BROADCAST_ADDR);
+    set_destination(&f, dst);
     if (!set_command(&f, cmd, payload, n)) return false;
     set_rolling_code(&f, io_store_next_rolling(src));
     if (!finalize_frame(&f, key, nullptr)) return false;
     return tx_frame(&f);
+}
+
+/* Apprend le profil d'emission depuis une trame io captee de la VRAIE telecommande du volet. On
+ * ne retient que les commandes 0x00 : leur destination (broadcast encodant le type) et leur
+ * signature fp1/fp2/data[2] sont ce qu'on doit rejouer. Disposition : ctrl0 ctrl1 | dest[3] |
+ * src[3] | cmd | data (origin acei main[2] fp1 fp2 data[2]) | ... Rend 0 si exploitable, -1 sinon. */
+extern "C" int io_profile_from_capture(const uint8_t *frame, int n, io_profile_t *out) {
+    if (!frame || !out) return -1;
+    if (n < 17) return -1;                   /* 9 (entete + cmd) + 8 (data p0x00_16) au minimum */
+    if (frame[8] != CMD_EXECUTE) return -1;  /* on n'apprend que sur une commande 0x00 */
+    memcpy(out->target, &frame[2], NODE_ID_SIZE);   /* destination = broadcast type-dependant */
+    out->acei    = frame[10];                /* [9] origin, [10] acei */
+    out->fp1     = frame[13];                /* [11][12] main, [13] fp1, [14] fp2 */
+    out->fp2     = frame[14];
+    out->data[0] = frame[15];
+    out->data[1] = frame[16];
+    return 0;
 }
 
 /* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers un
@@ -65,14 +82,16 @@ static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16],
  * frequence : un seul CC1101 suffit. Cree une identite d'emetteur neuve (propre a CE volet), la
  * memorise et la rend dans out_src. Rend 0 si emis, -2 sur erreur.
  * EXPERIMENTAL : une partie de la rafale 0x20 est reproduite d'une seule capture, a valider au banc. */
-extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
+extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], uint32_t timeout_ms) {
     (void)timeout_ms;
-    if (!out_src) return -2;
+    if (!out_src || !profile) return -2;
 
     uint8_t src[NODE_ID_SIZE], key[AES_KEY_SIZE];
     esp_fill_random(src, sizeof src);
     esp_fill_random(key, sizeof key);
-    io_store_set(src, key);   /* pose l'identite + initialise le compteur roulant par-source */
+    io_store_set(src, key);                /* pose l'identite + initialise le compteur roulant */
+    io_store_set_profile(src, profile);    /* memorise le profil appris pour l'emission */
+    const uint8_t *tgt = profile->target;  /* on vise le meme broadcast que la vraie telecommande */
 
     io_radio_set_channel(IO_CH2);   /* canal 1W primaire (868,95 MHz) */
 
@@ -86,7 +105,7 @@ extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
         const uint8_t msg_len = 28;   /* du ctrl byte 1 jusqu'au dernier octet avant le CRC */
         f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | 0x80 | 0x40 | CTRL0_PROTOCOL_MASK);  /* end+start+1W */
         f[1] = 0x00;                                      /* ctrl byte 1 */
-        memcpy(&f[2], SOMFY_BROADCAST_ADDR, NODE_ID_SIZE);
+        memcpy(&f[2], tgt, NODE_ID_SIZE);                 /* broadcast du type appris */
         memcpy(&f[5], src, NODE_ID_SIZE);
         f[8] = CMD_KEY_TRANSFER_1W;                       /* 0x30 */
         memcpy(&f[9], enc, AES_KEY_SIZE);                 /* cle enveloppee (16 o) */
@@ -108,11 +127,11 @@ extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
     {
         const uint8_t steps[] = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xFF};
         uint8_t pw[5] = {0x02 /*origin*/, 0x03 /*acei*/, 0x0C /*main0*/, 0x00 /*main1*/, 0x00 /*fp1*/};
-        send_signed_1w(src, key, CMD_PRIVATE_WRITE, pw, sizeof pw);
+        send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
         esp_rom_delay_us(14000);
         for (size_t i = 0; i < sizeof steps; i++) {
             pw[2] = 0x05; pw[3] = steps[i];
-            send_signed_1w(src, key, CMD_PRIVATE_WRITE, pw, sizeof pw);
+            send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
             esp_rom_delay_us(14000);
         }
     }
@@ -120,7 +139,7 @@ extern "C" int io_hc_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
     /* 3) Confirmation de pairage 0x2e (signee), charge utile = un octet de donnee a 0x00. */
     {
         uint8_t data = 0x00;
-        send_signed_1w(src, key, CMD_PAIR_CONFIRM, &data, 1);
+        send_signed_1w(src, key, tgt, CMD_PAIR_CONFIRM, &data, 1);
     }
 
     memcpy(out_src, src, NODE_ID_SIZE);

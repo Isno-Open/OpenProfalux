@@ -1195,24 +1195,31 @@ if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   await api('/api/diag/tx', { method: 'POST' }).catch(() => {});
   await loadDiag(); btn.disabled = false;
 };
+/* Derniere trame io captee : sert de modele a l'appairage 1W (cible + signature de type). */
+let lastIoFrame = null;
 if ($('#io-sniff-btn')) $('#io-sniff-btn').onclick = async () => {
   const btn = $('#io-sniff-btn'), st = $('#io-sniff-status');
   btn.disabled = true; setRadioBusy(true);
-  st.className = 'hint'; st.textContent = '📡 Écoute io ~8 s : fais agir ton volet ou ta box io maintenant...';
+  st.className = 'hint'; st.textContent = '📡 Écoute io ~8 s : fais agir ton volet avec sa vraie télécommande maintenant...';
   const d = await api('/api/io/sniff', { method: 'POST' }).catch(() => null);
   btn.disabled = false; setRadioBusy(false);
-  if (d && d.ok) st.innerHTML = `✅ Trame io captée (${d.len} octets) : <code>${esc(d.frame)}</code>`;
-  else st.innerHTML = '❌ Rien capté. io est expérimental (canal et alignement à affiner). Réessaie en faisant agir l\'appareil io tout près.';
+  if (d && d.ok) {
+    lastIoFrame = d.frame;
+    st.innerHTML = `✅ Trame io captée (${d.len} octets) : <code>${esc(d.frame)}</code>. Tu peux maintenant appairer.`;
+  } else st.innerHTML = '❌ Rien capté. io est expérimental (canal et alignement à affiner). Réessaie en faisant agir l\'appareil io tout près.';
 };
 if ($('#io-pair1w-btn')) $('#io-pair1w-btn').onclick = async () => {
   const btn = $('#io-pair1w-btn'), st = $('#io-pair-status');
+  if (!lastIoFrame) { st.className = 'hint'; st.textContent = '⚠️ Capture d\'abord une trame de ta vraie télécommande (bouton ci-dessus), elle sert de modèle à l\'appairage.'; return; }
   btn.disabled = true; setRadioBusy(true);
   st.className = 'hint'; st.textContent = '🔗 Appairage 1W : mets ton moteur io en mode appairage (PROG) maintenant...';
-  const d = await api('/api/io/pair/1w', { method: 'POST' }).catch(() => null);
+  const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ frame: lastIoFrame }) }).catch(() => null);
   btn.disabled = false; setRadioBusy(false);
   if (d && d.ok) {
     st.innerHTML = `✅ Volet io créé : <code>${esc(d.id)}</code> (source ${esc(d.src)}). Il apparaît dans la liste, pilotable Haut/Stop/Bas. Teste le moteur ; si rien ne bouge, recommence (io est expérimental).`;
     if (typeof loadStatus === 'function') loadStatus();
+  } else if (d && d.err === 'capture') {
+    st.innerHTML = '❌ La trame captée n\'est pas une commande exploitable. Capture pendant que tu actionnes Haut, Stop ou Bas sur ta vraie télécommande, puis réessaie.';
   } else {
     st.innerHTML = '❌ Appairage 1W non confirmé. io est expérimental. Mets le moteur en PROG, tout près, et réessaie.';
   }

@@ -6,6 +6,7 @@
 #include "pfx_enrol.h"
 #include "enrol_gate.h"
 #include "radio.h"
+#include "io/io_pair.h"   /* io_profile_from_capture : apprendre le profil io d'une capture */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
 #include "wifi_bridge.h"
@@ -1364,12 +1365,30 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
 }
 
 /* Appairage 1W io (#87) : la carte se presente comme une nouvelle telecommande et pousse sa cle
- * vers un moteur mis en mode PROG. Cree un volet io avec sa propre source, pilotable aussitot.
- * Mettre le moteur en appairage AVANT d'appeler (bouton PROG). */
+ * vers un moteur mis en mode PROG. Le corps porte la trame captee de la VRAIE telecommande du
+ * volet ({"frame":"<hexa>"}, voir /api/io/sniff) : on en apprend la cible et la signature de type
+ * (profil) pour viser et formater comme elle. Cree un volet io pilotable aussitot. Mettre le
+ * moteur en appairage AVANT d'appeler (bouton PROG). */
 static esp_err_t h_io_pair_1w(httpd_req_t *r) {
-    uint8_t src[3];
-    int rc = radio_io_pair_1w(src, 0);
     httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+
+    /* Trame captee -> octets -> profil d'emission. */
+    const char *hex = jstr(j, "frame");
+    uint8_t frame[32]; int n = 0;
+    if (hex) for (const char *p = hex; p[0] && p[1] && n < (int)sizeof frame; p += 2) {
+        unsigned b; if (sscanf(p, "%2x", &b) != 1) break; frame[n++] = (uint8_t)b;
+    }
+    io_profile_t prof;
+    int learned = io_profile_from_capture(frame, n, &prof);
+    cJSON_Delete(j);
+    if (learned != 0)   /* pas de trame 0x00 exploitable : il faut capturer d'abord */
+        return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"capture\"}");
+
+    uint8_t src[3];
+    int rc = radio_io_pair_1w(&prof, src, 0);
     if (rc != 0) {
         char out[48];
         snprintf(out, sizeof out, "{\"ok\":0,\"rc\":%d}", rc);

@@ -53,3 +53,24 @@ uint16_t io_store_next_rolling(const uint8_t src[3]) {
     nvs_close(h);
     return (uint16_t)roll;
 }
+
+void io_store_set_profile(const uint8_t src[3], const io_profile_t *p) {
+    if (!src || !p) return;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    char np[8]; key_name(src, 'p', np);   /* "p<6 hexa>" : le profil de cette source */
+    nvs_set_blob(h, np, p, sizeof *p);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool io_store_get_profile(const uint8_t src[3], io_profile_t *p) {
+    if (!src || !p) return false;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    char np[8]; key_name(src, 'p', np);
+    size_t n = sizeof *p;
+    bool ok = nvs_get_blob(h, np, p, &n) == ESP_OK && n == sizeof *p;
+    nvs_close(h);
+    return ok;
+}

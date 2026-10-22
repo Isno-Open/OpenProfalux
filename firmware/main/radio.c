@@ -136,13 +136,13 @@ int radio_io_send(const uint8_t src[3], uint8_t button) {
 /* Appairage 1W io (poussee de cle vers un moteur en mode PROG) : passe la radio en FSK io,
  * lance io_hc_pair_1w, puis RESTAURE l'OOK Profalux. Sous mutex, ecoute en pause. Rend 0 et
  * remplit out_src (identite d'emetteur creee pour ce volet) si emis, -2 sur erreur. */
-int radio_io_pair_1w(uint8_t out_src[3], uint32_t timeout_ms) {
-    if (!s_mtx || !out_src) return -2;
+int radio_io_pair_1w(const io_profile_t *profile, uint8_t out_src[3], uint32_t timeout_ms) {
+    if (!s_mtx || !out_src || !profile) return -2;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io */
-    int r = io_hc_pair_1w(out_src, timeout_ms);
+    int r = io_hc_pair_1w(profile, out_src, timeout_ms);
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
     xSemaphoreGive(s_mtx);

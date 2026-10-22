@@ -13,6 +13,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "io/io_store.h"   /* io_profile_t (appairage 1W io) */
 
 /* Callback appele (hors mutex) pour chaque trame recue. bits = chaine '0'/'1' ordre du fil. */
 typedef void (*radio_frame_cb_t)(const char *bits, uint32_t serial, uint8_t button,
@@ -33,7 +34,7 @@ void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permane
 int  radio_set_freq_khz(uint32_t khz); /* frequence porteuse a chaud (sous mutex) ; 0=OK, -1=non prise */
 int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms); /* ecoute UNE trame io (FSK), restaure l'OOK apres */
 int  radio_io_send(const uint8_t src[3], uint8_t button);        /* emet UN appui bouton io 1W depuis src (sens = code bouton BTN_*), restaure l'OOK apres */
-int  radio_io_pair_1w(uint8_t out_src[3], uint32_t timeout_ms);  /* appairage 1W io (poussee de cle vers moteur en PROG), restaure l'OOK apres */
+int  radio_io_pair_1w(const io_profile_t *profile, uint8_t out_src[3], uint32_t timeout_ms);  /* appairage 1W io (profil appris d'une capture), restaure l'OOK apres */
 int  radio_io_pair(uint8_t out_dst[3], uint32_t timeout_ms);     /* appairage 2W io (decouverte + transfert de cle), restaure l'OOK apres */
 int  radio_tx_selftest(void);          /* relance le self-test TX (sous mutex) ; 0=OK, -1=HS */
 int  radio_calibrate_start(void);      /* 0=lance, 1=deja en cours, -1=erreur */
