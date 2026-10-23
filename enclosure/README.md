@@ -13,7 +13,8 @@ Concu et imprime par @lecanard38, partage avec son accord.
 - `OPENPROFALUX-boite.step`, `OPENPROFALUX-avant.step`, `OPENPROFALUX-arriere.step` :
   export STEP, format neutre editable dans n'importe quelle CAO.
 - `Ensemble.stl` : maillage pret a imprimer.
-- `openprofalux-maison.jpg` : photo du boitier imprime.
+- `openprofalux-maison.jpg` : photo du boitier imprime, detouree sur fond blanc.
+- `openprofalux-maison-transparent.png` : la meme, fond transparent.
 
 ## Licence
 
