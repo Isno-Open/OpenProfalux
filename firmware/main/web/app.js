@@ -1481,6 +1481,43 @@ if ($('#central-create')) $('#central-create').onclick = async () => {
   if (r && r.ok) { toast('Centrale enregistrée'); $('#central-name').value = ''; $$('#central-members input').forEach(c => c.checked = false); await loadStatus(); }
   else toast('Échec de l\'enregistrement' + (r && r.err ? ' : ' + r.err : ''));
 };
+
+/* ── Somfy RTS : créer un volet (adresse 24 bits), appairer (PROG), tester ── */
+let somfyActive = null;   /* id du volet Somfy créé, cible de l'appairage et du test */
+function somfyShowStatus(sel, ok, msg) {
+  const el = $(sel); if (!el) return;
+  el.hidden = false; el.classList.toggle('ok', ok); el.classList.toggle('bad', !ok);
+  el.querySelector('b').textContent = msg;
+}
+if ($('#somfy-gen')) $('#somfy-gen').onclick = () => {
+  /* Adresse 24 bits pseudo-aléatoire, non nulle, affichée en hexa. */
+  const a = (Math.floor(Math.random() * 0xFFFFFF) + 1) & 0xFFFFFF;
+  $('#somfy-addr').value = '0x' + a.toString(16).toUpperCase().padStart(6, '0');
+};
+if ($('#somfy-create')) $('#somfy-create').onclick = async () => {
+  const name = ($('#somfy-name').value || '').trim();
+  const addr = ($('#somfy-addr').value || '').trim();
+  if (!name) return toast('Donne un nom au volet');
+  if (isNewNameWithComma(name)) return toast(COMMA_MSG);
+  if (!addr) return toast('Donne ou génère une adresse');
+  const r = await api('/api/somfy/create', { method: 'POST', body: JSON.stringify({ id: name, address: addr }) }).catch(() => null);
+  if (r && r.ok) {
+    somfyActive = name;
+    somfyShowStatus('#somfy-create-status', true, 'Volet « ' + name +' » créé. Appaire-le au moteur ci-dessous.');
+    $('#somfy-steps').hidden = false;
+    await loadStatus();
+  } else {
+    somfyShowStatus('#somfy-create-status', false, 'Échec' + (r && r.err ? ' : ' + r.err : ''));
+  }
+};
+if ($('#somfy-prog')) $('#somfy-prog').onclick = async (e) => {
+  if (!somfyActive) return toast('Crée d\'abord un volet Somfy');
+  await sendCmd({ id: somfyActive, cmd: 'prog' }, e.currentTarget);
+  somfyShowStatus('#somfy-prog-status', true, 'Appairage émis. Le moteur a-t-il fait un va-et-vient ? Teste ci-dessous.');
+};
+if ($('#somfy-up'))   $('#somfy-up').onclick   = e => somfyActive && sendCmd({ id: somfyActive, cmd: 'up' }, e.currentTarget);
+if ($('#somfy-stop')) $('#somfy-stop').onclick = e => somfyActive && sendCmd({ id: somfyActive, cmd: 'stop' }, e.currentTarget);
+if ($('#somfy-down')) $('#somfy-down').onclick = e => somfyActive && sendCmd({ id: somfyActive, cmd: 'down' }, e.currentTarget);
 /* Rafraichissement de l'etat : une requete a la fois, abandonnee au bout de 4 s (sans delai,
  * elles s'empilaient pendant une coupure). Un echec ne vide plus l'interface : on garde la
  * derniere reponse, et apres 2 echecs de suite un bandeau dit que le boitier ne repond pas
