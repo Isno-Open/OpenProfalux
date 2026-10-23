@@ -54,20 +54,23 @@ static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const ui
     return tx_frame(&f);
 }
 
-/* Apprend le profil d'emission depuis une trame io captee de la VRAIE telecommande du volet. On
- * ne retient que les commandes 0x00 : leur destination (broadcast encodant le type) et leur
- * signature fp1/fp2/data[2] sont ce qu'on doit rejouer. Disposition : ctrl0 ctrl1 | dest[3] |
- * src[3] | cmd | data (origin acei main[2] fp1 fp2 data[2]) | ... Rend 0 si exploitable, -1 sinon. */
+/* Apprend le profil d'emission depuis une trame io captee de la VRAIE telecommande du volet. On ne
+ * retient que les commandes 0x00 : leur destination (broadcast encodant le type) et leur charge utile
+ * entiere sont ce qu'on doit rejouer. Disposition 1W :
+ *   ctrl0 ctrl1 | dest[3] | src[3] | cmd | charge utile | code roulant[2] | HMAC[6] | CRC[2]
+ * La charge utile reelle = tout entre le cmd (offset 9) et le code roulant, soit n - 9 - 2 - 6 - 2.
+ * On la capture a sa VRAIE longueur (6 octets pour une p0x00_14, 8 pour une p0x00_16) au lieu de lire
+ * des offsets fixes : sur une trame de 6 octets, frame[15]/frame[16] sont deja le code roulant.
+ * Rend 0 si exploitable, -1 sinon. */
 extern "C" int io_profile_from_capture(const uint8_t *frame, int n, io_profile_t *out) {
     if (!frame || !out) return -1;
-    if (n < 17) return -1;                   /* 9 (entete + cmd) + 8 (data p0x00_16) au minimum */
-    if (frame[8] != CMD_EXECUTE) return -1;  /* on n'apprend que sur une commande 0x00 */
-    memcpy(out->target, &frame[2], NODE_ID_SIZE);   /* destination = broadcast type-dependant */
-    out->acei    = frame[10];                /* [9] origin, [10] acei */
-    out->fp1     = frame[13];                /* [11][12] main, [13] fp1, [14] fp2 */
-    out->fp2     = frame[14];
-    out->data[0] = frame[15];
-    out->data[1] = frame[16];
+    const int overhead = 9 + ROLLING_CODE_SIZE + HMAC_SIZE + CRC_SIZE;   /* 9 + 2 + 6 + 2 = 19 */
+    int data_len = n - overhead;
+    if (data_len < 3 || data_len > IO_PROFILE_PAYLOAD_MAX) return -1;     /* besoin d'au moins origin/fab/bouton */
+    if (frame[8] != CMD_EXECUTE) return -1;                              /* on n'apprend que sur une commande 0x00 */
+    memcpy(out->target, &frame[2], NODE_ID_SIZE);                        /* destination = broadcast type-dependant */
+    memcpy(out->payload, &frame[9], data_len);                           /* charge utile reelle, telle quelle */
+    out->payload_len = (uint8_t)data_len;
     return 0;
 }
 

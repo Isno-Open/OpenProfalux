@@ -36,21 +36,26 @@ static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const ui
 }
 
 /* Emet un appui bouton de volet Somfy io en 1W, calque sur une VRAIE trame de la telecommande du
- * volet (profil appris a l'appairage, voir io_store/io_pair). Commande 0x00, charge utile longue
- * "p0x00_16" (8 octets) : origin 0x01, acei, main[2] (main[0] = bouton BTN_UP/DOWN/STOP), fp1, fp2,
- * data[2]. acei, fp1, fp2, data et la destination sont la signature du type d'appareil, rejouee
- * telle quelle ; seul le bouton change. Repete comme une vraie telecommande (repeat = 4). Rend 0
- * si au moins une trame est emise, -1 si pas de profil pour ce volet ou echec radio. */
+ * volet (profil appris a l'appairage, voir io_store/io_pair). Commande 0x00. On rejoue la charge
+ * utile captee a l'identique, a sa vraie longueur (6 octets [origin, fabricant, bouton, 0, 0, 0]
+ * pour une p0x00_14, 8 pour une p0x00_16), et on ne change que l'octet du bouton (position 2). La
+ * destination et le reste de la charge utile sont la signature du type d'appareil, rejoues tels
+ * quels ; source, code roulant et HMAC sont les notres. Repete comme une vraie telecommande
+ * (repeat = 4). Rend 0 si au moins une trame est emise, -1 si pas de profil ou echec radio. */
 extern "C" int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16], uint8_t button) {
     if (!src || !key) return -1;
 
     io_profile_t p;
     if (!io_store_get_profile(src, &p)) return -1;   /* ce volet n'a pas de profil appris */
+    if (p.payload_len < 3 || p.payload_len > FRAME_MAX_DATA_SIZE) return -1;  /* profil invalide */
 
-    uint8_t payload[8] = { BUTTON_ORIGIN, p.acei, button, 0x00, p.fp1, p.fp2, p.data[0], p.data[1] };
+    uint8_t payload[FRAME_MAX_DATA_SIZE];
+    memcpy(payload, p.payload, p.payload_len);
+    payload[2] = button;             /* seul l'octet du bouton change ; le reste = signature rejouee */
+
     int ok = -1;
     for (int i = 0; i < 4; i++) {    /* repetitions, comme la vraie telecommande */
-        if (send_signed_1w(src, key, p.target, CMD_EXECUTE, payload, sizeof payload)) ok = 0;
+        if (send_signed_1w(src, key, p.target, CMD_EXECUTE, payload, p.payload_len)) ok = 0;
         esp_rom_delay_us(40000);     /* ~40 ms entre trames */
     }
     return ok;

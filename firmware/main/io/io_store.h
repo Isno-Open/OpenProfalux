@@ -18,16 +18,18 @@ void io_store_set(const uint8_t src[3], const uint8_t key[16]);
 /* Rend le compteur roulant courant de cette source puis l'incremente et le persiste. */
 uint16_t io_store_next_rolling(const uint8_t src[3]);
 
-/* Profil d'emission d'un volet io, appris d'une trame captee de sa VRAIE telecommande. Un moteur
- * io attend une trame "p0x00_16" dont la cible (broadcast encodant le type d'appareil) et la
- * signature fp1/fp2/data[2] dependent du type. On rejoue ces champs tels quels et on ne change
- * que le bouton, la source, le code roulant et le HMAC (signes avec NOTRE cle). */
+/* Profil d'emission d'un volet io, appris d'une trame captee de sa VRAIE telecommande. La charge
+ * utile d'une commande io (origin, fabricant, bouton, puis une signature propre au type d'appareil)
+ * et sa cible (broadcast encodant le type) dependent de l'appareil. On capture la charge utile
+ * REELLE telle qu'elle passe sur l'air, longueur comprise (6 octets pour une "p0x00_14", 8 pour une
+ * "p0x00_16"), et on la rejoue a l'identique en ne changeant que l'octet du bouton (position 2), la
+ * source, le code roulant et le HMAC (signes avec NOTRE cle). Lire a offsets fixes cassait sur une
+ * trame de 6 octets, ou frame[15]/frame[16] sont deja le code roulant, pas la charge utile. */
+#define IO_PROFILE_PAYLOAD_MAX 21   /* = iohome::FRAME_MAX_DATA_SIZE, repris ici pour rester en C */
 typedef struct {
-    uint8_t target[3];   /* destination de la vraie trame (broadcast type-dependant) */
-    uint8_t acei;        /* 2e octet de charge utile (0x43 observe chez Somfy) */
-    uint8_t fp1;         /* signature de type (ex. type 6 : 0x80) */
-    uint8_t fp2;         /* signature de type (ex. type 6 : 0xD3) */
-    uint8_t data[2];     /* 2 octets de fin de charge utile (variante longue p0x00_16) */
+    uint8_t target[3];                        /* destination de la vraie trame (broadcast type-dependant) */
+    uint8_t payload[IO_PROFILE_PAYLOAD_MAX];  /* charge utile reelle captee, rejouee telle quelle */
+    uint8_t payload_len;                      /* longueur reelle de la charge utile */
 } io_profile_t;
 
 /* Enregistre (ou remplace) le profil d'emission de cette source. */
