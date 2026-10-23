@@ -1364,6 +1364,25 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* Ecoute io permanente (#87) : POST {"on":true|false} met la radio en ecoute io 2-FSK continue.
+ * Chaque trame recue part au journal ("Trame io captee (N octets) : ..."). EXCLUSIVE de l'ecoute
+ * PFX (un seul protocole radio a la fois). Un POST sans corps rend juste l'etat courant. */
+static esp_err_t h_io_listen(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (body) {
+        cJSON *j = cJSON_Parse(body); free(body);
+        if (j) {
+            cJSON *on = cJSON_GetObjectItem(j, "on");
+            if (cJSON_IsBool(on)) radio_set_io_listening(cJSON_IsTrue(on));
+            cJSON_Delete(j);
+        }
+    }
+    char out[32];
+    snprintf(out, sizeof out, "{\"ok\":1,\"on\":%d}", radio_is_io_listening() ? 1 : 0);
+    return httpd_resp_sendstr(r, out);
+}
+
 /* Appairage 1W io (#87) : la carte se presente comme une nouvelle telecommande et pousse sa cle
  * vers un moteur mis en mode PROG. Le corps porte la trame captee de la VRAIE telecommande du
  * volet ({"frame":"<hexa>"}, voir /api/io/sniff) : on en apprend la cible et la signature de type
@@ -1525,6 +1544,7 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/io/sniff", HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
+    reg(s, "/api/io/listen", HTTP_POST, h_io_listen); /* io-homecontrol : ecoute io permanente ON/OFF (#87) */
     reg(s, "/api/io/pair/1w", HTTP_POST, h_io_pair_1w); /* io-homecontrol : appairage 1W, telecommande (#87) */
     reg(s, "/api/io/pair", HTTP_POST, h_io_pair);     /* io-homecontrol : appairage 2W (experimental, #87) */
     ESP_LOGI(TAG, "HTTP UI demarree");

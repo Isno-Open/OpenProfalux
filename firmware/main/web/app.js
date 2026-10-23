@@ -1208,6 +1208,26 @@ if ($('#io-sniff-btn')) $('#io-sniff-btn').onclick = async () => {
     st.innerHTML = `✅ Trame io captée (${d.len} octets) : <code>${esc(d.frame)}</code>. Tu peux maintenant appairer.`;
   } else st.innerHTML = '❌ Rien capté. io est expérimental (canal et alignement à affiner). Réessaie en faisant agir l\'appareil io tout près.';
 };
+/* Écoute io permanente : la carte reste en mode io (2-FSK) et note chaque trame au journal.
+ * Exclusive de l'écoute Profalux/PFX. Sert à capter une commande ou un enrôlement io (#87). */
+let ioListenOn = false;
+if ($('#io-listen-btn')) $('#io-listen-btn').onclick = async () => {
+  const btn = $('#io-listen-btn'), st = $('#io-listen-status');
+  const want = !ioListenOn;
+  btn.disabled = true;
+  const d = await api('/api/io/listen', { method: 'POST', body: JSON.stringify({ on: want }) }).catch(() => null);
+  btn.disabled = false;
+  if (d && d.ok) {
+    ioListenOn = !!d.on;
+    btn.textContent = `Écoute io permanente : ${ioListenOn ? 'ON' : 'OFF'} · expérimental`;
+    st.className = 'hint';
+    st.innerHTML = ioListenOn
+      ? '📡 Écoute io active : la carte reste en mode io et note chaque trame reçue dans le journal (« Trame io captée ... »). Commande ou enrôle un appareil io depuis ta box maintenant, puis copie-moi les lignes du journal. Pendant ce temps, l\'écoute Profalux est suspendue.'
+      : 'Écoute io arrêtée. L\'écoute Profalux reprend si elle était active.';
+  } else {
+    st.className = 'hint'; st.innerHTML = '❌ Impossible de changer l\'écoute io.';
+  }
+};
 if ($('#io-pair1w-btn')) $('#io-pair1w-btn').onclick = async () => {
   const btn = $('#io-pair1w-btn'), st = $('#io-pair-status');
   if (!lastIoFrame) { st.className = 'hint'; st.textContent = '⚠️ Capture d\'abord une trame de ta vraie télécommande (bouton ci-dessus), elle sert de modèle à l\'appairage.'; return; }

@@ -28,6 +28,12 @@ void radio_tx(const char *bits, int repeats);   /* rejoue une trame `repeats` fo
 int  radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full);
 void radio_pause_rx(bool pause);       /* pause TEMPORAIRE pendant nos TX (stream maintien) */
 void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permanente (case UI "capture") */
+/* Ecoute permanente io (2-FSK Somfy io) : la radio reste en config io et journalise chaque trame
+ * captee. EXCLUSIVE de l'ecoute PFX (le CC1101 ne fait qu'une modulation a la fois) : tant qu'elle
+ * est ON, le chemin OOK/PFX est suspendu ; a l'arret, l'OOK est restaure. Pour capter du Somfy io
+ * (une commande, ou un enrolement) qui ne sort pas en OOK. Voir #87. */
+void radio_set_io_listening(bool on);
+bool radio_is_io_listening(void);
 
 /* Auto-calibration du gain RX : balaie les gains, verrouille le 1er qui capte une trame
  * valide pendant que l'utilisateur appuie sur sa telecommande. Non bloquant (tache de fond). */

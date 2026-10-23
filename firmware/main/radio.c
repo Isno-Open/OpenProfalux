@@ -26,6 +26,7 @@ static radio_frame_cb_t  s_cb  = NULL;
 static volatile bool     s_run     = false;
 static volatile bool     s_paused  = false;  /* pause temporaire (pendant nos TX stream) */
 static volatile bool     s_listen  = false;  /* interrupteur maitre (case UI "capture toutes les trames") */
+static volatile bool     s_io_listen = false; /* ecoute permanente io (2-FSK) : exclusive de l'ecoute PFX */
 
 /* Lecture LSB-first d'un champ de la trame (ordre du fil). */
 static uint32_t lsb(const char *b, int from, int len) {
@@ -299,12 +300,48 @@ void radio_set_listening(bool on) {
     ESP_LOGI(TAG, "ecoute permanente %s (case UI 'capture toutes les trames')", on ? "ON" : "OFF");
 }
 
+void radio_set_io_listening(bool on) {
+    s_io_listen = on;
+    ESP_LOGW(TAG, "ecoute io permanente %s (2-FSK Somfy io)", on ? "ON" : "OFF");
+}
+
+bool radio_is_io_listening(void) { return s_io_listen; }
+
 static void rx_task(void *arg) {
     (void)arg;
     char bits[80];
     static rx_confirm_t c;   /* serie en cours : une trame n'est transmise que confirmee (issue #39) */
     rx_confirm_reset(&c);
+    bool     io_posed = false;   /* la config io 2-FSK est-elle actuellement en place ? */
+    uint32_t ook_freq = 0;       /* porteuse OOK a restaurer en quittant le mode io */
     while (s_run) {
+        /* ── Ecoute io permanente (2-FSK) : branche isolee, prioritaire et exclusive de l'OOK.
+         * On pose la config io une fois (en memorisant la porteuse OOK), on boucle la reception io
+         * et on journalise chaque trame ; a l'arret on restaure l'OOK. Le chemin PFX ci-dessous
+         * n'est pas touche tant que s_io_listen est faux (io_posed reste faux). */
+        if (s_io_listen && !s_paused) {
+            xSemaphoreTake(s_mtx, portMAX_DELAY);
+            if (!io_posed) { ook_freq = cc1101_get_freq_khz(); io_radio_config(); io_posed = true; }
+            uint8_t iob[32];
+            int n = io_radio_rx_packet(iob, sizeof iob, 300);
+            xSemaphoreGive(s_mtx);
+            if (n > 0) {
+                char hex[2 * 32 + 1];
+                int m = n > 32 ? 32 : n;
+                for (int i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02X", iob[i]);
+                ESP_LOGW(TAG, "Trame io captee (%d octets) : %s", n, hex);
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
+            continue;
+        }
+        if (io_posed) {   /* on quitte le mode io : restaure la modulation OOK et la porteuse */
+            xSemaphoreTake(s_mtx, portMAX_DELAY);
+            cc1101_apply_config_ook();
+            cc1101_set_freq_khz(ook_freq);
+            xSemaphoreGive(s_mtx);
+            io_posed = false;
+        }
         if (!s_listen || s_paused) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }  /* veille tant que capture OFF ou TX en cours */
         xSemaphoreTake(s_mtx, portMAX_DELAY);
         int n = (!s_listen || s_paused) ? -1 : cc1101_rx_listen_bits(RX_WINDOW_MS, bits, 79);
