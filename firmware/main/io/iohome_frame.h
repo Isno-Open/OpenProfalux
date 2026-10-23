@@ -164,7 +164,7 @@ inline bool is_2w_mode(uint8_t ctrl_byte_0) {
  * @return Frame length (11-32 bytes)
  */
 inline uint8_t get_frame_length(uint8_t ctrl_byte_0) {
-  return (ctrl_byte_0 & CTRL0_LENGTH_MASK) + FRAME_MIN_SIZE;
+  return (ctrl_byte_0 & CTRL0_LENGTH_MASK) + CTRL0_LEN_BASE;
 }
 
 /**

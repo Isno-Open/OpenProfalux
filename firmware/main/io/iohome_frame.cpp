@@ -20,12 +20,18 @@ void init_frame(IoFrame* frame, bool is_1w) {
   memset(frame, 0, sizeof(IoFrame));
   frame->is_1w_mode = is_1w;
 
-  // Set default control bytes
-  frame->ctrl_byte_0 = 0x00; // Will be updated when data is set
-  frame->ctrl_byte_1 = 0x00; // Default: no beacon, not routed, normal power
+  // Octets de controle par defaut.
+  frame->ctrl_byte_1 = 0x00; // ni beacon, ni route, puissance normale, version 0
 
-  if (!is_1w) {
-    frame->ctrl_byte_0 |= CTRL0_PROTOCOL_MASK; // Set 2W bit
+  if (is_1w) {
+    // Trame 1W complete : debut + fin de message (0xC0) et bit de protocole 1W (0x20). On
+    // reproduit l'octet de controle d'une VRAIE telecommande Somfy (0xF8 = 0xC0 | 0x20 |
+    // longueur) et de notre trame d'appairage 0x30 (io_pair.cpp). set_command y ajoute la
+    // longueur dans les 5 bits de poids faible.
+    frame->ctrl_byte_0 = CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK; // 0xE0
+  } else {
+    // 2W : chemin de decouverte non valide au banc, laisse tel quel.
+    frame->ctrl_byte_0 = CTRL0_PROTOCOL_MASK;
   }
 }
 
@@ -49,20 +55,20 @@ bool set_command(IoFrame* frame, uint8_t cmd_id, const uint8_t* params, size_t p
     memcpy(frame->data, params, params_len);
   }
 
-  // Update control byte 0 with frame length
-  // Frame length field = (total_length - 11)
-  // total_length = 9 (header) + 1 (cmd) + data_len + 2 (rolling code for 1W) + 6 (hmac) + 2 (crc)
-  uint8_t total_length;
+  // Longueur totale = 2 octets de controle + 2 adresses + commande + donnees
+  // (+ code roulant en 1W) + HMAC + CRC.
+  const uint8_t header = CTRL_BYTE_SIZE + 2 * NODE_ID_SIZE + COMMAND_ID_SIZE; // 2 + 6 + 1 = 9
+  uint8_t total_length = header + frame->data_len + HMAC_SIZE + CRC_SIZE;
   if (frame->is_1w_mode) {
-    total_length = 9 + 1 + frame->data_len + ROLLING_CODE_SIZE + HMAC_SIZE + CRC_SIZE;
-  } else {
-    total_length = 9 + 1 + frame->data_len + HMAC_SIZE + CRC_SIZE;
+    total_length += ROLLING_CODE_SIZE;
   }
 
   frame->frame_length = total_length;
 
-  // Update ctrl_byte_0 length field
-  frame->ctrl_byte_0 = (frame->ctrl_byte_0 & ~CTRL0_LENGTH_MASK) | ((total_length - FRAME_MIN_SIZE) & CTRL0_LENGTH_MASK);
+  // Champ longueur de l'octet 0 = total - CTRL0_LEN_BASE (3). On ne touche que les 5 bits de
+  // poids faible ; les drapeaux de debut/fin et de protocole poses par init_frame sont gardes.
+  frame->ctrl_byte_0 = (frame->ctrl_byte_0 & ~CTRL0_LENGTH_MASK)
+                     | ((total_length - CTRL0_LEN_BASE) & CTRL0_LENGTH_MASK);
 
   return true;
 }

@@ -60,9 +60,14 @@ constexpr uint8_t OFFSET_COMMAND_ID = 8;
 constexpr uint8_t OFFSET_DATA = 9;
 
 // Control Byte 0 Masks
-constexpr uint8_t CTRL0_ORDER_MASK = 0xC0;      // bits 7-6
-constexpr uint8_t CTRL0_PROTOCOL_MASK = 0x20;   // bit 5 (1W/2W)
-constexpr uint8_t CTRL0_LENGTH_MASK = 0x1F;     // bits 4-0
+constexpr uint8_t CTRL0_ORDER_MASK = 0xC0;      // bits 7-6 : debut (0x40) + fin (0x80) de message
+constexpr uint8_t CTRL0_PROTOCOL_MASK = 0x20;   // bit 5 : pose a 1 sur une vraie trame 1W Somfy
+constexpr uint8_t CTRL0_LENGTH_MASK = 0x1F;     // bits 4-0 : longueur = total - CTRL0_LEN_BASE
+
+// Base du champ longueur de l'octet 0 : longueur = total - 3 (tout sauf l'octet 0 et les
+// 2 octets de CRC ; couvre de ctrl_byte_1 au dernier octet avant le CRC). Mesure sur une
+// vraie trame 1W Somfy : ctrl0 0xF8 -> longueur 24 = 27 - 3.
+constexpr uint8_t CTRL0_LEN_BASE = 3;
 
 // Control Byte 1 Masks
 constexpr uint8_t CTRL1_USE_BEACON = 0x80;      // bit 7

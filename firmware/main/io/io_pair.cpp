@@ -103,7 +103,7 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], ui
     {
         uint8_t f[FRAME_MAX_SIZE];
         const uint8_t msg_len = 28;   /* du ctrl byte 1 jusqu'au dernier octet avant le CRC */
-        f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | 0x80 | 0x40 | CTRL0_PROTOCOL_MASK);  /* end+start+1W */
+        f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK);  /* debut+fin+1W */
         f[1] = 0x00;                                      /* ctrl byte 1 */
         memcpy(&f[2], tgt, NODE_ID_SIZE);                 /* broadcast du type appris */
         memcpy(&f[5], src, NODE_ID_SIZE);
