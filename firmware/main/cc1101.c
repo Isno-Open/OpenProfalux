@@ -1,5 +1,5 @@
 /*
- * CC1101 driver : Profalux 868.425 MHz OOK
+ * CC1101 driver — Profalux 868.425 MHz OOK
  *
  * NOTE: This is a functional skeleton. Config registers below are
  * validated against SmartRF Studio output for OOK 868.425 MHz ~1550 baud
@@ -530,26 +530,6 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
     }
     strobe(CC_SIDLE);
     if (s_cap) rmt_enable(s_cap);   /* re-arme la capture RMT pour l'ecoute permanente suivante */
-    return 0;
-}
-
-/* Train d'impulsions OOK brut (voir cc1101.h). Memes precautions que cc1101_tx_raw_bits :
- * capture RMT coupee pendant le bit-bang (sinon son ISR preempte le timing et le deforme),
- * GDO0 en sortie, un seul STX, capture re-armee au SIDLE. Le TX n'a pas besoin de la bande
- * RX : seule la frequence porteuse compte, et l'appelant l'a deja posee. */
-int cc1101_tx_ook_pulses(const uint8_t *levels, const uint32_t *us, int n) {
-    if (!levels || !us || n <= 0) return -1;
-    if (s_cap) rmt_disable(s_cap);
-    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
-    strobe(CC_STX);
-    esp_rom_delay_us(800);   /* laisse le PLL se caler + la PA monter avant de moduler */
-    for (int i = 0; i < n; i++) {
-        gpio_set_level(CC1101_PIN_GDO0, levels[i] ? 1 : 0);
-        esp_rom_delay_us(us[i]);
-    }
-    gpio_set_level(CC1101_PIN_GDO0, 0);
-    strobe(CC_SIDLE);
-    if (s_cap) rmt_enable(s_cap);
     return 0;
 }
 
