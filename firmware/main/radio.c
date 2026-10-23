@@ -90,6 +90,21 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
     return r;
 }
 
+/* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Calque radio_set_freq_khz :
+ * ecoute en pause + mutex, le temps de retuner, emettre, et RETABLIR la porteuse Profalux. */
+int radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t *us, int n) {
+    if (!s_mtx || !levels || !us || n <= 0) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    int r = cc1101_set_freq_khz(freq_khz);
+    if (r == 0) r = cc1101_tx_ook_pulses(levels, us, n);
+    cc1101_set_freq_khz(back);   /* retour a la porteuse Profalux, quoi qu'il arrive */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
 void radio_pause_rx(bool pause) { s_paused = pause; }
 
 /* Relance le self-test TX a la demande (bouton UI), sous mutex/pause pour ne pas

@@ -1,5 +1,5 @@
 /*
- * shutters.c — modele cover OpenProfalux (clone/replay + position time-based).
+ * shutters.c : modele cover OpenProfalux (clone/replay + position time-based).
  * Config persistee en NVS, un document JSON par volet (voir cfg_store.h). Le
  * dataset de trames et le ring RF vivent en SPIFFS (partition "storage").
  */
@@ -25,6 +25,7 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
+#include "somfy_tx.h"
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
 #include "ota.h"
@@ -545,13 +546,36 @@ static void emit_virt_profalux(volet_t *v, uint8_t button) {
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
 }
 
-/* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq est le seul
- * cable ; les autres (Somfy RTS - issue #73 - ou d'autres) s'ajouteront ici, sans toucher
- * au chemin Profalux. `button` est un code PFX_BTN_*, traduit par protocole le moment venu. */
+/* Volet VIRTUEL Somfy RTS : GENERE la trame (adresse + code roulant), puis l'emet a
+ * 433,42 MHz par le module somfy_tx, sans toucher au chemin Profalux. virt_serial sert
+ * d'adresse (24 bits) et virt_counter de code roulant : memes champs que la telecommande
+ * virtuelle Profalux, reinterpretes par protocole. Reserve-puis-emet comme Profalux : on
+ * persiste le PROCHAIN code AVANT d'emettre (au pire un code saute, jamais un rejeu). */
+static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
+    uint16_t code = v->virt_counter;
+    somfy_rts_remote_t r = { .address = v->virt_serial & 0xFFFFFF, .rolling_code = code };
+    uint8_t frame[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
+    v->virt_counter = r.rolling_code;
+    save_cfg();
+    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
+    ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
+             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
+}
+static void emit_virt_somfy(volet_t *v, uint8_t button) {
+    somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
+}
+
+/* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
+ * (issue #73) sont cables ; chaque protocole porte sa propre radio, sans toucher aux
+ * autres. `button` est un code PFX_BTN_*, traduit par protocole. */
 static void emit_virt(volet_t *v, uint8_t button) {
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:
         emit_virt_profalux(v, button);
+        break;
+    case VOLET_PROTO_SOMFY_RTS:
+        emit_virt_somfy(v, button);
         break;
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
@@ -808,6 +832,17 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         UNLOCK(); pub_flush();
         return 0;
     }
+    if (!strcmp(cmd, "prog")) {   /* appairage Somfy RTS : emet la commande PROG vers le moteur */
+        if (!v->virt || (volet_proto_t)v->proto != VOLET_PROTO_SOMFY_RTS) {
+            ESP_LOGW(TAG, "CMD prog refusee : '%s' n'est pas un volet Somfy virtuel", id);
+            UNLOCK(); return -1;
+        }
+        radio_pause_rx(true);
+        somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
+        radio_pause_rx(false);
+        UNLOCK();
+        return 0;
+    }
     if (!strcmp(cmd, "pos") && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
@@ -945,6 +980,26 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     pub_flush();
     ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u",
              id, (unsigned)serial, counter);
+    return 0;
+}
+
+/* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
+ * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
+ * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
+int shutters_create_virtual_somfy(const char *id, uint32_t address) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = true;
+    v->proto = VOLET_PROTO_SOMFY_RTS;
+    v->virt_serial = address & 0xFFFFFF;
+    v->virt_counter = 1;
+    save_cfg();
+    announce_one(v);
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)(address & 0xFFFFFF));
     return 0;
 }
 
@@ -1230,7 +1285,7 @@ static void purge_ghost_remotes_once(void) {
     nvs_close(h);
 }
 
-/* ══ FONCTION 1 — Dataset slide (option MQTT "capture toutes les trames") ══
+/* ══ FONCTION 1 : Dataset slide (option MQTT "capture toutes les trames") ══
  * Publie un hop UNIQUEMENT s'il n'est pas deja dans le set enregistre de ce serial.
  * Sert a collecter les 65536 hops distincts pour l'attaque slide-MITM. Appele sous LOCK. */
 static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, int8_t rssi, uint32_t t) {
@@ -1254,7 +1309,7 @@ static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, in
      * Le dataset slide (hops distincts) reste construit ici en RAM/NVS pour l'export /api/frames. */
 }
 
-/* ══ FONCTION 2 — Suivi de position via telecommandes ENREGISTREES ══
+/* ══ FONCTION 2 : Suivi de position via telecommandes ENREGISTREES ══
  * Independante de l'option MQTT : des qu'un volet a appris ce serial+bouton, on suit
  * sa position quand la VRAIE telecommande l'actionne. Appele sous LOCK. */
 static void track_shutter_position(const char *shex, uint8_t button) {
@@ -1377,8 +1432,13 @@ char *shutters_status_json(void) {
         cJSON_AddStringToObject(o, "id", v->id);
         if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
             cJSON_AddBoolToObject(o, "virt", true);
-            char vhex[SH_SERIAL_LEN]; snprintf(vhex, sizeof(vhex), "0x%07X", (unsigned)v->virt_serial);
-            cJSON_AddStringToObject(o, "virt_serial", vhex);   /* identite d'emission du volet (0x067) */
+            bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
+            cJSON_AddStringToObject(o, "proto", somfy ? "somfy" : "profalux");
+            char vhex[SH_SERIAL_LEN];
+            /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
+            snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
+                     (unsigned)(somfy ? (v->virt_serial & 0xFFFFFF) : v->virt_serial));
+            cJSON_AddStringToObject(o, "virt_serial", vhex);
         }
         if (v->central) cJSON_AddBoolToObject(o, "central", true);
         if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");   /* centrale : membres ; zone : suiveurs */
