@@ -1,10 +1,10 @@
 /*
- * CC1101 driver : TX + RX for Profalux 868.35 MHz OOK
+ * CC1101 driver — TX + RX for Profalux 868.35 MHz OOK
  *
  * Provides:
  *   - Init SPI + register config for OOK 868.35 MHz ~1550 baud
  *   - TX single frame (=synthesize OOK signal via GDO0 bit-banging)
- *   - RX capture : invokes callback for each detected frame
+ *   - RX capture — invokes callback for each detected frame
  */
 #ifndef CC1101_H
 #define CC1101_H
@@ -39,12 +39,6 @@ int  cc1101_tx_and_capture_bits(const uint8_t *frame, size_t bits, char *out_bit
 int  cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits);
 /* Rejoue (TX) une trame brute (chaine '0'/'1' en ordre du fil) en OOK HCS30x. */
 int  cc1101_tx_raw_bits(const char *bits, int n, int repeats);
-
-/* Emet un train d'impulsions OOK brut : chaque impulsion est un niveau (0/1) tenu us[i]
- * microsecondes, en bit-bang sur GDO0, dans UNE session TX. Primitive GENERIQUE, sans
- * protocole : l'appelant fournit la forme d'onde complete (et a deja retune la porteuse
- * si besoin). Rend 0 si emis, -1 sur argument invalide. */
-int  cc1101_tx_ook_pulses(const uint8_t *levels, const uint32_t *us, int n);
 
 /* Utils */
 extern int g_tx_marc;   /* MARCSTATE lu apres le dernier STX (0x13=TX). Diagnostic. */

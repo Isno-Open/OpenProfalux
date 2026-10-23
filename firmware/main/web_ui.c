@@ -1234,34 +1234,6 @@ static esp_err_t h_followers(httpd_req_t *r) {
     free(js);
     return e;
 }
-/* Cree un volet Somfy RTS : {id, address} -> adresse 24 bits (chaine "0x..." / decimale, ou
- * nombre). Pas de capture d'identite (contrairement au Profalux) : on choisit l'adresse, puis
- * on appaire depuis l'UI (commande "prog"). */
-static esp_err_t h_somfy_create(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
-    cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
-    const char *id = jstr(j, "id");
-    cJSON *a = cJSON_GetObjectItem(j, "address");
-    uint32_t address = 0;
-    if (cJSON_IsString(a) && a->valuestring) address = (uint32_t)strtoul(a->valuestring, NULL, 0);
-    else if (cJSON_IsNumber(a)) address = (uint32_t)a->valuedouble;
-    const char *err = NULL;
-    if (!id || !*id) err = "nom manquant";
-    else if (strchr(id, ',')) err = "virgule dans le nom";
-    else if ((address & 0xFFFFFF) == 0) err = "adresse manquante ou nulle";
-    int rc = err ? -1 : shutters_create_virtual_somfy(id, address);
-    if (err) ESP_LOGW(TAG, "volet Somfy '%s' refuse : %s", id ? id : "", err);
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
-    if (err) cJSON_AddStringToObject(o, "err", err);
-    char *js = cJSON_PrintUnformatted(o);
-    cJSON_Delete(o); cJSON_Delete(j);
-    httpd_resp_set_type(r, "application/json");
-    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
-    free(js);
-    return e;
-}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1477,6 +1449,5 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/forget", HTTP_POST, h_pfx_forget);
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
-    reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

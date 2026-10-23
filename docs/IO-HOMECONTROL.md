@@ -53,7 +53,7 @@ source repetee.
 
 ## Difference avec Somfy RTS
 
-Le Somfy RTS (deja integre, voir `IMPLEMENTATION-SOMFY-RTS.md`) est du **OOK en clair**,
+Le Somfy RTS (433 MHz, en cours d'integration, PR #75) est du **OOK en clair**,
 simple a emettre. io-homecontrol est **FSK chiffre AES, bidirectionnel**, avec un
 appairage a cle. C'est nettement plus lourd : ce n'est pas une variante du RTS.
 

@@ -75,7 +75,6 @@
         <button class="subtab active" data-s="learn">Cloner une télécommande</button>
         <button class="subtab" data-s="enrol">Créer une télécommande</button>
         <button class="subtab" data-s="central">Centrale</button>
-        <button class="subtab" data-s="somfy">Somfy</button>
         <button class="subtab" data-s="calib">Calibration</button>
         <button class="subtab" data-s="list">Liste</button>
       </nav>
@@ -133,34 +132,6 @@
           <div class="field"><label>Nom</label><input id="central-name" placeholder="ex : Tous les volets"></div>
           <div class="field"><label>Volets pilotés</label><div id="central-members" class="chips"></div></div>
           <div class="row"><button id="central-create" class="btn primary">Enregistrer la centrale</button><button id="central-cancel" class="btn">Annuler</button></div>
-        </div>
-      </div>
-
-      <div class="subpanel" data-sp="somfy">
-        <div class="card">
-          <div class="statline"><span class="dot"></span><b>Volet Somfy RTS (433,42 MHz).</b> Pour un moteur Somfy, pas Profalux. Pas besoin de télécommande d'origine : on choisit une adresse et on la fait apprendre au moteur par le mode appairage.</div>
-          <h2>Créer un volet Somfy</h2>
-          <p class="hint">Fonction expérimentale (issue #73), à valider sur un vrai moteur Somfy RTS.</p>
-          <div class="field"><label>Nom du volet</label><input id="somfy-name" placeholder="ex : Volet salon Somfy"></div>
-          <div class="field"><label>Adresse (24 bits)</label>
-            <div class="row" style="flex-wrap:nowrap">
-              <input id="somfy-addr" placeholder="0x123456" spellcheck="false" autocomplete="off" style="flex:1;min-width:0">
-              <button id="somfy-gen" class="btn">🎲 Générer</button></div>
-            <p class="hint">Identité de la télécommande virtuelle. Garde-la : c'est elle que le moteur retient à l'appairage.</p>
-          </div>
-          <div class="row"><button id="somfy-create" class="btn primary">💾 Créer le volet</button></div>
-          <div class="statline" id="somfy-create-status" hidden><span class="dot"></span><b></b></div>
-
-          <div id="somfy-steps" hidden>
-            <h3>1. Appairer le moteur</h3>
-            <p class="sub">Mets le moteur en attente d'appairage (appui long sur le bouton PROG de sa télécommande d'origine, le moteur fait un va-et-vient), puis clique : le boîtier émet la commande d'appairage. Le moteur fait un va-et-vient = c'est appairé.</p>
-            <div class="row"><button id="somfy-prog" class="btn primary">📡 Émettre l'appairage</button></div>
-            <div class="statline" id="somfy-prog-status" hidden><span class="dot"></span><b></b></div>
-            <h3>2. Tester</h3>
-            <p class="sub">Monte, stop, descends : le moteur doit suivre.</p>
-            <div class="dpad enrol-pad"><button id="somfy-up">▲</button><button id="somfy-stop">■</button><button id="somfy-down">▼</button></div>
-            <p class="hint">Le volet est aussi dans l'onglet <b>Volets</b> et pilotable depuis Home Assistant.</p>
-          </div>
         </div>
       </div>
 

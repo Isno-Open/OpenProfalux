@@ -297,24 +297,6 @@ jobs:
              -o mqtt_tls_host_test
           ./mqtt_tls_host_test
 
-  # Le codec logique Somfy RTS (somfy_rts.c) : somme de controle, obscurcissement en
-  # cascade, aller-retour des champs, depliage Manchester. Pur, un simple gcc suffit.
-  # Prepare le terrain du support Somfy RTS (issue #73) ; l'interop radio reste au banc.
-  banc-somfy-rts:
-    name: Banc de test du codec Somfy RTS
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: codec RTS sur vecteurs en bouchon (gcc + AddressSanitizer)
-        working-directory: firmware/test/somfy-rts
-        run: |
-          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
-             -I main -I ../../main main/test_main.c ../../main/somfy_rts.c \
-             -o somfy_rts_host_test
-          ./somfy_rts_host_test
-
   # Les profils radio (radio_profile.c) : frequence par marque, plage autorisee, mot de
   # frequence CC1101. Pur, un simple gcc suffit.
   banc-radio-profile:
