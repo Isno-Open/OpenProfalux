@@ -11,7 +11,8 @@ static const char *TAG = "somfy_tx";
  * a la fois (la tache volet serialise les commandes), et ca evite de charger la pile
  * d'une tache ESP de plusieurs kilo-octets. */
 #define SOMFY_TX_MAX_FRAMES   (1 + SOMFY_RTS_TX_REPEATS_MAX)
-#define SOMFY_TX_MAX_PULSES   (2 + SOMFY_TX_MAX_FRAMES * SOMFY_RTS_MAX_PULSES + (SOMFY_TX_MAX_FRAMES - 1))
+/* Dimensionne sur la trame la PLUS LONGUE (80 bits) : emit et emit80 partagent le buffer. */
+#define SOMFY_TX_MAX_PULSES   (2 + SOMFY_TX_MAX_FRAMES * SOMFY_RTS_MAX_PULSES_80 + (SOMFY_TX_MAX_FRAMES - 1))
 
 static uint8_t  s_level[SOMFY_TX_MAX_PULSES];
 static uint32_t s_us[SOMFY_TX_MAX_PULSES];
@@ -53,5 +54,31 @@ int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats) {
     int r = radio_tx_ook_pulses(SOMFY_RTS_FREQ_KHZ, s_level, s_us, n);
     ESP_LOGW(TAG, "TX Somfy : %d trame(s), %d impulsions, %u kHz, r=%d",
              repeats + 1, n, (unsigned)SOMFY_RTS_FREQ_KHZ, r);
+    return r;
+}
+
+int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd, int repeats) {
+    if (!base56) return -1;
+    if (repeats < 0) repeats = 0;
+    if (repeats > SOMFY_RTS_TX_REPEATS_MAX) repeats = SOMFY_RTS_TX_REPEATS_MAX;
+
+    int n = 0;
+    /* Reveil : une impulsion haute puis basse, sans long silence (comme ESPSomfy). */
+    n = push(n, 1, SOMFY_RTS_WAKEUP_HIGH_US);
+    n = push(n, 0, SOMFY_RTS_WAKEUP_LOW_US);
+
+    somfy_rts_pulse_t p[SOMFY_RTS_MAX_PULSES_80];
+    for (int f = 0; f <= repeats; f++) {
+        if (f > 0 && (n = push(n, 0, SOMFY_RTS_INTER_FRAME_US)) < 0) return -1;
+        uint8_t frame80[SOMFY_RTS_FRAME_BYTES_80];
+        somfy_rts_frame80(base56, cmd, (uint8_t)f, frame80);   /* octet 7 depend de f */
+        int np = somfy_rts_tx_pulses80(frame80, f == 0, p, SOMFY_RTS_MAX_PULSES_80);
+        if (np < 0) return -1;
+        for (int i = 0; i < np; i++)
+            if ((n = push(n, p[i].level, p[i].us)) < 0) return -1;
+    }
+    int r = radio_tx_ook_pulses(SOMFY_RTS_FREQ_KHZ, s_level, s_us, n);
+    ESP_LOGW(TAG, "TX Somfy 80 bits : cmd=0x%X, %d trame(s), %d impulsions, r=%d",
+             (unsigned)cmd, repeats + 1, n, r);
     return r;
 }

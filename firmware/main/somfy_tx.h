@@ -15,17 +15,14 @@
 #include <stdint.h>
 #include "somfy_rts.h"
 
-/* Plafond de trames repetees APRES la 1re. Borne le train (RAM statique + duree radio).
- * Monte a 23 (24 trames) : certains moteurs n'ENCLENCHENT la course complete qu'au-dela
- * d'un seuil de trames. Mesure communautaire (NodeMCU) : ~2 trames = un cran, ~16 = course
- * complete. Nos 8 d'avant restaient sous le seuil sur un volet a battants (#73). */
-#define SOMFY_RTS_TX_REPEATS_MAX  23
+/* Plafond de trames repetees APRES la 1re (borne le train : RAM statique + duree radio). */
+#define SOMFY_RTS_TX_REPEATS_MAX  7
 
-/* Nombre de repetitions par type de commande. Monter/descendre : au-dessus du seuil
- * d'enclenchement, pour que le moteur parte en course complete (le modele de la carte =
- * une rafale puis arret minute par do_stop). Stop/My : une rafale courte suffit a figer. */
-#define SOMFY_RTS_TX_REPEATS_MOVE 20
-#define SOMFY_RTS_TX_REPEATS_STOP 3
+/* Repetitions par appui bref. En 80 bits (format qui ENCLENCHE la course complete sur les
+ * moteurs concernes), la vraie telecommande emet 2 trames par appui (#73, Machin77), donc
+ * 1 repetition apres la 1re. Ce n'est PAS le nombre de trames qui fait la course complete,
+ * c'est le format 80 bits (ma piste "plus de trames", test2, etait fausse). */
+#define SOMFY_RTS_TX_REPEATS  1
 
 /* Traduit un bouton Profalux (PFX_BTN_UP/DOWN/STOP) en commande Somfy RTS. STOP -> My. */
 somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn);
@@ -35,5 +32,11 @@ somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn);
  * 433,42 MHz, puis retour a la porteuse Profalux. `repeats` est borne a
  * SOMFY_RTS_TX_REPEATS_MAX. Rend 0 si emis, -1 sinon. */
 int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats);
+
+/* Emet en FORMAT 80 BITS (RTS "80-S") : reveil, 1 trame + `repeats` repetitions, chaque
+ * trame = `base56` (7 octets empaquetes) + 3 octets d'extension recalcules selon `cmd` et
+ * l'index de repetition (somfy_rts_frame80). C'est ce format qui declenche la course complete
+ * sur les moteurs concernes (#73). Rend 0 si emis, -1 sinon. */
+int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd, int repeats);
 
 #endif

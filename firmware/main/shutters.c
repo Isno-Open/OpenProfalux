@@ -567,13 +567,12 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    /* Monter/descendre : rafale longue pour ENCLENCHER la course complete (le moteur part
-     * ensuite seul, do_stop le fige a la position voulue). Stop/My : rafale courte. */
-    const int reps = (cmd == SOMFY_RTS_CMD_UP || cmd == SOMFY_RTS_CMD_DOWN)
-                   ? SOMFY_RTS_TX_REPEATS_MOVE : SOMFY_RTS_TX_REPEATS_STOP;
-    somfy_tx_emit(frame, reps);
-    ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u reps=%d",
-             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code, reps);
+    /* Emission en FORMAT 80 BITS : c'est le format (pas le nombre de trames) qui declenche la
+     * course complete sur les moteurs concernes (#73). La vraie telecommande emet 2 trames par
+     * appui bref (SOMFY_RTS_TX_REPEATS = 1 repetition apres la 1re). */
+    somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS);
+    ESP_LOGW(TAG, "TX SOMFY 80b addr=0x%06X cmd=0x%X code=%u",
+             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
 static bool emit_virt_somfy(volet_t *v, uint8_t button) {
     somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
