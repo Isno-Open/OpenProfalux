@@ -14,6 +14,7 @@ Une ligne = un retour vérifié.
 | Profalux | MOT-PX3R10 (moteur solaire) | 2020 | 868 MHz (défaut) | preset Profalux Neosol R8 + bit de répétition | enrôlement | à déterminer | carte `external` (ESP32 + CC1101), puis module Ebyte E07-900MBL-01 | issue #59, joha38 |
 | Profalux | JX02XE 10R-56 (Stella NeoSol, moteur solaire) | 2026 | 868 MHz (défaut) | preset Profalux Neosol + bit de répétition | enrôlement | à déterminer | ESP32 + CC1101 | issue #59, joha38 |
 | FranciaFlex | M4G | non précisé | 868 MHz | non précisé | enrôlement | variable | non précisé | forum HACF, Lecanard38 |
+| Somfy | récepteur Soliris Mod/Var Slim Receiver RTS (réf. 181080x) + moteur J4 WT (réf. J406 1TN), BSO à lames orientables | 2012 | 433,42 MHz | Somfy RTS (hors profil Profalux) | Somfy RTS : appairage PROG, course complète en appui bref (rafale courte) | code tournant RTS | ESP32 + CC1101 | issue #73 |
 
 Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année d'installation,
 la fréquence, le profil radio choisi, la carte et le module utilisés, et ce qui a fonctionné
