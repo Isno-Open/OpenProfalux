@@ -40,20 +40,6 @@ static bool tx_raw(const uint8_t *io_bytes, uint8_t n) {
     return io_radio_tx_packet(fifo, m) == 0;
 }
 
-/* Construit une trame 1W signee (cmd + charge utile + code roulant + HMAC) vers dst et l'emet. Le
- * code roulant vient du compteur par-source de io_store (croissant, anti-rejeu). */
-static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const uint8_t dst[3],
-                           uint8_t cmd, const uint8_t *payload, size_t n) {
-    IoFrame f;
-    init_frame(&f, true);
-    set_source(&f, src);
-    set_destination(&f, dst);
-    if (!set_command(&f, cmd, payload, n)) return false;
-    set_rolling_code(&f, io_store_next_rolling(src));
-    if (!finalize_frame(&f, key, nullptr)) return false;
-    return tx_frame(&f);
-}
-
 /* Apprend le profil d'emission depuis une trame io captee de la VRAIE telecommande du volet. On ne
  * retient que les commandes 0x00 : leur destination (broadcast encodant le type) et leur charge utile
  * entiere sont ce qu'on doit rejouer. Disposition 1W :
@@ -75,16 +61,14 @@ extern "C" int io_profile_from_capture(const uint8_t *frame, int n, io_profile_t
 }
 
 /* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers un
- * moteur mis en mode PROG. Ceremonie calquee sur une capture Situo reelle
- * (danielpetrovic/somfy-io-bridge), la seule prouvee sur un vrai moteur Somfy :
- *  1) 0x30 : cle enveloppee, SANS HMAC (l'appairage est garde par le bouton du moteur),
- *  2) rafale 0x20 "private-write" signee : (main 0x0C00), puis 0x05xx (xx = 02..08) et un 0xFF,
- *  3) 0x2e : confirmation de pairage, signee.
- * Un 0x30 seul fait tressaillir le moteur mais ne le bonde pas ; la rafale + le 0x2e closent
- * l'enrolement, comme la rafale rituelle de l'enrolement Profalux. Aucune reception ni saut de
- * frequence : un seul CC1101 suffit. Cree une identite d'emetteur neuve (propre a CE volet), la
- * memorise et la rend dans out_src. Rend 0 si emis, -2 sur erreur.
- * EXPERIMENTAL : une partie de la rafale 0x20 est reproduite d'une seule capture, a valider au banc. */
+ * moteur mis en mode PROG (bouton physique tenu sur une telecommande existante du moteur).
+ * Calque sur l'enrolement REEL de Devmel, capte sur l'air sur le moteur d'un testeur (#87) :
+ * Devmel n'envoie QUE la commande 0x30 (transfert de cle), repetee 3 fois, SANS HMAC, et SANS
+ * rafale 0x20 ni confirmation 0x2e. On fait pareil. Disposition du 0x30 :
+ *   ctrl0 ctrl1 | dest | src | 0x30 | cle enveloppee[16] | man_id | data | seq[2] | crc[2]
+ * (total 31 octets, ctrl0 = 0xFC). C'est du 1W pur : aucune reception ni saut de frequence, un
+ * seul CC1101 suffit. Cree une identite d'emetteur neuve (propre a CE volet), la memorise et la
+ * rend dans out_src. Rend 0 si emis, -2 sur erreur. */
 extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], uint32_t timeout_ms) {
     (void)timeout_ms;
     if (!out_src || !profile) return -2;
@@ -98,51 +82,32 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], ui
 
     io_radio_set_channel(IO_CH2);   /* canal 1W primaire (868,95 MHz) */
 
-    /* 1) Transfert de cle 0x30, assemble a la main (notre IoFrame ajoute toujours un HMAC,
-     *    absent de cette trame). Disposition : ctrlb1 ctrlb2 dst src 0x30 cle[16] man_id data
-     *    seq[2] crc[2], soit msg_len = 28 et total = 31 octets. */
+    /* Transfert de cle 0x30, assemble a la main (notre IoFrame ajoute toujours un HMAC, absent de
+     * cette trame). Disposition : ctrl0 ctrl1 dst src 0x30 cle[16] man_id data seq[2] crc[2], soit
+     * msg_len = 28 et total = 31 octets. Comme Devmel, on l'emet 3 fois avec la MEME sequence, en
+     * basculant ctrl1 (0x20 / 0x00) d'une repetition a l'autre (#87). Pas de rafale 0x20 ni de
+     * confirmation 0x2e : Devmel ne les emet pas, ils faisaient echouer notre appairage. */
     uint8_t enc[AES_KEY_SIZE];
     if (!crypto::encrypt_1w_key(key, src, enc)) return -2;
-    {
+    const uint16_t seq = io_store_next_rolling(src);   /* une seule sequence pour les 3 repetitions */
+    for (int rep = 0; rep < 3; rep++) {
         uint8_t f[FRAME_MAX_SIZE];
         const uint8_t msg_len = 28;   /* du ctrl byte 1 jusqu'au dernier octet avant le CRC */
-        f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK);  /* debut+fin+1W */
-        f[1] = 0x00;                                      /* ctrl byte 1 */
+        f[0] = (uint8_t)((msg_len & CTRL0_LENGTH_MASK) | CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK);  /* debut+fin+1W = 0xFC */
+        f[1] = (rep % 2) ? 0x00 : 0x20;                   /* ctrl byte 1 : Devmel bascule 0x20/0x00 */
         memcpy(&f[2], tgt, NODE_ID_SIZE);                 /* broadcast du type appris */
         memcpy(&f[5], src, NODE_ID_SIZE);
         f[8] = CMD_KEY_TRANSFER_1W;                       /* 0x30 */
         memcpy(&f[9], enc, AES_KEY_SIZE);                 /* cle enveloppee (16 o) */
-        f[25] = MANUFACTURER_SOMFY_PAIR;                  /* 0x02 */
+        f[25] = MANUFACTURER_SOMFY_PAIR;                  /* 0x01 (mesure sur l'enrolement Devmel reel, #87) */
         f[26] = PAIR_STATUS_BYTE;                         /* 0x01 */
-        uint16_t seq = io_store_next_rolling(src);
         f[27] = (uint8_t)(seq >> 8);
         f[28] = (uint8_t)(seq & 0xFF);
-        uint16_t crc = crypto::compute_crc16(f, 1 + msg_len);   /* CRC-16/KERMIT sur ctrlb1..data */
+        uint16_t crc = crypto::compute_crc16(f, 1 + msg_len);   /* CRC-16/KERMIT sur ctrl0..data */
         f[29] = (uint8_t)(crc & 0xFF);                    /* LSB d'abord */
         f[30] = (uint8_t)(crc >> 8);
         tx_raw(f, 31);
         esp_rom_delay_us(20000);
-    }
-
-    /* 2) Rafale "private-write" 0x20 (signee), charge utile = origin, acei, main[2], fp1.
-     *    Valeurs reproduites de la capture Situo : (main0,main1) = (0x0C,0x00), puis (0x05, xx)
-     *    pour xx dans 02..08, puis (0x05, 0xFF). */
-    {
-        const uint8_t steps[] = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xFF};
-        uint8_t pw[5] = {0x02 /*origin*/, 0x03 /*acei*/, 0x0C /*main0*/, 0x00 /*main1*/, 0x00 /*fp1*/};
-        send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
-        esp_rom_delay_us(14000);
-        for (size_t i = 0; i < sizeof steps; i++) {
-            pw[2] = 0x05; pw[3] = steps[i];
-            send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
-            esp_rom_delay_us(14000);
-        }
-    }
-
-    /* 3) Confirmation de pairage 0x2e (signee), charge utile = un octet de donnee a 0x00. */
-    {
-        uint8_t data = 0x00;
-        send_signed_1w(src, key, tgt, CMD_PAIR_CONFIRM, &data, 1);
     }
 
     memcpy(out_src, src, NODE_ID_SIZE);
