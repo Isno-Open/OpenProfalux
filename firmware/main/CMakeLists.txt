@@ -55,6 +55,8 @@ idf_component_register(
         "cfg_model.c"
         "keeloq.c"
         "keeloq_decode.c"
+        "somfy_rts.c"
+        "somfy_tx.c"
         "mdns_name.c"
         "captive_dns.c"
         "enrol_gate.c"
