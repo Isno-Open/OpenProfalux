@@ -41,9 +41,6 @@ typedef struct {
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
     uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
-    uint8_t  somfy_mode;     /* somfy_rts_mode_t (somfy_tx.h) : 0 = 56 bits standard (defaut), 1 = 80 bits.
-                              * Ignore hors VOLET_PROTO_SOMFY_RTS. Les volets persistes sans ce champ
-                              * le prennent a 0, donc en 56 bits : aucune regression. */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
