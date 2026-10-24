@@ -24,6 +24,16 @@
  * c'est le format 80 bits (ma piste "plus de trames", test2, etait fausse). */
 #define SOMFY_RTS_TX_REPEATS  1
 
+/* Format de trame choisi PAR VOLET (#73). Le 56 bits est le STANDARD (volets roulants
+ * classiques, defaut d'ESPSomfy) : on le garde par defaut pour ne regresser personne. Le
+ * 80 bits enclenche la course complete sur les moteurs a lames orientables (ex. Situo
+ * Variation). Persiste en uint8_t dans volet_t (cfg_model.h), comme volet_proto_t ; sa
+ * valeur traverse la frontiere web sous forme d'ordinal, jamais de texte a reinterpreter. */
+typedef enum {
+    SOMFY_RTS_MODE_56 = 0,   /* standard : somfy_tx_emit */
+    SOMFY_RTS_MODE_80 = 1,   /* course complete : somfy_tx_emit80 */
+} somfy_rts_mode_t;
+
 /* Traduit un bouton Profalux (PFX_BTN_UP/DOWN/STOP) en commande Somfy RTS. STOP -> My. */
 somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn);
 

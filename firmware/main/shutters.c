@@ -568,12 +568,14 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    /* Emission en 56 bits : le STANDARD, compatible avec les volets roulants classiques, et
-     * le defaut d'ESPSomfy. Le 80 bits (somfy_tx_emit80), pour les volets a lames orientables
-     * (ex. Situo Variation, #73), reste disponible dans le codec et sera choisi via un reglage
-     * 56/80 par volet. Tant que ce reglage n'existe pas, on emet en 56 bits pour ne regresser
-     * personne. Machin77 valide le 80 bits sur la pre-release dediee. */
-    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
+    /* Format choisi par volet (#73). 56 bits = STANDARD (volets roulants classiques, defaut
+     * d'ESPSomfy) ; 80 bits = course complete sur les moteurs a lames orientables (ex. Situo
+     * Variation). Le defaut 56 bits ne regresse personne ; le 80 bits se choisit dans l'onglet
+     * Somfy. Les deux envoient la meme base de trame : le 80 bits y ajoute l'extension recalculee. */
+    if ((somfy_rts_mode_t)v->somfy_mode == SOMFY_RTS_MODE_80)
+        somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS_MAX);
+    else
+        somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
@@ -1009,7 +1011,7 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
 /* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
  * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
-int shutters_create_virtual_somfy(const char *id, uint32_t address) {
+int shutters_create_virtual_somfy(const char *id, uint32_t address, uint8_t mode) {
     if (!id || !*id) return -1;
     /* Une adresse Somfy ne doit JAMAIS ressembler a une identite Profalux 0x067 valide. Sinon un
      * ancien firmware (d'avant le champ `proto`) qui restaure ce volet le prendrait pour un volet
@@ -1026,13 +1028,32 @@ int shutters_create_virtual_somfy(const char *id, uint32_t address) {
     if (!v) { UNLOCK(); return -1; }
     v->virt = true;
     v->proto = VOLET_PROTO_SOMFY_RTS;
+    v->somfy_mode = (mode == SOMFY_RTS_MODE_80) ? SOMFY_RTS_MODE_80 : SOMFY_RTS_MODE_56;
     v->virt_serial = address & 0xFFFFFF;
     v->virt_counter = 1;
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)(address & 0xFFFFFF));
+    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X, %s",
+             id, (unsigned)(address & 0xFFFFFF),
+             v->somfy_mode == SOMFY_RTS_MODE_80 ? "80 bits" : "56 bits");
+    return 0;
+}
+
+/* Bascule le format d'un volet Somfy deja cree entre 56 et 80 bits, sans le recreer :
+ * le testeur peut comparer les deux sur le meme moteur. Refuse (-1) un volet inconnu ou
+ * qui n'est pas un volet Somfy RTS ; les autres champs ne bougent pas. */
+int shutters_set_somfy_mode(const char *id, uint8_t mode) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v || !v->virt || v->proto != VOLET_PROTO_SOMFY_RTS) { UNLOCK(); return -1; }
+    v->somfy_mode = (mode == SOMFY_RTS_MODE_80) ? SOMFY_RTS_MODE_80 : SOMFY_RTS_MODE_56;
+    save_cfg();
+    UNLOCK();
+    ESP_LOGW(TAG, "volet Somfy '%s' : format %s", id,
+             mode == SOMFY_RTS_MODE_80 ? "80 bits" : "56 bits");
     return 0;
 }
 

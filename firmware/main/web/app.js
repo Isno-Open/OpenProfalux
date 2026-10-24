@@ -1500,7 +1500,8 @@ if ($('#somfy-create')) $('#somfy-create').onclick = async () => {
   if (!name) return toast('Donne un nom au volet');
   if (isNewNameWithComma(name)) return toast(COMMA_MSG);
   if (!addr) return toast('Donne ou génère une adresse');
-  const r = await api('/api/somfy/create', { method: 'POST', body: JSON.stringify({ id: name, address: addr }) }).catch(() => null);
+  const mode = parseInt(($('#somfy-mode') && $('#somfy-mode').value) || '0', 10) || 0;
+  const r = await api('/api/somfy/create', { method: 'POST', body: JSON.stringify({ id: name, address: addr, mode }) }).catch(() => null);
   if (r && r.ok) {
     somfyActive = name;
     somfyShowStatus('#somfy-create-status', true, 'Volet « ' + name +' » créé. Appaire-le au moteur ci-dessous.');
@@ -1509,6 +1510,14 @@ if ($('#somfy-create')) $('#somfy-create').onclick = async () => {
   } else {
     somfyShowStatus('#somfy-create-status', false, 'Échec' + (r && r.err ? ' : ' + r.err : ''));
   }
+};
+/* Changer le format d'un volet deja cree, sans le recreer (comparer 56/80 sur le meme moteur). */
+if ($('#somfy-mode')) $('#somfy-mode').onchange = async () => {
+  if (!somfyActive) return;   /* avant creation : la valeur est juste lue a la creation */
+  const mode = parseInt($('#somfy-mode').value || '0', 10) || 0;
+  const r = await api('/api/somfy/mode', { method: 'POST', body: JSON.stringify({ id: somfyActive, mode }) }).catch(() => null);
+  if (r && r.ok) toast('Format ' + (mode ? '80 bits' : '56 bits') + ' appliqué');
+  else toast('Changement de format refusé');
 };
 if ($('#somfy-prog')) $('#somfy-prog').onclick = async (e) => {
   if (!somfyActive) return toast('Crée d\'abord un volet Somfy');
