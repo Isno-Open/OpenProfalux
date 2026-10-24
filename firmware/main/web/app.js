@@ -191,7 +191,7 @@ $('#theme').onclick = () => {
 };
 /* Libelles des boutons-symboles ▲ ■ ▼ (lecteurs d'ecran, infobulles), poses apres chaque rendu :
  * les cartes de volets sont regenerees toutes les 3 s. */
-const SYM = { up: 'Monter', stop: 'Stop', down: 'Descendre' };
+const SYM = { up: 'Monter', stop: 'Stop', down: 'Descendre', inter: 'Position intermédiaire' };
 function labelSymbols() {
   const set = (b, l) => { if (b && !b.hasAttribute('aria-label')) { b.setAttribute('aria-label', l); if (!b.title) b.title = l; } };
   $$('.dpad button[data-cmd]').forEach(b => set(b, SYM[b.dataset.cmd]));
@@ -221,6 +221,7 @@ if ($('#reorder-toggle')) $('#reorder-toggle').onclick = () => {
 };
 
 let dragId = null;   /* volet en cours de glissement */
+let slatHover = null; /* barre de position survolee : { id, p } */
 
 /* Applique et persiste un nouvel ordre complet. Le cache local est mis a jour
    AVANT l'aller-retour reseau, sinon le prochain poll (3 s) ecraserait l'ordre
@@ -295,7 +296,9 @@ function renderVolets(list, rf) {
         reorderMode ? '<span class="reorder"><button data-mv="up" title="Monter">▲</button><button data-mv="down" title="Descendre">▼</button></span>'
                     : (showP ? `<span class="pct">${v.position ?? '?'}%</span>` : '')}</div>
       <div class="dpad"><button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button></div>
-      ${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}
+      ${showP || v.inter ? `<div class="dpad posrow">${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}${
+        v.inter ? `<button data-cmd="inter" class="star" title="Position intermédiaire du moteur${!isC && !isZ && v.inter_pct >= 0 ? ` (${v.inter_pct} %)` : ''}">★</button>` : ''}</div>` : ''}
+      ${v.inter_seen && !reorderMode ? `<div class="statline"><span class="dot"></span><span>La télécommande <code>${esc(remoteName(v.inter_seen.serial))}</code> a envoyé la position intermédiaire.</span><button class="btn" data-inter-add>L'ajouter à ce volet</button></div>` : ''}
       <div class="serials">${isC
         ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
         : (v.virt
@@ -311,10 +314,21 @@ function renderVolets(list, rf) {
       b.onclick = () => sendCmd({ id: v.id, cmd: b.dataset.cmd }, b);
     });
     const slat = el.querySelector('.slat');
-    if (slat && !reorderMode) slat.onclick = e => {
-      const p = Math.round(100 * (e.offsetX / e.currentTarget.offsetWidth));
-      sendCmd({ id: v.id, cmd: 'pos', value: p });
-    };
+    if (slat && !reorderMode) {
+      slat.onclick = e => {
+        const p = Math.round(100 * (e.offsetX / e.currentTarget.offsetWidth));
+        sendCmd({ id: v.id, cmd: 'pos', value: p });
+      };
+      /* survol : lamelles claires jusqu'au curseur, gardees d'un rafraichissement (3 s) a l'autre */
+      if (slatHover && slatHover.id === v.id) slat.style.setProperty('--h', slatHover.p);
+      slat.onmousemove = e => {
+        slatHover = { id: v.id, p: 100 * e.offsetX / e.currentTarget.offsetWidth };
+        slat.style.setProperty('--h', slatHover.p);
+      };
+      slat.onmouseleave = () => { slatHover = null; slat.style.removeProperty('--h'); };
+    }
+    const addInter = el.querySelector('[data-inter-add]');
+    if (addInter) addInter.onclick = () => interAdopt(v);
     el.querySelectorAll('[data-mv]').forEach(b =>
       b.onclick = () => moveVolet(v.id, b.dataset.mv === 'up' ? -1 : 1));
     /* Glisser-deposer (souris/trackpad). Les fleches restent disponibles : le
@@ -464,6 +478,7 @@ function renderLearnSlots() {
   if (orientInp && v && document.activeElement !== orientInp)
     orientInp.value = (v.orientation != null && v.orientation >= 0) ? v.orientation : '';
   renderZoneMembers(v);
+  renderInter(v);
   const delRow = $('#del-volet-row');
   if (delRow) delRow.hidden = !v;
   const hint = $('#learn-hint');
@@ -538,6 +553,66 @@ if (orientSave) orientSave.onclick = async () => {
   toast('Orientation enregistrée'); await loadStatus();
 };
 
+/* ── Position intermediaire du moteur ──
+ * Volet virtuel : une case (le moteur l'a ou non), decochee par defaut. Volet clone : la
+ * trame Montee + Stop ou Descente + Stop (l'une ou l'autre, meme effet), capturee ici ou
+ * adoptee depuis le bandeau de la carte. Le % ne sert qu'au suivi de position. Le boitier
+ * n'enregistre pas la position dans le moteur : la telecommande d'origine s'en charge. */
+function renderInter(v) {
+  const row = $('#inter-row'), box = $('#inter-box'); if (!row || !box) return;
+  row.hidden = !v || !!v.central;
+  if (row.hidden) return;
+  if (box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT'
+      && document.activeElement.type === 'number') return;   /* saisie du % en cours */
+  const c = (v.cmd || {}).inter;
+  const has = !!v.inter;
+  const pct = v.inter_pct >= 0 ? v.inter_pct : '';
+  const pctRow = `<div class="row" style="flex-wrap:nowrap;margin-top:6px"><input id="inter-pct" type="number" min="0" max="100" value="${pct}" placeholder="% inconnu" style="flex:1;min-width:0">
+      <button id="inter-pct-save" class="btn">Enregistrer le %</button></div>
+    <p class="hint">% de fermeture, comme sur la carte (0 = ouvert, 100 = fermé). Vide = inconnu : le volet y va, mais sa position affichée ne bouge pas.</p>`;
+  const goBtn = `<button id="inter-go" class="btn">◐ Y aller</button>`;
+  if (v.virt) {
+    box.innerHTML = `<label class="chip" style="cursor:pointer"><input type="checkbox" id="inter-on"${v.inter_on ? ' checked' : ''} style="margin-right:5px">Ce moteur a une position intermédiaire</label>`
+      + (has ? pctRow + `<div class="row" style="margin-top:6px">${goBtn}</div>` : '');
+  } else if (c) {
+    box.innerHTML = `<div class="slot done"><span class="slot-ico">◐</span><span class="slot-lbl">${c.b === 0xC ? 'Descente + Stop' : 'Montée + Stop'}</span>
+        <span class="slot-state">✓ appris <code>0x${c.b.toString(16).toUpperCase()}</code> <code>${esc(c.s)}</code></span>
+        <button class="btn slot-btn" id="inter-cap">Recapturer</button><button class="btn danger" id="inter-off">Retirer</button></div>`
+      + pctRow + `<div class="row" style="margin-top:6px">${goBtn}</div>`;
+  } else {
+    box.innerHTML = `<div class="slot"><span class="slot-ico">◐</span><span class="slot-lbl">Montée + Stop ou Descente + Stop</span>
+        <span class="slot-state">à capturer : appuie sur les deux boutons en même temps (l'un ou l'autre couple, même effet)</span>
+        <button class="btn slot-btn" id="inter-cap">Capturer</button></div>`;
+  }
+  const on = $('#inter-on');
+  if (on) on.onchange = () => interSet(v.id, { on: on.checked });
+  const off = $('#inter-off');
+  if (off) off.onclick = () => { if (confirm(`Retirer la position intermédiaire du volet « ${v.id} » ?`)) interSet(v.id, { on: false }); };
+  const cap = $('#inter-cap');
+  if (cap) { cap.disabled = learning; cap.onclick = () => captureAction('inter', cap); }
+  const ps = $('#inter-pct-save');
+  if (ps) ps.onclick = () => {
+    const val = $('#inter-pct').value.trim();
+    interSet(v.id, { on: true, pct: val === '' ? -1 : Math.max(0, Math.min(100, parseInt(val, 10) || 0)) });
+  };
+  const go = $('#inter-go');
+  if (go) go.onclick = () => sendCmd({ id: v.id, cmd: 'inter' }, go);
+}
+async function interSet(id, body) {
+  const r = await api('/api/volet/inter', { method: 'POST', body: JSON.stringify({ id, ...body }) }).catch(() => null);
+  if (r && r.ok) toast('Position intermédiaire enregistrée');
+  else toast('Échec' + (r && r.err ? ' : ' + r.err : ''));
+  await loadStatus();
+}
+/* Bandeau de la carte : une telecommande du volet a envoye la position intermediaire. Clone :
+ * on adopte sa trame depuis le journal RF ; virtuel : on coche la case. */
+async function interAdopt(v) {
+  if (v.virt) return interSet(v.id, { on: true });
+  const r = await api('/api/learn/adopt', { method: 'POST', body: JSON.stringify({ id: v.id, action: 'inter', serial: v.inter_seen.serial, hop: v.inter_seen.hop }) }).catch(() => null);
+  toast(r && r.ok ? 'Position intermédiaire ajoutée' : 'Trame plus dans le journal : capture-la dans Télécommandes → Cloner');
+  await loadStatus();
+}
+
 async function reassign(from, to) {
   if (!activeVolet || from === to) { renderLearnSlots(); return; }
   await api('/api/learn/reassign', { method: 'POST', body: JSON.stringify({ id: activeVolet, from, to }) });
@@ -553,7 +628,7 @@ async function captureAction(action, btn) {
   const id = activeVolet;
   if (!id) { toast('Choisis d’abord un volet'); return; }
   if (isNewNameWithComma(id)) { toast(COMMA_MSG); return; }
-  const label = LEARN_ACTIONS.find(x => x.a === action).lbl;
+  const label = (LEARN_ACTIONS.find(x => x.a === action) || { lbl: 'Montée + Stop ou Descente + Stop' }).lbl;
   learning = true; renderLearnSlots();
   learnFail(false);
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
@@ -576,7 +651,12 @@ async function captureAction(action, btn) {
       }
       const name = $('#cap-name').value.trim();
       if (name) await api('/api/remote', { method: 'POST', body: JSON.stringify({ serial: r.serial, name }) });
-      await api('/api/learn/assign', { method: 'POST', body: JSON.stringify({ id, action, bits: r.bits }) });
+      const as = await api('/api/learn/assign', { method: 'POST', body: JSON.stringify({ id, action, bits: r.bits }) }).catch(() => null);
+      if (!as || !as.ok) {   /* position intermediaire : seul Montee + Stop (ou Stop + Descente) est pris */
+        toast(as && as.err === 'bouton' ? `Ni Montée + Stop ni Descente + Stop : bouton 0x${r.button} reçu. Appuie sur les deux en même temps.` : 'Échec de l\'enregistrement');
+        renderLearnSlots();
+        return;
+      }
       toast(`✓ ${label} apprise (0x${r.button}, ${r.rssi} dBm)`);
       await loadStatus();     // rafraîchit -> le slot passe en ✓
     } else if (Date.now() - t0 > 16000) {

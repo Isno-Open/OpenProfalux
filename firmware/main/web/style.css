@@ -123,7 +123,15 @@ select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 .dpad button{padding:13px 0;font-size:1.1rem;border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:var(--radius-sm);cursor:pointer;transition:.12s}
 .dpad button:hover{border-color:var(--accent-line);color:var(--accent)}
 .dpad button:active{background:var(--accent-weak)}
-.slat{position:relative;height:12px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);overflow:hidden;cursor:pointer}
+/* Rangee sous les commandes : barre de position, et l'etoile de la position intermediaire,
+   un peu plus haute que la barre pour s'en detacher, a droite meme sans barre. */
+.dpad.posrow{display:flex;align-items:center}.dpad.posrow .slat{flex:1}
+.dpad button.star{height:30px;width:54px;padding:0;flex:none;margin-left:auto;font-size:1.05rem;line-height:1;border-radius:999px;color:var(--accent)}.dpad button.star:hover{background:var(--accent-weak)}
+.slat{position:relative;height:22px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);overflow:hidden;cursor:pointer;transition:.12s}
+/* Survol : les memes lamelles, plus claires, de l'origine jusqu'au curseur (vide et rempli),
+   la ou un clic enverrait le volet. */
+.slat:hover{border-color:var(--accent-line)}
+.slat::after{content:"";position:absolute;inset:0;width:calc(var(--h,0)*1%);background:repeating-linear-gradient(90deg,var(--accent),var(--accent) 4px,color-mix(in srgb,var(--accent) 78%,#000) 4px,color-mix(in srgb,var(--accent) 78%,#000) 6px);opacity:.4;pointer-events:none}
 .slat::before{content:"";position:absolute;inset:0;width:calc(var(--p,50)*1%);background:repeating-linear-gradient(90deg,var(--accent),var(--accent) 4px,color-mix(in srgb,var(--accent) 78%,#000) 4px,color-mix(in srgb,var(--accent) 78%,#000) 6px);opacity:.85}
 /* Radio = ressource unique : pendant qu'une commande part (~1s), on montre le bouton actif ("envoi")
    et on desactive tous les autres boutons volet -> plus de matraquage ni de file d'attente invisible. */
