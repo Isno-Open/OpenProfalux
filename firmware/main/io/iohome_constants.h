@@ -123,12 +123,11 @@ constexpr uint8_t CMD_PRIVATE_WRITE = 0x20;     // "private write" de la ceremon
 constexpr uint8_t CMD_PAIR_CONFIRM  = 0x2e;     // confirmation de pairage (close de la ceremonie)
 constexpr uint8_t CMD_REMOVE_1W     = 0x39;     // depairage (retrait d'une cle 1W)
 
-// Marqueur fabricant (man_id) dans la trame d'appairage 0x30 (different de l'octet bouton).
-// MESURE sur un enrolement Devmel reel vers un moteur Somfy io (#87) : man_id = 0x01.
-// (L'ancien 0x02, tire de samr037/danielpetrovic, etait une supposition non confirmee.)
-constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x01;
+// Marqueur fabricant dans la trame d'appairage 0x30 (different de l'octet bouton) :
+// 0x02 pour Somfy, 0x01 pour Velux (samr037 frame_build.h, danielpetrovic manufacturer_).
+constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x02;
 constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
-constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet du 0x30, observe a 0x01 (Devmel #87)
+constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01
 
 // Authentication Commands (0x3C-0x3D)
 constexpr uint8_t CMD_CHALLENGE_REQUEST = 0x3C;
