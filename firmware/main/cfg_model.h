@@ -26,7 +26,7 @@
  * s'ajoutent ici et se cablent dans emit_virt (shutters.c). */
 typedef enum {
     VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
-    VOLET_PROTO_SOMFY_RTS = 1,   /* reserve, pas encore cable */
+    VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
 } volet_proto_t;
 
 typedef struct {

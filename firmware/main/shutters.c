@@ -8,6 +8,7 @@
 #include "cfg_model.h"
 #include "remote_battery.h"
 #include "pfx_enrol.h"
+#include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -533,10 +534,18 @@ static uint8_t bits_button(const char *b) {
 
 /* Volet VIRTUEL Profalux : GENERE la trame (keeloq + compteur roulant), l'emet au TE du
  * boitier, puis avance et persiste le compteur. */
-static void emit_virt_profalux(volet_t *v, uint8_t button) {
+/* Un volet participe a la comptabilite d'enrolement Profalux (identites 0x067, compteurs
+ * roulants) seulement s'il est virtuel ET en protocole Profalux. Un volet Somfy RTS porte une
+ * adresse 24 bits dans un autre espace de noms : il ne doit ni reserver un creneau 0x067 ni
+ * toucher un compteur d'enrolement Profalux, meme si son adresse coincide avec un serial 0x067. */
+static inline bool is_pfx_virt(const volet_t *v) {
+    return v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX;
+}
+
+static bool emit_virt_profalux(volet_t *v, uint8_t button) {
     char bits[68];
     uint16_t cnt = v->virt_counter;
-    if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return;
+    if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return false;   /* rien emis */
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre. Un crash entre les
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
     v->virt_counter = cnt + 1;
@@ -544,6 +553,7 @@ static void emit_virt_profalux(volet_t *v, uint8_t button) {
     radio_tx(bits, PRESS_REPEATS);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
+    return true;
 }
 
 /* Volet VIRTUEL Somfy RTS : GENERE la trame (adresse + code roulant), puis l'emet a
@@ -558,29 +568,35 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
+    /* Emission en 56 bits : le STANDARD, compatible avec les volets roulants classiques, et
+     * le defaut d'ESPSomfy. Le 80 bits (somfy_tx_emit80), pour les volets a lames orientables
+     * (ex. Situo Variation, #73), reste disponible dans le codec et sera choisi via un reglage
+     * 56/80 par volet. Tant que ce reglage n'existe pas, on emet en 56 bits pour ne regresser
+     * personne. Machin77 valide le 80 bits sur la pre-release dediee. */
     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
-static void emit_virt_somfy(volet_t *v, uint8_t button) {
+static bool emit_virt_somfy(volet_t *v, uint8_t button) {
     somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
+    return true;
 }
 
 /* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
  * (issue #73) sont cables ; chaque protocole porte sa propre radio, sans toucher aux
- * autres. `button` est un code PFX_BTN_*, traduit par protocole. */
-static void emit_virt(volet_t *v, uint8_t button) {
+ * autres. `button` est un code PFX_BTN_*, traduit par protocole. Renvoie true si une trame a
+ * ete emise : un protocole non cable (ou une trame Profalux non construite) renvoie false, pour
+ * que l'appelant ne simule pas un mouvement qui n'a rien envoye au moteur. */
+static bool emit_virt(volet_t *v, uint8_t button) {
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:
-        emit_virt_profalux(v, button);
-        break;
+        return emit_virt_profalux(v, button);
     case VOLET_PROTO_SOMFY_RTS:
-        emit_virt_somfy(v, button);
-        break;
+        return emit_virt_somfy(v, button);
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
                  v->id, (unsigned)v->proto);
-        break;
+        return false;
     }
 }
 
@@ -589,11 +605,18 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
  * On integre juste la position ensuite ; l'arret se fait par do_stop (rafale STOP) au bon moment. */
 static void start_move(volet_t *v, int dir) {
+    radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
+    bool sent;
+    if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
+    else       { emit_press(dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise */
+    if (!sent) {
+        /* Rien n'est parti (protocole non cable) : ne pas enclencher le suivi, sinon la boucle de
+         * tick ferait avancer et publier une position que le moteur n'a jamais recue. */
+        radio_pause_rx(false);
+        return;
+    }
     v->dir = dir; v->own_move = true;
     v->last_tick_us = esp_timer_get_time();
-    radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
-    if (v->virt) emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
-    else         emit_press(dir > 0 ? v->up : v->down);
     zone_follow(v, dir);
 }
 static void do_stop(volet_t *v) {
@@ -797,7 +820,7 @@ int shutters_delete_volet(const char *id) {
     if (idx < 0) { UNLOCK(); return -1; }
     /* Volet virtuel : son compteur roulant (le seul a jour, il avance a chaque commande) doit
      * survivre au volet, sinon un re-enrolement du meme moteur repart en retard (issue #45). */
-    bool virt = s_volets[idx].virt;
+    bool pfx_virt = is_pfx_virt(&s_volets[idx]);   /* seul l'enrolement Profalux tient un compteur */
     uint32_t vser = s_volets[idx].virt_serial; uint16_t vcnt = s_volets[idx].virt_counter;
     clear_one(&s_volets[idx]);         /* retire l'entite HA (discovery retenu) AVANT de perdre le volet */
     cfg_model_remove(&s_model, idx);   /* libere la liste d'une centrale */
@@ -805,7 +828,7 @@ int shutters_delete_volet(const char *id) {
     update_listening();   /* plus aucun volet -> coupe l'ecoute permanente */
     UNLOCK();
     pub_flush();          /* pousse l'effacement MQTT hors LOCK */
-    if (virt) pfx_enrol_note_counter(vser, vcnt);   /* table d'enrolement, hors LOCK */
+    if (pfx_virt) pfx_enrol_note_counter(vser, vcnt);   /* table d'enrolement, hors LOCK */
     ESP_LOGW(TAG, "volet '%s' supprime", id);
     return 0;
 }
@@ -939,20 +962,20 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
 /* true si un volet virtuel utilise deja ce serial 0x067 (evite les conflits d'allocation de slot). */
 bool shutters_virt_serial_used(uint32_t serial) {
     for (int i = 0; i < s_nvolets; i++)
-        if (s_volets[i].virt && s_volets[i].virt_serial == serial) return true;
+        if (is_pfx_virt(&s_volets[i]) && s_volets[i].virt_serial == serial) return true;
     return false;
 }
 bool shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap) {
     if (cap) out[0] = 0;
     for (int i = 0; i < s_nvolets; i++)
-        if (s_volets[i].virt && s_volets[i].virt_serial == serial) { strlcpy(out, s_volets[i].id, cap); return true; }
+        if (is_pfx_virt(&s_volets[i]) && s_volets[i].virt_serial == serial) { strlcpy(out, s_volets[i].id, cap); return true; }
     return false;
 }
-/* Compteur roulant courant du volet virtuel de ce serial (0 si aucun). Sert a resynchroniser
- * l'identite d'enrolement sur la valeur reellement emise par le volet (toujours devant le moteur). */
+/* Compteur roulant courant du volet virtuel Profalux de ce serial (0 si aucun). Sert a
+ * resynchroniser l'identite d'enrolement sur la valeur reellement emise (toujours devant le moteur). */
 uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
     for (int i = 0; i < s_nvolets; i++)
-        if (s_volets[i].virt && s_volets[i].virt_serial == serial) return s_volets[i].virt_counter;
+        if (is_pfx_virt(&s_volets[i]) && s_volets[i].virt_serial == serial) return s_volets[i].virt_counter;
     return 0;
 }
 
@@ -988,6 +1011,16 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
 int shutters_create_virtual_somfy(const char *id, uint32_t address) {
     if (!id || !*id) return -1;
+    /* Une adresse Somfy ne doit JAMAIS ressembler a une identite Profalux 0x067 valide. Sinon un
+     * ancien firmware (d'avant le champ `proto`) qui restaure ce volet le prendrait pour un volet
+     * virtuel Profalux et emettrait une vraie trame 0x067 sur 868, pouvant commander un moteur
+     * Profalux du meme foyer mixte. On refuse ces adresses a la source : le cas devient impossible,
+     * y compris sur les firmwares deja deployes. */
+    if (pfx_key_for_serial(address & 0xFFFFFF, NULL, NULL)) {
+        ESP_LOGW(TAG, "volet Somfy '%s' refuse : adresse 0x%06X ressemble a une identite Profalux 0x067",
+                 id, (unsigned)(address & 0xFFFFFF));
+        return -1;
+    }
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
@@ -1543,7 +1576,7 @@ int shutters_import_json(const char *js, const char **err) {
     /* Table d'enrolement, et compteurs-photo des volets virtuels restaures : non confirmes,
      * un re-enrolement sautera devant le moteur au lieu de repartir derriere (issue #45). */
     pfx_enrol_import(cJSON_GetObjectItem(root, "pfx_enrol"));
-    for (int i = 0; i < s_nvolets; i++) if (s_volets[i].virt) pfx_enrol_unconfirm(s_volets[i].virt_serial);
+    for (int i = 0; i < s_nvolets; i++) if (is_pfx_virt(&s_volets[i])) pfx_enrol_unconfirm(s_volets[i].virt_serial);
     /* L'echec d'ecriture remonte a l'UI : une restauration repondait "ok" meme
      * quand la NVS pleine l'empechait de survivre au redemarrage. */
     esp_err_t saved = save_cfg();
