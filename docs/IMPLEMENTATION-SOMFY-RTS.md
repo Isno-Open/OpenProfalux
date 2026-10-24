@@ -128,6 +128,15 @@ s'y cale.
 Une **adresse 24 bits** générée par OpenProfalux (comme on génère une identité Profalux),
 plus le compteur. L'UI crée une « télécommande virtuelle Somfy » et on l'appaire au moteur.
 
+**Adresses interdites (foyer mixte Profalux + Somfy)** : la création refuse toute adresse
+Somfy qui serait, par coïncidence, une identité Profalux 0x067 valide (`serial & 0x3FF == 0x067`
+et slot dans la plage). Raison : un ancien firmware d'avant le champ `proto`, qui restaurerait
+une sauvegarde contenant ce volet, le lirait comme un volet virtuel Profalux et émettrait une
+vraie trame 0x067 sur 868, susceptible de commander un moteur Profalux du même foyer. En
+refusant ces adresses à la source (`pfx_key_for_serial`, côté endpoint et côté création), ce
+cas devient impossible, y compris sur les firmwares déjà déployés. Probabilité pour une adresse
+tirée au hasard : environ 1 sur 66 000, mais concentrée exactement sur le public visé.
+
 ### 3.6 L'appairage (PROG)
 
 Procédure Somfy standard : mettre le **moteur en mode apprentissage** (maintenir PROG sur

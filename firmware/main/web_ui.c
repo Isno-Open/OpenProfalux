@@ -4,6 +4,7 @@
 #include "web_ui.h"
 #include "shutters.h"
 #include "pfx_enrol.h"
+#include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "enrol_gate.h"
 #include "radio.h"
 #include "ota.h"
@@ -1250,6 +1251,8 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
     if (!id || !*id) err = "nom manquant";
     else if (strchr(id, ',')) err = "virgule dans le nom";
     else if ((address & 0xFFFFFF) == 0) err = "adresse manquante ou nulle";
+    else if (pfx_key_for_serial(address & 0xFFFFFF, NULL, NULL))
+        err = "adresse reservee (ressemble a une identite Profalux 0x067), choisis-en une autre";
     int rc = err ? -1 : shutters_create_virtual_somfy(id, address);
     if (err) ESP_LOGW(TAG, "volet Somfy '%s' refuse : %s", id ? id : "", err);
     cJSON *o = cJSON_CreateObject();

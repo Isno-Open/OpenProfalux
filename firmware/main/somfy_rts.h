@@ -141,6 +141,27 @@ typedef struct {
 int somfy_rts_tx_pulses(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], bool first,
                         somfy_rts_pulse_t *out, int max);
 
+/* ── Variante 80 bits (RTS "80-S") ──────────────────────────────────────────
+ * Certaines telecommandes (Somfy Situo Variation) emettent 80 bits, pas 56, et c'est
+ * ce format qui declenche la COURSE COMPLETE sur ces moteurs (2 trames suffisent).
+ * Format : les 56 premiers bits = une trame RTS standard (empaquetee/obscurcie), suivis
+ * de 3 octets d'extension ENVOYES BRUTS (pas d'obscurcissement). Ces 3 octets dependent de
+ * la commande et de l'index de repetition. Valeurs et calcul repris d'ESPSomfy-RTS
+ * (encode80BitFrame / calc80Checksum), la reference qui fonctionne sur ces moteurs (#73). */
+#define SOMFY_RTS_FRAME_BYTES_80 10
+#define SOMFY_RTS_FRAME_BITS_80  80
+#define SOMFY_RTS_MAX_PULSES_80  (2 * SOMFY_RTS_HW_SYNC_REPEAT + 2 + 2 * SOMFY_RTS_FRAME_BITS_80)
+
+/* Construit la trame 80 bits : copie les 7 octets 56-bit (deja empaquetes par somfy_rts_pack),
+ * puis ajoute les 3 octets d'extension (bruts) selon `cmd` (UP/DOWN/MY) et `repeat` (0 = 1re
+ * trame). Pour MY (= stop chez nous), l'extension porte le sens "stop". */
+void somfy_rts_frame80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd,
+                       uint8_t repeat, uint8_t out[SOMFY_RTS_FRAME_BYTES_80]);
+
+/* Comme somfy_rts_tx_pulses mais sur les 80 bits (10 octets). */
+int somfy_rts_tx_pulses80(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES_80], bool first,
+                          somfy_rts_pulse_t *out, int max);
+
 /* Telecommande virtuelle Somfy : adresse 24 bits + code roulant 16 bits. Le quartet
  * de cle n'est PAS un etat a part : c'est le quartet BAS du code roulant (verifie sur
  * les vecteurs open-rts : code 0x1E63 -> cle 0xA3, code 0x007B -> cle 0xAB). */
