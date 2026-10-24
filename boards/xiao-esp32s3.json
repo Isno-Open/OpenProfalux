@@ -1,0 +1,17 @@
+{
+  "_comment": ["XIAO ESP32S3 + CC1101 868 externe, build de depannage issue #1 (non officiel)."],
+  "id": "xiao-esp32s3",
+  "name": "Seeed XIAO ESP32S3 + CC1101 externe",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32s3",
+  "spi_freq_hz": 6000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "E07-900M10S",
+      "pins": { "sck": 7, "miso": 8, "mosi": 9, "cs": 5, "gdo0": 4, "gdo2": 2 } }
+  ],
+  "ui": { "button": -1, "led": 21, "led_active_high": true },
+  "region": "eu",
+  "bands_allowed_khz": [
+    { "radio": "868", "low": 863000, "high": 870000, "carrier_khz": 868350, "max_dbm": 10 }
+  ]
+}
