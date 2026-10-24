@@ -132,6 +132,70 @@ int somfy_rts_tx_pulses(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES], bool first,
     return n;
 }
 
+/* ── 80 bits (RTS "80-S"), repris d'ESPSomfy-RTS (#73) ──────────────────────── */
+
+/* Octet 7 de l'extension (ESPSomfy encode80Byte7) : start + 4*repeat, avec repli. */
+static uint8_t enc80_byte7(int start, int repeat) {
+    while ((repeat * 4) + start > 255) repeat -= 15;
+    return (uint8_t)(start + repeat * 4);
+}
+
+/* Checksum 4 bits des 3 octets d'extension (ESPSomfy calc80Checksum). */
+static uint8_t calc80_checksum(uint8_t b0, uint8_t b1, uint8_t b2) {
+    uint8_t cs = (uint8_t)(((b0 & 0xF0) >> 4) ^ ((b1 & 0xF0) >> 4));
+    cs ^= (uint8_t)((b2 & 0xF0) >> 4);
+    cs ^= (uint8_t)(b0 & 0x0F);
+    cs ^= (uint8_t)(b1 & 0x0F);
+    return (uint8_t)(cs & 0x0F);
+}
+
+void somfy_rts_frame80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd,
+                       uint8_t repeat, uint8_t out[SOMFY_RTS_FRAME_BYTES_80]) {
+    if (!base56 || !out)
+        return;
+    for (int i = 0; i < SOMFY_RTS_FRAME_BYTES; i++)
+        out[i] = base56[i];
+    uint8_t b7, b8, b9;
+    switch (cmd) {
+    case SOMFY_RTS_CMD_UP:   b7 = enc80_byte7(196, repeat); b8 = 0x20; b9 = 0x00; break;
+    case SOMFY_RTS_CMD_DOWN: b7 = enc80_byte7(196, repeat); b8 = 0x2C; b9 = 0x80; break;
+    case SOMFY_RTS_CMD_MY:   /* stop chez nous */
+    default:                 b7 = (uint8_t)(repeat > 0 ? 132 : 196); b8 = 0x2F; b9 = 0xF0; break;
+    }
+    b9 = (uint8_t)(b9 | calc80_checksum(b7, b8, b9));
+    out[7] = b7;
+    out[8] = b8;
+    out[9] = b9;
+}
+
+int somfy_rts_tx_pulses80(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES_80], bool first,
+                          somfy_rts_pulse_t *out, int max) {
+    if (!bytes || !out || max < 1)
+        return -1;
+    int n = 0;
+    const int pairs = first ? SOMFY_RTS_HW_SYNC_FIRST : SOMFY_RTS_HW_SYNC_REPEAT;
+    for (int i = 0; i < pairs; i++) {
+        if (!push_pulse(out, &n, max, 1, SOMFY_RTS_HW_SYNC_US)) return -1;
+        if (!push_pulse(out, &n, max, 0, SOMFY_RTS_HW_SYNC_US)) return -1;
+    }
+    if (!push_pulse(out, &n, max, 1, SOMFY_RTS_SW_SYNC_US))     return -1;
+    if (!push_pulse(out, &n, max, 0, SOMFY_RTS_HALF_SYMBOL_US)) return -1;
+    /* Donnees : 80 bits Manchester (poids fort en tete). 1 = bas puis haut, 0 = haut puis bas. */
+    for (int bit = 0; bit < SOMFY_RTS_FRAME_BITS_80; bit++) {
+        int byte  = bit >> 3;
+        int shift = 7 - (bit & 7);
+        int b     = (bytes[byte] >> shift) & 1;
+        if (b) {
+            if (!push_pulse(out, &n, max, 0, SOMFY_RTS_HALF_SYMBOL_US)) return -1;
+            if (!push_pulse(out, &n, max, 1, SOMFY_RTS_HALF_SYMBOL_US)) return -1;
+        } else {
+            if (!push_pulse(out, &n, max, 1, SOMFY_RTS_HALF_SYMBOL_US)) return -1;
+            if (!push_pulse(out, &n, max, 0, SOMFY_RTS_HALF_SYMBOL_US)) return -1;
+        }
+    }
+    return n;
+}
+
 void somfy_rts_remote_next(somfy_rts_remote_t *r, somfy_rts_cmd_t cmd,
                            uint8_t out[SOMFY_RTS_FRAME_BYTES]) {
     if (!r || !out)
