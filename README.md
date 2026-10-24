@@ -60,9 +60,10 @@ Le même boîtier sait émettre deux autres protocoles, encore **en test**, à c
 
 - **Somfy RTS** (433,42 MHz, [#73](https://github.com/Isno-Open/OpenProfalux/issues/73)) : on crée
   un volet virtuel (adresse 24 bits + code tournant), on l'appaire au moteur par son bouton PROG,
-  puis on le pilote. Deux formats au choix **par volet** : **56 bits** (le standard, défaut, comme
-  ESPSomfy) et **80 bits**, pour les moteurs à lames orientables dont la course complète ne part
-  qu'en 80 bits. Validé sur un moteur Somfy RTS à lames orientables ; reste à confirmer sur d'autres.
+  puis on le pilote. L'émission reproduit l'appui bref de la télécommande d'origine (rafale courte) :
+  c'est ça qui déclenche la course complète, y compris sur les récepteurs à lames orientables (BSO),
+  où un appui long oriente les lames au lieu de faire la course. Validé sur un récepteur Soliris
+  Mod/Var ; reste à confirmer sur d'autres.
 - **io-homecontrol** (Velux, Somfy io, [#87](https://github.com/Isno-Open/OpenProfalux/issues/87)) :
   en recherche, **pas encore fonctionnel**. L'appairage est émis correctement mais le moteur ne le
   valide pas (piste : io attend un échange bidirectionnel avec saut de fréquence qu'une radio simple
@@ -139,7 +140,7 @@ ne se tient pas à la main.
 - ✅ Firmware produit **compile** (ESP-IDF v6.1, 1,14 Mo pour `isno-super`, 24 % libres au 2026-10-18, partitions OTA).
 - ✅ **Rejeu validé au banc** (le moteur suit une trame rejouée, y compris après la vraie télécommande).
 - ✅ **Enrôlement confirmé par des utilisateurs** (NeoSol S300, moteur solaire MOT-PX3R10, FranciaFlex M4G).
-- 🧪 **Somfy RTS (433 MHz)** émis : appairage PROG, pilotage, format 56/80 bits par volet. Validé sur un moteur à lames orientables, à confirmer plus largement ([#73](https://github.com/Isno-Open/OpenProfalux/issues/73)).
+- 🧪 **Somfy RTS (433 MHz)** émis : appairage PROG, pilotage, rafale courte (course complète). Validé sur un récepteur à lames orientables, à confirmer plus largement ([#73](https://github.com/Isno-Open/OpenProfalux/issues/73)).
 - 🔬 **io-homecontrol** (Velux, Somfy io) à l'étude, pas encore fonctionnel ([#87](https://github.com/Isno-Open/OpenProfalux/issues/87)).
 - ⏳ À valider sur l'installation : calibration des temps de course, portée antenne, multi-volets.
 
