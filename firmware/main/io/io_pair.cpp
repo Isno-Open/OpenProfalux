@@ -77,14 +77,17 @@ extern "C" int io_profile_from_capture(const uint8_t *frame, int n, io_profile_t
 /* Appairage 1W : la carte se presente comme une nouvelle telecommande et POUSSE sa cle vers un
  * moteur mis en mode PROG (appui physique tenu sur une telecommande existante). Ceremonie calee
  * sur l'enrolement REEL capte sur l'air sur le moteur d'un testeur via notre ecoute io (#87,
- * journal6), dans cet ordre :
+ * journal6), reproduite a l'identique dans cet ordre chronologique :
+ *  0) 0x39 remove (signe),
  *  1) 0x30 : cle enveloppee (man_id 0x02, data 0x01), SANS HMAC (l'appairage est garde par PROG),
- *  2) rafale 0x20 "private-write" signee : (main 0x0C00), puis (0x05, xx) pour xx de 02 a 09, puis 0xFF,
- *  3) 0x2e : confirmation de pairage, signee.
+ *  2a) rafale 0x20 "private-write" signee : (main 0C,00) puis (05, 02..07),
+ *  3) 0x2e : confirmation (signee), AU MILIEU de la rafale,
+ *  2b) fin de rafale 0x20 : (05, 08), (05, 09), (05, FF).
  * Aucune reception ni saut de frequence : un seul CC1101 suffit. Cree une identite d'emetteur
  * neuve (propre a CE volet), la memorise et la rend dans out_src. Rend 0 si emis, -2 sur erreur.
- * ATTENTION : un capture partiel (9h29, que les 0x30) avait fait croire a tort que le 0x20 et le
- * 0x2e etaient inutiles (test6). journal6, complet, montre qu'ils font partie de la sequence. */
+ * HISTORIQUE : test6 avait retire 0x20/0x2e (capture partielle de 9h29, que les 0x30) : faux.
+ * test7 les avait remis mais dans le mauvais ordre (tout avant le 0x2e, sans 0x39). test8 cale
+ * sur la vraie sequence chronologique de journal6, y compris le 0x39 et le 0x2e au milieu. */
 extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], uint32_t timeout_ms) {
     (void)timeout_ms;
     if (!out_src || !profile) return -2;
@@ -97,6 +100,16 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], ui
     const uint8_t *tgt = profile->target;  /* on vise le meme broadcast que la vraie telecommande */
 
     io_radio_set_channel(IO_CH2);   /* canal 1W primaire (868,95 MHz) */
+
+    /* 0) Remove 0x39 (signe) en tete, comme la vraie sequence (#87, journal6) : le moteur efface
+     *    l'ancienne association avant d'en prendre une neuve. Charge utile a 0x00. (Signe avec notre
+     *    cle, que le moteur n'a pas encore : sans doute ignore pour une source neuve, mais on calque
+     *    la sequence a l'identique.) */
+    {
+        uint8_t data = 0x00;
+        send_signed_1w(src, key, tgt, CMD_REMOVE_1W, &data, 1);
+        esp_rom_delay_us(14000);
+    }
 
     /* 1) Transfert de cle 0x30, assemble a la main (notre IoFrame ajoute toujours un HMAC,
      *    absent de cette trame). Disposition : ctrlb1 ctrlb2 dst src 0x30 cle[16] man_id data
@@ -124,25 +137,36 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, uint8_t out_src[3], ui
         esp_rom_delay_us(20000);
     }
 
-    /* 2) Rafale "private-write" 0x20 (signee), charge utile = origin, acei, main[2], fp1.
-     *    Valeurs de l'enrolement reel (#87, journal6) : (main0,main1) = (0x0C,0x00), puis (0x05, xx)
-     *    pour xx de 02 a 09, puis (0x05, 0xFF). */
+    /* 2a) Rafale "private-write" 0x20 (signee), 1re partie : (0C,00) puis (05, 02..07). Charge
+     *     utile = origin, acei, main[2], fp1. Valeurs de l'enrolement reel (#87, journal6). */
     {
-        const uint8_t steps[] = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0xFF};
         uint8_t pw[5] = {0x02 /*origin*/, 0x03 /*acei*/, 0x0C /*main0*/, 0x00 /*main1*/, 0x00 /*fp1*/};
         send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
         esp_rom_delay_us(14000);
-        for (size_t i = 0; i < sizeof steps; i++) {
-            pw[2] = 0x05; pw[3] = steps[i];
+        for (uint8_t s = 0x02; s <= 0x07; s++) {
+            pw[2] = 0x05; pw[3] = s;
             send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
             esp_rom_delay_us(14000);
         }
     }
 
-    /* 3) Confirmation de pairage 0x2e (signee), charge utile = un octet de donnee a 0x00. */
+    /* 3) Confirmation de pairage 0x2e (signee) AU MILIEU de la rafale (apres 07, avant 08),
+     *    exactement comme la vraie sequence (#87, journal6). Charge utile = un octet a 0x00. */
     {
         uint8_t data = 0x00;
         send_signed_1w(src, key, tgt, CMD_PAIR_CONFIRM, &data, 1);
+        esp_rom_delay_us(14000);
+    }
+
+    /* 2b) Fin de la rafale 0x20 : (05, 08), (05, 09), (05, FF). */
+    {
+        const uint8_t steps[] = {0x08, 0x09, 0xFF};
+        uint8_t pw[5] = {0x02, 0x03, 0x05, 0x00, 0x00};
+        for (size_t i = 0; i < sizeof steps; i++) {
+            pw[3] = steps[i];
+            send_signed_1w(src, key, tgt, CMD_PRIVATE_WRITE, pw, sizeof pw);
+            esp_rom_delay_us(14000);
+        }
     }
 
     memcpy(out_src, src, NODE_ID_SIZE);
