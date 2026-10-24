@@ -567,9 +567,13 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
-    ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
-             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
+    /* Monter/descendre : rafale longue pour ENCLENCHER la course complete (le moteur part
+     * ensuite seul, do_stop le fige a la position voulue). Stop/My : rafale courte. */
+    const int reps = (cmd == SOMFY_RTS_CMD_UP || cmd == SOMFY_RTS_CMD_DOWN)
+                   ? SOMFY_RTS_TX_REPEATS_MOVE : SOMFY_RTS_TX_REPEATS_STOP;
+    somfy_tx_emit(frame, reps);
+    ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u reps=%d",
+             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code, reps);
 }
 static bool emit_virt_somfy(volet_t *v, uint8_t button) {
     somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));

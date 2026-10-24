@@ -15,9 +15,17 @@
 #include <stdint.h>
 #include "somfy_rts.h"
 
-/* Plafond de trames repetees APRES la 1re. ESPSomfy en envoie quelques-unes ; on borne
- * pour dimensionner le train et ne pas tenir la radio trop longtemps. */
-#define SOMFY_RTS_TX_REPEATS_MAX  7
+/* Plafond de trames repetees APRES la 1re. Borne le train (RAM statique + duree radio).
+ * Monte a 23 (24 trames) : certains moteurs n'ENCLENCHENT la course complete qu'au-dela
+ * d'un seuil de trames. Mesure communautaire (NodeMCU) : ~2 trames = un cran, ~16 = course
+ * complete. Nos 8 d'avant restaient sous le seuil sur un volet a battants (#73). */
+#define SOMFY_RTS_TX_REPEATS_MAX  23
+
+/* Nombre de repetitions par type de commande. Monter/descendre : au-dessus du seuil
+ * d'enclenchement, pour que le moteur parte en course complete (le modele de la carte =
+ * une rafale puis arret minute par do_stop). Stop/My : une rafale courte suffit a figer. */
+#define SOMFY_RTS_TX_REPEATS_MOVE 20
+#define SOMFY_RTS_TX_REPEATS_STOP 3
 
 /* Traduit un bouton Profalux (PFX_BTN_UP/DOWN/STOP) en commande Somfy RTS. STOP -> My. */
 somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn);
