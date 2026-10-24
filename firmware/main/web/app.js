@@ -221,7 +221,7 @@ if ($('#reorder-toggle')) $('#reorder-toggle').onclick = () => {
 };
 
 let dragId = null;   /* volet en cours de glissement */
-let slatHover = null; /* barre de position survolee : { id, p } */
+let posHover = null;  /* zone de position survolee (barre ou fenetre) : { id, p } */
 
 /* Applique et persiste un nouvel ordre complet. Le cache local est mis a jour
    AVANT l'aller-retour reseau, sinon le prochain poll (3 s) ecraserait l'ordre
@@ -268,6 +268,52 @@ function sortVolets(list) {
   });
 }
 
+/* ── Skins des cartes de volets ──
+ * Une skin ne dessine que le CORPS de la carte (sous le nom) ; en-tete, bandeau, ligne des
+ * telecommandes et reorganisation sont communs. Contrat : boutons data-cmd="up|stop|down|inter",
+ * zone de position cliquable data-pos="h" (barre) ou "v" (fenetre), qui recoit --p (% de
+ * fermeture) et --h (survol : % sous le curseur, absent hors survol). Le CSS de la skin vit sous body.skin-<nom>. lists : la skin
+ * affiche elle-meme les volets d'une zone ou d'une centrale (la ligne du bas ne les repete
+ * pas). Ajouter une skin = une entree ici + son bloc CSS. ctx : { isC, isZ, showP, showPos,
+ * pad (▲ ■ ▼), star (★ ou '') }. Le bouton ▥ les fait defiler : au-dela de deux skins,
+ * passer a un choix par nom (liste), plus clair qu'un defilement a l'aveugle. */
+const SKINS = {
+  classique: {
+    label: 'Classique', lists: false,
+    body: (v, c) => `<div class="dpad">${c.pad}</div>` + (c.showP || c.star
+      ? `<div class="dpad posrow">${c.showP ? `<div class="slat" data-pos="h" style="--p:${v.position ?? 50}"><i class="ret"></i></div>` : ''}${c.star}</div>` : ''),
+  },
+  /* Volet : une fenetre dont le volet descend du haut, commandes en colonne a cote (▲ en
+   * haut, ▼ en bas) ; sans ecoute permanente, la rangee de boutons. Zone et centrale : la
+   * liste de leurs volets, commandes et etoile en colonne a droite. */
+  fenetres: {
+    label: 'Fenêtres', lists: true,
+    body: (v, c) => (c.isC || c.isZ)
+      ? `<div class="vbody"><div class="members">${groupRows(v, c.showPos)}</div><div class="dpad vpad narrow">${c.pad}${c.star}</div></div>`
+      : c.showP
+        ? `<div class="vbody solo"><div class="win" data-pos="v" style="--p:${v.position ?? 50}"><i class="mull"></i><i class="fill"></i><i class="hov"></i><i class="ret"></i></div>`
+          + `<div class="dpad vpad">${c.pad}</div>${c.star ? `<div class="dpad vstar">${c.star}</div>` : ''}</div>`
+        : `<div class="dpad">${c.pad}</div>${c.star ? `<div class="dpad posrow">${c.star}</div>` : ''}`,
+  },
+};
+/* Choix de la skin : propre a chaque navigateur (comme le theme), Classique par defaut. */
+let skin = 'classique';
+try { const s = localStorage.getItem('opfx_skin'); if (SKINS[s]) skin = s; } catch (e) {}
+function applySkin() {
+  for (const k in SKINS) document.body.classList.toggle('skin-' + k, k === skin);
+  const b = $('#skin');
+  if (b) { b.title = `Présentation : ${SKINS[skin].label} (changer)`; b.setAttribute('aria-label', b.title); }
+}
+applySkin();
+if ($('#skin')) $('#skin').onclick = () => {
+  const ks = Object.keys(SKINS);
+  skin = ks[(ks.indexOf(skin) + 1) % ks.length];
+  try { localStorage.setItem('opfx_skin', skin); } catch (e) {}
+  applySkin();
+  toast(`Présentation : ${SKINS[skin].label}`);
+  renderVolets(statusCache.volets || [], statusCache.rf || []);
+};
+
 /* ── Volets ── */
 function renderVolets(list, rf) {
   const box = $('#volets'); box.innerHTML = '';
@@ -290,42 +336,45 @@ function renderVolets(list, rf) {
     const isC = !!v.central;
     const isZ = !isC && !!v.zone;   /* zone : comme une centrale, pas de position */
     const showP = showPos && !isC && !isZ;
+    const star = v.inter ? `<button data-cmd="inter" class="star" title="Position intermédiaire du moteur${!isC && !isZ && v.inter_pct >= 0 ? ` (${v.inter_pct} %)` : ''}">★</button>` : '';
+    const pad = '<button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button>';
+    const sk = SKINS[skin];
+    const body = sk.body(v, { isC, isZ, showP, showPos, pad, star });
     if (reorderMode) { el.draggable = true; el.dataset.id = v.id; }
     el.innerHTML = `
       <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : isZ ? ' <span class="badge">zone</span>' : ''}</span>${
         reorderMode ? '<span class="reorder"><button data-mv="up" title="Monter">▲</button><button data-mv="down" title="Descendre">▼</button></span>'
                     : (showP ? `<span class="pct">${v.position ?? '?'}%</span>` : '')}</div>
-      <div class="dpad"><button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button></div>
-      ${showP || v.inter ? `<div class="dpad posrow">${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}${
-        v.inter ? `<button data-cmd="inter" class="star" title="Position intermédiaire du moteur${!isC && !isZ && v.inter_pct >= 0 ? ` (${v.inter_pct} %)` : ''}">★</button>` : ''}</div>` : ''}
+      ${body}
       ${v.inter_seen && !reorderMode ? `<div class="statline"><span class="dot"></span><span>La télécommande <code>${esc(remoteName(v.inter_seen.serial))}</code> a envoyé la position intermédiaire.</span><button class="btn" data-inter-add>L'ajouter à ce volet</button></div>` : ''}
       <div class="serials">${isC
-        ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
+        ? (sk.lists ? '' : 'volets : ' + (esc(v.members || '') || 'aucun') + ' ') + '<span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
         : (v.virt
             ? 'identité : <code>' + esc(remoteName(v.virt_serial)) + '</code>'
               + ((v.serials || []).length ? ' · télécommandes : ' + v.serials.map(s => `<code>${esc(remoteName(s))}</code>${battIcon(s)}`).join(' ') : '')
             : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>${battIcon(s)}`).join(' ') || 'aucun'))
           + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')
-          + (isZ ? `<br>suiveurs : ${esc(v.members)}` : (v.follows || []).length ? `<br>suit : ${esc(v.follows.join(', '))}` : '')}</div>`;
+          + (isZ ? (sk.lists ? '' : `<br>suiveurs : ${esc(v.members)}`) : (v.follows || []).length ? `<br>suit : ${esc(v.follows.join(', '))}` : '')}</div>`;
     /* En mode reorganisation, le pilotage est NEUTRALISE : un clic mal place ne
        doit pas faire partir un volet pendant qu'on range l'affichage. */
     el.querySelectorAll('[data-cmd]').forEach(b => {
       if (reorderMode) { b.disabled = true; return; }
       b.onclick = () => sendCmd({ id: v.id, cmd: b.dataset.cmd }, b);
     });
-    const slat = el.querySelector('.slat');
-    if (slat && !reorderMode) {
-      slat.onclick = e => {
-        const p = Math.round(100 * (e.offsetX / e.currentTarget.offsetWidth));
-        sendCmd({ id: v.id, cmd: 'pos', value: p });
+    /* Zone de position de la skin ([data-pos] : "h" barre, "v" fenetre) : un clic envoie le
+     * volet au % vise (0 = ouvert, a gauche ou en haut). Survol : --h = % sous le curseur,
+     * garde d'un rafraichissement (3 s) a l'autre ; la skin en dessine l'apercu. */
+    const pz = el.querySelector('[data-pos]');
+    if (pz && !reorderMode) {
+      const vert = pz.dataset.pos === 'v';
+      const at = e => {
+        const b = pz.getBoundingClientRect();
+        return Math.max(0, Math.min(100, 100 * (vert ? (e.clientY - b.top) / b.height : (e.clientX - b.left) / b.width)));
       };
-      /* survol : lamelles claires jusqu'au curseur, gardees d'un rafraichissement (3 s) a l'autre */
-      if (slatHover && slatHover.id === v.id) slat.style.setProperty('--h', slatHover.p);
-      slat.onmousemove = e => {
-        slatHover = { id: v.id, p: 100 * e.offsetX / e.currentTarget.offsetWidth };
-        slat.style.setProperty('--h', slatHover.p);
-      };
-      slat.onmouseleave = () => { slatHover = null; slat.style.removeProperty('--h'); };
+      pz.onclick = e => sendCmd({ id: v.id, cmd: 'pos', value: Math.round(at(e)) });
+      if (posHover && posHover.id === v.id) pz.style.setProperty('--h', posHover.p);
+      pz.onmousemove = e => { posHover = { id: v.id, p: at(e) }; pz.style.setProperty('--h', posHover.p); };
+      pz.onmouseleave = () => { posHover = null; pz.style.removeProperty('--h'); };
     }
     const addInter = el.querySelector('[data-inter-add]');
     if (addInter) addInter.onclick = () => interAdopt(v);
@@ -342,6 +391,23 @@ function renderVolets(list, rf) {
     }
     box.appendChild(el);
   }
+}
+
+/* Lignes d'une zone ou d'une centrale : ses volets, chacun avec sa petite fenetre et son %
+ * (seulement avec l'ecoute permanente, sinon la position n'est pas fiable). Dans une zone
+ * « Salon », « Salon Fenêtre » s'affiche « Fenêtre » : le nom de la zone en tete est retire. */
+function groupRows(g, showPos) {
+  const ids = (g.members || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!ids.length) return '<span class="hint">aucun volet</span>';
+  const vols = statusCache.volets || [];
+  const pre = g.id + ' ';
+  return ids.map(id => {
+    const m = vols.find(x => x.id === id);
+    const label = id.startsWith(pre) && id.length > pre.length ? id.slice(pre.length) : id;
+    const p = m && m.position != null ? m.position : null;
+    return `<div class="mrow" title="${esc(id)}">${showPos && p != null ? `<span class="mico" style="--p:${p}"><i></i></span>` : ''}`
+      + `<span class="mname">${esc(label)}</span>${showPos && p != null ? `<span class="mpct">${p}%</span>` : ''}</div>`;
+  }).join('');
 }
 
 /* ── Apprentissage (centré volet) ── */

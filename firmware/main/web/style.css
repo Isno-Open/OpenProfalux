@@ -123,21 +123,52 @@ select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 .dpad button{padding:13px 0;font-size:1.1rem;border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:var(--radius-sm);cursor:pointer;transition:.12s}
 .dpad button:hover{border-color:var(--accent-line);color:var(--accent)}
 .dpad button:active{background:var(--accent-weak)}
-/* Rangee sous les commandes : barre de position, et l'etoile de la position intermediaire,
-   un peu plus haute que la barre pour s'en detacher, a droite meme sans barre. */
-.dpad.posrow{display:flex;align-items:center}.dpad.posrow .slat{flex:1}
+/* ── Skins des cartes de volets (app.js, SKINS) : chacune sous body.skin-<nom> ── */
+/* Commun : l'etoile de la position intermediaire, a droite sous les boutons quand rien ne
+   l'accompagne. */
+.dpad.posrow{display:flex;align-items:center}
 .dpad button.star{height:30px;width:54px;padding:0;flex:none;margin-left:auto;font-size:1.05rem;line-height:1;border-radius:999px;color:var(--accent)}.dpad button.star:hover{background:var(--accent-weak)}
-.slat{position:relative;height:22px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);overflow:hidden;cursor:pointer;transition:.12s}
-/* Survol : les memes lamelles, plus claires, de l'origine jusqu'au curseur (vide et rempli),
-   la ou un clic enverrait le volet. */
-.slat:hover{border-color:var(--accent-line)}
-.slat::after{content:"";position:absolute;inset:0;width:calc(var(--h,0)*1%);background:repeating-linear-gradient(90deg,var(--accent),var(--accent) 4px,color-mix(in srgb,var(--accent) 78%,#000) 4px,color-mix(in srgb,var(--accent) 78%,#000) 6px);opacity:.4;pointer-events:none}
-.slat::before{content:"";position:absolute;inset:0;width:calc(var(--p,50)*1%);background:repeating-linear-gradient(90deg,var(--accent),var(--accent) 4px,color-mix(in srgb,var(--accent) 78%,#000) 4px,color-mix(in srgb,var(--accent) 78%,#000) 6px);opacity:.85}
+:root{--slats-h:repeating-linear-gradient(90deg,var(--accent),var(--accent) 4px,color-mix(in srgb,var(--accent) 78%,#000) 4px,color-mix(in srgb,var(--accent) 78%,#000) 6px);
+  --slats:repeating-linear-gradient(180deg,var(--accent) 0 5px,color-mix(in srgb,var(--accent) 78%,#000) 5px 8px)}
+/* Classique : barre horizontale (% de fermeture de gauche a droite) ; survol = lamelles
+   claires jusqu'au curseur. */
+body.skin-classique .dpad.posrow .slat{flex:1}
+body.skin-classique .slat{position:relative;height:22px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);overflow:hidden;cursor:pointer;transition:.12s}
+body.skin-classique .slat:hover{border-color:var(--accent-line)}
+body.skin-classique .slat::before{content:"";position:absolute;inset:0;width:calc(var(--p,50)*1%);background:var(--slats-h);opacity:.85}
+body.skin-classique .slat::after{content:"";position:absolute;inset:0;width:calc(var(--h,0)*1%);background:var(--slats-h);opacity:.4;pointer-events:none}
+/* Survol sur la partie fermee : les lamelles claires s'y confondraient avec le volet ; on
+   eclaircit plutot ce qui va s'ouvrir, du curseur au bord du volet (--h absent : rien). */
+body.skin-classique .slat .ret{position:absolute;top:0;bottom:0;left:calc(var(--h,100)*1%);width:calc(max(0,var(--p,50) - var(--h,100))*1%);background:var(--surface);opacity:.55;pointer-events:none}
+/* Fenetres : le volet descend du haut, commandes en colonne a cote, ▲ en haut et ▼ en bas.
+   Zone et centrale : la liste de leurs volets. */
+body.skin-fenetres .vbody{display:flex;gap:14px;align-items:stretch;margin-bottom:12px}
+body.skin-fenetres .win{position:relative;flex:none;width:104px;height:156px;border:2px solid color-mix(in srgb,var(--border) 70%,var(--accent));border-radius:6px;background:linear-gradient(160deg,var(--surface),var(--surface-2));overflow:hidden;cursor:pointer;transition:.12s}
+body.skin-fenetres .win:hover{border-color:var(--accent-line)}
+body.skin-fenetres .win i{position:absolute;left:0;right:0;top:0;pointer-events:none}
+body.skin-fenetres .win .mull{bottom:0;left:50%;right:auto;width:2px;margin-left:-1px;background:color-mix(in srgb,var(--border) 70%,var(--accent))}
+body.skin-fenetres .win .fill{height:calc(var(--p,50)*1%);background:var(--slats);border-bottom:3px solid color-mix(in srgb,var(--accent) 55%,#000)}
+body.skin-fenetres .win .hov{height:calc(var(--h,0)*1%);background:var(--slats);opacity:.4}
+/* Survol sur la partie fermee : on eclaircit ce qui va remonter, du curseur au bas du volet. */
+body.skin-fenetres .win .ret{top:calc(var(--h,100)*1%);height:calc(max(0,var(--p,50) - var(--h,100))*1%);background:var(--surface);opacity:.55}
+/* colonne de boutons bornee : sur une carte large (PC), l'ensemble reste groupe et centre */
+body.skin-fenetres .vbody.solo{justify-content:center}
+body.skin-fenetres .dpad.vpad{display:flex;flex-direction:column;flex:1;max-width:120px;margin-bottom:0}body.skin-fenetres .dpad.vpad button{flex:1;padding:0}
+body.skin-fenetres .dpad.vpad.narrow{flex:none;width:64px}body.skin-fenetres .dpad.vpad.narrow button{flex:none;height:44px}
+body.skin-fenetres .dpad.vstar{display:flex;align-items:center;margin-bottom:0}
+body.skin-fenetres .dpad.vstar button.star{width:30px;height:54px;margin:0}
+body.skin-fenetres .dpad.vpad.narrow button.star{width:auto;height:34px;margin:0}
+body.skin-fenetres .members{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+body.skin-fenetres .mrow{display:flex;align-items:center;gap:9px;font-size:.84rem;line-height:22px}
+body.skin-fenetres .mico{position:relative;flex:none;width:18px;height:24px;border:1.5px solid color-mix(in srgb,var(--border) 70%,var(--accent));border-radius:3px;background:var(--surface-2);overflow:hidden}
+body.skin-fenetres .mico i{position:absolute;left:0;right:0;top:0;height:calc(var(--p,0)*1%);background:repeating-linear-gradient(180deg,var(--accent) 0 2px,color-mix(in srgb,var(--accent) 78%,#000) 2px 3px)}
+body.skin-fenetres .mname{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.skin-fenetres .mpct{flex:none;width:40px;text-align:right;font-family:var(--mono);font-size:.78rem;font-weight:600;color:var(--accent)}
 /* Radio = ressource unique : pendant qu'une commande part (~1s), on montre le bouton actif ("envoi")
    et on desactive tous les autres boutons volet -> plus de matraquage ni de file d'attente invisible. */
 .dpad button.sending{background:var(--accent);color:var(--surface);border-color:var(--accent);animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-body.radio-busy .dpad button:not(.sending),body.radio-busy .slat{opacity:.45;pointer-events:none;cursor:not-allowed;filter:grayscale(.35)}
+body.radio-busy .dpad button:not(.sending),body.radio-busy [data-pos]{opacity:.45;pointer-events:none;cursor:not-allowed;filter:grayscale(.35)}
 .serials{margin-top:11px;font-size:.76rem;color:var(--muted)}
 .serials code{background:var(--surface-2);padding:1px 6px;border-radius:5px;border:1px solid var(--border)}
 
