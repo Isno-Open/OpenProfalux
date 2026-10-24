@@ -567,11 +567,13 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    /* Emission en FORMAT 80 BITS : c'est le format (pas le nombre de trames) qui declenche la
-     * course complete sur les moteurs concernes (#73). La vraie telecommande emet 2 trames par
-     * appui bref (SOMFY_RTS_TX_REPEATS = 1 repetition apres la 1re). */
-    somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS);
-    ESP_LOGW(TAG, "TX SOMFY 80b addr=0x%06X cmd=0x%X code=%u",
+    /* Emission en 56 bits : le STANDARD, compatible avec les volets roulants classiques, et
+     * le defaut d'ESPSomfy. Le 80 bits (somfy_tx_emit80), pour les volets a lames orientables
+     * (ex. Situo Variation, #73), reste disponible dans le codec et sera choisi via un reglage
+     * 56/80 par volet. Tant que ce reglage n'existe pas, on emet en 56 bits pour ne regresser
+     * personne. Machin77 valide le 80 bits sur la pre-release dediee. */
+    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
+    ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
 static bool emit_virt_somfy(volet_t *v, uint8_t button) {
