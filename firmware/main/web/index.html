@@ -148,6 +148,13 @@
               <button id="somfy-gen" class="btn">🎲 Générer</button></div>
             <p class="hint">Identité de la télécommande virtuelle. Garde-la : c'est elle que le moteur retient à l'appairage.</p>
           </div>
+          <div class="field"><label>Format RTS</label>
+            <select id="somfy-mode">
+              <option value="0">56 bits : standard (volets roulants)</option>
+              <option value="1">80 bits : course complète (lames orientables)</option>
+            </select>
+            <p class="hint">56 bits convient à la plupart des moteurs. Passe en 80 bits si l'appui ne donne qu'un micro-mouvement au lieu de la course complète (ex : Situo Variation). Modifiable après coup.</p>
+          </div>
           <div class="row"><button id="somfy-create" class="btn primary">💾 Créer le volet</button></div>
           <div class="statline" id="somfy-create-status" hidden><span class="dot"></span><b></b></div>
 

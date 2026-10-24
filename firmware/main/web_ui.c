@@ -1253,13 +1253,34 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
     else if ((address & 0xFFFFFF) == 0) err = "adresse manquante ou nulle";
     else if (pfx_key_for_serial(address & 0xFFFFFF, NULL, NULL))
         err = "adresse reservee (ressemble a une identite Profalux 0x067), choisis-en une autre";
-    int rc = err ? -1 : shutters_create_virtual_somfy(id, address);
+    /* Format RTS : ordinal somfy_rts_mode_t (0 = 56 bits standard, defaut ; 1 = 80 bits).
+     * shutters_create_virtual_somfy borne la valeur, l'absence vaut 56 bits. */
+    uint8_t mode = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "mode"));
+    int rc = err ? -1 : shutters_create_virtual_somfy(id, address, mode);
     if (err) ESP_LOGW(TAG, "volet Somfy '%s' refuse : %s", id ? id : "", err);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
     if (err) cJSON_AddStringToObject(o, "err", err);
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
+/* Bascule 56/80 bits d'un volet Somfy existant : {id, mode}. mode = ordinal somfy_rts_mode_t. */
+static esp_err_t h_somfy_mode(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    uint8_t mode = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "mode"));
+    int rc = (id && *id) ? shutters_set_somfy_mode(id, mode) : -1;
+    cJSON_Delete(j);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
     httpd_resp_set_type(r, "application/json");
     esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
     free(js);
@@ -1481,5 +1502,6 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
+    reg(s, "/api/somfy/mode", HTTP_POST, h_somfy_mode);
     ESP_LOGI(TAG, "HTTP UI demarree");
 }
