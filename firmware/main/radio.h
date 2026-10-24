@@ -1,5 +1,5 @@
 /*
- * radio.h — arbitrage RX/TX sur l'unique CC1101 (GDO0 + canal RMT partages).
+ * radio.h : arbitrage RX/TX sur l'unique CC1101 (GDO0 + canal RMT partages).
  *
  * Le driver cc1101 ne fait PAS de RX asynchrone (cc1101_rx_start est un squelette) :
  * le seul RX reel est cc1101_rx_listen_bits() (bloquant). RX et TX se disputent GDO0
@@ -21,6 +21,10 @@ typedef void (*radio_frame_cb_t)(const char *bits, uint32_t serial, uint8_t butt
 void radio_init(void);                 /* cree le mutex (idempotent) */
 void radio_start(radio_frame_cb_t cb); /* demarre la tache RX (en veille tant que listening OFF) */
 void radio_tx(const char *bits, int repeats);   /* rejoue une trame `repeats` fois en UNE rafale TX (mutex-garde) */
+/* Emet un train d'impulsions OOK sur une AUTRE porteuse (p.ex. Somfy RTS a 433,42 MHz),
+ * puis RETABLIT la porteuse Profalux, meme si l'emission echoue. Sous mutex + ecoute en
+ * pause, comme radio_tx : l'unique CC1101 est a nous le temps de la rafale. 0=emis, -1=non. */
+int  radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t *us, int n);
 /* Ecoute dediee (apprentissage, capture d'enrolement), meme ecoute permanente coupee. Rend la
  * 1re trame CONFIRMEE par une seconde identique (rx_confirm.h) ; full = exiger une trame complete
  * de 66 bits. max >= 67. Rend le nombre de bits, ou <0 si rien de confirme avant timeout_ms. */
