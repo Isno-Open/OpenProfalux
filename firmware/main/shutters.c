@@ -568,14 +568,16 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    /* Format choisi par volet (#73). 56 bits = STANDARD (volets roulants classiques, defaut
-     * d'ESPSomfy) ; 80 bits = course complete sur les moteurs a lames orientables (ex. Situo
-     * Variation). Le defaut 56 bits ne regresse personne ; le 80 bits se choisit dans l'onglet
-     * Somfy. Les deux envoient la meme base de trame : le 80 bits y ajoute l'extension recalculee. */
+    /* Rafale COURTE, comme la vraie telecommande (#73). Sur un recepteur a lames orientables
+     * (BSO), c'est la DUREE de l'appui qui decide : bref (peu de trames) = course complete,
+     * long (beaucoup de trames) = orientation des lames. Une longue salve orientait les lames
+     * au lieu de faire la course (l'ancien SOMFY_RTS_TX_REPEATS_MAX = 8 trames en etait une).
+     * SOMFY_RTS_TX_REPEATS reproduit l'appui bref de la telecommande d'origine. Le format 56/80
+     * (v->somfy_mode) reste un choix par volet ; le 80 bits ajoute l'extension recalculee par trame. */
     if ((somfy_rts_mode_t)v->somfy_mode == SOMFY_RTS_MODE_80)
-        somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS_MAX);
+        somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS);
     else
-        somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS_MAX);
+        somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
