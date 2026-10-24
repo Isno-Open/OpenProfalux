@@ -707,11 +707,16 @@ static void announce_one(volet_t *v) {
             "\"position_open\":100,\"position_closed\":0,", slug, slug);
     snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
     /* Cles en TOUTES LETTRES (alignees sur OpenXtraflame) ; device PARTAGE (un seul appareil
-     * "OpenProfalux" regroupe tous les volets) ; topics command/state SLUGIFIES. */
+     * "OpenProfalux" regroupe tous les volets) ; topics command/state SLUGIFIES.
+     * optimistic : HA en deduit assumed_state, et son interface laisse alors Ouvrir et Fermer
+     * toujours actifs. Sans lui, un volet que HA croit ferme n'a plus de bouton Fermer : une
+     * commande ratee, ou une position mal suivie, ne se rattrapait qu'en le remontant d'abord.
+     * C'est le cas reel : le moteur ne renvoie rien, l'etat est suppose. HA continue de lire
+     * state_topic ; il affiche juste l'etat vise des l'envoi, avant celui du boitier. */
     snprintf(pl, 1536,
         "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"shutter\","
         "\"command_topic\":\"openprofalux/cover/%s/set\","
-        "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\","
+        "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"optimistic\":true,"
         "%s"
         "\"state_topic\":\"openprofalux/cover/%s/state\","
         "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
