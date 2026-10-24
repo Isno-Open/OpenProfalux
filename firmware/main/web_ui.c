@@ -295,6 +295,16 @@ static esp_err_t h_status(httpd_req_t *r) {
     return e;
 }
 
+/* Envoie un objet JSON et le libere. */
+static esp_err_t send_json(httpd_req_t *r, cJSON *o) {
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
+
 /* ── /api/shutter ── */
 static esp_err_t h_shutter(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
@@ -343,7 +353,7 @@ static esp_err_t h_learn_assign(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_learn_assign(jstr(j, "id"), jstr(j, "action"), jstr(j, "bits"));
     cJSON_Delete(j); s_lready = false;
-    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : rc == -2 ? "{\"ok\":0,\"err\":\"bouton\"}" : "{\"ok\":0}");
     return ESP_OK;
 }
 static esp_err_t h_learn_reassign(httpd_req_t *r) {
@@ -400,6 +410,22 @@ static esp_err_t h_orientation(httpd_req_t *r) {
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
+}
+/* /api/volet/inter : {"id", "on": bool, "pct": -1..100 (absent = inchange)}. Position
+ * intermediaire du moteur : voir shutters_set_inter. */
+static esp_err_t h_volet_inter(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    cJSON *pct = cJSON_GetObjectItem(j, "pct");
+    const char *why = NULL;
+    int rc = shutters_set_inter(jstr(j, "id"), cJSON_IsTrue(cJSON_GetObjectItem(j, "on")),
+                                cJSON_IsNumber(pct) ? (int)pct->valuedouble : -2, &why);
+    cJSON_Delete(j);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (why) cJSON_AddStringToObject(o, "err", why);
+    return send_json(r, o);
 }
 /* /api/volet/order : {"ids":["id1","id2",...]} dans l'ordre d'affichage voulu.
  * Purement cosmetique : ne touche ni la radio, ni le pilotage, ni les topics HA. */
@@ -1413,6 +1439,7 @@ void web_ui_start(void) {
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
     reg(s, "/api/volet/followers", HTTP_POST, h_followers);
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
+    reg(s, "/api/volet/inter",       HTTP_POST, h_volet_inter);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
     reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);
     reg(s, "/api/remote/create_volet", HTTP_POST, h_remote_create_volet);

@@ -48,8 +48,15 @@ typedef struct {
                               * Centrale : les volets a qui la commande est diffusee.
                               * Volet appris (ZONE) : ses SUIVEURS. Sa propre trame les fait
                               * bouger tous ; ils suivent ses mouvements sans rien emettre. */
+    /* Position intermediaire du MOTEUR (volet_inter.h). Volet clone : la trame 0x6/0xC
+     * captee, rejouee telle quelle. Volet virtuel : inter_on (le moteur l'a), la trame est
+     * generee. Ni l'une ni l'autre : le volet n'a pas la fonction, rien ne s'affiche. */
+    char     inter[SH_BITS_LEN];
+    uint8_t  inter_btn;
+    bool     inter_on;
+    int8_t   inter_pct;      /* % de fermeture de cette position (-1 = inconnu) */
     uint32_t travel_up_ms, travel_down_ms;
-    int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
+    int   orientation;      /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
                               * l'UI place alors le volet a la fin, dans son ordre de creation. */
     float position;          /* 0..100 */
@@ -60,6 +67,10 @@ typedef struct {
     int64_t last_tick_us;
     int   pub_pos;           /* derniere position publiee MQTT (evite le spam) */
     int   pub_dir;           /* derniere direction publiee MQTT */
+    /* Derniere trame 0x6/0xC d'une telecommande du volet, tant qu'il n'a pas la position
+     * intermediaire : l'UI propose de l'ajouter (adoption depuis le journal RF). */
+    char     inter_seen[SH_SERIAL_LEN];
+    uint32_t inter_seen_hop;
 } volet_t;
 
 /* dframe_t (trame distincte du dataset slide : hop brut + bouton + t) est defini dans shutters.h. */

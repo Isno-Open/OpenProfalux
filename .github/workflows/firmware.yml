@@ -160,6 +160,23 @@ jobs:
              -o remote_battery_host_test
           ./remote_battery_host_test
 
+  # La position intermediaire du moteur (volet_inter.c) : codes boutons et suivi de
+  # position. Pure, un simple gcc suffit.
+  banc-volet-inter:
+    name: Banc de test de la position intermediaire
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: codes boutons et suivi (gcc + AddressSanitizer)
+        working-directory: firmware/test/volet-inter
+        run: |
+          cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/volet_inter.c \
+             -o volet_inter_host_test
+          ./volet_inter_host_test
+
   # Le decodeur OOK HCS30x/KeeLoq (keeloq_decode.c) sur des trames en bouchon :
   # voir firmware/test/keeloq/README.md. Il est PUR, donc un simple gcc suffit,
   # sans l'image IDF : quelques secondes, et il rend 1 au premier echec.

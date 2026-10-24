@@ -7,6 +7,7 @@
 #include "cfg_store.h"
 #include "cfg_model.h"
 #include "remote_battery.h"
+#include "volet_inter.h"
 #include "pfx_enrol.h"
 #include <string.h>
 #include <strings.h>
@@ -139,8 +140,8 @@ static const char *remote_user(const char *shex) {
             char vx[SH_SERIAL_LEN]; snprintf(vx, sizeof(vx), "0x%07X", (unsigned)v->virt_serial);
             if (!strcmp(vx, shex)) return v->id;
         }
-        const char *cmds[3] = { v->up, v->down, v->stop };
-        for (int k = 0; k < 3; k++) {
+        const char *cmds[4] = { v->up, v->down, v->stop, v->inter };
+        for (int k = 0; k < 4; k++) {
             char cx[SH_SERIAL_LEN]; bits_serial_hex(cmds[k], cx);
             if (cx[0] && !strcmp(cx, shex)) return v->id;
         }
@@ -211,6 +212,17 @@ static volet_t *zone_of(const volet_t *v) {
     for (int i = 0; i < s_nvolets; i++) if (is_zone(&s_volets[i]) && in_members(s_volets[i].members, v->id)) return &s_volets[i];
     return NULL;
 }
+/* Le volet sait-il aller a la position intermediaire du moteur ? Clone : trame apprise ;
+ * virtuel : case cochee ; centrale : au moins un de ses volets. */
+static bool has_inter(const volet_t *v) {
+    if (!v->central) return v->virt ? v->inter_on : v->inter[0] != 0;
+    char mid[SH_ID_LEN];
+    for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
+        const volet_t *m = find_volet(mid);
+        if (m && m != v && !m->central && has_inter(m)) return true;
+    }
+    return false;
+}
 static volet_t *get_or_create(const char *id) {
     volet_t *v = find_volet(id);
     if (v) return v;
@@ -224,6 +236,7 @@ static volet_t *get_or_create(const char *id) {
     memset(v, 0, sizeof(*v));
     strlcpy(v->id, id, SH_ID_LEN);
     v->position = 50; v->target = -1; v->pub_pos = -1; v->pub_dir = -9; v->orientation = -1;
+    v->inter_pct = -1;   /* position intermediaire : % inconnu */
     v->order = -1;   /* non range : l'UI l'affiche a la fin, dans l'ordre de creation */
     return v;
 }
@@ -628,6 +641,41 @@ static void zone_follow(volet_t *z, int dir) {
         publish_volet_state(m);
     }
 }
+/* ── Position intermediaire du moteur (volet_inter.h) ──
+ * Le moteur y va de lui-meme et s'y arrete : on le suit sans rien emettre (own_move
+ * false), vers le % connu, et la cible atteinte fige le suivi, sans STOP. Appele sous LOCK. */
+static void inter_track(volet_t *v) {
+    int d;
+    switch (inter_plan(v->dir, v->target, v->position, v->inter_pct, &d)) {
+    case INTER_MOVE:
+        v->dir = d; v->own_move = false; v->target = v->inter_pct;
+        v->last_tick_us = esp_timer_get_time();
+        break;
+    case INTER_FREEZE: freeze(v); break;
+    case INTER_KEEP:   return;
+    }
+    publish_volet_state(v);
+}
+/* Les suiveurs d'une zone vont chacun a SA position intermediaire : la trame de la piece a
+ * actionne tous leurs moteurs. Appele sous LOCK. */
+static void zone_follow_inter(volet_t *z) {
+    if (z->central || !z->members) return;
+    char mid[SH_ID_LEN];
+    for (const char *p = cfg_members_next(z->members, mid); p; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (m && m != z && !m->central && !is_zone(m)) inter_track(m);
+    }
+}
+/* Envoie le volet a sa position intermediaire. Appele sous LOCK. */
+static void inter_go(volet_t *v) {
+    radio_pause_rx(true);
+    if (v->virt) emit_virt(v, INTER_BTN_GOTO);
+    else         emit_press(v->inter);
+    radio_pause_rx(false);   /* une rafale, pas de STOP a venir : l'ecoute reprend tout de suite */
+    inter_track(v);
+    zone_follow_inter(v);
+}
+
 /* Publie la config HA discovery d'un cover (retained). Appele sous LOCK. */
 /* ── Pile des telecommandes (bit VLOW) : un binary_sensor HA par telecommande NOMMEE ──
  * ON = pile faible. Etat retenu sur openprofalux/remote/<serial>/battery, publie des qu'une
@@ -719,8 +767,27 @@ static void announce_one(volet_t *v) {
         "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
         v->id, slug, slug, slug, pos, slug, s_device, devname, cu);
     pub_defer(topic, pl, 1, 1);
+    /* Bouton « Position intermediaire » : seulement si le volet l'a ; sinon config vide
+     * retenue, qui retire l'entite si elle existait. Pas d'« Enregistrer » dans HA : une
+     * automatisation mal reglee ecraserait la position du moteur sans prevenir. */
+    snprintf(topic, sizeof(topic), "homeassistant/button/openprofalux_%s_inter/config", slug);
+    if (has_inter(v)) {
+        snprintf(pl, 1536,
+            "{\"name\":\"%s position intermediaire\",\"unique_id\":\"openprofalux_%s_inter\",\"object_id\":\"openprofalux_%s_inter\","
+            "\"command_topic\":\"openprofalux/cover/%s/inter\",\"payload_press\":\"PRESS\",\"icon\":\"mdi:arrow-collapse-vertical\","
+            "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
+            "\"device\":{\"identifiers\":[\"openprofalux\"],\"name\":\"%s\","
+            "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
+            v->id, slug, slug, slug, s_device, devname, cu);
+        pub_defer(topic, pl, 1, 1);
+    } else pub_defer(topic, "", 1, 1);
     free(pl);
     publish_volet_state(v);
+}
+/* Le bouton HA d'une centrale depend de ses volets : a reannoncer quand l'un d'eux gagne ou
+ * perd la position intermediaire. Appele sous LOCK. */
+static void announce_centrals(void) {
+    for (int i = 0; i < s_nvolets; i++) if (s_volets[i].central) announce_one(&s_volets[i]);
 }
 
 /* Entites HA supplementaires (une seule fois, sous le meme appareil) :
@@ -762,6 +829,8 @@ static void clear_one(volet_t *v) {
     pub_defer(topic, "", 0, 1);
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
     pub_defer(topic, "", 0, 1);
+    snprintf(topic, sizeof(topic), "homeassistant/button/openprofalux_%s_inter/config", slug);
+    pub_defer(topic, "", 0, 1);
 }
 
 /* ── API commande ── */
@@ -778,6 +847,7 @@ int shutters_delete_volet(const char *id) {
     clear_one(&s_volets[idx]);         /* retire l'entite HA (discovery retenu) AVANT de perdre le volet */
     cfg_model_remove(&s_model, idx);   /* libere la liste d'une centrale */
     save_cfg();
+    announce_centrals();  /* une centrale peut perdre son dernier volet a position intermediaire */
     update_listening();   /* plus aucun volet -> coupe l'ecoute permanente */
     UNLOCK();
     pub_flush();          /* pousse l'effacement MQTT hors LOCK */
@@ -800,11 +870,18 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
             if      (!strcmp(cmd, "up"))   { m->target = 0;   start_move(m, +1); }
             else if (!strcmp(cmd, "down")) { m->target = 100; start_move(m, -1); }
             else if (!strcmp(cmd, "stop")) { do_stop(m); }
+            else if (!strcmp(cmd, "inter")) { if (has_inter(m)) inter_go(m); }   /* ceux qui l'ont */
             publish_volet_state(m);
         }
         if (!strcmp(cmd, "up")) v->position = 0; else if (!strcmp(cmd, "down")) v->position = 100;
         v->dir = 0;
         publish_volet_state(v);
+        UNLOCK(); pub_flush();
+        return 0;
+    }
+    if (!strcmp(cmd, "inter")) {
+        if (!has_inter(v)) { ESP_LOGW(TAG, "CMD inter refusee : '%s' n'a pas de position intermediaire", id); UNLOCK(); return -1; }
+        inter_go(v);
         UNLOCK(); pub_flush();
         return 0;
     }
@@ -886,6 +963,14 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     if      (!strcmp(action, "up"))   { strlcpy(v->up, bits, SH_BITS_LEN);   v->up_btn = btn; }
     else if (!strcmp(action, "down")) { strlcpy(v->down, bits, SH_BITS_LEN); v->down_btn = btn; }
     else if (!strcmp(action, "stop")) { strlcpy(v->stop, bits, SH_BITS_LEN); v->stop_btn = btn; }
+    else if (!strcmp(action, "inter")) {   /* Montee + Stop ou Stop + Descente, rien d'autre */
+        if (!inter_btn_goto(btn)) {
+            ESP_LOGW(TAG, "volet '%s' : bouton 0x%X refuse pour la position intermediaire (0x6 ou 0xC)", id, btn);
+            UNLOCK(); return -2;
+        }
+        strlcpy(v->inter, bits, SH_BITS_LEN); v->inter_btn = btn;
+        v->inter_seen[0] = 0;
+    }
     else { UNLOCK(); return -1; }
     /* memorise le serial de cette telecommande pour ce volet (sync position) */
     uint32_t ser = 0; if ((int)strlen(bits) >= 60) for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
@@ -895,6 +980,7 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     if (!has && v->n_serials < SH_MAX_SERIALS) strlcpy(v->serials[v->n_serials++], shex, SH_SERIAL_LEN);
     save_cfg();
     announce_one(v);       /* (re)publie le cover HA des qu'il est appris */
+    if (!strcmp(action, "inter")) announce_centrals();
     update_listening();    /* 1er volet appris -> allume l'ecoute pour le suivi de position */
     UNLOCK();
     pub_flush();
@@ -1092,6 +1178,31 @@ int shutters_create_volet_from_remote(const char *id, const char *serial, char *
     return 0;
 }
 
+/* Reglages de la position intermediaire (Telecommandes > Cloner, volet choisi). on : volet
+ * virtuel, le moteur l'a ou non ; volet clone, false retire la trame apprise (true exige de
+ * l'avoir capturee). pct : % de fermeture de la position, -1 = inconnu, -2 = inchange. */
+int shutters_set_inter(const char *id, bool on, int pct, const char **why) {
+    const char *err = NULL;
+    LOCK();
+    volet_t *v = id ? find_volet(id) : NULL;
+    if (!v) err = "volet inconnu";
+    else if (v->central) err = "une centrale suit ses volets";
+    else if (pct < -2 || pct > 100) err = "pourcentage hors de 0 a 100";
+    else if (v->virt) v->inter_on = on;
+    else if (!on) { v->inter[0] = 0; v->inter_btn = 0; }
+    else if (!v->inter[0]) err = "capture d'abord Montee + Stop ou Descente + Stop de la telecommande";
+    if (err) { UNLOCK(); if (why) *why = err; return -1; }
+    if (pct != -2) v->inter_pct = (int8_t)pct;
+    if (has_inter(v)) v->inter_seen[0] = 0;
+    save_cfg();
+    announce_one(v);
+    announce_centrals();
+    ESP_LOGW(TAG, "volet '%s' : position intermediaire %s, %d %%", v->id, has_inter(v) ? "oui" : "non", v->inter_pct);
+    UNLOCK();
+    pub_flush();
+    return 0;
+}
+
 int shutters_calibrate(const char *id, uint32_t up_ms, uint32_t down_ms) {
     LOCK();
     volet_t *v = find_volet(id);
@@ -1257,7 +1368,7 @@ static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, in
 /* ══ FONCTION 2 — Suivi de position via telecommandes ENREGISTREES ══
  * Independante de l'option MQTT : des qu'un volet a appris ce serial+bouton, on suit
  * sa position quand la VRAIE telecommande l'actionne. Appele sous LOCK. */
-static void track_shutter_position(const char *shex, uint8_t button) {
+static void track_shutter_position(const char *shex, uint8_t button, uint32_t hop) {
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
         bool mine = false;
@@ -1275,6 +1386,20 @@ static void track_shutter_position(const char *shex, uint8_t button) {
             if (!v->own_move && v->dir != +1) { track_move(v, +1); zone_follow(v, +1); }
         } else if (v->down_btn && button == v->down_btn) {
             if (!v->own_move && v->dir != -1) { track_move(v, -1); zone_follow(v, -1); }
+        } else if (inter_btn_goto(button)) {
+            /* Position intermediaire : le moteur y va seul. Sans la fonction cote boitier, on
+             * retient la trame pour proposer de l'ajouter (bandeau de l'UI). */
+            if (!has_inter(v)) { strlcpy(v->inter_seen, shex, SH_SERIAL_LEN); v->inter_seen_hop = hop; }
+            inter_track(v);
+            zone_follow_inter(v);
+        } else if (inter_btn_save(button)) {
+            /* Enregistree avec la vraie telecommande (le boitier ne l'enregistre pas lui-meme) :
+             * elle est la ou le boitier croit le volet. */
+            int p = (int)(v->position + 0.5f);
+            if (!v->dir && v->inter_pct != p) {
+                v->inter_pct = (int8_t)p; s_pos_dirty = true;
+                ESP_LOGW(TAG, "volet '%s' : position intermediaire enregistree par la telecommande, %d %%", v->id, p);
+            }
         }
         /* v->own_move : notre propre echo (meme serial rejoue) -> ignore.
          * PAS de break : un meme serial (telecommande GENERALE) peut piloter plusieurs volets
@@ -1325,7 +1450,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
             pub_slot = slot; do_pub = true;
         }
     }
-    track_shutter_position(shex, button);   /* toujours (idempotent sur les repetitions) */
+    track_shutter_position(shex, button, hop);   /* toujours (idempotent sur les repetitions) */
     UNLOCK();
     pub_flush();   /* etat pile eventuel (empile sous LOCK) */
     /* DEADLOCK FIX : ne JAMAIS publier en MQTT sous le LOCK. Un publish QoS1 retained peut
@@ -1401,6 +1526,19 @@ char *shutters_status_json(void) {
         add_cmd_json(cmd, "up",   v->up,   v->up_btn);
         add_cmd_json(cmd, "stop", v->stop, v->stop_btn);
         add_cmd_json(cmd, "down", v->down, v->down_btn);
+        add_cmd_json(cmd, "inter", v->inter, v->inter_btn);
+        /* Position intermediaire : inter = le volet l'a (centrale : un de ses volets),
+         * inter_on = case du volet virtuel, inter_pct = son % (-1 inconnu), inter_seen = une
+         * telecommande du volet l'a envoyee alors qu'il ne l'a pas (a proposer). */
+        if (has_inter(v)) cJSON_AddBoolToObject(o, "inter", true);
+        if (v->inter_on) cJSON_AddBoolToObject(o, "inter_on", true);
+        cJSON_AddNumberToObject(o, "inter_pct", v->inter_pct);
+        if (v->inter_seen[0] && !has_inter(v)) {
+            cJSON *is = cJSON_AddObjectToObject(o, "inter_seen");
+            cJSON_AddStringToObject(is, "serial", v->inter_seen);
+            char hx[10]; snprintf(hx, sizeof(hx), "%08X", (unsigned)v->inter_seen_hop);
+            cJSON_AddStringToObject(is, "hop", hx);
+        }
         cJSON_AddItemToArray(vols, o);
     }
     cJSON *rf = cJSON_AddArrayToObject(root, "rf");   /* recentes seulement ; les 300 via /api/rf */
@@ -1627,6 +1765,8 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         else if (!strcasecmp(payload, "STOP"))  shutters_cmd(id, "stop", 0);
     } else if (!strcmp(sub, "set_position")) {
         shutters_cmd(id, "pos", 100 - atoi(payload));   /* HA envoie le % d'ouverture -> on convertit en fermeture */
+    } else if (!strcmp(sub, "inter")) {
+        shutters_cmd(id, "inter", 0);   /* bouton HA « Position intermediaire » */
     }
 }
 

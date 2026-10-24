@@ -58,6 +58,14 @@ static cJSON *volet_to_json(const volet_t *v) {
     cJSON_AddNumberToObject(o, "up_btn", v->up_btn);
     cJSON_AddNumberToObject(o, "down_btn", v->down_btn);
     cJSON_AddNumberToObject(o, "stop_btn", v->stop_btn);
+    /* Position intermediaire : ecrite seulement si le volet l'a, pour garder le JSON (et la
+     * place en NVS) des autres volets a l'identique. */
+    if (v->inter[0]) {
+        cJSON_AddStringToObject(cmd, "inter", v->inter);
+        cJSON_AddNumberToObject(o, "inter_btn", v->inter_btn);
+    }
+    if (v->inter_on) cJSON_AddBoolToObject(o, "inter_on", true);
+    if (v->inter_pct >= 0) cJSON_AddNumberToObject(o, "inter_pct", v->inter_pct);
     cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);
     cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
     cJSON_AddNumberToObject(o, "orientation", v->orientation);
@@ -155,10 +163,16 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         strlcpy(v->up,   cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "up"))   ?: "", SH_BITS_LEN);
         strlcpy(v->down, cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "down")) ?: "", SH_BITS_LEN);
         strlcpy(v->stop, cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "stop")) ?: "", SH_BITS_LEN);
+        strlcpy(v->inter, cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "inter")) ?: "", SH_BITS_LEN);
     }
     v->up_btn   = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "up_btn"));
     v->down_btn = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "down_btn"));
     v->stop_btn = (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "stop_btn"));
+    v->inter_btn = v->inter[0] ? (uint8_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "inter_btn")) : 0;
+    v->inter_on  = cJSON_IsTrue(cJSON_GetObjectItem(o, "inter_on"));
+    cJSON *ip = cJSON_GetObjectItem(o, "inter_pct");   /* absent -> -1 (inconnu) */
+    double ipv = ip ? cJSON_GetNumberValue(ip) : -1;
+    v->inter_pct = (ipv >= 0 && ipv <= 100) ? (int8_t)ipv : -1;
     v->travel_up_ms   = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "travel_up_ms"));
     v->travel_down_ms = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "travel_down_ms"));
     cJSON *ori = cJSON_GetObjectItem(o, "orientation");

@@ -24,14 +24,20 @@
 /* Charge la config NVS + demarre la tache de suivi position. */
 void shutters_init(void);
 
-/* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
+/* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100) | "inter" (position
+ * intermediaire du moteur, refusee si le volet ne l'a pas). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
+/* Position intermediaire (volet_inter.h). Reglages : on (virtuel : le moteur l'a ; clone :
+ * false retire la trame), pct = % de fermeture (-1 inconnu, -2 inchange). *why = raison d'un
+ * refus. L'enregistrer dans le moteur reste a sa telecommande d'origine. */
+int  shutters_set_inter(const char *id, bool on, int pct, const char **why);
 int  shutters_delete_volet(const char *id);
 int  shutters_delete_remote(const char *serial, const char **why);   /* refuse si un volet s'en sert (*why) */
 int  shutters_ignore_remote(const char *serial, const char **why);   /* retire + n'enregistre plus ; refuse si un volet s'en sert */
 int  shutters_unignore_remote(const char *serial);
 
-/* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet. Cree le volet si absent. */
+/* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet ("up", "down",
+ * "stop", "inter"). Cree le volet si absent. -2 : bouton refuse pour "inter" (ni 0x6 ni 0xC). */
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
 /* Cree un volet "virtuel PFX" a partir d'une identite 0x067 enrolee (pilote par generation,
  * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */

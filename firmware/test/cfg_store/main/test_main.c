@@ -185,7 +185,7 @@ static volet_t *mk_volet(store_t *s, const char *id, unsigned seed, uint32_t up_
     bits66(v->up, seed * 3 + 1); bits66(v->down, seed * 3 + 2); bits66(v->stop, seed * 3 + 3);
     v->up_btn = 8; v->down_btn = 2; v->stop_btn = 4;
     v->travel_up_ms = up_ms; v->travel_down_ms = down_ms;
-    v->orientation = -1; v->order = s->nvolets - 1; v->position = 100;
+    v->orientation = -1; v->order = s->nvolets - 1; v->position = 100; v->inter_pct = -1;
     return v;
 }
 /* Le boitier de reference : 15 telecommandes, 5 volets, 1 centrale. */
@@ -227,6 +227,8 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
         && a->up_btn == b->up_btn && a->down_btn == b->down_btn && a->stop_btn == b->stop_btn
         && a->virt == b->virt && a->virt_serial == b->virt_serial
         && a->virt_counter == b->virt_counter && a->proto == b->proto
+        && !strcmp(a->inter, b->inter) && a->inter_btn == b->inter_btn
+        && a->inter_on == b->inter_on && a->inter_pct == b->inter_pct
         && a->central == b->central && !strcmp(a->members ? a->members : "", b->members ? b->members : "")
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
@@ -418,9 +420,11 @@ int main(void) {
         model_init(&g_ref);
         volet_t *q = mk_volet(&g_ref, "Volet \"sud\" \\ 2", 7, 15000, 14000);   /* guillemets et antislash */
         snprintf(q->serials[1], SH_SERIAL_LEN, "0x0ABCDEF"); q->n_serials = 2; q->orientation = 180;
+        bits66(q->inter, 99); q->inter_btn = 0x6; q->inter_pct = 0;   /* position intermediaire apprise, a 0 % */
         volet_t *v = mk_volet(&g_ref, "Virtuel", 8, 0, 0);                        /* volet virtuel */
         v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321;
         v->proto = VOLET_PROTO_SOMFY_RTS;   /* protocole non-Profalux : doit survivre a l'aller-retour */
+        v->inter_on = true;                 /* position intermediaire generee, % inconnu */
         volet_t *z = mk_volet(&g_ref, "Zone salon", 9, 0, 0);                     /* zone : volet appris + suiveurs */
         cfg_volet_set_members(z, "Volet du salon,Volet cuisine");
         char *js = cfg_model_export(&g_ref.m);
@@ -436,6 +440,10 @@ int main(void) {
         int nproto = 0;
         for (const char *p = js; js && (p = strstr(p, "\"proto\"")) != NULL; p += 7) nproto++;
         CHECK(nproto == 1, "un seul volet doit ecrire \"proto\" (trouve %d)", nproto);
+        /* Position intermediaire : seuls les volets qui l'ont l'ecrivent (meme raison). */
+        int ninter = 0;
+        for (const char *p = js; js && (p = strstr(p, "\"inter")) != NULL; p += 6) ninter++;
+        CHECK(ninter == 4, "inter, inter_btn, inter_pct et inter_on attendus une fois chacun (trouve %d)", ninter);
         printf("  aller-retour de %d volets (centrale, virtuel, zone, guillemets, accents) : %s\n", g_ref.nvolets, rt ? "identique" : "DIFFERENT");
         /* Zone : ses suiveurs reviennent, sans en faire une centrale ; un volet sans
          * suiveurs n'ecrit pas de "members" (les sauvegardes restent celles d'avant). */
