@@ -5,6 +5,10 @@
 Firmware ESP32 + CC1101 open-source pour les volets **Profalux 868 MHz** (moteurs MAI-EMPX /
 MAI-EMNOE). Tout reste local : pas de cloud, pas de passerelle propriétaire, aucun fil à tirer.
 
+Le cœur, c'est Profalux. Le même boîtier sait aussi émettre en **Somfy RTS (433,42 MHz)**, pour
+un foyer qui mélange les deux marques. Un troisième protocole, l'**io-homecontrol** (Velux, Somfy
+io), est à l'étude. Ces deux-là sont **expérimentaux** : détails plus bas.
+
 📖 **Montage pas à pas, photos et l'histoire complète du reverse** : [www.isno.fr/projets/openprofalux](https://www.isno.fr/projets/openprofalux)
 
 🔌 **Sans rien câbler** : je fais fabriquer une carte qui intègre tout d'origine (ESP32-S3, radio 868 MHz, antenne SMA, USB-C, protections ESD) et qui tourne avec ce même firmware. Prototypes en fabrication, pas encore en vente : [liste d'attente sur isno.fr](https://www.isno.fr/liste-attente).
@@ -49,6 +53,20 @@ Matériel confirmé par des retours d'utilisateurs (conditions et détails dans
 La porteuse Profalux varie selon la génération (**868,350 à 868,425 MHz**). Pour un volet
 ancien ou une autre marque, un profil radio ou une fréquence personnalisée se règle dans l'UI
 (symptômes et marche à suivre dans [docs/COMPATIBILITE.md](docs/COMPATIBILITE.md)).
+
+### Somfy RTS et io-homecontrol (expérimental)
+
+Le même boîtier sait émettre deux autres protocoles, encore **en test**, à côté du cœur Profalux :
+
+- **Somfy RTS** (433,42 MHz, [#73](https://github.com/Isno-Open/OpenProfalux/issues/73)) : on crée
+  un volet virtuel (adresse 24 bits + code tournant), on l'appaire au moteur par son bouton PROG,
+  puis on le pilote. Deux formats au choix **par volet** : **56 bits** (le standard, défaut, comme
+  ESPSomfy) et **80 bits**, pour les moteurs à lames orientables dont la course complète ne part
+  qu'en 80 bits. Validé sur un moteur Somfy RTS à lames orientables ; reste à confirmer sur d'autres.
+- **io-homecontrol** (Velux, Somfy io, [#87](https://github.com/Isno-Open/OpenProfalux/issues/87)) :
+  en recherche, **pas encore fonctionnel**. L'appairage est émis correctement mais le moteur ne le
+  valide pas (piste : io attend un échange bidirectionnel avec saut de fréquence qu'une radio simple
+  ne tient pas).
 
 ## Ce que fait le firmware (`firmware/`)
 
@@ -121,6 +139,8 @@ ne se tient pas à la main.
 - ✅ Firmware produit **compile** (ESP-IDF v6.1, 1,14 Mo pour `isno-super`, 24 % libres au 2026-10-18, partitions OTA).
 - ✅ **Rejeu validé au banc** (le moteur suit une trame rejouée, y compris après la vraie télécommande).
 - ✅ **Enrôlement confirmé par des utilisateurs** (NeoSol S300, moteur solaire MOT-PX3R10, FranciaFlex M4G).
+- 🧪 **Somfy RTS (433 MHz)** émis : appairage PROG, pilotage, format 56/80 bits par volet. Validé sur un moteur à lames orientables, à confirmer plus largement ([#73](https://github.com/Isno-Open/OpenProfalux/issues/73)).
+- 🔬 **io-homecontrol** (Velux, Somfy io) à l'étude, pas encore fonctionnel ([#87](https://github.com/Isno-Open/OpenProfalux/issues/87)).
 - ⏳ À valider sur l'installation : calibration des temps de course, portée antenne, multi-volets.
 
 ## Extensions possibles
