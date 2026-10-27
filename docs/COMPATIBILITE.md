@@ -6,16 +6,16 @@ Une ligne = un retour vérifié.
 - **rejeu** : capturer une commande de la télécommande d'origine puis la réémettre.
 - **enrôlement** : créer une identité que le moteur apprend, pour piloter sans capturer.
 
-| Marque | Modèle | Année | Fréquence | Profil radio | Méthode confirmée | Compteur roulant | Carte / module testés | Source |
-|---|---|---|---|---|---|---|---|---|
-| Profalux | gamme PFX (référence du projet) | non précisé | 868,350 à 868,425 MHz (selon la génération) | `profalux` (défaut) | rejeu, enrôlement | variable selon la génération du moteur | banc du mainteneur | mainteneur, issue #34 |
-| Eveno | Zuni-R | 2015 | 868,33 MHz | `eveno` | rejeu | non observé (une vingtaine de rejeux successifs acceptés) | non précisé | issue #3, azriek |
-| Profalux | NeoSol S300 Stella AT | non précisé | 868 MHz (défaut) | `profalux` + bit de répétition | enrôlement | à déterminer (TE mesuré ~400 µs) | XIAO ESP32-S3 + CC1101 | issue #1, eleroy |
-| Profalux | MOT-PX3R10 (moteur solaire) | 2020 | 868 MHz (défaut) | preset Profalux Neosol R8 + bit de répétition | enrôlement | à déterminer | carte `external` (ESP32 + CC1101), puis module Ebyte E07-900MBL-01 | issue #59, joha38 |
-| Profalux | JX02XE 10R-56 (Stella NeoSol, moteur solaire) | 2026 | 868 MHz (défaut) | preset Profalux Neosol + bit de répétition | enrôlement | à déterminer | ESP32 + CC1101 | issue #59, joha38 |
-| FranciaFlex | M4G | non précisé | 868 MHz | non précisé | enrôlement | variable | non précisé | forum HACF, Lecanard38 |
-| Profalux | VISIO Monobloc, télécommande MAI-EMPX-B1 | 2017 | 868,350 MHz | `profalux`, profil R6 (MAI-EMPX / MUR / NOE) | enrôlement (le rejeu n'a pas fonctionné sur cette installation) | code tournant généré à l'enrôlement | M5Stack ATOM Lite + CC1101 | issue #35, MaxFrakass |
-| Somfy | récepteur Soliris Mod/Var Slim Receiver RTS (réf. 181080x) + moteur J4 WT (réf. J406 1TN), BSO à lames orientables | 2012 | 433,42 MHz | Somfy RTS (hors profil Profalux) | Somfy RTS : appairage PROG, course complète en appui bref (rafale courte) | code tournant RTS | ESP32 + CC1101 | issue #73, Machin77 |
+| Marque | Modèle | Fréquence | Méthode | Retour |
+|---|---|---|---|---|
+| Profalux | gamme PFX (référence du projet) | 868,350 à 868,425 MHz selon la génération | rejeu, enrôlement | #34 |
+| Eveno | Zuni-R | 868,33 MHz (profil Eveno) | rejeu | #3 |
+| Profalux | NeoSol S300 Stella AT | 868 MHz, bit de répétition | enrôlement | #1 |
+| Profalux | MOT-PX3R10 (moteur solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
+| Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
+| FranciaFlex | M4G | 868 MHz | enrôlement | forum HACF |
+| Profalux | VISIO Monobloc (MAI-EMPX-B1) | 868,350 MHz, profil R6 | enrôlement (rejeu KO ici) | #35 |
+| Somfy | récepteur Soliris RTS + moteur J4 WT | 433,42 MHz (Somfy RTS) | appairage PROG, appui bref | #73 |
 
 Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année d'installation,
 la fréquence, le profil radio choisi, la carte et le module utilisés, et ce qui a fonctionné
