@@ -9,7 +9,7 @@ Une ligne = un retour vérifié.
 | Marque | Modèle | Fréquence | Méthode | Retour |
 |---|---|---|---|---|
 | Profalux | gamme PFX (référence du projet) | 868,350 à 868,425 MHz selon la génération | rejeu, enrôlement | #34 |
-| Profalux | NeoSol S300 Stella AT | 868 MHz, bit de répétition | enrôlement | #1 |
+| Profalux | NeoSol S300 Stella AT | ~868,383 MHz (personnalisée, à confirmer) ; bit de répétition | enrôlement | #1 |
 | Profalux | MOT-PX3R10 (moteur solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
 | Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
 | Profalux | VISIO Monobloc (MAI-EMPX-B1) | 868,350 MHz, profil R6 | enrôlement (rejeu KO ici) | #35 |
@@ -45,6 +45,12 @@ défaut. Retours concordants : eleroy sur NeoSol 300 (issue #1), joha38 sur MOT-
 solaire de 2020 (issue #59, confirmé sur deux modules radio) et, chez le même testeur, sur
 un moteur solaire récent **JX02XE 10R-56 (Stella NeoSol) de 2026**. La même méthode, preset
 NeoSol et bit de répétition, pilote les quatre volets, anciens et récents mélangés.
+
+⚠️ À confirmer, fréquence du NeoSol S300 Stella : un second retour sur ce moteur n'a réussi
+l'enrôlement qu'en **forçant une fréquence personnalisée autour de 868,383 MHz** (profil
+NeoSol R8), le défaut Profalux (868,425) ne captant pas sa télécommande. Le bouton **« Caler
+sur ma télécommande »** donne la valeur exacte à viser. Valeur à confirmer sur d'autres
+exemplaires.
 
 **FranciaFlex M4G** : le moteur n'accepte qu'un **nombre limité de télécommandes**. Une
 fois ce nombre atteint, l'enrôlement d'un nouvel émetteur échoue sans message, et il faut
