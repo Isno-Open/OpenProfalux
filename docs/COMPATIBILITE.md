@@ -23,6 +23,21 @@ la fréquence, le profil radio choisi, la carte et le module utilisés, et ce qu
 
 ## Particularités connues
 
+**Enrôlement, les deux signes à connaître (aller-retour et délai).** À la fin de
+l'apprentissage, deux choses trompent souvent :
+
+- **l'aller-retour de confirmation est facultatif.** Certains moteurs font un petit
+  aller-retour pour signaler « c'est appris », d'autres ne bougent pas du tout. Les deux
+  cas sont normaux : l'absence d'aller-retour ne veut pas dire que l'enrôlement a échoué.
+- **il faut attendre une dizaine de secondes avant de tester une commande.** Le moteur ne
+  répond pas immédiatement ; tester tout de suite donne l'impression d'un échec alors que
+  l'enrôlement a réussi. C'est le piège le plus fréquent.
+
+Retours concordants : lecanard38 sur FranciaFlex M4G (« si on teste sans attendre, ça ne
+marche pas », et pas d'aller-retour sur ce moteur), eleroy sur NeoSol S300 (issue #1) et
+joha38 sur moteur solaire (issue #59). Le délai est encore plus marqué sur les moteurs
+solaires, qui n'écoutent la radio que par intermittence pour économiser leur batterie.
+
 **NeoSol et moteurs solaires, bit de répétition** : sur NeoSol S300 et sur les moteurs
 solaires Profalux, l'enrôlement et le pilotage sont plus fiables en cochant **« Émettre
 comme la télécommande (bit de répétition) »** (Système > Appareil), fréquence Profalux par
