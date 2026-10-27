@@ -87,6 +87,28 @@ Le même boîtier sait émettre deux autres protocoles, encore **en test**, à c
 
 → Détails, build et flash : **[`firmware/README.md`](firmware/README.md)**.
 
+## L'interface web
+
+Servie par l'ESP32, sans aucune application : pilotage des volets, apprentissage,
+calibration, moniteur RF et configuration Wi-Fi / MQTT.
+
+<table>
+  <tr>
+    <td width="50%"><img src="images/ui/pc/volets.webp" alt="Onglet Volets"><br><sub><b>Volets</b> : une carte par volet, position estimée.</sub></td>
+    <td width="50%"><img src="images/ui/pc/telecommandes-cloner.webp" alt="Cloner une télécommande"><br><sub><b>Rejeu</b> : capture ▲/■/▼ d'une vraie télécommande.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="images/ui/pc/telecommandes-creer.webp" alt="Créer une télécommande virtuelle"><br><sub><b>Enrôlement</b> : identité virtuelle apprise au moteur.</sub></td>
+    <td><img src="images/ui/pc/wifi.webp" alt="Onglet Wi-Fi"><br><sub><b>Wi-Fi</b> : connexion du boîtier au réseau.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="images/ui/pc/mqtt.webp" alt="Onglet MQTT"><br><sub><b>MQTT</b> : broker et discovery vers Home Assistant.</sub></td>
+    <td><img src="images/ui/pc/systeme-rf-debug.webp" alt="Moniteur RF"><br><sub><b>Moniteur RF</b> : chaque trame reçue (bits, RSSI, KeeLoq).</sub></td>
+  </tr>
+</table>
+
+> Les captures des sept onglets, en versions PC et mobile, sont dans [`images/ui/`](images/ui/).
+
 ## Matériel
 
 | Composant | Réf | Coût |
