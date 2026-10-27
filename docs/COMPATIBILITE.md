@@ -3,6 +3,10 @@
 Liste du matériel testé avec OpenProfalux, tenue à partir des retours (forum, issues).
 Une ligne = un retour vérifié.
 
+![Télécommandes compatibles OpenProfalux](images/telecommandes-compatibles.webp)
+
+*Quelques télécommandes confirmées par les testeurs. Photos : @MaxFrakass, @valentinni192, @lecanard38.*
+
 - **rejeu** : capturer une commande de la télécommande d'origine puis la réémettre.
 - **enrôlement** : créer une identité que le moteur apprend, pour piloter sans capturer.
 
