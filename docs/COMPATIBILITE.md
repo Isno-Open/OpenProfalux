@@ -9,12 +9,12 @@ Une ligne = un retour vérifié.
 | Marque | Modèle | Fréquence | Méthode | Retour |
 |---|---|---|---|---|
 | Profalux | gamme PFX (référence du projet) | 868,350 à 868,425 MHz selon la génération | rejeu, enrôlement | #34 |
-| Eveno | Zuni-R | 868,33 MHz (profil Eveno) | rejeu | #3 |
 | Profalux | NeoSol S300 Stella AT | 868 MHz, bit de répétition | enrôlement | #1 |
 | Profalux | MOT-PX3R10 (moteur solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
 | Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
-| FranciaFlex | M4G | 868 MHz | enrôlement | forum HACF |
 | Profalux | VISIO Monobloc (MAI-EMPX-B1) | 868,350 MHz, profil R6 | enrôlement (rejeu KO ici) | #35 |
+| Eveno | Zuni-R | 868,33 MHz (profil Eveno) | rejeu | #3 |
+| FranciaFlex | M4G | 868 MHz | enrôlement | forum HACF |
 | Somfy | récepteur Soliris RTS + moteur J4 WT | 433,42 MHz (Somfy RTS) | appairage PROG, appui bref | #73 |
 
 Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année d'installation,
