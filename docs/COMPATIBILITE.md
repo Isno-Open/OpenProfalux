@@ -10,19 +10,24 @@ Une ligne = un retour vérifié.
 - **rejeu** : capturer une commande de la télécommande d'origine puis la réémettre.
 - **enrôlement** : créer une identité que le moteur apprend, pour piloter sans capturer.
 
-| Marque | Modèle | Télécommande | Fréquence | Rejeu | Enrôlement | Retour |
+Tableau bilingue : une cellule qui diffère entre les langues s'écrit « français // anglais ».
+Sur isno.fr, chaque article n'affiche que sa langue ; ici sur GitHub, les deux sont visibles.
+
+| Marque // Brand | Modèle // Model | Télécommande // Remote | Fréquence // Frequency | Rejeu // Replay | Enrôlement // Enrollment | Retour // Report |
 |---|---|---|---|---|---|---|
-| Profalux | gamme PFX (référence du projet) | ![Profalux MAI-EMPXMUR, photo @valentinni192](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empxmur.webp) | 868,350 à 868,425 MHz selon la génération | oui | oui | #34 |
-| Profalux | NeoSol S300 Stella AT | ![Profalux NeoSol MAI-SOLTS, photo @eleroy](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/neosol-mai-solts.webp) | ~868,383 MHz (personnalisée, à confirmer) ; bit de répétition | NA | oui | #1 |
-| Profalux | MOT-PX3R10 (moteur solaire) |  | 868 MHz, bit de répétition | NA | oui | #59 |
-| Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) |  | 868 MHz, bit de répétition | NA | oui | #59 |
-| Profalux | VISIO Monobloc (MAI-EMPX-B1) | ![Profalux MAI-EMPX-B1, photo @MaxFrakass](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empx-b1.webp) | 868,350 MHz, profil R6 | non | oui | #35 |
-| Eveno | Zuni-R |  | 868,33 MHz (profil Eveno) | oui | NA | #3 |
-| FranciaFlex | M4G | ![FranciaFlex M4g, photo @lecanard38](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/m4g.webp) | 868 MHz | NA | oui | forum HACF |
-| Somfy | récepteur Soliris RTS + moteur J4 WT (appairage PROG) |  | 433,42 MHz (Somfy RTS) | NA | oui | #73 |
+| Profalux | gamme PFX (référence du projet) // PFX range (project reference) | ![Profalux MAI-EMPXMUR, photo @valentinni192](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empxmur.webp) | 868,350 à 868,425 MHz selon la génération // 868.350 to 868.425 MHz depending on generation | oui | oui | #34 |
+| Profalux | NeoSol S300 Stella AT | ![Profalux NeoSol MAI-SOLTS, photo @eleroy](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/neosol-mai-solts.webp) | ~868,383 MHz (personnalisée, à confirmer) ; bit de répétition // ~868.383 MHz (custom, to confirm); repeat bit | NA | oui | #1 |
+| Profalux | MOT-PX3R10 (moteur solaire) // MOT-PX3R10 (solar motor) |  | 868 MHz, bit de répétition // 868 MHz, repeat bit | NA | oui | #59 |
+| Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) // JX02XE 10R-56 (Stella NeoSol, solar) |  | 868 MHz, bit de répétition // 868 MHz, repeat bit | NA | oui | #59 |
+| Profalux | VISIO Monobloc (MAI-EMPX-B1) | ![Profalux MAI-EMPX-B1, photo @MaxFrakass](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empx-b1.webp) | 868,350 MHz, profil R6 // 868.350 MHz, R6 profile | non | oui | #35 |
+| Eveno | Zuni-R |  | 868,33 MHz (profil Eveno) // 868.33 MHz (Eveno profile) | oui | NA | #3 |
+| FranciaFlex | M4G | ![FranciaFlex M4g, photo @lecanard38](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/m4g.webp) | 868 MHz | NA | oui | forum HACF // HACF forum |
+| Somfy | récepteur Soliris RTS + moteur J4 WT (appairage PROG) // Soliris RTS receiver + J4 WT motor (PROG pairing) |  | 433,42 MHz (Somfy RTS) // 433.42 MHz (Somfy RTS) | NA | oui | #73 |
 
 Colonnes Rejeu et Enrôlement : « oui » = confirmé par un retour, « non » = testé sans succès,
 NA = non renseigné (non testé).
+Replay and Enrollment columns: yes = confirmed by a report, no = tested without success,
+NA = not reported (not tested).
 
 Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année d'installation,
 la fréquence, le profil radio choisi, la carte et le module utilisés, et ce qui a fonctionné
