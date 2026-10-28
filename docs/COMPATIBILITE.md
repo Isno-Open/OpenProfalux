@@ -5,21 +5,21 @@ Une ligne = un retour vérifié.
 
 ![Télécommandes compatibles OpenProfalux](images/telecommandes-compatibles.webp)
 
-*Quelques télécommandes confirmées par les testeurs. Photos : @MaxFrakass, @valentinni192, @lecanard38.*
+*Quelques télécommandes confirmées par les testeurs. Photos : @MaxFrakass, @valentinni192, @lecanard38, @eleroy.*
 
 - **rejeu** : capturer une commande de la télécommande d'origine puis la réémettre.
 - **enrôlement** : créer une identité que le moteur apprend, pour piloter sans capturer.
 
-| Marque | Modèle | Fréquence | Méthode | Retour |
-|---|---|---|---|---|
-| Profalux | gamme PFX (référence du projet) | 868,350 à 868,425 MHz selon la génération | rejeu, enrôlement | #34 |
-| Profalux | NeoSol S300 Stella AT | ~868,383 MHz (personnalisée, à confirmer) ; bit de répétition | enrôlement | #1 |
-| Profalux | MOT-PX3R10 (moteur solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
-| Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) | 868 MHz, bit de répétition | enrôlement | #59 |
-| Profalux | VISIO Monobloc (MAI-EMPX-B1) | 868,350 MHz, profil R6 | enrôlement (rejeu KO ici) | #35 |
-| Eveno | Zuni-R | 868,33 MHz (profil Eveno) | rejeu | #3 |
-| FranciaFlex | M4G | 868 MHz | enrôlement | forum HACF |
-| Somfy | récepteur Soliris RTS + moteur J4 WT | 433,42 MHz (Somfy RTS) | appairage PROG, appui bref | #73 |
+| Marque | Modèle | Télécommande | Fréquence | Méthode | Retour |
+|---|---|---|---|---|---|
+| Profalux | gamme PFX (référence du projet) | ![Profalux MAI-EMPXMUR, photo @valentinni192](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empxmur.webp) | 868,350 à 868,425 MHz selon la génération | rejeu, enrôlement | #34 |
+| Profalux | NeoSol S300 Stella AT | ![Profalux NeoSol MAI-SOLTS, photo @eleroy](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/neosol-mai-solts.webp) | ~868,383 MHz (personnalisée, à confirmer) ; bit de répétition | enrôlement | #1 |
+| Profalux | MOT-PX3R10 (moteur solaire) |  | 868 MHz, bit de répétition | enrôlement | #59 |
+| Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) |  | 868 MHz, bit de répétition | enrôlement | #59 |
+| Profalux | VISIO Monobloc (MAI-EMPX-B1) | ![Profalux MAI-EMPX-B1, photo @MaxFrakass](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empx-b1.webp) | 868,350 MHz, profil R6 | enrôlement (rejeu KO ici) | #35 |
+| Eveno | Zuni-R |  | 868,33 MHz (profil Eveno) | rejeu | #3 |
+| FranciaFlex | M4G | ![FranciaFlex M4g, photo @lecanard38](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/m4g.webp) | 868 MHz | enrôlement | forum HACF |
+| Somfy | récepteur Soliris RTS + moteur J4 WT |  | 433,42 MHz (Somfy RTS) | appairage PROG, appui bref | #73 |
 
 Un retour à ajouter ? Ouvrez une issue avec la marque, le modèle, l'année d'installation,
 la fréquence, le profil radio choisi, la carte et le module utilisés, et ce qui a fonctionné
