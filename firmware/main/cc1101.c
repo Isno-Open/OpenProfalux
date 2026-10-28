@@ -27,6 +27,45 @@
 #include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
 
 static const char *TAG = "cc1101";
+
+/* ── Radios de la carte (issue #95) ──────────────────────────────────────────
+ * La carte declare une ou plusieurs radios CC1101 sur le MEME bus SPI (SCK/MISO/
+ * MOSI communs) ; elles ne different que par CS et GDO0/GDO2. board_pins.h fournit
+ * CC1101_COUNT et la table CC1101_RADIO_TABLE_INIT (index 0 = radio primaire 868,
+ * voir tools/gen_board.py). Le corps du driver pilote la radio ACTIVE : les macros
+ * CC1101_PIN_CS/GDO0/GDO2 sont redefinies pour indirecter vers s_radios[s_active],
+ * de sorte qu'aucune fonction du driver n'a a connaitre l'index. Une carte
+ * mono-radio garde exactement le comportement d'avant (CC1101_COUNT==1, index 0). */
+#ifndef CC1101_COUNT
+#define CC1101_COUNT 1
+#define CC1101_RADIO_TABLE_INIT { { CC1101_PIN_CS, CC1101_PIN_GDO0, CC1101_PIN_GDO2, \
+                                    CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, 0 } }
+#endif
+typedef struct { int cs, gdo0, gdo2; uint32_t band_low_khz, band_high_khz, carrier_khz; } cc1101_radio_cfg_t;
+static const cc1101_radio_cfg_t s_radios[CC1101_COUNT] = CC1101_RADIO_TABLE_INIT;
+static int s_active = 0;   /* radio courante (0 = primaire 868) */
+
+/* A partir d'ici, CS et GDO suivent la radio active : aucune broche n'est figee. */
+#undef  CC1101_PIN_CS
+#undef  CC1101_PIN_GDO0
+#undef  CC1101_PIN_GDO2
+#define CC1101_PIN_CS    (s_radios[s_active].cs)
+#define CC1101_PIN_GDO0  (s_radios[s_active].gdo0)
+#define CC1101_PIN_GDO2  (s_radios[s_active].gdo2)
+
+int cc1101_radio_count(void) { return CC1101_COUNT; }
+int cc1101_active_radio(void) { return s_active; }
+/* Index de la radio dont la bande declaree contient khz, ou -1 si aucune. */
+int cc1101_radio_for_khz(uint32_t khz) {
+    for (int i = 0; i < CC1101_COUNT; i++)
+        if (khz >= s_radios[i].band_low_khz && khz <= s_radios[i].band_high_khz) return i;
+    return -1;
+}
+
+/* Frequence porteuse : cache de la radio active (s_freq_khz) et valeur figee de chaque
+ * radio (s_chip_khz), car chaque puce garde ses propres registres FREQ. */
+static uint32_t s_freq_khz = PROFALUX_FREQ_HZ / 1000;   /* 868 au boot (s_regs) */
+static uint32_t s_chip_khz[CC1101_COUNT];
 /* ── Switch DEBUG capture RX (runtime, togglable depuis l'UI/MQTT) ──────────
  * Quand ON : logge CHAQUE paquet capte en ecoute (symboles RMT + RSSI + bits
  * decodes + classification KeeLoq), y compris les trames <64 bits normalement
@@ -225,8 +264,10 @@ static void strobe(uint8_t s) {
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
 }
 
-int cc1101_init(void) {
-    /* GPIO CS + GDO0 */
+/* Configure la radio ACTIVE : GPIO (CS/GDO0), reset, registres, PATABLE, porteuse.
+ * Le bus SPI est partage et deja initialise par cc1101_init. Renvoie 0 si la puce
+ * repond (PARTNUM 0x00), -1 sinon. */
+static int cc1101_configure_active_chip(void) {
     gpio_config_t io_cs = { .pin_bit_mask = 1ULL << CC1101_PIN_CS,
                             .mode = GPIO_MODE_OUTPUT };
     gpio_config(&io_cs);
@@ -235,20 +276,6 @@ int cc1101_init(void) {
     gpio_config_t io_gdo = { .pin_bit_mask = 1ULL << CC1101_PIN_GDO0,
                              .mode = GPIO_MODE_INPUT_OUTPUT };
     gpio_config(&io_gdo);
-
-    /* SPI init */
-    spi_bus_config_t bus = {
-        .miso_io_num = CC1101_PIN_MISO, .mosi_io_num = CC1101_PIN_MOSI,
-        .sclk_io_num = CC1101_PIN_SCK, .quadwp_io_num = -1, .quadhd_io_num = -1,
-        .max_transfer_sz = 32,
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(CC1101_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
-
-    spi_device_interface_config_t dev = {
-        .clock_speed_hz = CC1101_SPI_FREQ_HZ, .mode = 0,
-        .spics_io_num = -1, .queue_size = 4,
-    };
-    ESP_ERROR_CHECK(spi_bus_add_device(CC1101_SPI_HOST, &dev, &s_spi));
 
     /* Reset + configure */
     strobe(CC_SRES);
@@ -271,12 +298,47 @@ int cc1101_init(void) {
         s_spi_retries++;
         esp_rom_delay_us(1000);
     }
+    /* La radio primaire (index 0) garde la porteuse Profalux de s_regs (868,425 MHz) ; une
+     * radio secondaire (p.ex. 433) pose la porteuse declaree par la carte. */
+    if (s_active != 0 && s_radios[s_active].carrier_khz)
+        cc1101_set_freq_khz(s_radios[s_active].carrier_khz);
+    s_chip_khz[s_active] = s_freq_khz;   /* fige la porteuse de cette radio */
+
     uint8_t partnum = cc1101_read_reg(CC_PARTNUM | 0x40);
     uint8_t version = cc1101_read_reg(0x31 | 0x40);   /* VERSION : ~0x04/0x14 sur un vrai CC1101 */
     uint8_t marc    = cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F;
-    s_partnum = partnum; s_version = version;          /* pour le diagnostic UI */
-    ESP_LOGI(TAG, "PARTNUM=0x%02X VERSION=0x%02X (attendu 0x00/0x04-0x14) MARCSTATE=0x%02X", partnum, version, marc);
+    if (s_active == 0) { s_partnum = partnum; s_version = version; }   /* diag UI = radio primaire */
+    ESP_LOGI(TAG, "radio %d (CS=%d GDO0=%d) PARTNUM=0x%02X VERSION=0x%02X (attendu 0x00/0x04-0x14) MARCSTATE=0x%02X",
+             s_active, s_radios[s_active].cs, s_radios[s_active].gdo0, partnum, version, marc);
     return (partnum == 0x00) ? 0 : -1;
+}
+
+int cc1101_init(void) {
+    /* Bus SPI partage par toutes les radios, initialise une seule fois. SCK/MISO/MOSI
+     * sont communs ; CS manuel (spics_io_num=-1) : cs_low/cs_high abaissent la broche CS
+     * de la radio active. On configure ensuite CHAQUE radio declaree (issue #95). */
+    spi_bus_config_t bus = {
+        .miso_io_num = CC1101_PIN_MISO, .mosi_io_num = CC1101_PIN_MOSI,
+        .sclk_io_num = CC1101_PIN_SCK, .quadwp_io_num = -1, .quadhd_io_num = -1,
+        .max_transfer_sz = 32,
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(CC1101_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
+
+    spi_device_interface_config_t dev = {
+        .clock_speed_hz = CC1101_SPI_FREQ_HZ, .mode = 0,
+        .spics_io_num = -1, .queue_size = 4,
+    };
+    ESP_ERROR_CHECK(spi_bus_add_device(CC1101_SPI_HOST, &dev, &s_spi));
+
+    int rc0 = -1;
+    for (int i = 0; i < CC1101_COUNT; i++) {
+        s_active = i;
+        int rc = cc1101_configure_active_chip();
+        if (i == 0) rc0 = rc;   /* le code de retour est celui de la radio primaire */
+    }
+    s_active = 0;               /* on rend la main sur la radio primaire (868) */
+    s_freq_khz = s_chip_khz[0];
+    return rc0;
 }
 
 /* Synchronous bit-bang OOK on GDO0. Codage PWM HCS30x mesure le 2026-08-10 :
@@ -302,8 +364,21 @@ static void ook_bit(bool one) {
 /* Frequence porteuse (profil radio). Ecrite en IDLE ; le synthetiseur se recalibre au
  * prochain passage en RX/TX (MCSM0 FS_AUTOCAL). Relue pour verifier : sur certains montages
  * le CC1101 ignore une ecriture juste apres une rafale d'acces SPI, d'ou 3 essais espaces. */
-static uint32_t s_freq_khz = PROFALUX_FREQ_HZ / 1000;   /* celle de s_regs au boot */
 uint32_t cc1101_get_freq_khz(void) { return s_freq_khz; }
+
+/* Rend active la radio idx (0 = primaire 868). Rebranche la capture RMT sur son GDO0 si
+ * l'ecoute etait armee, et restaure la porteuse figee de cette radio. 0=OK, -1=index hors
+ * borne. A appeler sous le mutex radio (voir radio.c). */
+int cc1101_select(int idx) {
+    if (idx < 0 || idx >= CC1101_COUNT) return -1;
+    if (idx == s_active) return 0;
+    bool had_cap = (s_cap != NULL);
+    if (s_cap) { rmt_del_channel(s_cap); s_cap = NULL; }   /* capture liee a l'ancien GDO0 */
+    s_active = idx;
+    s_freq_khz = s_chip_khz[idx];                          /* cache = porteuse de cette radio */
+    if (had_cap) cc1101_capture_init();                    /* re-cree la capture sur le nouveau GDO0 */
+    return 0;
+}
 
 int cc1101_set_freq_khz(uint32_t khz) {
     uint32_t w = radio_cc1101_freq_word(khz);
@@ -313,6 +388,7 @@ int cc1101_set_freq_khz(uint32_t khz) {
         cc1101_write_reg(CC_FREQ2, f2); cc1101_write_reg(CC_FREQ1, f1); cc1101_write_reg(CC_FREQ0, f0);
         if (cc1101_read_reg(CC_FREQ2) == f2 && cc1101_read_reg(CC_FREQ1) == f1 && cc1101_read_reg(CC_FREQ0) == f0) {
             s_freq_khz = khz;
+            s_chip_khz[s_active] = khz;   /* fige la porteuse de la radio active */
             ESP_LOGI(TAG, "frequence %u kHz (FREQ %02X %02X %02X)", (unsigned)khz, f2, f1, f0);
             return 0;
         }

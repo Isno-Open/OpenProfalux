@@ -8,9 +8,12 @@ radios et, par radio, la plage autorisee. Le firmware LIT ces valeurs, il n'en
 connait aucune. Appele par CMake a la configuration ; rien d'engendre n'est
 commis.
 
-OpenProfalux ne pilote qu'UNE radio CC1101, en 868 (Profalux emet a 868,425 MHz,
-voir PROFALUX_FREQ_HZ). Sur une carte multi-radio comme la Super, on retient la
-radio 868 ; sur une carte mono-radio, la seule.
+La radio PRIMAIRE est la 868 (Profalux emet a 868,425 MHz, voir PROFALUX_FREQ_HZ) :
+c'est elle que portent les macros CC1101_PIN_* / CC1101_BAND_* historiques, et c'est
+l'index 0. Mais TOUTES les radios declarees par la carte sont emises, dans la table
+CC1101_RADIO_TABLE_INIT (voir cc1101.c), pour qu'une carte bi-bande comme la Super
+pilote aussi sa radio 433. Le firmware ne retient plus une radio en jetant les autres :
+il lit la declaration entiere.
 
 Les noms de macros sont ceux QUE LE CODE d'OpenProfalux lit deja
 (CC1101_PIN_*, LED_*, BTN_PIN_DEBUG_*), pas ceux d'OpenRFTest : chaque firmware
@@ -59,6 +62,32 @@ def ethernet_lines(d):
     ]
 
 
+def radio_table_lines(d, primary, bands):
+    """Table de TOUTES les radios declarees, la primaire (868) en index 0.
+    Chaque entree : {CS, GDO0, GDO2, bande basse kHz, bande haute kHz, porteuse kHz}.
+    cc1101.c la lit pour piloter plusieurs radios sur le bus SPI partage."""
+    radios = d["radios"]
+    ordered = [primary] + [r for r in radios if r is not primary]
+    rows = []
+    for r in ordered:
+        band = str(r.get("band"))
+        if band not in bands:
+            raise SystemExit("radio %s sans plage declaree dans %s" % (band, d["id"]))
+        b = bands[band]
+        p = r["pins"]
+        rows.append("  { %d, %d, %d, %d, %d, %d }" % (
+            p["cs"], p["gdo0"], p["gdo2"], b["low"], b["high"], int(b.get("carrier_khz", 0))))
+    L = [
+        "/* Toutes les radios declarees par la carte (index 0 = primaire 868). */",
+        "#define CC1101_COUNT         %d" % len(ordered),
+        "/* {CS, GDO0, GDO2, bande_basse_kHz, bande_haute_kHz, porteuse_kHz} par radio. */",
+        "#define CC1101_RADIO_TABLE_INIT { \\",
+    ]
+    L += [row + (", \\" if i + 1 < len(rows) else " \\") for i, row in enumerate(rows)]
+    L += ["}"]
+    return L
+
+
 def header(d):
     ui = d.get("ui", {})
     radio = pick_radio(d)
@@ -90,10 +119,14 @@ def header(d):
         "#define CC1101_PIN_GDO2      %d" % pins["gdo2"],
         "#define CC1101_SPI_FREQ_HZ   %d" % freq,
         "",
-        "/* Plage autorisee de la radio retenue, bornes incluses (kHz). */",
+        "/* Plage autorisee de la radio PRIMAIRE (868), bornes incluses (kHz). */",
         "#define CC1101_BAND_LOW_KHZ  %d" % b["low"],
         "#define CC1101_BAND_HIGH_KHZ %d" % b["high"],
         "#define CC1101_MAX_DBM       %d" % b.get("max_dbm", 10),
+        "",
+    ]
+    L += radio_table_lines(d, radio, bands)
+    L += [
         "",
         "/* Interface. Les boutons de debogage restent desactives : tout passe par MQTT/HA. */",
         "#define LED_PIN              %d" % ui.get("led", -1),

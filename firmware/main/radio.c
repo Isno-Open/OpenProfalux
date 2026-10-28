@@ -90,16 +90,24 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
     return r;
 }
 
-/* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Calque radio_set_freq_khz :
- * ecoute en pause + mutex, le temps de retuner, emettre, et RETABLIR la porteuse Profalux. */
+/* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Ecoute en pause + mutex, le
+ * temps d'emettre et de RETABLIR l'etat. Si la carte declare une radio dediee a la bande visee
+ * (p.ex. la radio 433 de la Super pour le Somfy RTS ou un portail), on bascule sur elle (son
+ * front-end est adapte a 433) ; sinon on retune la radio active, comme avant. Dans tous les cas
+ * on rend la main a la radio primaire (868) a la fin. */
 int radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t *us, int n) {
     if (!s_mtx || !levels || !us || n <= 0) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int prev = cc1101_active_radio();
+    int idx = cc1101_radio_for_khz(freq_khz);   /* radio dont la bande declaree contient freq_khz */
+    if (idx < 0) idx = prev;                     /* aucune radio dediee : retune l'active (ancien comportement) */
+    cc1101_select(idx);
     uint32_t back = cc1101_get_freq_khz();
     int r = cc1101_set_freq_khz(freq_khz);
     if (r == 0) r = cc1101_tx_ook_pulses(levels, us, n);
-    cc1101_set_freq_khz(back);   /* retour a la porteuse Profalux, quoi qu'il arrive */
+    cc1101_set_freq_khz(back);   /* retablit la porteuse de cette radio, quoi qu'il arrive */
+    cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
