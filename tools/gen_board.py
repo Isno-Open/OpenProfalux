@@ -64,8 +64,10 @@ def ethernet_lines(d):
 
 def radio_table_lines(d, primary, bands):
     """Table de TOUTES les radios declarees, la primaire (868) en index 0.
-    Chaque entree : {CS, GDO0, GDO2, bande basse kHz, bande haute kHz, porteuse kHz}.
-    cc1101.c la lit pour piloter plusieurs radios sur le bus SPI partage."""
+    Chaque entree : {bande, CS, GDO0, GDO2, bande basse kHz, bande haute kHz, porteuse kHz}.
+    La bande est l'etiquette declaree ("868", "433") : l'UI s'en sert pour nommer chaque
+    radio sans la deviner. cc1101.c lit la table pour piloter plusieurs radios sur le bus
+    SPI partage."""
     radios = d["radios"]
     ordered = [primary] + [r for r in radios if r is not primary]
     rows = []
@@ -75,12 +77,12 @@ def radio_table_lines(d, primary, bands):
             raise SystemExit("radio %s sans plage declaree dans %s" % (band, d["id"]))
         b = bands[band]
         p = r["pins"]
-        rows.append("  { %d, %d, %d, %d, %d, %d }" % (
-            p["cs"], p["gdo0"], p["gdo2"], b["low"], b["high"], int(b.get("carrier_khz", 0))))
+        rows.append("  { \"%s\", %d, %d, %d, %d, %d, %d }" % (
+            band, p["cs"], p["gdo0"], p["gdo2"], b["low"], b["high"], int(b.get("carrier_khz", 0))))
     L = [
         "/* Toutes les radios declarees par la carte (index 0 = primaire 868). */",
         "#define CC1101_COUNT         %d" % len(ordered),
-        "/* {CS, GDO0, GDO2, bande_basse_kHz, bande_haute_kHz, porteuse_kHz} par radio. */",
+        "/* {bande, CS, GDO0, GDO2, bande_basse_kHz, bande_haute_kHz, porteuse_kHz} par radio. */",
         "#define CC1101_RADIO_TABLE_INIT { \\",
     ]
     L += [row + (", \\" if i + 1 < len(rows) else " \\") for i, row in enumerate(rows)]

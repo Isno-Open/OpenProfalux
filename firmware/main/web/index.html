@@ -307,6 +307,8 @@
             <span class="lbl">Écoute RF permanente<small>Active le RF debug en direct, le suivi de position via la vraie télécommande et le dataset MQTT. Désactivée = radio libre (moins de bruit).</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-debug"><span class="track"></span>
             <span class="lbl">Debug console<small>Logge chaque capture RX dans la console série (symboles, RSSI, bits, KeeLoq ou non). Pour diagnostiquer « ça ne capte pas ». À laisser OFF en usage normal (verbeux).</small></span></label>
+          <div id="sys-radios" class="radio-list"></div>
+          <h3 id="sys-primary-title" hidden></h3>
           <div class="field" style="margin-top:12px"><label>Profil radio - marque des volets</label>
             <select id="sys-radioprof">
               <option value="profalux">Profalux (868,425 MHz)</option>
@@ -338,6 +340,7 @@
             <span class="lbl">Émettre comme la télécommande (bit de répétition)<small>Première trame d'un appui marquée « initiale », les suivantes « répétition », 18 ms entre trames, comme une télécommande KeeLoq. Sans cette option, le boîtier envoie des trames identiques. Les moteurs testés acceptent les deux : n'activer que si un moteur ignore les commandes du boîtier.</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-txrmt"><span class="track"></span>
             <span class="lbl">Émission matérielle (RMT)<small>Le minutage de chaque trame est tenu par le périphérique RMT, et non plus par une boucle logicielle que le WiFi peut interrompre. À essayer si des commandes sont parfois ignorées. En cas d'échec, le boîtier repasse automatiquement en émission logicielle.</small></span></label>
+          <div id="sys-radios-extra"></div>
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>
           <div class="row end"><button id="sys-save" class="btn primary">Enregistrer</button></div>
@@ -355,11 +358,13 @@
       <div class="subpanel" data-sp="radio">
         <div class="card">
           <h2>Diagnostic radio</h2>
+          <div id="diag-radios" class="radio-list"></div>
+          <h3 id="diag-detail-title" hidden>Détail</h3>
           <div class="statline" id="diag-verdict"><span class="dot"></span><b>Chargement...</b></div>
           <p class="hint" id="diag-line"></p>
           <div class="row"><button id="diag-tx-btn" class="btn" type="button">Re-tester l'émission (TX)</button><button id="diag-rx-btn" class="btn" type="button">Tester la réception (presse ta télécommande)</button></div>
           <p class="hint" id="diag-rx-status" style="margin-top:8px"></p>
-          <p class="hint">La puce est détectée mais rien ne se capte ? Vérifie que ton module est bien en <b>868 MHz</b> (pas 433), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>.</p>
+          <p class="hint">La puce est détectée mais rien ne se capte ? Vérifie que le module est bien sur <b>la bonne bande</b> (868 pour Profalux, 433 pour Somfy), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>. Les boutons ci-dessus testent la radio primaire.</p>
         </div>
       </div>
 
