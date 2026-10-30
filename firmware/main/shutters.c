@@ -9,6 +9,7 @@
 #include "remote_battery.h"
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
+#include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -1577,8 +1578,29 @@ int shutters_import_json(const char *js, const char **err) {
         ESP_LOGE(TAG, "restauration annulee : copie de la config actuelle impossible");
         *err = "copie"; return -1;
     }
+    /* Compteurs des telecommandes virtuelles en place : la sauvegarde en est une photo plus
+     * ancienne, elle ne doit pas les faire reculer sous ce que le moteur a deja vu (virt_counter.h). */
+    struct { uint32_t serial; uint16_t counter; uint8_t proto; } vc[SH_MAX_VOLETS];
+    int nvc = 0;
+    for (int i = 0; i < s_nvolets && nvc < SH_MAX_VOLETS; i++) if (s_volets[i].virt) {
+        vc[nvc].serial = s_volets[i].virt_serial; vc[nvc].counter = s_volets[i].virt_counter;
+        vc[nvc].proto = s_volets[i].proto; nvc++;
+    }
     reset_state();
     cfg_model_import(&s_model, root);
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        if (!v->virt) continue;
+        for (int k = 0; k < nvc; k++) if (vc[k].proto == v->proto && vc[k].serial == v->virt_serial) {
+            uint16_t keep = vc_keep(v->virt_counter, vc[k].counter);
+            if (keep != v->virt_counter) {
+                ESP_LOGW(TAG, "volet virtuel '%s' : compteur %u garde (la sauvegarde disait %u)",
+                         v->id, (unsigned)keep, (unsigned)v->virt_counter);
+                v->virt_counter = keep;
+            }
+            break;
+        }
+    }
     /* Table d'enrolement, et compteurs-photo des volets virtuels restaures : non confirmes,
      * un re-enrolement sautera devant le moteur au lieu de repartir derriere (issue #45). */
     pfx_enrol_import(cJSON_GetObjectItem(root, "pfx_enrol"));

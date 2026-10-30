@@ -64,6 +64,7 @@ idf_component_register(
         "rx_confirm.c"
         "pfx_keys.c"
         "pfx_enrol.c"
+        "virt_counter.c"
         "web_ui.c"
         "req_guard.c"
         "ota.c"
