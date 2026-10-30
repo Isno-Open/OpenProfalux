@@ -1331,6 +1331,33 @@ if ($('#io-trace-btn')) $('#io-trace-btn').onclick = async () => {
   btn.disabled = false;
 };
 
+/* Rapport de capture radio : joint le journal (masqué côté firmware), l'email et la description,
+ * et POST au relais via /api/report. L'email reste privé (jamais dans l'issue publique). */
+if ($('#rep-send')) $('#rep-send').onclick = async () => {
+  const st = $('#rep-status'), btn = $('#rep-send');
+  const email = (($('#rep-email') || {}).value || '').trim();
+  if (!email) { ioStat(st, '⚠️ Mets ton email (pour le suivi).'); return; }
+  const payload = {
+    email,
+    brand: (($('#rep-brand') || {}).value || '').trim(),
+    model: (($('#rep-model') || {}).value || '').trim(),
+    note:  (($('#rep-note')  || {}).value || '').trim(),
+    purpose: (($('#rep-purpose') || {}).value || 'debug'),
+  };
+  btn.disabled = true;
+  ioStat(st, '📨 Envoi du rapport...');
+  const d = await api('/api/report', { method: 'POST', body: JSON.stringify(payload) }).catch(() => null);
+  btn.disabled = false;
+  if (d && d.ok) ioStat(st, '✅ Rapport envoyé. Tu recevras un email de suivi avec le lien de ton rapport.');
+  else ioStat(st, `❌ Échec de l'envoi${d && d.status ? ' (relais ' + d.status + ')' : ''}. Réessaie ; le relais est peut-être indisponible.`);
+};
+if ($('#rep-jview')) $('#rep-jview').onclick = async (e) => {
+  e.preventDefault();
+  const pre = $('#rep-jpreview');
+  const t = await fetch('/api/io/trace').then(r => r.text()).catch(() => '(indisponible)');
+  if (pre) { pre.textContent = (t && t.trim()) || '(journal vide)'; pre.hidden = false; }
+};
+
 if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {
   const btn = $('#diag-rx-btn'), st = $('#diag-rx-status');
   btn.disabled = true; setRadioBusy(true);

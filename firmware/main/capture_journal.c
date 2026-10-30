@@ -133,7 +133,7 @@ int capture_journal_add_rawook(uint8_t radio, uint16_t band_mhz, uint32_t freq_k
 
 int capture_journal_count(void) { if (!s_loaded) load_from_nvs(); return s_n; }
 
-int capture_journal_dump(char *out, size_t cap) {
+static int dump_impl(char *out, size_t cap, int mask) {
     if (!s_loaded) load_from_nvs();
     int w = 0;
     for (int i = 0; i < s_n && (size_t)w < cap; i++) {
@@ -160,7 +160,11 @@ int capture_journal_dump(char *out, size_t cap) {
         /* io : hex de la trame */
         char hx[2 * RAW_HEXMAX + 1];
         int m = e->len; if (m > RAW_HEXMAX) m = RAW_HEXMAX;
-        for (int j = 0; j < m; j++) snprintf(hx + 2 * j, 3, "%02X", s_pool[e->off + j]);
+        for (int j = 0; j < m; j++) {
+            /* 0x30 (send_key) : le champ-cle = octets [9..24]. Masque pour un rapport publiable. */
+            if (mask && e->cmd == 0x30 && j >= 9 && j < 25) { hx[2 * j] = 'X'; hx[2 * j + 1] = 'X'; }
+            else snprintf(hx + 2 * j, 3, "%02X", s_pool[e->off + j]);
+        }
         hx[2 * m] = '\0';
         w += snprintf(out + w, cap - (size_t)w,
                       "t+%6ldms %s band%u RSSI %4d cmd=0x%02X  %s\n",
@@ -169,3 +173,6 @@ int capture_journal_dump(char *out, size_t cap) {
     }
     return w;
 }
+
+int capture_journal_dump(char *out, size_t cap)        { return dump_impl(out, cap, 0); }
+int capture_journal_dump_masked(char *out, size_t cap) { return dump_impl(out, cap, 1); }

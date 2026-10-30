@@ -45,8 +45,14 @@ int capture_journal_add_rawook(uint8_t radio, uint16_t band_mhz, uint32_t freq_k
  * jamais par trame (un commit NVS prend ~10-20 ms et ferait rater des trames). */
 void capture_journal_persist(void);
 
-/* Rend le journal en texte (une ligne par entree, sections par marqueur). Rend les octets ecrits. */
+/* Rend le journal en texte (une ligne par entree, sections par marqueur). Rend les octets ecrits.
+ * Version BRUTE : pour notre debug interne (tire par nous, non publie). */
 int capture_journal_dump(char *out, size_t cap);
+
+/* Comme dump, mais MASQUE le champ-cle (16 o) des trames io 0x30 (remplace par des X). A utiliser
+ * pour un rapport PUBLIABLE : le transfer_key io etant public, un 0x30 en clair livrerait la cle
+ * de l'appareil. Le reste (identite, cmd, compteur, impulsions raw-ook) passe tel quel. */
+int capture_journal_dump_masked(char *out, size_t cap);
 
 /* Nombre d'entrees (marqueurs compris). */
 int capture_journal_count(void);
