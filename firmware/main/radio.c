@@ -46,10 +46,11 @@ void radio_tx(const char *bits, int repeats) {
     xSemaphoreGive(s_mtx);
 }
 
-int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
-    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
-    bool was = s_paused; s_paused = true;   /* met la tache permanente en pause pendant l'ecoute dediee */
-    xSemaphoreTake(s_mtx, portMAX_DELAY);
+/* Coeur de l'ecoute dediee : SUPPOSE le mutex pris et l'ecoute permanente en pause, et travaille
+ * sur la radio ACTIVE. Les deux points d'entree ci-dessous gerent le mutex (et, pour la variante
+ * par radio, la selection de la puce). Extrait pour que l'ecoute par radio (issue #95) ne duplique
+ * pas la boucle. */
+static int listen_confirmed_locked(uint32_t timeout_ms, char *buf, int max, bool full) {
     /* Fenetres successives : on prefere deux trames identiques (rx_confirm.h, issue #39), mais a
      * defaut on accepte une trame complete (repli ci-dessous, issue #1), car ici l'utilisateur a
      * lance la capture expres et tient le bouton. */
@@ -85,6 +86,32 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
      * La double trame reste de rigueur pour l'ecoute permanente (telecommandes fantomes, #39) ;
      * ici la capture est explicite, une trame bien formee suffit (issue #1). */
     if (r < 0 && repli[0]) { strlcpy(buf, repli, (size_t)max); r = (int)strlen(buf); }
+    return r;
+}
+
+int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
+    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
+    bool was = s_paused; s_paused = true;   /* met la tache permanente en pause pendant l'ecoute dediee */
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int r = listen_confirmed_locked(timeout_ms, buf, max, full);
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
+/* Comme radio_listen_confirmed, mais ECOUTE SUR LA RADIO idx (issue #95). On selectionne la puce
+ * sous le mutex (le front-end de la 433 est adapte a 433, la ou la primaire 868 n'entend rien d'un
+ * emetteur 433), on ecoute, puis on REND LA MAIN a la radio primaire. Sert au diagnostic de
+ * reception par radio : verifier qu'une puce RECOIT, pas seulement qu'elle voit une porteuse. */
+int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full) {
+    if (idx < 0 || idx >= cc1101_radio_count()) return -1;
+    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int prev = cc1101_active_radio();
+    cc1101_select(idx);
+    int r = listen_confirmed_locked(timeout_ms, buf, max, full);
+    cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;

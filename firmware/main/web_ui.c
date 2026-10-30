@@ -215,6 +215,9 @@ static uint32_t bits_lsb(const char *b, int from, int len) {
     return v;
 }
 
+static int req_radio_idx(httpd_req_t *r);   /* ?radio=N (defini plus bas) */
+static int s_learn_radio = 0;               /* radio ciblee par /api/learn/start (issue #95) */
+
 static void learn_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
@@ -224,7 +227,7 @@ static void learn_task(void *arg) {
      * ce qu'on supposait) : ca empechait d'apprendre stop et descente.
      * Confirmee par une 2e trame identique et complete (66 bits) : une trame isolee a bits
      * faux donnait un volet au serial ou a la commande corrompus (issue #39). */
-    int n = radio_listen_confirmed(15000, bits, SH_BITS_LEN, true);
+    int n = radio_listen_confirmed_on(s_learn_radio, 15000, bits, SH_BITS_LEN, true);
     if (n >= 66) {
         s_lrssi   = cc1101_get_rssi();
         strlcpy(s_lbits, bits, SH_BITS_LEN);
@@ -325,7 +328,7 @@ static esp_err_t h_volet_delete(httpd_req_t *r) {
 /* ── /api/learn/start + /poll ── */
 static esp_err_t h_learn_start(httpd_req_t *r) {
     char *body = read_body(r); if (body) free(body);   /* le corps {action} n'est plus utilise cote firmware */
-    if (!s_lactive) { s_lready = false; s_lactive = true; xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL); }
+    if (!s_lactive) { s_learn_radio = req_radio_idx(r); s_lready = false; s_lactive = true; xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL); }   /* ?radio=N : ecoute cette radio (issue #95) */
     httpd_resp_sendstr(r, "{\"ok\":1}");
     return ESP_OK;
 }

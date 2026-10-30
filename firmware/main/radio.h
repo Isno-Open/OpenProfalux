@@ -29,6 +29,7 @@ int  radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_
  * 1re trame CONFIRMEE par une seconde identique (rx_confirm.h) ; full = exiger une trame complete
  * de 66 bits. max >= 67. Rend le nombre de bits, ou <0 si rien de confirme avant timeout_ms. */
 int  radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full);
+int  radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full); /* ecoute sur la radio idx (issue #95) */
 void radio_pause_rx(bool pause);       /* pause TEMPORAIRE pendant nos TX (stream maintien) */
 void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permanente (case UI "capture") */
 

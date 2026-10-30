@@ -1298,7 +1298,8 @@ function radioCard(rd) {
 }
 async function loadDiag() {
   const vd = $('#diag-verdict'), el = $('#diag-line'); if (!vd && !el) return;
-  await renderRadios('#diag-radios').catch(() => {});
+  const rdata = await renderRadios('#diag-radios').catch(() => null);
+  buildRxTests(rdata);   /* un bouton de test de reception PAR radio declaree (issue #95) */
   const d = await api('/api/diag').catch(() => null);
   if (!d) { if (vd) vd.querySelector('b').textContent = 'Diagnostic indisponible'; if (el) el.textContent = ''; return; }
   const ph = '0x' + Number(d.partnum).toString(16).toUpperCase().padStart(2, '0');
@@ -1328,18 +1329,34 @@ if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   await api('/api/diag/tx', { method: 'POST' }).catch(() => {});
   await loadDiag(); btn.disabled = false;
 };
-if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {
-  const btn = $('#diag-rx-btn'), st = $('#diag-rx-status');
-  btn.disabled = true; setRadioBusy(true);
-  st.className = 'hint'; st.textContent = '📡 Presse ta télécommande MAINTENANT (~15 s)...';
-  await api('/api/learn/start', { method: 'POST' }).catch(() => {});
+/* Test de reception PAR radio (issue #95) : un bouton par radio declaree. Chaque bouton ecoute SA
+   puce (via /api/learn/start?radio=idx), la ou avant on ne testait que la primaire 868 - d'ou le
+   "ne capte rien" sur une telecommande 433. Carte mono-radio : un seul bouton, comme avant. */
+function buildRxTests(d) {
+  const box = $('#diag-rx-tests'); if (!box) return;
+  const radios = d && Array.isArray(d.radios) && d.radios.length ? d.radios : [{ idx: 0, band: '' }];
+  box.innerHTML = radios.map(r => {
+    const lbl = r.band ? `Tester la réception ${esc(r.band)} MHz` : 'Tester la réception';
+    return `<button class="btn rx-test" type="button" data-radio="${r.idx || 0}" data-band="${esc(r.band || '')}">${lbl}</button>`;
+  }).join('');
+  box.querySelectorAll('.rx-test').forEach(b => { b.onclick = () => runRxTest(+b.dataset.radio, b.dataset.band, b); });
+}
+async function runRxTest(idx, band, btn) {
+  const st = $('#diag-rx-status');
+  $$('#diag-rx-tests .rx-test').forEach(b => b.disabled = true);
+  setRadioBusy(true);
+  if (st) { st.className = 'hint'; st.textContent = `📡 Presse ta télécommande ${band ? band + ' MHz ' : ''}MAINTENANT (~15 s)...`; }
+  await api('/api/learn/start?radio=' + idx, { method: 'POST' }).catch(() => {});
   const wait = ms => new Promise(r => setTimeout(r, ms));
   let got = null;
   for (let i = 0; i < 16; i++) { await wait(1000); const p = await api('/api/learn/poll').catch(() => null); if (p && p.serial && p.serial !== '0x0000000') { got = p; break; } }
-  btn.disabled = false; setRadioBusy(false);
-  if (got) st.innerHTML = `✅ Réception OK : serial <code>${esc(got.serial)}</code>, bouton 0x${esc(got.button)}, RSSI ${got.rssi} dBm. La radio primaire reçoit.`;
-  else st.innerHTML = '❌ Rien capté en 15 s. Si TX est OK mais RX ne capte jamais, c\'est souvent la <b>mauvaise bande</b> (868 pour Profalux). Vérifie aussi antenne, distance < 1 m, gain RX.';
-};
+  $$('#diag-rx-tests .rx-test').forEach(b => b.disabled = false);
+  setRadioBusy(false);
+  if (!st) return;
+  const where = band ? `la radio ${esc(band)} MHz` : 'la radio primaire';
+  if (got) st.innerHTML = `✅ Réception OK sur ${where} : serial <code>${esc(got.serial)}</code>, bouton 0x${esc(got.button)}, RSSI ${got.rssi} dBm.`;
+  else st.innerHTML = `❌ Rien capté en 15 s sur ${where}. Vérifie que la télécommande émet bien sur cette bande, l'antenne, la distance < 1 m, et le gain RX.`;
+}
 loadDiag();
 $('#mqtt-detect').onclick = async () => {
   const b = $('#mqtt-detect'); b.textContent = 'Recherche…'; b.disabled = true;
