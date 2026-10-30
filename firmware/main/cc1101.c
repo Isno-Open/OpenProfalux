@@ -898,6 +898,59 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     return r;
 }
 
+/* Capture BRUTE OOK (issue #95) : ecoute idle-delimitee et rend les impulsions brutes
+ * (niveau + duree us) SANS decoder - pour rejouer n'importe quelle telecommande OOK a CODE FIXE
+ * (portail CAME, capteurs...) que le decodeur Profalux ne connait pas. L'appelant tient le radio
+ * (ecoute permanente en pause) et a selectionne la bonne puce (voir radio_capture_raw_on).
+ * levels[i]=0|1, us[i]=duree us (resolution RMT = 1 MHz). Rend le nb d'impulsions (>0), <0 si
+ * rien/erreur. Code FIXE uniquement : rejouer une trame a code tournant est rejete (il change a
+ * chaque appui), ca reste l'affaire des decodeurs dedies (Profalux, io). */
+int cc1101_rx_capture_pulses(uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+    if (!levels || !us || max < 2) return -1;
+    if (!s_cap && cc1101_capture_init() != 0) return -1;
+    /* ⚠️ Armement RX OOK async : COPIE VOLONTAIRE de cc1101_rx_listen_bits (meme mode, memes
+     * registres, meme gain s_rx_gain). A factoriser (arm_ook_rx) une fois valide sur une vraie
+     * Super ; dupliquee ici pour ne PAS toucher le chemin d'ecoute eprouve sans materiel de test. */
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
+    cc1101_write_reg(0x02, 0x0D); cc1101_write_reg(0x0B, 0x06); cc1101_write_reg(0x19, 0x14);
+    cc1101_write_reg(0x1B, s_rx_gain[s_active]); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x91);
+    strobe(CC_SIDLE); esp_rom_delay_us(200);
+    strobe(0x33); vTaskDelay(pdMS_TO_TICKS(3));
+    strobe(0x3A); strobe(0x34);
+    for (int i = 0; i < 50; i++) { if ((cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F) == 0x0D) break; vTaskDelay(pdMS_TO_TICKS(1)); }
+    rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq);
+    /* Idle a 8 ms = fin de rafale (une trame, repetitions comprises si le gap inter-trame < 8 ms).
+     * min 3 us de-glitche le bruit. Un seul evenement a la fois (pas de partial_rx) : prouve OK
+     * sur le S3 par cc1101_rx_probe. */
+    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 8000000 };
+    int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    int n = -3;
+    rmt_rx_done_event_data_t ev;
+    if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) == ESP_OK) {
+        while (esp_timer_get_time() < t_end) {
+            if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(100)) != pdTRUE) continue;   /* tjrs en RX */
+            if (ev.num_symbols >= 8) {   /* rafale substantielle : filtre les blips de bruit */
+                int k = 0;
+                for (size_t i = 0; i < ev.num_symbols && k < max - 1; i++) {
+                    const rmt_symbol_word_t *s = &ev.received_symbols[i];
+                    if (s->duration0) { levels[k] = (uint8_t)s->level0; us[k] = (uint16_t)s->duration0; k++; }
+                    if (k >= max - 1) break;
+                    if (s->duration1) { levels[k] = (uint8_t)s->level1; us[k] = (uint16_t)s->duration1; k++; }
+                }
+                n = k;
+                { int8_t rssi = cc1101_get_rssi(); if (rssi_out) *rssi_out = rssi;
+                  ESP_LOGW(TAG, "CAPTURE brute : %u symboles -> %d impulsions, RSSI %d dBm",
+                           (unsigned)ev.num_symbols, n, rssi); }
+                break;
+            }
+            if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;   /* re-arme */
+        }
+    } else n = -2;
+    strobe(CC_SIDLE);
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* restaure pour le TX bit-bang */
+    return n;
+}
+
 /* --- RX --- */
 static void rx_task(void *pv) {
     ESP_LOGI(TAG, "RX task started");

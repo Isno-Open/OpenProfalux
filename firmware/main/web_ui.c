@@ -7,6 +7,7 @@
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "enrol_gate.h"
 #include "radio.h"
+#include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
 #include "wifi_bridge.h"
@@ -190,6 +191,8 @@ extern const uint8_t style_css_start[]  asm("_binary_style_css_gz_start");
 extern const uint8_t style_css_end[]    asm("_binary_style_css_gz_end");
 extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
 extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
+extern const uint8_t app_capture_js_start[] asm("_binary_app_capture_js_gz_start");   /* UI capture brute (issue #95) */
+extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end");
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
@@ -286,6 +289,7 @@ static const char *jstr(cJSON *o, const char *k) {
 static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end, true); }
 static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end,  true); }
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
+static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
@@ -1013,6 +1017,33 @@ static esp_err_t h_rx_sweep_status(httpd_req_t *r) {
     return e;
 }
 
+/* ── /api/capture/* : capture OOK BRUTE + rejeu (issue #95) ──
+ * start (POST ?radio=N) : ecoute ~15 s, l'utilisateur presse sa telecommande (portail CAME,
+ * capteur...) ; aucun decodeur, on enregistre la forme du signal. last (GET) : derniere capture
+ * en JSON (impulsions [[lvl,us]]). replay (POST) : rejoue la derniere capture. Code FIXE : un code
+ * tournant (Somfy RTS, Profalux) ne se rejoue pas ainsi, c'est l'affaire des decodeurs dedies. */
+static esp_err_t h_capture_start(httpd_req_t *r) {
+    int n = rfcap_capture(req_radio_idx(r), 15000);   /* bloquant : capture dediee, comme l'enrolement */
+    char out[48];
+    snprintf(out, sizeof(out), "{\"n\":%d}", n);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+static esp_err_t h_capture_last(httpd_req_t *r) {
+    char *buf = malloc(6144);
+    if (!buf) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
+    rfcap_last_json(buf, 6144);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, buf);
+    free(buf);
+    return e;
+}
+static esp_err_t h_capture_replay(httpd_req_t *r) {
+    int rc = rfcap_replay(5);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+}
+
 /* ── /api/diag : diagnostic radio (puce + self-test TX) pour l'UI ── */
 static esp_err_t h_diag(httpd_req_t *r) {
     int tx_ok = -1; uint8_t partnum = 0xFF, version = 0xFF;
@@ -1553,6 +1584,7 @@ void web_ui_start(void) {
     reg_open(s, "/",          HTTP_GET, h_index);
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
+    reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
     reg_open(s, "/icon-192.png",         HTTP_GET, h_icon);
@@ -1591,6 +1623,9 @@ void web_ui_start(void) {
     reg(s, "/api/rx/calibrate", HTTP_GET,  h_rx_calibrate_status);
     reg(s, "/api/rx/sweep",     HTTP_POST, h_rx_sweep);
     reg(s, "/api/rx/sweep",     HTTP_GET,  h_rx_sweep_status);
+    reg(s, "/api/capture/start",  HTTP_POST, h_capture_start);   /* capture OOK brute (issue #95) */
+    reg(s, "/api/capture/last",   HTTP_GET,  h_capture_last);
+    reg(s, "/api/capture/replay", HTTP_POST, h_capture_replay);
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
     reg(s, "/api/radios",       HTTP_GET,  h_radios);
     reg(s, "/api/health",       HTTP_GET,  h_health);
