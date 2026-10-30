@@ -1,4 +1,9 @@
-# OpenProfalux
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo/banniere-sombre.webp">
+    <img src="docs/images/logo/banniere-clair.webp" alt="OpenProfalux : module Wi-Fi DIY pour volets roulants Profalux" width="600">
+  </picture>
+</p>
 
 **Piloter ses volets roulants Profalux depuis Home Assistant avec un ESP32 à ~15 €, sans la clé constructeur.**
 
