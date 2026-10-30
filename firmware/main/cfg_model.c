@@ -23,6 +23,8 @@ int cfg_volet_set_members(volet_t *v, const char *csv) {
 void cfg_volet_release(volet_t *v) {
     free(v->members);
     v->members = NULL;
+    free(v->rejeu);
+    v->rejeu = NULL;
 }
 void cfg_model_remove(const cfg_model_t *m, int idx) {
     int n = *m->nvolets;
@@ -78,6 +80,7 @@ static cJSON *volet_to_json(const volet_t *v) {
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
+    if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
     return o;
 }
 /* En-tete : tout ce qui n'est pas un volet. */
@@ -187,6 +190,8 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     if (cfg_volet_set_members(v, mem) != 0)
         ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
                  v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
+    const char *rj = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu"));
+    v->rejeu = (rj && *rj) ? strdup(rj) : NULL;   /* rejeu brut par commande ; libere par cfg_volet_release */
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);

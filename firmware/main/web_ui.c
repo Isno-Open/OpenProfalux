@@ -1431,6 +1431,42 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
     free(js);
     return e;
 }
+static esp_err_t h_rejeu_create(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "type"));   /* dev_type_t */
+    const char *err = NULL;
+    if (!id || !*id) err = "nom manquant";
+    else if (strchr(id, ',')) err = "virgule dans le nom";
+    int rc = err ? -1 : shutters_create_rejeu(id, (uint8_t)type);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (err) cJSON_AddStringToObject(o, "err", err);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
+static esp_err_t h_rejeu_capture(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
+    int radio = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "radio"));
+    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio) : -1;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "n", n);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"n\":-1}");
+    free(js);
+    return e;
+}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1727,5 +1763,7 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
+    reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
+    reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

@@ -59,6 +59,10 @@ typedef struct {
                               * Centrale : les volets a qui la commande est diffusee.
                               * Volet appris (ZONE) : ses SUIVEURS. Sa propre trame les fait
                               * bouger tous ; ils suivent ses mouvements sans rien emettre. */
+    /* Rejeu BRUT par commande (code fixe OOK, agnostique) : JSON
+     * {"f":freq_khz,"up":"<csv>","stop":"<csv>","down":"<csv>"} ; chaque csv = impulsions signees
+     * (+us haut / -us bas). NULL = pas de rejeu brut. Heap, libere par cfg_volet_release. */
+    char    *rejeu;
     uint32_t travel_up_ms, travel_down_ms;
     int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :

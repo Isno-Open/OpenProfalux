@@ -476,6 +476,67 @@ static void emit_press(const char *bits) {
     }
     radio_tx(bits, PRESS_REPEATS);
 }
+
+/* ── Rejeu BRUT par commande (code fixe OOK, agnostique : CAME, 433 cheap...) ──
+ * Le cadre capte de chaque commande est range dans v->rejeu (JSON {f, up, stop, down} ;
+ * chaque valeur = impulsions signees +us haut / -us bas). On le rejoue a l'identique, suivi
+ * d'un silence inter-trame, repete. Ne touche ni au clone bit-string ni au virtuel. */
+#define REJEU_MAX_PULSES 512
+#define REJEU_GAP_US     12000   /* silence inter-trame, couvre le CAME (~11,5 ms) */
+#define REJEU_REPEATS    8
+
+/* Rejoue la commande `cmd` ("up"/"stop"/"down") d'un volet a rejeu brut. true si emis. */
+static bool rejeu_emit(volet_t *v, const char *cmd) {
+    if (!v->rejeu) return false;
+    cJSON *j = cJSON_Parse(v->rejeu);
+    if (!j) return false;
+    uint32_t freq = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
+    const char *csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, cmd));
+    bool ok = false;
+    if (csv && *csv && freq) {
+        static uint8_t  lvl[REJEU_MAX_PULSES + 1];
+        static uint32_t us[REJEU_MAX_PULSES + 1];
+        int n = 0;
+        for (const char *p = csv; *p && n < REJEU_MAX_PULSES; ) {
+            char *end; long d = strtol(p, &end, 10);
+            if (end == p) break;
+            lvl[n] = d >= 0 ? 1 : 0; us[n] = (uint32_t)(d >= 0 ? d : -d); n++;
+            p = end; if (*p == ',') p++;
+        }
+        if (n >= 2) {
+            lvl[n] = 0; us[n] = REJEU_GAP_US; n++;   /* silence inter-trame */
+            int r = 0;
+            for (int k = 0; k < REJEU_REPEATS && r == 0; k++)
+                r = radio_tx_ook_pulses(freq, lvl, us, n);
+            ESP_LOGW(TAG, "REJEU brut '%s' cmd=%s : %d impulsions a %u kHz, rc=%d",
+                     v->id, cmd, n - 1, (unsigned)freq, r);
+            ok = (r == 0);
+        }
+    }
+    cJSON_Delete(j);
+    return ok;
+}
+
+/* Range le cadre capte (lvl/us, n impulsions) comme commande `cmd` de v, a la frequence freq. */
+static int rejeu_store(volet_t *v, const char *cmd, uint32_t freq,
+                       const uint8_t *lvl, const uint16_t *us, int n) {
+    if (n < 2) return -1;
+    char *csv = malloc((size_t)n * 9 + 1);
+    if (!csv) return -1;
+    int p = 0;
+    for (int i = 0; i < n; i++)
+        p += snprintf(csv + p, (size_t)n * 9 + 1 - p, "%s%d", i ? "," : "",
+                      lvl[i] ? (int)us[i] : -(int)us[i]);
+    cJSON *j = v->rejeu ? cJSON_Parse(v->rejeu) : NULL;
+    if (!j) j = cJSON_CreateObject();
+    cJSON_DeleteItemFromObject(j, "f");   cJSON_AddNumberToObject(j, "f", freq);
+    cJSON_DeleteItemFromObject(j, cmd);   cJSON_AddStringToObject(j, cmd, csv);
+    char *out = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j); free(csv);
+    if (!out) return -1;
+    free(v->rejeu); v->rejeu = out;   /* out = heap cJSON, libere par cfg_volet_release */
+    return 0;
+}
 /* Rejoue TELLE QUELLE une trame captee (identifiee par serial+hop dans l'anneau RF).
  * Sert au bouton "rejouer" du debug RF : on renvoie la trame brute, sans passer par un volet. */
 int shutters_replay_frame(const char *serial, uint32_t hop) {
@@ -610,6 +671,7 @@ static void start_move(volet_t *v, int dir) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     bool sent;
     if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
+    else if (v->rejeu) sent = rejeu_emit(v, dir > 0 ? "up" : "down");   /* rejeu brut par commande */
     else       { emit_press(dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise */
     if (!sent) {
         /* Rien n'est parti (protocole non cable) : ne pas enclencher le suivi, sinon la boucle de
@@ -624,6 +686,7 @@ static void start_move(volet_t *v, int dir) {
 static void do_stop(volet_t *v) {
     v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
     if (v->virt) emit_virt(v, PFX_BTN_STOP);
+    else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
     else         emit_press(v->stop);    /* rafale STOP = fige le moteur a la position voulue */
     zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
@@ -1041,6 +1104,46 @@ int shutters_create_virtual_somfy(const char *id, uint32_t address) {
     pub_flush();
     ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)(address & 0xFFFFFF));
     return 0;
+}
+
+/* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
+ * par commande arrivent ensuite par shutters_rejeu_capture. `type` = dev_type_t (portail/volet). */
+int shutters_create_rejeu(const char *id, uint8_t type) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = false;
+    v->type = type;
+    save_cfg();
+    announce_one(v);
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "appareil rejeu brut '%s' cree (type %u)", id, type);
+    return 0;
+}
+
+/* Capture le cadre OOK brut d'UNE commande (cmd = "up"/"stop"/"down") sur la radio `radio` et
+ * le range dans l'appareil. La capture (~15 s, mutex radio) se fait HORS du LOCK shutters ; le
+ * rangement + sauvegarde sous LOCK. Rend le nombre d'impulsions (>0), <=0 si rien / erreur. */
+int shutters_rejeu_capture(const char *id, const char *cmd, int radio) {
+    if (!id || !*id || !cmd || !*cmd) return -1;
+    static uint8_t  lvl[REJEU_MAX_PULSES];
+    static uint16_t us[REJEU_MAX_PULSES];
+    int8_t rssi = 0;
+    int n = radio_capture_raw_on(radio, 15000, lvl, us, REJEU_MAX_PULSES, &rssi);
+    if (n < 2) { ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : rien (rc=%d)", id, cmd, n); return n <= 0 ? n : -1; }
+    const char *band = NULL; uint32_t carrier = 0, cur = 0, low = 0, high = 0; uint8_t pn = 0, ver = 0;
+    cc1101_radio_info(radio, &band, &carrier, &cur, &low, &high, &pn, &ver);
+    uint32_t freq = cur ? cur : carrier;
+    LOCK();
+    volet_t *v = find_volet(id);
+    int rc = v ? rejeu_store(v, cmd, freq, lvl, us, n) : -1;
+    if (rc == 0) save_cfg();
+    UNLOCK();
+    if (rc != 0) return -1;
+    ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : %d impulsions a %u kHz, RSSI %d dBm", id, cmd, n, (unsigned)freq, rssi);
+    return n;
 }
 
 /* ZONE : fixe les suiveurs d'un volet appris (CSV d'ids, "" = plus aucun).
