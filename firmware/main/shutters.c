@@ -28,6 +28,7 @@
 #include "cc1101.h"
 #include "radio.h"
 #include "somfy_tx.h"
+#include "came_top432.h"
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
 #include "ota.h"
@@ -584,6 +585,15 @@ static bool emit_virt_somfy(volet_t *v, uint8_t button) {
     return true;
 }
 
+/* Portail CAME TOP-432 : code FIXE 12 bits (pas de compteur roulant), stocke dans virt_serial
+ * comme l'adresse Somfy y est stockee. On reconstruit une trame propre (came_top432) a 433,92
+ * MHz. Mono-canal : toute commande emet le MEME code, le portail l'interprete (un bouton = un
+ * cycle ouvrir/stop/fermer), d'ou `button` ignore. */
+static bool emit_virt_came(volet_t *v, uint8_t button) {
+    (void)button;
+    return came_top432_tx((uint16_t)(v->virt_serial & 0x0FFF), CAME_TOP432_PRESS_REPEATS) == 0;
+}
+
 /* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
  * (issue #73) sont cables ; chaque protocole porte sa propre radio, sans toucher aux
  * autres. `button` est un code PFX_BTN_*, traduit par protocole. Renvoie true si une trame a
@@ -595,6 +605,8 @@ static bool emit_virt(volet_t *v, uint8_t button) {
         return emit_virt_profalux(v, button);
     case VOLET_PROTO_SOMFY_RTS:
         return emit_virt_somfy(v, button);
+    case VOLET_PROTO_CAME_TOP432:
+        return emit_virt_came(v, button);
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
                  v->id, (unsigned)v->proto);
