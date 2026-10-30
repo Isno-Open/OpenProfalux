@@ -88,6 +88,7 @@ function applyRoute() {
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
   if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
+  if (sub === 'rejeu' && typeof loadRejeuPanel === 'function') loadRejeuPanel();
   if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
 }
@@ -1853,7 +1854,7 @@ fetch('/api/session')
    profiles.json (source unique). La pyramide ne fait que ROUTER vers les flux existants
    (Cloner/Créer/Somfy) via le hash ; elle ne réécrit aucun de leurs panneaux ni handlers. ── */
 let PROFILES = null;
-const ADD_FLOW_PANEL = { 'learn': 'learn', 'enrol-pfx': 'enrol', 'create-somfy': 'somfy' };
+const ADD_FLOW_PANEL = { 'learn': 'learn', 'enrol-pfx': 'enrol', 'create-somfy': 'somfy', 'rejeu': 'rejeu' };
 
 async function loadAddPyramid() {
   const host = $('#add-pyramid');
@@ -1904,8 +1905,86 @@ function renderAddStep(host, type, marque) {
   wireRestart();
   host.querySelectorAll('.add-profil').forEach((el, i) => {
     el.onclick = () => {
-      const panel = ADD_FLOW_PANEL[feuilles[i].flow];
+      const prof = feuilles[i];
+      if (prof.flow === 'rejeu') REJEU_PROFILE = prof;   // le panneau rejeu lit le profil (son type)
+      const panel = ADD_FLOW_PANEL[prof.flow];
       if (panel) location.hash = `remotes/${panel}`;
     };
   });
+}
+
+/* ── Panneau « rejeu » (moteur de rejeu brut par commande, flow="rejeu") : créer un appareil, puis
+   capturer chaque commande depuis sa télécommande d'origine en brut OOK. Backend (Max) :
+   POST /api/rejeu/create {id,type} -> {ok} ; POST /api/rejeu/capture {id,cmd,radio} -> {n}.
+   Une fois les cadres capturés, le d-pad de Pilotage les rejoue tout seul (rien à faire ici). ── */
+let REJEU_PROFILE = null;   // profil choisi dans la pyramide (porte le type : volet 0 / portail 1)
+let REJEU_RADIOS = null;
+
+const rejeuStat = (st, msg, bad) => {
+  if (!st) return;
+  st.hidden = false;
+  st.classList.toggle('bad', !!bad);
+  const b = st.querySelector('b');
+  if (b) b.textContent = msg;
+};
+
+async function loadRejeuPanel() {
+  const p = REJEU_PROFILE;
+  const type = p && p.type === 'portail' ? 1 : 0;   // dev_type_t
+  const dev = DEV[type] || DEV[0];
+  const t = $('#rejeu-title'); if (t) t.textContent = p ? ('Ajouter : ' + (p.nom || p.marque || 'appareil')) : 'Ajouter un appareil';
+  const nm = $('#rejeu-name'); if (nm) { nm.value = ''; nm.placeholder = 'ex : ' + (p && p.marque ? p.marque : 'appareil'); }
+
+  if (!REJEU_RADIOS) REJEU_RADIOS = await fetch('/api/radios').then(r => r.json()).then(d => d.radios || []).catch(() => []);
+  const sel = $('#rejeu-radio'), row = $('#rejeu-radio-row');
+  if (sel) {
+    sel.innerHTML = REJEU_RADIOS.map(r => `<option value="${r.idx}">${esc(String(r.band))} MHz (radio ${r.idx})</option>`).join('');
+    const r433 = REJEU_RADIOS.find(r => String(r.band) === '433');
+    if (r433) sel.value = String(r433.idx);          // portail CAME = OOK 433 par défaut
+    if (row) row.hidden = REJEU_RADIOS.length <= 1;  // une seule radio : pas de choix à montrer
+  }
+  const cs = $('#rejeu-create-status'); if (cs) cs.hidden = true;
+  const cap = $('#rejeu-capture'); if (cap) cap.hidden = true;
+  const done = $('#rejeu-done'); if (done) done.hidden = true;
+  const cmds = $('#rejeu-cmds');
+  if (cmds) {
+    cmds.innerHTML = ['up', 'stop', 'down'].map(c =>
+      `<div class="row" style="margin:6px 0"><button class="btn rejeu-cap" data-cmd="${c}">📡 Capturer « ${esc(dev[c])} »</button></div>`).join('');
+    cmds.querySelectorAll('.rejeu-cap').forEach(b => b.onclick = () => rejeuCapture(b, dev));
+  }
+  const cb = $('#rejeu-create'); if (cb) cb.dataset.type = String(type);
+}
+
+if ($('#rejeu-create')) $('#rejeu-create').onclick = async () => {
+  const st = $('#rejeu-create-status'), btn = $('#rejeu-create');
+  const name = (($('#rejeu-name') || {}).value || '').trim();
+  if (!name) { rejeuStat(st, "⚠️ Donne un nom à l'appareil.", true); return; }
+  const type = parseInt(btn.dataset.type || '0', 10);
+  btn.disabled = true;
+  const d = await api('/api/rejeu/create', { method: 'POST', body: JSON.stringify({ id: name, type }) }).catch(() => null);
+  btn.disabled = false;
+  if (d && d.ok) {
+    rejeuStat(st, '✅ « ' + name + ' » créé. Capture ses commandes ci-dessous.');
+    const cap = $('#rejeu-capture'); if (cap) { cap.hidden = false; cap.dataset.id = name; }
+  } else {
+    rejeuStat(st, '❌ Échec de la création' + (d && d.err ? ' (' + d.err + ')' : '') + '.', true);
+  }
+};
+
+async function rejeuCapture(btn, dev) {
+  const cap = $('#rejeu-capture'); const id = cap ? cap.dataset.id : '';
+  const cmd = btn.dataset.cmd, label = dev[cmd] || cmd;
+  const radio = parseInt((($('#rejeu-radio') || {}).value || '0'), 10);
+  const st = $('#rejeu-cap-status');
+  btn.disabled = true;
+  rejeuStat(st, '📡 Appuie MAINTENANT sur « ' + label + ' » de ta télécommande (~15 s)…');
+  const d = await api('/api/rejeu/capture', { method: 'POST', body: JSON.stringify({ id, cmd, radio }) }).catch(() => null);
+  btn.disabled = false;
+  if (d && d.n > 0) {
+    rejeuStat(st, '✅ « ' + label + ' » captée (' + d.n + ' impulsions).');
+    btn.textContent = '✅ ' + label + ' (recapturer)';
+    const done = $('#rejeu-done'); if (done) done.hidden = false;
+  } else {
+    rejeuStat(st, '❌ Rien capté pour « ' + label + ' ». Réessaie, bien en face, en appuyant pendant tout le délai.', true);
+  }
 }

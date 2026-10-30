@@ -180,6 +180,25 @@
         </div>
       </div>
 
+      <div class="subpanel" data-sp="rejeu">
+        <div class="card">
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
+          <h2 id="rejeu-title">Ajouter un appareil</h2>
+          <p class="sub">On capture chaque commande depuis ta télécommande d'origine, puis le boîtier la rejoue à l'identique. Une capture par commande suffit.</p>
+          <div class="field"><label>Nom</label><input id="rejeu-name" placeholder="ex : Portail entrée"></div>
+          <div class="field" id="rejeu-radio-row" hidden><label>Radio</label><select id="rejeu-radio"></select></div>
+          <div class="row"><button id="rejeu-create" class="btn primary">Créer</button></div>
+          <div class="statline" id="rejeu-create-status" hidden><span class="dot"></span><b></b></div>
+          <div id="rejeu-capture" hidden>
+            <h3>Capturer les commandes</h3>
+            <p class="sub">Clique une commande, puis <b>appuie sur le bouton correspondant de ta télécommande</b> (à moins d'1 m, pendant les ~15 s).</p>
+            <div id="rejeu-cmds"></div>
+            <div class="statline" id="rejeu-cap-status" hidden><span class="dot"></span><b></b></div>
+            <p class="hint" id="rejeu-done" hidden>✅ Capturé. Teste depuis l'onglet <b>Volets</b> : le pavé rejoue tes trames.</p>
+          </div>
+        </div>
+      </div>
+
       <div class="subpanel" data-sp="calib">
         <div class="card">
           <h2>Calibrer la position</h2>
