@@ -565,7 +565,7 @@ async function captureAction(action, btn) {
       clearInterval(poll); learning = false;
       /* Volet CLONE : les 3 trames up/down/stop doivent venir de la MEME telecommande
        * (sinon on rejoue un melange) -> garde-fou. Volet ENROLE : `serials` est l'ENSEMBLE
-       * des vraies telecommandes a reconnaitre pour le suivi de position (origine, devmel,
+       * des vraies telecommandes a reconnaitre pour le suivi de position (origine, box tierce,
        * centrale...), on en associe plusieurs -> pas de garde-fou "meme telecommande". */
       const vol = (statusCache.volets || []).find(x => x.id === id);
       const known = (vol && vol.serials) || [];
