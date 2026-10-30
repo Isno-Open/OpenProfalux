@@ -27,6 +27,62 @@
 #include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
 
 static const char *TAG = "cc1101";
+
+/* ── Radios de la carte (issue #95) ──────────────────────────────────────────
+ * La carte declare une ou plusieurs radios CC1101 sur le MEME bus SPI (SCK/MISO/
+ * MOSI communs) ; elles ne different que par CS et GDO0/GDO2. board_pins.h fournit
+ * CC1101_COUNT et la table CC1101_RADIO_TABLE_INIT (index 0 = radio primaire 868,
+ * voir tools/gen_board.py). Le corps du driver pilote la radio ACTIVE : les macros
+ * CC1101_PIN_CS/GDO0/GDO2 sont redefinies pour indirecter vers s_radios[s_active],
+ * de sorte qu'aucune fonction du driver n'a a connaitre l'index. Une carte
+ * mono-radio garde exactement le comportement d'avant (CC1101_COUNT==1, index 0). */
+#ifndef CC1101_COUNT
+#define CC1101_COUNT 1
+#define CC1101_RADIO_TABLE_INIT { { "", CC1101_PIN_CS, CC1101_PIN_GDO0, CC1101_PIN_GDO2, \
+                                    CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, 0 } }
+#endif
+typedef struct { const char *band; int cs, gdo0, gdo2; uint32_t band_low_khz, band_high_khz, carrier_khz; } cc1101_radio_cfg_t;
+static const cc1101_radio_cfg_t s_radios[CC1101_COUNT] = CC1101_RADIO_TABLE_INIT;
+static int s_active = 0;   /* radio courante (0 = primaire 868) */
+
+/* A partir d'ici, CS et GDO suivent la radio active : aucune broche n'est figee. */
+#undef  CC1101_PIN_CS
+#undef  CC1101_PIN_GDO0
+#undef  CC1101_PIN_GDO2
+#define CC1101_PIN_CS    (s_radios[s_active].cs)
+#define CC1101_PIN_GDO0  (s_radios[s_active].gdo0)
+#define CC1101_PIN_GDO2  (s_radios[s_active].gdo2)
+
+int cc1101_radio_count(void) { return CC1101_COUNT; }
+int cc1101_active_radio(void) { return s_active; }
+/* Index de la radio dont la bande declaree contient khz, ou -1 si aucune. */
+int cc1101_radio_for_khz(uint32_t khz) {
+    for (int i = 0; i < CC1101_COUNT; i++)
+        if (khz >= s_radios[i].band_low_khz && khz <= s_radios[i].band_high_khz) return i;
+    return -1;
+}
+
+/* Frequence porteuse : cache de la radio active (s_freq_khz) et valeur figee de chaque
+ * radio (s_chip_khz), car chaque puce garde ses propres registres FREQ. */
+static uint32_t s_freq_khz = PROFALUX_FREQ_HZ / 1000;   /* 868 au boot (s_regs) */
+static uint32_t s_chip_khz[CC1101_COUNT];
+/* PARTNUM/VERSION lus a l'init pour CHAQUE radio (presence + diagnostic par puce, issue #95). */
+static uint8_t s_part[CC1101_COUNT], s_ver[CC1101_COUNT];
+
+/* Description d'une radio declaree, pour l'UI (/api/radios). idx 0 = primaire 868.
+ * Lecture seule (table + caches figes a l'init), pas de mutex necessaire. 0=OK, -1=hors borne. */
+int cc1101_radio_info(int idx, const char **band, uint32_t *carrier_khz, uint32_t *cur_khz,
+                      uint32_t *low_khz, uint32_t *high_khz, uint8_t *partnum, uint8_t *version) {
+    if (idx < 0 || idx >= CC1101_COUNT) return -1;
+    if (band)        *band = s_radios[idx].band;
+    if (carrier_khz) *carrier_khz = s_radios[idx].carrier_khz;
+    if (cur_khz)     *cur_khz = s_chip_khz[idx];
+    if (low_khz)     *low_khz = s_radios[idx].band_low_khz;
+    if (high_khz)    *high_khz = s_radios[idx].band_high_khz;
+    if (partnum)     *partnum = s_part[idx];
+    if (version)     *version = s_ver[idx];
+    return 0;
+}
 /* ── Switch DEBUG capture RX (runtime, togglable depuis l'UI/MQTT) ──────────
  * Quand ON : logge CHAQUE paquet capte en ecoute (symboles RMT + RSSI + bits
  * decodes + classification KeeLoq), y compris les trames <64 bits normalement
@@ -38,15 +94,19 @@ bool cc1101_get_rx_debug(void)    { return s_rx_debug; }
 /* Gain RX reglable (AGCCTRL2) : plafond de gain LNA. 0x27=defaut (-9 dB). Plus GRAND
  * = moins de gain (0x37, 0x3F=-17 dB) -> l'AGC ne remonte plus sur le bruit dans les
  * creux OOK (moins de fausses transitions), au prix de la sensibilite aux signaux faibles. */
-static volatile uint8_t s_rx_gain = 0x27;
-void cc1101_set_rx_gain(uint8_t v) { s_rx_gain = v; ESP_LOGW(TAG, "RX gain AGCCTRL2=0x%02X", v); }
-uint8_t cc1101_get_rx_gain(void)   { return s_rx_gain; }
+/* Reglages PAR RADIO (issue #95) : chaque CC1101 garde son gain, son TE et ses options.
+ * Le set/get agit sur la radio ACTIVE (s_active) ; l'application (registre AGCCTRL2 en RX,
+ * timing en TX) lit toujours le slot de la radio active, donc basculer de radio applique
+ * naturellement ses reglages. Defauts poses dans cc1101_init. */
+static volatile uint8_t s_rx_gain[CC1101_COUNT];
+void cc1101_set_rx_gain(uint8_t v) { s_rx_gain[s_active] = v; ESP_LOGW(TAG, "radio %d : RX gain AGCCTRL2=0x%02X", s_active, v); }
+uint8_t cc1101_get_rx_gain(void)   { return s_rx_gain[s_active]; }
 /* Timing d'EMISSION : TE (temps elementaire), 400 us par defaut, le nominal de la datasheet HCS300
  * (plage garantie 260-660 us). Le TE d'une vraie telecommande depend de son oscillateur RC ; les
  * moteurs le mesurent sur chaque trame et acceptent toute la plage. On n'imite donc pas le TE de la
  * telecommande captee (issue #64), mais le reglage reste possible (Systeme > Appareil). On derive
  * bit '1'=TE, '0'=2*TE, preambule=TE, entete=10 TE. */
-static volatile uint32_t s_tx_te = TX_TE_DEFAULT_US;
+static volatile uint32_t s_tx_te[CC1101_COUNT];
 /* Bit de repetition (bit 65 de la trame KeeLoq). Mesure 2026-10-10 au YARD Stick One sur les
  * murales Eveno (HCS30x) : la 1re trame d'un appui porte RPT=0, toutes les repetitions RPT=1
  * (meme code tournant), ~18 ms de silence entre trames. Le rejeu envoyait jusqu'ici N trames
@@ -54,16 +114,16 @@ static volatile uint32_t s_tx_te = TX_TE_DEFAULT_US;
  * desactivee par defaut : les moteurs testes acceptent les deux ; elle sert aux moteurs qui
  * tiendraient compte du bit, et a un maintien fidele (appui long). */
 #define TX_RPT_GAP_MS 18
-static volatile bool s_tx_rpt = false;
-void cc1101_set_tx_repeat_bit(bool on) { s_tx_rpt = on; ESP_LOGW(TAG, "TX bit de repetition %s", on ? "ON" : "OFF"); }
-bool cc1101_get_tx_repeat_bit(void)    { return s_tx_rpt; }
+static volatile bool s_tx_rpt[CC1101_COUNT];
+void cc1101_set_tx_repeat_bit(bool on) { s_tx_rpt[s_active] = on; ESP_LOGW(TAG, "radio %d : TX bit de repetition %s", s_active, on ? "ON" : "OFF"); }
+bool cc1101_get_tx_repeat_bit(void)    { return s_tx_rpt[s_active]; }
 /* Emission par le RMT (timing materiel) au lieu du bit-bang (esp_rom_delay_us + GPIO,
  * preemptible par le WiFi, voir issue upstream #37). Option, desactivee par defaut. */
-static volatile bool s_tx_rmt = false;
-void cc1101_set_tx_rmt(bool on) { s_tx_rmt = on; ESP_LOGW(TAG, "TX par RMT %s", on ? "ON" : "OFF"); }
-bool cc1101_get_tx_rmt(void)    { return s_tx_rmt; }
-void cc1101_set_tx_te(uint32_t te) { if (te >= 200 && te <= 900) { s_tx_te = te; ESP_LOGW(TAG, "TX TE=%u us", (unsigned)te); } }
-uint32_t cc1101_get_tx_te(void)    { return s_tx_te; }
+static volatile bool s_tx_rmt[CC1101_COUNT];
+void cc1101_set_tx_rmt(bool on) { s_tx_rmt[s_active] = on; ESP_LOGW(TAG, "radio %d : TX par RMT %s", s_active, on ? "ON" : "OFF"); }
+bool cc1101_get_tx_rmt(void)    { return s_tx_rmt[s_active]; }
+void cc1101_set_tx_te(uint32_t te) { if (te >= 200 && te <= 900) { s_tx_te[s_active] = te; ESP_LOGW(TAG, "radio %d : TX TE=%u us", s_active, (unsigned)te); } }
+uint32_t cc1101_get_tx_te(void)    { return s_tx_te[s_active]; }
 /* TE (us) mesure sur la DERNIERE trame decodee (periode de bit / 3). Diagnostic seulement
  * (te= sur la ligne RX) : il ne regle plus l'emission. */
 static volatile int s_last_te = 455;
@@ -225,8 +285,10 @@ static void strobe(uint8_t s) {
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
 }
 
-int cc1101_init(void) {
-    /* GPIO CS + GDO0 */
+/* Configure la radio ACTIVE : GPIO (CS/GDO0), reset, registres, PATABLE, porteuse.
+ * Le bus SPI est partage et deja initialise par cc1101_init. Renvoie 0 si la puce
+ * repond (PARTNUM 0x00), -1 sinon. */
+static int cc1101_configure_active_chip(void) {
     gpio_config_t io_cs = { .pin_bit_mask = 1ULL << CC1101_PIN_CS,
                             .mode = GPIO_MODE_OUTPUT };
     gpio_config(&io_cs);
@@ -235,20 +297,6 @@ int cc1101_init(void) {
     gpio_config_t io_gdo = { .pin_bit_mask = 1ULL << CC1101_PIN_GDO0,
                              .mode = GPIO_MODE_INPUT_OUTPUT };
     gpio_config(&io_gdo);
-
-    /* SPI init */
-    spi_bus_config_t bus = {
-        .miso_io_num = CC1101_PIN_MISO, .mosi_io_num = CC1101_PIN_MOSI,
-        .sclk_io_num = CC1101_PIN_SCK, .quadwp_io_num = -1, .quadhd_io_num = -1,
-        .max_transfer_sz = 32,
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(CC1101_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
-
-    spi_device_interface_config_t dev = {
-        .clock_speed_hz = CC1101_SPI_FREQ_HZ, .mode = 0,
-        .spics_io_num = -1, .queue_size = 4,
-    };
-    ESP_ERROR_CHECK(spi_bus_add_device(CC1101_SPI_HOST, &dev, &s_spi));
 
     /* Reset + configure */
     strobe(CC_SRES);
@@ -271,12 +319,53 @@ int cc1101_init(void) {
         s_spi_retries++;
         esp_rom_delay_us(1000);
     }
+    /* La radio primaire (index 0) garde la porteuse Profalux de s_regs (868,425 MHz) ; une
+     * radio secondaire (p.ex. 433) pose la porteuse declaree par la carte. */
+    if (s_active != 0 && s_radios[s_active].carrier_khz)
+        cc1101_set_freq_khz(s_radios[s_active].carrier_khz);
+    s_chip_khz[s_active] = s_freq_khz;   /* fige la porteuse de cette radio */
+
     uint8_t partnum = cc1101_read_reg(CC_PARTNUM | 0x40);
     uint8_t version = cc1101_read_reg(0x31 | 0x40);   /* VERSION : ~0x04/0x14 sur un vrai CC1101 */
     uint8_t marc    = cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F;
-    s_partnum = partnum; s_version = version;          /* pour le diagnostic UI */
-    ESP_LOGI(TAG, "PARTNUM=0x%02X VERSION=0x%02X (attendu 0x00/0x04-0x14) MARCSTATE=0x%02X", partnum, version, marc);
+    s_part[s_active] = partnum; s_ver[s_active] = version;             /* presence par radio (/api/radios) */
+    if (s_active == 0) { s_partnum = partnum; s_version = version; }   /* diag UI detaille = radio primaire */
+    ESP_LOGI(TAG, "radio %d (CS=%d GDO0=%d) PARTNUM=0x%02X VERSION=0x%02X (attendu 0x00/0x04-0x14) MARCSTATE=0x%02X",
+             s_active, s_radios[s_active].cs, s_radios[s_active].gdo0, partnum, version, marc);
     return (partnum == 0x00) ? 0 : -1;
+}
+
+int cc1101_init(void) {
+    /* Defauts PAR RADIO (issue #95) : gain nominal, TE nominal, options off. main.c les
+     * ecrase ensuite par les reglages NVS de chaque radio (apply_radio_config). */
+    for (int i = 0; i < CC1101_COUNT; i++) {
+        s_rx_gain[i] = 0x27; s_tx_te[i] = TX_TE_DEFAULT_US; s_tx_rpt[i] = false; s_tx_rmt[i] = false;
+    }
+    /* Bus SPI partage par toutes les radios, initialise une seule fois. SCK/MISO/MOSI
+     * sont communs ; CS manuel (spics_io_num=-1) : cs_low/cs_high abaissent la broche CS
+     * de la radio active. On configure ensuite CHAQUE radio declaree (issue #95). */
+    spi_bus_config_t bus = {
+        .miso_io_num = CC1101_PIN_MISO, .mosi_io_num = CC1101_PIN_MOSI,
+        .sclk_io_num = CC1101_PIN_SCK, .quadwp_io_num = -1, .quadhd_io_num = -1,
+        .max_transfer_sz = 32,
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(CC1101_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
+
+    spi_device_interface_config_t dev = {
+        .clock_speed_hz = CC1101_SPI_FREQ_HZ, .mode = 0,
+        .spics_io_num = -1, .queue_size = 4,
+    };
+    ESP_ERROR_CHECK(spi_bus_add_device(CC1101_SPI_HOST, &dev, &s_spi));
+
+    int rc0 = -1;
+    for (int i = 0; i < CC1101_COUNT; i++) {
+        s_active = i;
+        int rc = cc1101_configure_active_chip();
+        if (i == 0) rc0 = rc;   /* le code de retour est celui de la radio primaire */
+    }
+    s_active = 0;               /* on rend la main sur la radio primaire (868) */
+    s_freq_khz = s_chip_khz[0];
+    return rc0;
 }
 
 /* Synchronous bit-bang OOK on GDO0. Codage PWM HCS30x mesure le 2026-08-10 :
@@ -302,8 +391,27 @@ static void ook_bit(bool one) {
 /* Frequence porteuse (profil radio). Ecrite en IDLE ; le synthetiseur se recalibre au
  * prochain passage en RX/TX (MCSM0 FS_AUTOCAL). Relue pour verifier : sur certains montages
  * le CC1101 ignore une ecriture juste apres une rafale d'acces SPI, d'ou 3 essais espaces. */
-static uint32_t s_freq_khz = PROFALUX_FREQ_HZ / 1000;   /* celle de s_regs au boot */
 uint32_t cc1101_get_freq_khz(void) { return s_freq_khz; }
+
+/* Rend active la radio idx (0 = primaire 868). Rebranche la capture RMT sur son GDO0 si
+ * l'ecoute etait armee, et restaure la porteuse figee de cette radio. 0=OK, -1=index hors
+ * borne. A appeler sous le mutex radio (voir radio.c). */
+int cc1101_select(int idx) {
+    if (idx < 0 || idx >= CC1101_COUNT) return -1;
+    if (idx == s_active) return 0;
+    bool had_cap = (s_cap != NULL);
+    /* rmt_del_channel EXIGE un canal desactive (ESP-IDF rmt_rx.c : sinon ESP_ERR_INVALID_STATE,
+     * le canal n'est PAS libere). En ecoute permanente s_cap est ENABLE : sans ce rmt_disable,
+     * la suppression echoue en silence, le canal DMA fuit, et re-creer sur le nouveau GDO0 rend
+     * "no free rx channels" -> s_cap NULL -> toute RX sur la radio secondaire (capture, reception,
+     * calage 433) echoue instantanement. Le sweep y echappe : il lit le registre RSSI, pas le RMT. */
+    if (s_cap) { rmt_disable(s_cap); rmt_del_channel(s_cap); s_cap = NULL; }   /* capture liee a l'ancien GDO0 */
+    s_active = idx;
+    s_freq_khz = s_chip_khz[idx];                          /* cache = porteuse de cette radio */
+    if (had_cap && cc1101_capture_init() != 0)             /* re-cree la capture sur le nouveau GDO0 */
+        ESP_LOGE(TAG, "cc1101_select(%d) : recreation de la capture RMT sur GDO0 KO", idx);
+    return 0;
+}
 
 int cc1101_set_freq_khz(uint32_t khz) {
     uint32_t w = radio_cc1101_freq_word(khz);
@@ -313,6 +421,7 @@ int cc1101_set_freq_khz(uint32_t khz) {
         cc1101_write_reg(CC_FREQ2, f2); cc1101_write_reg(CC_FREQ1, f1); cc1101_write_reg(CC_FREQ0, f0);
         if (cc1101_read_reg(CC_FREQ2) == f2 && cc1101_read_reg(CC_FREQ1) == f1 && cc1101_read_reg(CC_FREQ0) == f0) {
             s_freq_khz = khz;
+            s_chip_khz[s_active] = khz;   /* fige la porteuse de la radio active */
             ESP_LOGI(TAG, "frequence %u kHz (FREQ %02X %02X %02X)", (unsigned)khz, f2, f1, f0);
             return 0;
         }
@@ -500,10 +609,10 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
     /* Timing derive du TE reglable : bit '1'=TE haut/2TE bas, '0'=2TE haut/TE bas,
      * preambule=TE, entete = 10 TE comme la telecommande (l'ancien 4450 x TE / 455 = 9,78 TE
      * raccourcissait l'entete de ~100 us a TE 448). */
-    const uint32_t te = s_tx_te, te2 = 2 * s_tx_te;
-    const uint32_t hdr = PROFALUX_HEADER_TE * s_tx_te;
-    const bool rpt = s_tx_rpt && n >= 66;   /* bit 65 = RPT : 0 sur la 1re trame, 1 ensuite */
-    if (s_tx_rmt) {
+    const uint32_t te = s_tx_te[s_active], te2 = 2 * s_tx_te[s_active];
+    const uint32_t hdr = PROFALUX_HEADER_TE * s_tx_te[s_active];
+    const bool rpt = s_tx_rpt[s_active] && n >= 66;   /* bit 65 = RPT : 0 sur la 1re trame, 1 ensuite */
+    if (s_tx_rmt[s_active]) {
         if (tx_rmt_burst(bits, n, repeats, rpt, te, te2, hdr, rpt ? TX_RPT_GAP_MS * 1000 : 2000) == 0) {
             strobe(CC_SIDLE);   /* reception deja recreee et active */
             return 0;
@@ -650,7 +759,7 @@ int cc1101_rx_probe(void) {
     if (!s_cap && cc1101_capture_init() != 0) return -1;
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(0x02, 0x0D); cc1101_write_reg(0x0B, 0x06); cc1101_write_reg(0x19, 0x14);
-    cc1101_write_reg(0x1B, s_rx_gain); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x91);   /* AGC : meme reglage que l'ecoute (rx_listen_bits) */
+    cc1101_write_reg(0x1B, s_rx_gain[s_active]); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x91);   /* AGC : meme reglage que l'ecoute (rx_listen_bits) */
     strobe(CC_SIDLE); esp_rom_delay_us(200);
     strobe(0x33); vTaskDelay(pdMS_TO_TICKS(3));
     strobe(0x3A); strobe(0x34);
@@ -713,7 +822,7 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     cc1101_write_reg(0x02, 0x0D);   /* IOCFG0 = donnee serie demodulee sur GDO0 */
     cc1101_write_reg(0x0B, 0x06);   /* FSCTRL1 */
     cc1101_write_reg(0x19, 0x14);   /* FOCCFG  */
-    cc1101_write_reg(0x1B, s_rx_gain);   /* AGCCTRL2 : plafond de gain RX REGLABLE via l'UI (defaut 0x27)
+    cc1101_write_reg(0x1B, s_rx_gain[s_active]);   /* AGCCTRL2 : plafond de gain RX REGLABLE via l'UI (defaut 0x27)
                                      * et resultat de la calibration. Le 0x04 fige "TI DN022" introduit en
                                      * v0.2.6 degradait la reception en terrain : l'ancienne valeur recoit
                                      * mieux (retours issues #1 eleroy et #59 joha38, rollback = RX revient).
@@ -835,7 +944,7 @@ int cc1101_rssi_scan(const uint32_t *khz, int n, int dwell_ms, int16_t *peak_hdb
     const uint8_t mdm4 = cc1101_read_reg(CC_MDMCFG4);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(CC_IOCFG0, 0x0D);
-    cc1101_write_reg(0x1B, s_rx_gain);   /* AGCCTRL2, AGCCTRL1, AGCCTRL0 : comme l'ecoute (rx_listen_bits) */
+    cc1101_write_reg(0x1B, s_rx_gain[s_active]);   /* AGCCTRL2, AGCCTRL1, AGCCTRL0 : comme l'ecoute (rx_listen_bits) */
     cc1101_write_reg(0x1C, 0x00);
     cc1101_write_reg(0x1D, 0x91);
     cc1101_write_reg(CC_MDMCFG4, (uint8_t)(0xF0 | (mdm4 & 0x0F)));   /* CHANBW 58 kHz, debit inchange */

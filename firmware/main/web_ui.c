@@ -215,6 +215,9 @@ static uint32_t bits_lsb(const char *b, int from, int len) {
     return v;
 }
 
+static int req_radio_idx(httpd_req_t *r);   /* ?radio=N (defini plus bas) */
+static int s_learn_radio = 0;               /* radio ciblee par /api/learn/start (issue #95) */
+
 static void learn_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
@@ -224,7 +227,7 @@ static void learn_task(void *arg) {
      * ce qu'on supposait) : ca empechait d'apprendre stop et descente.
      * Confirmee par une 2e trame identique et complete (66 bits) : une trame isolee a bits
      * faux donnait un volet au serial ou a la commande corrompus (issue #39). */
-    int n = radio_listen_confirmed(15000, bits, SH_BITS_LEN, true);
+    int n = radio_listen_confirmed_on(s_learn_radio, 15000, bits, SH_BITS_LEN, true);
     if (n >= 66) {
         s_lrssi   = cc1101_get_rssi();
         strlcpy(s_lbits, bits, SH_BITS_LEN);
@@ -325,7 +328,7 @@ static esp_err_t h_volet_delete(httpd_req_t *r) {
 /* ── /api/learn/start + /poll ── */
 static esp_err_t h_learn_start(httpd_req_t *r) {
     char *body = read_body(r); if (body) free(body);   /* le corps {action} n'est plus utilise cote firmware */
-    if (!s_lactive) { s_lready = false; s_lactive = true; xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL); }
+    if (!s_lactive) { s_learn_radio = req_radio_idx(r); s_lready = false; s_lactive = true; xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL); }   /* ?radio=N : ecoute cette radio (issue #95) */
     httpd_resp_sendstr(r, "{\"ok\":1}");
     return ESP_OK;
 }
@@ -550,6 +553,50 @@ static esp_err_t h_config_post(httpd_req_t *r) {
     char *body = read_body_max(r, CONFIG_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    /* Reglages d'une radio SECONDAIRE (issue #95) : champ "radio" >= 1. Chemin dedie, cles NVS
+     * indexees (rprofN, rfreqN, rxgN, rteN, rrptN, rrmtN), applique a CETTE puce. La radio 0 garde
+     * le chemin historique (cles plates) ci-dessous. Chaque frequence est bornee par la bande de SA
+     * radio. */
+    cJSON *radj = cJSON_GetObjectItem(j, "radio");
+    if (cJSON_IsNumber(radj) && radj->valuedouble >= 1) {
+        int idx = (int)radj->valuedouble;
+        if (idx >= cc1101_radio_count()) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "radio inconnue"); }
+        uint32_t low = 0, high = 0; cc1101_radio_info(idx, NULL, NULL, NULL, &low, &high, NULL, NULL);
+        nvs_handle_t rh;
+        if (nvs_open("cfg", NVS_READWRITE, &rh) != ESP_OK) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs"); }
+        char k[24];
+        uint32_t khz = 0; const uint32_t *pkhz = NULL;
+        const char *rpname = jstr(j, "radio_profile");
+        if (rpname) {
+            int prof = radio_profile_from_name(rpname);
+            uint32_t fcustom = 0; cJSON *fj = cJSON_GetObjectItem(j, "freq_khz");
+            if (prof == RADIO_PROFILE_CUSTOM && cJSON_IsNumber(fj) && fj->valuedouble > 0) fcustom = (uint32_t)fj->valuedouble;
+            if (!radio_profile_resolve(prof, fcustom, low, high, &khz)) {
+                nvs_close(rh); cJSON_Delete(j);
+                return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, prof < 0 ? "radio_profile inconnu" : "freq_khz hors de la plage de cette radio");
+            }
+            snprintf(k, sizeof k, "rprof%d", idx); nvs_set_u8(rh, k, (uint8_t)prof);
+            if (prof == RADIO_PROFILE_CUSTOM) { snprintf(k, sizeof k, "rfreq%d", idx); nvs_set_u32(rh, k, fcustom); }
+            pkhz = &khz;
+        }
+        uint8_t rxg = 0; const uint8_t *prxg = NULL; cJSON *rgj = cJSON_GetObjectItem(j, "rx_gain");
+        if (cJSON_IsNumber(rgj)) { rxg = (uint8_t)rgj->valuedouble; snprintf(k, sizeof k, "rxg%d", idx); nvs_set_u8(rh, k, rxg); prxg = &rxg; }
+        uint32_t te = 0; const uint32_t *pte = NULL; cJSON *tj = cJSON_GetObjectItem(j, "tx_te");
+        if (cJSON_IsNumber(tj)) { te = (uint32_t)tj->valuedouble; snprintf(k, sizeof k, "rte%d", idx); nvs_set_u32(rh, k, te); pte = &te; }
+        int rpt = 0; const int *prpt = NULL; cJSON *rpj = cJSON_GetObjectItem(j, "tx_repeat_bit");
+        if (cJSON_IsBool(rpj) || cJSON_IsNumber(rpj)) { rpt = (cJSON_IsTrue(rpj) || (cJSON_IsNumber(rpj) && rpj->valuedouble != 0)); snprintf(k, sizeof k, "rrpt%d", idx); nvs_set_u8(rh, k, (uint8_t)rpt); prpt = &rpt; }
+        int rmt = 0; const int *prmt = NULL; cJSON *rmj = cJSON_GetObjectItem(j, "tx_rmt");
+        if (cJSON_IsBool(rmj) || cJSON_IsNumber(rmj)) { rmt = (cJSON_IsTrue(rmj) || (cJSON_IsNumber(rmj) && rmj->valuedouble != 0)); snprintf(k, sizeof k, "rrmt%d", idx); nvs_set_u8(rh, k, (uint8_t)rmt); prmt = &rmt; }
+        nvs_commit(rh); nvs_close(rh);
+        int ap = radio_apply(idx, pkhz, prxg, pte, prpt, prmt);
+        bool rb = cJSON_IsTrue(cJSON_GetObjectItem(j, "reboot"));
+        cJSON_Delete(j);
+        char resp[80];
+        snprintf(resp, sizeof resp, "{\"ok\":1,\"radio\":%d,\"radio_applied\":%d}", idx, ap == 0 ? 1 : 0);
+        httpd_resp_set_type(r, "application/json"); httpd_resp_sendstr(r, resp);
+        if (rb) { vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
+        return ESP_OK;
+    }
     nvs_handle_t h;
     /* Profil radio : valide AVANT toute ecriture, pour qu'une requete refusee ne change rien.
      * radio_profile = "profalux" | "eveno" | "custom" ; freq_khz n'est lu que pour "custom". */
@@ -914,8 +961,9 @@ static esp_err_t h_ota_pull(httpd_req_t *r) {
 
 /* ── /api/rx/calibrate : auto-calibrage du gain RX ──
  * POST lance le balayage (l'utilisateur appuie sur sa telecommande), GET renvoie l'etat. */
+static int req_radio_idx(httpd_req_t *r);   /* defini plus bas (parametre ?radio=N) */
 static esp_err_t h_rx_calibrate(httpd_req_t *r) {
-    int rc = radio_calibrate_start();
+    int rc = radio_calibrate_start_on(req_radio_idx(r));   /* ?radio=N : calibre cette radio (issue #95) */
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : (rc == 1 ? "{\"ok\":1,\"busy\":1}" : "{\"ok\":0}"));
 }
@@ -932,7 +980,7 @@ static esp_err_t h_rx_calibrate_status(httpd_req_t *r) {
  * POST lance (l'utilisateur met le commutateur P de sa telecommande), GET rend l'etat et,
  * une fois fini, la porteuse trouvee et la courbe [[kHz, RSSI demi-dB], ...]. */
 static esp_err_t h_rx_sweep(httpd_req_t *r) {
-    int rc = radio_sweep_start();
+    int rc = radio_sweep_start_on(req_radio_idx(r));   /* ?radio=N : balaie cette radio (issue #95) */
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : (rc == 1 ? "{\"ok\":1,\"busy\":1}" : "{\"ok\":0}"));
 }
@@ -977,6 +1025,87 @@ static esp_err_t h_diag(httpd_req_t *r) {
              tx_ok, partnum, version, (unsigned)retries, (unsigned)fails, gdo0, gdo0_lvl);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
+}
+
+/* Reglages persistes d'une radio (issue #95). La radio 0 garde les cles plates historiques ;
+ * les radios i>0 ont des cles indexees. Valeurs par defaut si absentes. */
+static void radio_cfg_read(int idx, uint8_t *prof, uint32_t *fcustom, uint8_t *rxg,
+                           uint32_t *te, uint8_t *rpt, uint8_t *rmt) {
+    *prof = (idx == 0) ? RADIO_PROFILE_DEFAULT : RADIO_PROFILE_CUSTOM;
+    *fcustom = 0; *rxg = 0x27; *te = TX_TE_DEFAULT_US; *rpt = 0; *rmt = 0;
+    nvs_handle_t h; if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) return;
+    if (idx == 0) {
+        nvs_get_u8(h, "radio_prof", prof); nvs_get_u32(h, "freq_khz", fcustom);
+        { uint8_t v = 0;  if (nvs_get_u8(h, "rx_gain", &v) == ESP_OK && v) *rxg = v; }
+        { uint32_t v = 0; if (nvs_get_u32(h, "te_tx", &v) == ESP_OK && v) *te = v; }
+        nvs_get_u8(h, "tx_rpt", rpt); nvs_get_u8(h, "tx_rmt", rmt);
+    } else {
+        char k[24];
+        snprintf(k, sizeof k, "rprof%d", idx); nvs_get_u8(h, k, prof);
+        snprintf(k, sizeof k, "rfreq%d", idx); nvs_get_u32(h, k, fcustom);
+        snprintf(k, sizeof k, "rxg%d", idx);   { uint8_t v = 0;  if (nvs_get_u8(h, k, &v) == ESP_OK && v) *rxg = v; }
+        snprintf(k, sizeof k, "rte%d", idx);   { uint32_t v = 0; if (nvs_get_u32(h, k, &v) == ESP_OK && v) *te = v; }
+        snprintf(k, sizeof k, "rrpt%d", idx);  nvs_get_u8(h, k, rpt);
+        snprintf(k, sizeof k, "rrmt%d", idx);  nvs_get_u8(h, k, rmt);
+    }
+    nvs_close(h);
+}
+/* Index de radio passe en parametre d'URL (?radio=N), 0 par defaut (radio active/primaire). */
+static int req_radio_idx(httpd_req_t *r) {
+    char q[32], v[8];
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK &&
+        httpd_query_key_value(q, "radio", v, sizeof v) == ESP_OK) {
+        int i = atoi(v); if (i > 0) return i;
+    }
+    return 0;
+}
+
+/* ── /api/radios : les radios CC1101 declarees par la carte (issue #95). L'UI genere une carte
+ * complete par radio (bande, diagnostic, et les memes reglages : profil, frequence, gain, TE,
+ * options). Chaque radio est un CC1101 a part entiere. Lecture seule. ── */
+static esp_err_t h_radios(httpd_req_t *r) {
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "active", cc1101_active_radio());
+    cJSON *arr = cJSON_AddArrayToObject(o, "radios");
+    int n = cc1101_radio_count();
+    for (int i = 0; i < n; i++) {
+        const char *band = ""; uint32_t carrier = 0, cur = 0, low = 0, high = 0; uint8_t pn = 0xFF, ver = 0xFF;
+        cc1101_radio_info(i, &band, &carrier, &cur, &low, &high, &pn, &ver);
+        uint8_t prof = 0, rxg = 0, rpt = 0, rmt = 0; uint32_t fcustom = 0, te = 0;
+        radio_cfg_read(i, &prof, &fcustom, &rxg, &te, &rpt, &rmt);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddNumberToObject(e, "idx", i);
+        cJSON_AddStringToObject(e, "band", band ? band : "");
+        cJSON_AddNumberToObject(e, "carrier_khz", carrier);
+        cJSON_AddNumberToObject(e, "freq_khz", cur);
+        cJSON_AddNumberToObject(e, "band_low_khz", low);
+        cJSON_AddNumberToObject(e, "band_high_khz", high);
+        cJSON_AddNumberToObject(e, "partnum", pn);
+        cJSON_AddNumberToObject(e, "version", ver);
+        cJSON_AddBoolToObject(e, "present", pn == 0x00 && ver != 0x00 && ver != 0xFF);
+        cJSON_AddBoolToObject(e, "primary", i == 0);
+        cJSON_AddStringToObject(e, "radio_profile", radio_profile_name((radio_profile_t)prof));
+        cJSON_AddNumberToObject(e, "freq_custom_khz", fcustom);
+        cJSON_AddNumberToObject(e, "rx_gain", rxg);
+        cJSON_AddNumberToObject(e, "tx_te", te);
+        cJSON_AddBoolToObject(e, "tx_repeat_bit", rpt);
+        cJSON_AddBoolToObject(e, "tx_rmt", rmt);
+        /* Profils valides pour CETTE bande : un profil nomme n'est propose que si sa frequence
+         * tombe dans la plage de la radio ; "custom" l'est toujours. L'UI ne devine pas. */
+        cJSON *profs = cJSON_AddArrayToObject(e, "profiles");
+        for (int p = 0; p < RADIO_PROFILE_COUNT; p++) {
+            uint32_t pf = radio_profile_freq_khz((radio_profile_t)p, 0);
+            if (p == RADIO_PROFILE_CUSTOM || radio_freq_in_band(pf, low, high))
+                cJSON_AddItemToArray(profs, cJSON_CreateString(radio_profile_name((radio_profile_t)p)));
+        }
+        cJSON_AddItemToArray(arr, e);
+    }
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t res = httpd_resp_sendstr(r, js ? js : "{\"radios\":[]}");
+    free(js);
+    return res;
 }
 
 /* ── /api/health : sante du boitier (Systeme > Etat), sans cable USB. Le reste (Wi-Fi,
@@ -1463,6 +1592,7 @@ void web_ui_start(void) {
     reg(s, "/api/rx/sweep",     HTTP_POST, h_rx_sweep);
     reg(s, "/api/rx/sweep",     HTTP_GET,  h_rx_sweep_status);
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
+    reg(s, "/api/radios",       HTTP_GET,  h_radios);
     reg(s, "/api/health",       HTTP_GET,  h_health);
     reg(s, "/api/diag/tx",      HTTP_POST, h_diag_tx);
     reg(s, "/api/backup",       HTTP_GET,  h_backup);

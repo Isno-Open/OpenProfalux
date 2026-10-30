@@ -1037,6 +1037,8 @@ async function loadConfig() {
       (rp.value === 'custom' ? ` (saisie en kHz, entre ${fq.min} et ${fq.max})` : '');
   }
   if ($('#mqtt-device')) $('#mqtt-device').value = c.device || '';
+  /* Un seul appel /api/radios : le recap en tete ET les cartes de reglages par radio. */
+  api('/api/radios').then(d => { renderRadios('#sys-radios', d); buildRadioCards(d); }).catch(() => {});
   refreshRadioReminder();
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
@@ -1164,8 +1166,140 @@ if ($('#rxcal-btn')) $('#rxcal-btn').onclick = async () => {
     }
   }, 1000);
 };
+/* Radios declarees par la carte (issue #95) : une ligne par radio (bande, frequence, presence).
+   La meme liste alimente le recap de l'onglet Appareil et l'entete du Diagnostic : l'ecran ne
+   suppose plus une seule radio, il se genere depuis /api/radios. */
+async function renderRadios(sel, data) {
+  const el = $(sel); if (!el) return null;
+  const d = data !== undefined ? data : await api('/api/radios').catch(() => null);
+  /* Une seule radio DECLAREE par la carte (CC1101_COUNT==1, decide a la compilation depuis
+     boards/<carte>.json) : rien a repartir, l'ecran reste celui d'une carte mono-radio.
+     On garde le compte DECLARE, pas le detecte : une carte bi-radio dont une puce manque doit
+     afficher la ligne rouge "absente", c'est un diagnostic. */
+  const multi = d && Array.isArray(d.radios) && d.radios.length > 1;
+  const title = $('#diag-detail-title');
+  if (title) title.hidden = !multi;
+  if (!multi) { el.innerHTML = ''; return d; }
+  el.innerHTML = d.radios.map(rd => {
+    const ok = !!rd.present;
+    const name = rd.band ? `Radio ${esc(rd.band)} MHz` : 'Radio';
+    const mhz = rd.freq_khz ? (rd.freq_khz / 1000).toFixed(3) + ' MHz' : '?';
+    const role = rd.primary ? 'primaire' : 'secondaire';
+    return `<div class="radio-row"><span class="rr-dot">${ok ? '🟢' : '🔴'}</span>`
+      + `<b class="rr-name">${name}</b>`
+      + `<span class="rr-meta">${mhz} · ${role} · ${ok ? 'détectée' : 'absente'}</span></div>`;
+  }).join('');
+  return d;
+}
+/* Cartes de reglages des radios SECONDAIRES (issue #95) : meme contenu que le bloc 868 primaire
+   (profil, frequence, calage, gain, TE, options), generees depuis /api/radios pour chaque radio
+   idx>=1. Chaque radio est un CC1101 a part entiere. Le primaire garde son bloc et ses
+   gestionnaires d'origine. Carte mono-radio : rien de genere, et le titre du primaire reste cache. */
+const GAIN_OPTS = [[7, '0x07 - gain max (le plus sensible)'], [39, '0x27 - défaut (-9 dB)'], [47, '0x2F - gain réduit'], [55, '0x37 - gain réduit +'], [63, '0x3F - mordant (-17 dB)']];
+function profLabel(name) {
+  return name === 'profalux' ? 'Profalux (868,425 MHz)' : name === 'eveno' ? 'Eveno (868,330 MHz)'
+    : name === 'custom' ? 'Fréquence personnalisée' : name;
+}
+function buildRadioCards(data) {
+  const host = $('#sys-radios-extra'); if (!host) return;
+  host.innerHTML = '';
+  const pt = $('#sys-primary-title');
+  const multi = data && Array.isArray(data.radios) && data.radios.length > 1;
+  if (pt) { pt.hidden = !multi; if (multi && data.radios[0]) pt.textContent = `Radio ${data.radios[0].band} MHz (primaire)`; }
+  if (!multi) return;
+  for (const rd of data.radios) if (!rd.primary) host.appendChild(radioCard(rd));
+}
+function radioCard(rd) {
+  const idx = rd.idx, lo = rd.band_low_khz || 0, hi = rd.band_high_khz || 0;
+  const card = document.createElement('div');
+  card.className = 'card radio-card';
+  const profOpts = (rd.profiles || ['custom']).map(p => `<option value="${esc(p)}">${esc(profLabel(p))}</option>`).join('');
+  const gainOpts = GAIN_OPTS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+  card.innerHTML =
+    `<h3>Radio ${esc(rd.band)} MHz</h3>`
+    + `<div class="field"><label>Profil radio</label>`
+    + `<select class="rr-prof">${profOpts}</select>`
+    + `<input class="rr-freq" type="number" step="1" hidden style="margin-top:8px" min="${lo}" max="${hi}">`
+    + `<p class="hint rr-freq-hint"></p>`
+    + `<div class="row" style="margin-top:8px"><button class="btn rr-sweep" type="button">📡 Caler sur ma télécommande</button></div>`
+    + `<div class="statline rr-sweep-res" hidden><span class="dot"></span><b></b></div>`
+    + `<div class="row rr-sweep-apply-row" hidden><button class="btn primary rr-sweep-apply" type="button">Appliquer cette fréquence</button></div></div>`
+    + `<div class="field" style="margin-top:12px"><label>Gain RX (AGCCTRL2)</label>`
+    + `<select class="rr-gain">${gainOpts}</select>`
+    + `<p class="hint" style="margin-top:8px"><button class="btn rr-cal" type="button">Calibrer la réception (auto)</button> <span class="rr-cal-status" style="margin-left:8px"></span></p></div>`
+    + `<div class="field" style="margin-top:12px"><label>TE d'émission (µs)</label><input class="rr-te" type="number" min="200" max="900" step="1"></div>`
+    + `<label class="switch"><input type="checkbox" class="rr-rpt"><span class="track"></span><span class="lbl">Émettre comme la télécommande (bit de répétition)</span></label>`
+    + `<label class="switch"><input type="checkbox" class="rr-rmt"><span class="track"></span><span class="lbl">Émission matérielle (RMT)</span></label>`
+    + `<div class="row end"><button class="btn primary rr-save" type="button">Enregistrer cette radio</button></div>`;
+  const q = s => card.querySelector(s);
+  const fq = q('.rr-freq');
+  q('.rr-prof').value = rd.radio_profile || 'custom';
+  fq.value = rd.freq_custom_khz || rd.freq_khz || '';
+  fq.hidden = q('.rr-prof').value !== 'custom';
+  q('.rr-freq-hint').textContent = `Fréquence active : ${(rd.freq_khz / 1000).toFixed(3)} MHz (saisie en kHz, entre ${lo} et ${hi})`;
+  q('.rr-gain').value = String(rd.rx_gain || 39);
+  q('.rr-te').value = rd.tx_te || 400;
+  q('.rr-rpt').checked = !!rd.tx_repeat_bit;
+  q('.rr-rmt').checked = !!rd.tx_rmt;
+  q('.rr-prof').onchange = () => { fq.hidden = q('.rr-prof').value !== 'custom'; };
+  let sweepKhz = 0;
+  q('.rr-sweep').onclick = async () => {
+    const b = q('.rr-sweep'), res = q('.rr-sweep-res');
+    b.disabled = true; setRadioBusy(true); sweepKhz = 0; q('.rr-sweep-apply-row').hidden = true;
+    res.hidden = false; res.className = 'statline'; res.querySelector('b').textContent = 'Mets ta télécommande sur P…';
+    await api(`/api/rx/sweep?radio=${idx}`, { method: 'POST' }).catch(() => {});
+    const poll = setInterval(async () => {
+      const s = await api(`/api/rx/sweep?radio=${idx}`).catch(() => null);
+      if (!s || s.state !== 2) return;
+      clearInterval(poll); b.disabled = false; setRadioBusy(false);
+      if (s.status === 0 && s.center_khz) {
+        sweepKhz = s.center_khz; res.className = 'statline ok';
+        res.querySelector('b').textContent = `Porteuse : ${(s.center_khz / 1000).toFixed(3)} MHz`;
+        q('.rr-sweep-apply-row').hidden = false;
+      } else { res.className = 'statline bad'; res.querySelector('b').textContent = 'Rien trouvé (télécommande sur P, à 1-2 m).'; }
+    }, 1000);
+  };
+  q('.rr-sweep-apply').onclick = async () => {
+    if (!sweepKhz) return;
+    const ok = await api('/api/config', { method: 'POST', body: JSON.stringify({ radio: idx, radio_profile: 'custom', freq_khz: sweepKhz }) }).then(r => r && r.ok).catch(() => false);
+    toast(ok ? `Fréquence appliquée : ${sweepKhz} kHz` : 'Refusé (hors bande ?)');
+    if (ok) { q('.rr-sweep-apply-row').hidden = true; loadConfig().catch(() => {}); }
+  };
+  q('.rr-cal').onclick = async () => {
+    const st = q('.rr-cal-status'), b = q('.rr-cal');
+    b.disabled = true; st.textContent = 'Appuie sur ta télécommande…';
+    await api(`/api/rx/calibrate?radio=${idx}`, { method: 'POST' }).catch(() => {});
+    const poll = setInterval(async () => {
+      const s = await api('/api/rx/calibrate').catch(() => null);
+      if (!s) return;
+      if (s.state === 1) { st.textContent = `Appuie… (test ${hex2(s.testing)})`; return; }
+      clearInterval(poll); b.disabled = false;
+      if (s.state === 2) {
+        st.textContent = `✓ Gain ${hex2(s.result)}`; q('.rr-gain').value = String(s.result);
+        await api('/api/config', { method: 'POST', body: JSON.stringify({ radio: idx, rx_gain: s.result }) }).catch(() => {});
+      } else st.textContent = '✗ Rien capté.';
+    }, 1000);
+  };
+  q('.rr-save').onclick = async () => {
+    const prof = q('.rr-prof').value;
+    const body = { radio: idx, radio_profile: prof, rx_gain: Number(q('.rr-gain').value), tx_te: Number(q('.rr-te').value) || 400, tx_repeat_bit: q('.rr-rpt').checked, tx_rmt: q('.rr-rmt').checked };
+    if (prof === 'custom') {
+      const f = Number(fq.value);
+      if (!(f >= lo && f <= hi)) { toast(`Fréquence invalide : entre ${lo} et ${hi} kHz`); return; }
+      body.freq_khz = f;
+    }
+    try {
+      const res = await api('/api/config', { method: 'POST', body: JSON.stringify(body) });
+      if (res && res.radio_applied === 0) toast('Enregistré, mais la radio n’a pas pris la fréquence');
+      else savedBtn(q('.rr-save'), 'Enregistrer cette radio');
+    } catch (e) { toast(e === 400 ? 'Refusé : profil ou fréquence invalide' : 'Échec de l’enregistrement'); }
+  };
+  return card;
+}
 async function loadDiag() {
   const vd = $('#diag-verdict'), el = $('#diag-line'); if (!vd && !el) return;
+  const rdata = await renderRadios('#diag-radios').catch(() => null);
+  buildRxTests(rdata);   /* un bouton de test de reception PAR radio declaree (issue #95) */
   const d = await api('/api/diag').catch(() => null);
   if (!d) { if (vd) vd.querySelector('b').textContent = 'Diagnostic indisponible'; if (el) el.textContent = ''; return; }
   const ph = '0x' + Number(d.partnum).toString(16).toUpperCase().padStart(2, '0');
@@ -1195,18 +1329,34 @@ if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   await api('/api/diag/tx', { method: 'POST' }).catch(() => {});
   await loadDiag(); btn.disabled = false;
 };
-if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {
-  const btn = $('#diag-rx-btn'), st = $('#diag-rx-status');
-  btn.disabled = true; setRadioBusy(true);
-  st.className = 'hint'; st.textContent = '📡 Presse ta télécommande MAINTENANT (~15 s)...';
-  await api('/api/learn/start', { method: 'POST' }).catch(() => {});
+/* Test de reception PAR radio (issue #95) : un bouton par radio declaree. Chaque bouton ecoute SA
+   puce (via /api/learn/start?radio=idx), la ou avant on ne testait que la primaire 868 - d'ou le
+   "ne capte rien" sur une telecommande 433. Carte mono-radio : un seul bouton, comme avant. */
+function buildRxTests(d) {
+  const box = $('#diag-rx-tests'); if (!box) return;
+  const radios = d && Array.isArray(d.radios) && d.radios.length ? d.radios : [{ idx: 0, band: '' }];
+  box.innerHTML = radios.map(r => {
+    const lbl = r.band ? `Tester la réception ${esc(r.band)} MHz` : 'Tester la réception';
+    return `<button class="btn rx-test" type="button" data-radio="${r.idx || 0}" data-band="${esc(r.band || '')}">${lbl}</button>`;
+  }).join('');
+  box.querySelectorAll('.rx-test').forEach(b => { b.onclick = () => runRxTest(+b.dataset.radio, b.dataset.band, b); });
+}
+async function runRxTest(idx, band, btn) {
+  const st = $('#diag-rx-status');
+  $$('#diag-rx-tests .rx-test').forEach(b => b.disabled = true);
+  setRadioBusy(true);
+  if (st) { st.className = 'hint'; st.textContent = `📡 Presse ta télécommande ${band ? band + ' MHz ' : ''}MAINTENANT (~15 s)...`; }
+  await api('/api/learn/start?radio=' + idx, { method: 'POST' }).catch(() => {});
   const wait = ms => new Promise(r => setTimeout(r, ms));
   let got = null;
   for (let i = 0; i < 16; i++) { await wait(1000); const p = await api('/api/learn/poll').catch(() => null); if (p && p.serial && p.serial !== '0x0000000') { got = p; break; } }
-  btn.disabled = false; setRadioBusy(false);
-  if (got) st.innerHTML = `✅ Réception OK : serial <code>${esc(got.serial)}</code>, bouton 0x${esc(got.button)}, RSSI ${got.rssi} dBm. Module bien en 868 et qui reçoit.`;
-  else st.innerHTML = '❌ Rien capté en 15 s. Si TX est OK mais RX ne capte jamais, c\'est souvent la <b>mauvaise fréquence (433 au lieu de 868)</b>. Vérifie aussi antenne, distance < 1 m, gain RX.';
-};
+  $$('#diag-rx-tests .rx-test').forEach(b => b.disabled = false);
+  setRadioBusy(false);
+  if (!st) return;
+  const where = band ? `la radio ${esc(band)} MHz` : 'la radio primaire';
+  if (got) st.innerHTML = `✅ Réception OK sur ${where} : serial <code>${esc(got.serial)}</code>, bouton 0x${esc(got.button)}, RSSI ${got.rssi} dBm.`;
+  else st.innerHTML = `❌ Rien capté en 15 s sur ${where}. Vérifie que la télécommande émet bien sur cette bande, l'antenne, la distance < 1 m, et le gain RX.`;
+}
 loadDiag();
 $('#mqtt-detect').onclick = async () => {
   const b = $('#mqtt-detect'); b.textContent = 'Recherche…'; b.disabled = true;

@@ -46,10 +46,11 @@ void radio_tx(const char *bits, int repeats) {
     xSemaphoreGive(s_mtx);
 }
 
-int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
-    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
-    bool was = s_paused; s_paused = true;   /* met la tache permanente en pause pendant l'ecoute dediee */
-    xSemaphoreTake(s_mtx, portMAX_DELAY);
+/* Coeur de l'ecoute dediee : SUPPOSE le mutex pris et l'ecoute permanente en pause, et travaille
+ * sur la radio ACTIVE. Les deux points d'entree ci-dessous gerent le mutex (et, pour la variante
+ * par radio, la selection de la puce). Extrait pour que l'ecoute par radio (issue #95) ne duplique
+ * pas la boucle. */
+static int listen_confirmed_locked(uint32_t timeout_ms, char *buf, int max, bool full) {
     /* Fenetres successives : on prefere deux trames identiques (rx_confirm.h, issue #39), mais a
      * defaut on accepte une trame complete (repli ci-dessous, issue #1), car ici l'utilisateur a
      * lance la capture expres et tient le bouton. */
@@ -85,21 +86,56 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
      * La double trame reste de rigueur pour l'ecoute permanente (telecommandes fantomes, #39) ;
      * ici la capture est explicite, une trame bien formee suffit (issue #1). */
     if (r < 0 && repli[0]) { strlcpy(buf, repli, (size_t)max); r = (int)strlen(buf); }
+    return r;
+}
+
+int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
+    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
+    bool was = s_paused; s_paused = true;   /* met la tache permanente en pause pendant l'ecoute dediee */
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int r = listen_confirmed_locked(timeout_ms, buf, max, full);
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
 }
 
-/* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Calque radio_set_freq_khz :
- * ecoute en pause + mutex, le temps de retuner, emettre, et RETABLIR la porteuse Profalux. */
+/* Comme radio_listen_confirmed, mais ECOUTE SUR LA RADIO idx (issue #95). On selectionne la puce
+ * sous le mutex (le front-end de la 433 est adapte a 433, la ou la primaire 868 n'entend rien d'un
+ * emetteur 433), on ecoute, puis on REND LA MAIN a la radio primaire. Sert au diagnostic de
+ * reception par radio : verifier qu'une puce RECOIT, pas seulement qu'elle voit une porteuse. */
+int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full) {
+    if (idx < 0 || idx >= cc1101_radio_count()) return -1;
+    if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int prev = cc1101_active_radio();
+    cc1101_select(idx);
+    int r = listen_confirmed_locked(timeout_ms, buf, max, full);
+    cc1101_select(prev);         /* rend la main a la radio primaire (868) */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
+/* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Ecoute en pause + mutex, le
+ * temps d'emettre et de RETABLIR l'etat. Si la carte declare une radio dediee a la bande visee
+ * (p.ex. la radio 433 de la Super pour le Somfy RTS ou un portail), on bascule sur elle (son
+ * front-end est adapte a 433) ; sinon on retune la radio active, comme avant. Dans tous les cas
+ * on rend la main a la radio primaire (868) a la fin. */
 int radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t *us, int n) {
     if (!s_mtx || !levels || !us || n <= 0) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int prev = cc1101_active_radio();
+    int idx = cc1101_radio_for_khz(freq_khz);   /* radio dont la bande declaree contient freq_khz */
+    if (idx < 0) idx = prev;                     /* aucune radio dediee : retune l'active (ancien comportement) */
+    cc1101_select(idx);
+    ESP_LOGI(TAG, "emission OOK sur radio %d a %u kHz (%d impulsions)", idx, (unsigned)freq_khz, n);
     uint32_t back = cc1101_get_freq_khz();
     int r = cc1101_set_freq_khz(freq_khz);
     if (r == 0) r = cc1101_tx_ook_pulses(levels, us, n);
-    cc1101_set_freq_khz(back);   /* retour a la porteuse Profalux, quoi qu'il arrive */
+    cc1101_set_freq_khz(back);   /* retablit la porteuse de cette radio, quoi qu'il arrive */
+    cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
@@ -130,6 +166,28 @@ int radio_set_freq_khz(uint32_t khz) {
     return r;
 }
 
+/* Applique un lot de reglages a la radio idx, puis rend la main a la radio d'avant (issue #95).
+ * Pointeur NULL = champ inchange. Appele depuis la tache HTTP (POST /api/config radio=idx)
+ * pendant que la tache RX tourne : mutex + ecoute en pause, comme radio_set_freq_khz. Avant
+ * radio_init (boot), pas de concurrence : on applique directement. Rend 0, ou -1 si idx hors borne. */
+int radio_apply(int idx, const uint32_t *freq_khz, const uint8_t *rx_gain,
+                const uint32_t *tx_te, const int *tx_rpt, const int *tx_rmt) {
+    if (idx < 0 || idx >= cc1101_radio_count()) return -1;
+    bool locked = (s_mtx != NULL);
+    bool was = s_paused;
+    if (locked) { s_paused = true; xSemaphoreTake(s_mtx, portMAX_DELAY); }
+    int prev = cc1101_active_radio();
+    cc1101_select(idx);
+    if (freq_khz) cc1101_set_freq_khz(*freq_khz);
+    if (rx_gain)  cc1101_set_rx_gain(*rx_gain);
+    if (tx_te)    cc1101_set_tx_te(*tx_te);
+    if (tx_rpt)   cc1101_set_tx_repeat_bit(*tx_rpt != 0);
+    if (tx_rmt)   cc1101_set_tx_rmt(*tx_rmt != 0);
+    cc1101_select(prev);
+    if (locked) { xSemaphoreGive(s_mtx); s_paused = was; }
+    return 0;
+}
+
 /* ── Auto-calibration du gain RX ──────────────────────────────────────────
  * Balaie une echelle de gain (du + sensible au + mordant) ; a chaque cran, ecoute
  * quelques secondes ; DES QU'UNE TRAME VALIDE (>=64 bits) est captee, verrouille ce
@@ -138,12 +196,18 @@ int radio_set_freq_khz(uint32_t khz) {
 static volatile int     s_cal_state   = 0;   /* 0=idle 1=en cours 2=ok 3=echec */
 static volatile uint8_t s_cal_testing = 0;   /* gain (AGCCTRL2) en cours de test */
 static volatile uint8_t s_cal_result  = 0;   /* gain retenu si ok */
+static volatile int     s_cal_radio   = 0;   /* radio ciblee par la calibration (issue #95) */
 
 static void cal_task(void *arg) {
     (void)arg;
     static const uint8_t ladder[] = { 0x27, 0x2F, 0x37, 0x3F };
     char bits[80];
     bool was = s_paused; s_paused = true;              /* suspend l'ecoute permanente */
+    /* Calibre la radio CIBLEE : on la rend active le temps du balayage de gain, puis on
+     * rend la main a la radio d'avant (issue #95). set_rx_gain ecrit alors le slot de CETTE radio. */
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int cal_prev = cc1101_active_radio(); cc1101_select(s_cal_radio);
+    xSemaphoreGive(s_mtx);
     int found = -1;
     for (int i = 0; i < (int)sizeof(ladder) && found < 0 && s_run; i++) {
         cc1101_set_rx_gain(ladder[i]);
@@ -158,18 +222,21 @@ static void cal_task(void *arg) {
     }
     if (found > 0) { cc1101_set_rx_gain((uint8_t)found); s_cal_result = (uint8_t)found; s_cal_state = 2; }
     else           { cc1101_set_rx_gain(0x27);            s_cal_result = 0;             s_cal_state = 3; }
+    xSemaphoreTake(s_mtx, portMAX_DELAY); cc1101_select(cal_prev); xSemaphoreGive(s_mtx);
     s_paused = was;
-    ESP_LOGW(TAG, "calibration gain RX : %s (0x%02X)", found > 0 ? "OK" : "ECHEC", found > 0 ? found : 0x27);
+    ESP_LOGW(TAG, "calibration gain RX (radio %d) : %s (0x%02X)", s_cal_radio, found > 0 ? "OK" : "ECHEC", found > 0 ? found : 0x27);
     vTaskDelete(NULL);
 }
 
-int radio_calibrate_start(void) {
+int radio_calibrate_start_on(int idx) {
     if (!s_mtx) return -1;
     if (s_cal_state == 1) return 1;                    /* deja en cours */
+    s_cal_radio = (idx >= 0 && idx < cc1101_radio_count()) ? idx : cc1101_active_radio();
     s_cal_state = 1; s_cal_testing = 0; s_cal_result = 0;
     if (xTaskCreate(cal_task, "radio_cal", 4096, NULL, 5, NULL) != pdPASS) { s_cal_state = 0; return -1; }
     return 0;
 }
+int radio_calibrate_start(void) { return radio_calibrate_start_on(cc1101_active_radio()); }
 
 void radio_calibrate_status(int *state, uint8_t *testing, uint8_t *result) {
     if (state)   *state   = s_cal_state;
@@ -192,18 +259,25 @@ static int      s_sw_n;
 static uint32_t s_sw_from;            /* frequence au lancement */
 static int      s_sw_status;          /* fsweep_status_t, ou -10 si la puce n'est pas passee en RX */
 static fsweep_result_t s_sw_res;
+static volatile int s_sw_radio = 0;   /* radio ciblee par le balayage (issue #95) */
 
 static void sweep_task(void *arg) {
     (void)arg;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
+    /* Balaye la radio CIBLEE, dans SA bande declaree (pas celle de la primaire), puis rend la
+     * main (issue #95). */
+    int sw_prev = cc1101_active_radio(); cc1101_select(s_sw_radio);
+    uint32_t lo = CC1101_BAND_LOW_KHZ, hi = CC1101_BAND_HIGH_KHZ;
+    cc1101_radio_info(s_sw_radio, NULL, NULL, NULL, &lo, &hi, NULL, NULL);
     s_sw_from = cc1101_get_freq_khz();
     s_sw_n = 0;
     for (int o = -SWEEP_SPAN_KHZ; o <= SWEEP_SPAN_KHZ && s_sw_n < SWEEP_MAX; o += SWEEP_STEP_KHZ) {
         uint32_t f = s_sw_from + o;
-        if (f >= CC1101_BAND_LOW_KHZ && f <= CC1101_BAND_HIGH_KHZ) s_sw_khz[s_sw_n++] = f;   /* bande de la carte */
+        if (f >= lo && f <= hi) s_sw_khz[s_sw_n++] = f;   /* bande declaree de cette radio */
     }
     int rc = cc1101_rssi_scan(s_sw_khz, s_sw_n, SWEEP_DWELL_MS, s_sw_hdb);
+    cc1101_select(sw_prev);
     xSemaphoreGive(s_mtx);
     s_paused = was;
     s_sw_status = rc ? -10 : fsweep_analyze(s_sw_khz, s_sw_hdb, s_sw_n, &s_sw_res);
@@ -218,13 +292,15 @@ static void sweep_task(void *arg) {
     vTaskDelete(NULL);
 }
 
-int radio_sweep_start(void) {
+int radio_sweep_start_on(int idx) {
     if (!s_mtx) return -1;
     if (s_sw_state == 1 || s_cal_state == 1) return 1;   /* deja en cours (ou calibration de gain) */
+    s_sw_radio = (idx >= 0 && idx < cc1101_radio_count()) ? idx : cc1101_active_radio();
     s_sw_state = 1; s_sw_status = 0; memset(&s_sw_res, 0, sizeof(s_sw_res));
     if (xTaskCreate(sweep_task, "radio_sweep", 4096, NULL, 5, NULL) != pdPASS) { s_sw_state = 0; return -1; }
     return 0;
 }
+int radio_sweep_start(void) { return radio_sweep_start_on(cc1101_active_radio()); }
 
 int radio_sweep_status(int *status, uint32_t *from_khz, const uint32_t **khz, const int16_t **hdb, int *n,
                        uint32_t *center_khz, int16_t *peak_hdb, int16_t *floor_hdb) {

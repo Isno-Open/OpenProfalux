@@ -18,6 +18,7 @@
 
 #include "hardware_config.h"
 #include "cc1101.h"
+#include "radio.h"
 #include "radio_profile.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
@@ -226,6 +227,43 @@ void app_main(void) {
     cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */
     cc1101_set_tx_repeat_bit(s_tx_rpt);   /* bit de repetition (option) restaure au boot */
     cc1101_set_tx_rmt(s_tx_rmt);          /* emission RMT (option) restauree au boot */
+    /* Radios SECONDAIRES (issue #95) : la radio 0 garde les cles NVS historiques (ci-dessus) ;
+     * chaque radio i>0 a ses propres cles indexees (rprofN, rfreqN, rxgN, rteN, rrptN, rrmtN).
+     * On resout sa frequence dans SA bande (defaut = porteuse declaree) et on applique freq, gain,
+     * TE et options a cette puce. radio_apply serialise par le mutex radio. */
+    {
+        nvs_handle_t rh; bool rok = (nvs_open("cfg", NVS_READONLY, &rh) == ESP_OK);
+        for (int i = 1; i < cc1101_radio_count(); i++) {
+            char k[24];
+            uint8_t prof = RADIO_PROFILE_CUSTOM, rxg = 0x27, rpt = 0, rmt = 0;
+            uint32_t fcustom = 0, te = TX_TE_DEFAULT_US;
+            if (rok) {
+                snprintf(k, sizeof k, "rprof%d", i); nvs_get_u8(rh, k, &prof);
+                snprintf(k, sizeof k, "rfreq%d", i); nvs_get_u32(rh, k, &fcustom);
+                snprintf(k, sizeof k, "rxg%d", i);   { uint8_t v = 0;  if (nvs_get_u8(rh, k, &v) == ESP_OK && v) rxg = v; }
+                snprintf(k, sizeof k, "rte%d", i);   { uint32_t v = 0; if (nvs_get_u32(rh, k, &v) == ESP_OK && v) te = v; }
+                snprintf(k, sizeof k, "rrpt%d", i);  nvs_get_u8(rh, k, &rpt);
+                snprintf(k, sizeof k, "rrmt%d", i);  nvs_get_u8(rh, k, &rmt);
+            }
+            uint32_t lo = 0, hi = 0, carrier = 0;
+            cc1101_radio_info(i, NULL, &carrier, NULL, &lo, &hi, NULL, NULL);
+            uint32_t khz;
+            if (!radio_profile_resolve(prof, fcustom, lo, hi, &khz)) khz = carrier ? carrier : lo;
+            int rpt_i = rpt, rmt_i = rmt;
+            radio_apply(i, &khz, &rxg, &te, &rpt_i, &rmt_i);
+        }
+        if (rok) nvs_close(rh);
+    }
+    /* Resume des radios au boot (issue #95) : visible dans la console serie du testeur, pour
+     * confirmer que CHAQUE puce declaree repond, sur quelle bande et quelle porteuse. */
+    ESP_LOGW(TAG, "radios declarees par la carte : %d", cc1101_radio_count());
+    for (int i = 0; i < cc1101_radio_count(); i++) {
+        const char *band = ""; uint32_t cur = 0; uint8_t pn = 0xFF, ver = 0xFF;
+        cc1101_radio_info(i, &band, NULL, &cur, NULL, NULL, &pn, &ver);
+        bool ok = (pn == 0x00 && ver != 0x00 && ver != 0xFF);
+        ESP_LOGW(TAG, "  radio %d : bande %s MHz, porteuse %u kHz, PARTNUM=0x%02X VERSION=0x%02X -> %s",
+                 i, band[0] ? band : "?", (unsigned)cur, pn, ver, ok ? "DETECTEE" : "ABSENTE");
+    }
 
     /* 5. Reseau : Ethernet filaire d'abord (si la carte en declare), sinon Wi-Fi. */
     wifi_bridge_init();

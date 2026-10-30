@@ -29,6 +29,19 @@ int  cc1101_tx_selftest(void);
 /* Frequence porteuse en kHz (profil radio, voir radio_profile.h). 0=OK, -1=non prise. */
 int      cc1101_set_freq_khz(uint32_t khz);
 uint32_t cc1101_get_freq_khz(void);
+
+/* Radios de la carte (issue #95). La carte peut declarer plusieurs CC1101 sur le bus SPI
+ * partage (index 0 = primaire 868). Une seule est active a la fois : le TX/RX vise la radio
+ * active. Selection a appeler sous le mutex radio (radio.c). */
+int cc1101_radio_count(void);              /* nombre de radios declarees (>=1) */
+int cc1101_active_radio(void);             /* index de la radio active */
+int cc1101_radio_for_khz(uint32_t khz);    /* index dont la bande contient khz, ou -1 */
+int cc1101_select(int idx);                /* rend active la radio idx ; 0=OK, -1=hors borne */
+/* Description d'une radio declaree, pour l'UI (/api/radios) : etiquette de bande ("868"/"433"),
+ * porteuse declaree, frequence courante figee, bornes de bande, PARTNUM/VERSION lus a l'init.
+ * Tout pointeur peut etre NULL. 0=OK, -1=index hors borne. */
+int cc1101_radio_info(int idx, const char **band, uint32_t *carrier_khz, uint32_t *cur_khz,
+                      uint32_t *low_khz, uint32_t *high_khz, uint8_t *partnum, uint8_t *version);
 int  cc1101_rx_probe(void);   /* sonde de bruit RX au boot (RSSI + nb d'evenements RMT a vide) */
 
 /* Auto-capture : initialise le RMT sur GDO0 pour relire notre propre emission. */

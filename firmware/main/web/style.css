@@ -231,3 +231,12 @@ progress::-webkit-progress-value{background:var(--accent)}
 .flash{animation:flash 1.8s ease-out}
 @keyframes flash{0%,55%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}
 .statline .more{flex-basis:100%}
+/* Radios de la carte (issue #95) : une ligne par radio (Appareil + Diagnostic), generee depuis /api/radios */
+.radio-list{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.radio-row{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.86rem;flex-wrap:wrap}
+.radio-row .rr-dot{flex:none}
+.radio-row .rr-name{font-weight:650}
+.radio-row .rr-meta{margin-left:auto;color:var(--muted);font-family:var(--mono);font-size:.8rem}
+/* Carte de reglages d'une radio secondaire : sous-bloc dans la carte Appareil, demarque */
+.radio-card{margin-top:16px;padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:none}
+.radio-card h3{margin:0 0 10px}
