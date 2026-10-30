@@ -1809,3 +1809,33 @@ fetch('/api/session')
   .then(r => r.json())
   .then(s => { if (s.authed) boot(); else showLogin(); })
   .catch(() => boot());   /* firmware plus ancien (route absente) : comportement historique */
+
+/* Rapport de capture radio : joint la derniere capture brute (rfcap), l'email et la description,
+   et POST au relais via /api/report. L'email reste prive (jamais dans l'issue publique). */
+(function () {
+  const repStat = (st, msg) => { if (!st) return; st.hidden = false; const b = st.querySelector('b'); if (b) b.textContent = msg; };
+  if ($('#rep-send')) $('#rep-send').onclick = async () => {
+    const st = $('#rep-status'), btn = $('#rep-send');
+    const email = (($('#rep-email') || {}).value || '').trim();
+    if (!email) { repStat(st, '⚠️ Mets ton email (pour le suivi).'); return; }
+    const payload = {
+      email,
+      brand: (($('#rep-brand') || {}).value || '').trim(),
+      model: (($('#rep-model') || {}).value || '').trim(),
+      note:  (($('#rep-note')  || {}).value || '').trim(),
+      purpose: (($('#rep-purpose') || {}).value || 'debug'),
+    };
+    btn.disabled = true;
+    repStat(st, '📨 Envoi du rapport...');
+    const d = await api('/api/report', { method: 'POST', body: JSON.stringify(payload) }).catch(() => null);
+    btn.disabled = false;
+    if (d && d.ok) repStat(st, '✅ Rapport envoyé. Tu recevras un email de suivi avec le lien de ton rapport.');
+    else repStat(st, `❌ Échec de l'envoi${d && d.status ? ' (relais ' + d.status + ')' : ''}. Réessaie ; le relais est peut-être indisponible.`);
+  };
+  if ($('#rep-jview')) $('#rep-jview').onclick = async (e) => {
+    e.preventDefault();
+    const pre = $('#rep-jpreview');
+    const t = await fetch('/api/capture/last').then(r => r.text()).catch(() => '(indisponible)');
+    if (pre) { pre.textContent = (t && t.trim()) || '(aucune capture)'; pre.hidden = false; }
+  };
+})();

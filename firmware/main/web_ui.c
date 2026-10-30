@@ -33,6 +33,9 @@
 #include "esp_spiffs.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
+#include "esp_http_client.h" /* POST du rapport vers le relais www.isno.fr */
+#include "esp_crt_bundle.h"  /* verification TLS du relais */
+#include "esp_mac.h"         /* chip-id (MAC eFuse) : cle stable qui survit au flash */
 #include "cfg_store.h"       /* place des volets en NVS */
 #include "req_guard.h"       /* envois venus d'un autre site (CSRF) */
 #include <inttypes.h>
@@ -1529,6 +1532,79 @@ static void reg_open(httpd_handle_t s, const char *uri, httpd_method_t m, esp_er
     if (e != ESP_OK) ESP_LOGE(TAG, "route NON enregistree: %s (%s) -> augmenter max_uri_handlers", uri, esp_err_to_name(e));
 }
 
+#ifndef REPORT_RELAY_URL
+#define REPORT_RELAY_URL "https://www.isno.fr/support"   /* relais : ouvre l'issue + envoie l'email */
+#endif
+
+/* /api/report : l'utilisateur remplit {email, brand, model, note, purpose} dans l'UI ; on y joint
+ * chip-id (MAC eFuse, stable au flash) + version + carte + la DERNIERE CAPTURE BRUTE (rfcap, OOK,
+ * protocole-agnostique, aucun secret dedans) et on POST au relais www.isno.fr, qui ouvre l'issue
+ * OpenProfalux et renvoie l'email de suivi. L'email ne part PAS dans l'issue : le relais le garde prive. */
+static esp_err_t h_report(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (!body) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"body\"}");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"json\"}");
+    const char *email = jstr(j, "email");
+    if (!email || !email[0]) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"email\"}"); }
+    const char *brand = jstr(j, "brand"), *model = jstr(j, "model");
+    const char *note = jstr(j, "note"), *purpose = jstr(j, "purpose");
+
+    uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char chip[13];
+    snprintf(chip, sizeof chip, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    char *cap = malloc(6144);
+    if (!cap) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"mem\"}"); }
+    rfcap_last_json(cap, 6144);
+
+    cJSON *rep = cJSON_CreateObject();
+    cJSON_AddStringToObject(rep, "chip_id", chip);
+    cJSON_AddStringToObject(rep, "version", esp_app_get_description()->version);
+    cJSON_AddStringToObject(rep, "board", TARGET_NAME);
+    cJSON_AddStringToObject(rep, "email", email);
+    cJSON_AddStringToObject(rep, "brand", brand ? brand : "");
+    cJSON_AddStringToObject(rep, "model", model ? model : "");
+    cJSON_AddStringToObject(rep, "note", note ? note : "");
+    cJSON_AddStringToObject(rep, "purpose", (purpose && purpose[0]) ? purpose : "debug");
+    cJSON_AddStringToObject(rep, "journal", cap);   /* capture brute (rfcap_last_json) jointe comme texte */
+    free(cap); cJSON_Delete(j);
+    char *payload = cJSON_PrintUnformatted(rep);
+    cJSON_Delete(rep);
+    if (!payload) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"mem\"}");
+
+    esp_http_client_config_t cfg = {
+        .url = REPORT_RELAY_URL,
+        .method = HTTP_METHOD_POST,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    int plen = (int)strlen(payload), status = 0;
+    esp_err_t err = ESP_FAIL;
+    if (c) {
+        esp_http_client_set_header(c, "Content-Type", "application/json");
+        err = esp_http_client_open(c, plen);
+        if (err == ESP_OK) {
+            if (esp_http_client_write(c, payload, plen) >= 0) {
+                esp_http_client_fetch_headers(c);
+                status = esp_http_client_get_status_code(c);
+            } else err = ESP_FAIL;
+        }
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+    }
+    free(payload);
+
+    char out[96];
+    if (err == ESP_OK && status >= 200 && status < 300)
+        snprintf(out, sizeof out, "{\"ok\":1,\"status\":%d}", status);
+    else
+        snprintf(out, sizeof out, "{\"ok\":0,\"status\":%d,\"err\":\"relais\"}", status);
+    return httpd_resp_sendstr(r, out);
+}
+
 /* Enregistre une route PROTEGEE (toutes les routes sous "/api/"). */
 static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
     if (s_nroutes >= MAX_ROUTES) { ESP_LOGE(TAG, "route NON enregistree: %s (table pleine)", uri); return; }
@@ -1626,6 +1702,7 @@ void web_ui_start(void) {
     reg(s, "/api/capture/start",  HTTP_POST, h_capture_start);   /* capture OOK brute (issue #95) */
     reg(s, "/api/capture/last",   HTTP_GET,  h_capture_last);
     reg(s, "/api/capture/replay", HTTP_POST, h_capture_replay);
+    reg(s, "/api/report", HTTP_POST, h_report);   /* rapport de capture radio : POST au relais www.isno.fr -> issue + email */
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
     reg(s, "/api/radios",       HTTP_GET,  h_radios);
     reg(s, "/api/health",       HTTP_GET,  h_health);
