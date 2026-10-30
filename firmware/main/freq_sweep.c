@@ -1,4 +1,4 @@
-/* freq_sweep — voir freq_sweep.h. */
+/* freq_sweep : voir freq_sweep.h. */
 #include "freq_sweep.h"
 #include <string.h>
 

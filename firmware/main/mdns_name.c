@@ -1,4 +1,4 @@
-/* mdns_name — voir mdns_name.h. */
+/* mdns_name : voir mdns_name.h. */
 #include "mdns_name.h"
 #include <stdio.h>
 #include <string.h>

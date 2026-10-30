@@ -1,4 +1,4 @@
-# OpenProfalux — Wiring convention couleurs fils
+# OpenProfalux : Wiring convention couleurs fils
 
 Convention couleurs standard pour souder **8 fils** entre **EBYTE E07-900M10S** et **M5Stack ATOM Lite** (=cible production) ou **ESP32 DevKit** (=prototype alternatif).
 
@@ -17,7 +17,7 @@ Standard électronique universel : rouge/noir pour alim, signaux SPI dans ordre 
 | 7 | 🟠 **Orange** | GDO0 | Data async OOK (=KEELOQ critique) |
 | 8 | 🟣 **Violet** | GDO2 | Debug (=optionnel) |
 
-## Table complète — Target M5Stack ATOM Lite (=Dupont-friendly)
+## Table complète : Target M5Stack ATOM Lite (=Dupont-friendly)
 
 **Utilisation** : Dupont femelle-femelle direct sur bottom header ATOM Lite.
 
@@ -32,7 +32,7 @@ Standard électronique universel : rouge/noir pour alim, signaux SPI dans ordre 
 | GDO0 | 🟠 Orange | **15** (=rangée BAS milieu) | **G25** (=bottom) |
 | GDO2 (opt) | 🟣 Violet | **14** (=rangée BAS milieu-gauche) | **G21** (=bottom) |
 
-## Table complète — Target External (=ESP32 DevKit alternatif)
+## Table complète : Target External (=ESP32 DevKit alternatif)
 
 | Signal | Couleur | Pin E07 | Pin ESP32 DevKit |
 |--------|---------|---------|------------------|
@@ -45,7 +45,7 @@ Standard électronique universel : rouge/noir pour alim, signaux SPI dans ordre 
 | GDO0 | 🟠 Orange | 15 | GPIO4 |
 | GDO2 | 🟣 Violet | 14 | GPIO2 |
 
-## Table complète — D1 mini ESP32 (`-DBOARD=d1-mini`)
+## Table complète : D1 mini ESP32 (`-DBOARD=d1-mini`)
 
 Même bus SPI que le DevKit, mais **GDO0 sur IO26** : sur la carte de référence, IO4 n'est
 pas câblé. SPI à 1 MHz (voir `boards/d1-mini.json`).
@@ -87,9 +87,9 @@ depuis une source 5V sans 3V3 disponible (ce qui n'est pas le cas de l'ATOM Lite
 - Pin 5V direct vers E07 → destruction immédiate CC1101
 - Divisieur de tension résistif → instable, ondulation courant
 
-L'ESP32 DevKit alternatif n'a pas ce problème — il expose bien 3.3V direct sur un pin dédié.
+L'ESP32 DevKit alternatif n'a pas ce problème : il expose bien 3.3V direct sur un pin dédié.
 
-## Schéma E07-900M10S — position naturelle (=écriture face + IPX bas-droite)
+## Schéma E07-900M10S : position naturelle (=écriture face + IPX bas-droite)
 
 ```
               ── rangée HAUT (=pins 11 → 1 gauche→droite) ──
@@ -117,7 +117,7 @@ L'ESP32 DevKit alternatif n'a pas ce problème — il expose bien 3.3V direct su
               ── rangée BAS (=pins 12 → 22 gauche→droite) ──
 ```
 
-## Schéma M5Stack ATOM Lite — bottom header
+## Schéma M5Stack ATOM Lite : bottom header
 
 ```
                   ┌──────────────────────┐
@@ -142,7 +142,7 @@ L'ESP32 DevKit alternatif n'a pas ce problème — il expose bien 3.3V direct su
       Pin 4 : G19 = 🔵 SCK
       Pin 5 : G33 = 🟢 MISO
       Pin 6 : G23 = 🟡 MOSI
-      Pin 7 : 3.3V = 🔴 VCC (pin 3V3 du bottom header — alim directe du module RF)
+      Pin 7 : 3.3V = 🔴 VCC (pin 3V3 du bottom header, alim directe du module RF)
       Pin 8 : GND = ⚫ GND
 ```
 
@@ -157,14 +157,14 @@ L'ESP32 DevKit alternatif n'a pas ce problème — il expose bien 3.3V direct su
 
 Côté E07 (=SMD 1.27mm castellated, soudure fine) :
 
-1. **🔴 Rouge (VCC pin 9)** — priorité alim
-2. **⚫ Noir (GND pin 20)** — priorité alim
-3. **⚪ Blanc (CSN pin 19)** — SPI critique
-4. **🔵 Bleu (SCK pin 18)** — SPI critique
-5. **🟡 Jaune (MOSI pin 17)** — SPI critique
-6. **🟢 Vert (MISO pin 16)** — SPI critique
-7. **🟠 Orange (GDO0 pin 15)** — data KEELOQ critique
-8. 🟣 Violet (GDO2 pin 14) — optionnel debug
+1. **🔴 Rouge (VCC pin 9)** : priorité alim
+2. **⚫ Noir (GND pin 20)** : priorité alim
+3. **⚪ Blanc (CSN pin 19)** : SPI critique
+4. **🔵 Bleu (SCK pin 18)** : SPI critique
+5. **🟡 Jaune (MOSI pin 17)** : SPI critique
+6. **🟢 Vert (MISO pin 16)** : SPI critique
+7. **🟠 Orange (GDO0 pin 15)** : data KEELOQ critique
+8. 🟣 Violet (GDO2 pin 14) : optionnel debug
 
 Côté M5Stack ATOM Lite : **aucune soudure**, connecteurs Dupont femelle enfichés sur les pins mâles du bottom header.
 
@@ -201,4 +201,4 @@ Si `PARTNUM != 0x00` ou timeout :
 
 ## Précaution IPX
 
-Connecteur **U.FL fragile** — **ne pas tirer sur le câble antenne** pour débrancher. Soulever le connecteur perpendiculairement au PCB. ~30 clip/déclip max avant usure.
+Connecteur **U.FL fragile** : **ne pas tirer sur le câble antenne** pour débrancher. Soulever le connecteur perpendiculairement au PCB. ~30 clip/déclip max avant usure.

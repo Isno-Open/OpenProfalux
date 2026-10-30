@@ -11,7 +11,7 @@ static esp_mqtt_client_handle_t s_mqtt = NULL;
 static mqtt_handlers_t          s_hdl = {0};
 static char s_client_id[32];
 
-/* Topic base — set at start */
+/* Topic base : set at start */
 #define TOPIC_BASE "openprofalux"
 
 static void publish_log(const char *level, const char *msg) {

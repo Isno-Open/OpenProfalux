@@ -1,5 +1,5 @@
 #pragma once
-/* mdns_name — nom d'hote mDNS du boitier (<nom>.local).
+/* mdns_name : nom d'hote mDNS du boitier (<nom>.local).
  *
  * Deux boitiers sur un meme reseau ne doivent pas se disputer le meme nom. Regle :
  *   - nom de boitier choisi par l'utilisateur (cfg/device) -> ce nom, nettoye ;

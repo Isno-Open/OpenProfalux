@@ -1,4 +1,4 @@
-/* captive_dns — voir captive_dns.h. */
+/* captive_dns : voir captive_dns.h. */
 #include "captive_dns.h"
 #include <string.h>
 #include "lwip/udp.h"

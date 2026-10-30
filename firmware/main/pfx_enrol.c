@@ -1,5 +1,5 @@
 /*
- * pfx_enrol.c — enrôlement d'une identité virtuelle 0x067 (voir pfx_enrol.h).
+ * pfx_enrol.c : enrôlement d'une identité virtuelle 0x067 (voir pfx_enrol.h).
  *
  * La génération de trame réplique EXACTEMENT le banc (firmware-capture-test : pfx_frame_build +
  * tx067_one) : plaintext = button<<28 | discrim<<16 | counter ; hop = KeeLoq(plaintext, clé du

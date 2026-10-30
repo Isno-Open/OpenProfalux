@@ -215,7 +215,7 @@ static void on_listen_stop(void) {
 void app_main(void) {
     esp_log_level_set("*", ESP_LOG_INFO);   /* coupe le flot verbeux SPI/RMT: log lisible */
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║ OpenProfalux firmware — target=" TARGET_NAME);
+    ESP_LOGI(TAG, "║ OpenProfalux firmware : target=" TARGET_NAME);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
 
     /* 1. NVS */

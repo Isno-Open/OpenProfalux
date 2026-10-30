@@ -65,7 +65,7 @@
     #define CC1101_SPI_FREQ_HZ  4000000
 
     /* VCC = 3.3V bottom - 🔴 rouge / GND = bottom - ⚫ noir */
-    /* Aucun bouton — tout via MQTT/HA */
+    /* Aucun bouton : tout via MQTT/HA */
 
     /* LED RGB (=WS2812 pin 27) */
     #define LED_PIN                   27

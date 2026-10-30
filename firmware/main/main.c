@@ -153,7 +153,7 @@ static void on_wifi_back(void) {   /* appele depuis la tache d'evenements : on n
 void app_main(void) {
     log_ring_init();   /* journal de l'interface web : avant le premier message */
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║ OpenProfalux v%s — target=" TARGET_NAME, esp_app_get_description()->version);
+    ESP_LOGI(TAG, "║ OpenProfalux v%s : target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
     if (s_fb_magic == FALLBACK_MAGIC && esp_reset_reason() == ESP_RST_SW)
         ESP_LOGW(TAG, "redemarre apres le retour du Wi-Fi (%u s en mode secours)", (unsigned)s_fb_secs);

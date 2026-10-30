@@ -1,8 +1,8 @@
-# OpenProfalux — API MQTT
+# OpenProfalux : API MQTT
 
 Toutes les interactions avec le firmware se font via MQTT. Le firmware publie sa présence + entities via Home Assistant MQTT Discovery.
 
-## Topics — commandes entrantes (=subscribe)
+## Topics : commandes entrantes (=subscribe)
 
 ### `openprofalux/{device}/pair`
 **Trigger** : payload vide OU `{}`.
@@ -37,7 +37,7 @@ Utile pour :
 ### `openprofalux/listen/stop`
 Arrête la capture RX.
 
-## Topics — publications sortantes (=pub)
+## Topics : publications sortantes (=pub)
 
 ### `openprofalux/{device}/state` (=retained)
 ```json

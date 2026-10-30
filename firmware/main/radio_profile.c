@@ -1,5 +1,5 @@
 /*
- * radio_profile.c — profils de frequence (voir radio_profile.h). Pur, teste sur PC.
+ * radio_profile.c : profils de frequence (voir radio_profile.h). Pur, teste sur PC.
  */
 #include "radio_profile.h"
 #include <string.h>

@@ -6,7 +6,7 @@ Ce n'est **pas** le firmware de production Home Assistant (à venir dans `../fir
 
 Voir l'analyse : `../../OpenProfalux-Research/analysis/SECURITE-MOTEUR-REJEU.md`.
 
-## Bouton ATOM (GPIO39) — comptage d'appuis rapides (fenêtre 700 ms)
+## Bouton ATOM (GPIO39) : comptage d'appuis rapides (fenêtre 700 ms)
 
 | Appuis | Action |
 |---|---|

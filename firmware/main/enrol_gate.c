@@ -1,4 +1,4 @@
-/* enrol_gate — voir enrol_gate.h. */
+/* enrol_gate : voir enrol_gate.h. */
 #include "enrol_gate.h"
 
 void eg_init(enrol_gate_t *g)          { g->state = EG_IDLE; g->remote = 0; }

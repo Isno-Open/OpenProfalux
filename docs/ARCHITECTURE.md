@@ -1,4 +1,4 @@
-# OpenProfalux — Architecture & conception
+# OpenProfalux : Architecture & conception
 
 > Document de référence. Modèle **clone/replay** validé au banc (2026-08-14).
 > Il **remplace** les hypothèses antérieures (récupération de clé, enrôlement) :
@@ -15,9 +15,9 @@ commandes HA + télécommande physique.
 
 Les moteurs Profalux visés **n'appliquent aucun contrôle de code tournant** côté récepteur.
 
-- **Niveau 1** (rejeu répété d'une même trame) : ✅ prouvé — une trame capturée rejouée X fois
+- **Niveau 1** (rejeu répété d'une même trame) : ✅ prouvé : une trame capturée rejouée X fois
   actionne le volet.
-- **Niveau 2** (robustesse) : ✅ prouvé — en **alternant** vraie télécommande et rejeu, l'ancienne
+- **Niveau 2** (robustesse) : ✅ prouvé : en **alternant** vraie télécommande et rejeu, l'ancienne
   trame capturée **continue de marcher**. Donc le compteur n'est jamais vérifié.
 
 **Conséquence** : on capture **une** trame par bouton (UP / DOWN / STOP), on la **rejoue à vie**.
@@ -114,16 +114,16 @@ Conventions (comme OpenXtraflame) : fichiers ≤ 150-200 lignes, CSS externe (pa
 Single-file `web/index.html` + `style.css`, vanilla JS (tabs `data-tab`, `fetch /api/*.json`).
 
 ```
-📊 Dashboard    — volets, position live, up/down/stop/%
-🪟 Volets       — config par volet, mapping serial→volet
-📱 Télécommandes— serials détectés (temps réel)
-🎯 Calibration  — wizard (découverte multi-serial + temps de course)  [NEUF]
-📻 RF Monitor   — trames live (serial/button/hopping/rssi) = mini-Flipper  [NEUF]
-💾 Dataset      — progression vers 65536 par serial + « lancer slide »  [NEUF]
-📶 Wi-Fi · 📡 MQTT · ⬆️ OTA — repris tels quels
+📊 Dashboard    : volets, position live, up/down/stop/%
+🪟 Volets       : config par volet, mapping serial→volet
+📱 Télécommandes : serials détectés (temps réel)
+🎯 Calibration  : wizard (découverte multi-serial + temps de course)  [NEUF]
+📻 RF Monitor   : trames live (serial/button/hopping/rssi) = mini-Flipper  [NEUF]
+💾 Dataset      : progression vers 65536 par serial + « lancer slide »  [NEUF]
+📶 Wi-Fi · 📡 MQTT · ⬆️ OTA : repris tels quels
 ```
 
-## 9. Ce qui est ÉCARTÉ (et pourquoi) — post-mortem honnête
+## 9. Ce qui est ÉCARTÉ (et pourquoi) : post-mortem honnête
 
 Une journée entière de crypto a mené à la conclusion que **rien de tout ça n'est nécessaire** :
 

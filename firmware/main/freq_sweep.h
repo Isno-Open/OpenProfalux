@@ -1,5 +1,5 @@
 #pragma once
-/* freq_sweep — porteuse d'une telecommande trouvee par balayage RSSI (issue #51).
+/* freq_sweep : porteuse d'une telecommande trouvee par balayage RSSI (issue #51).
  *
  * Le CC1101 n'estime pas l'ecart de frequence en OOK (FREQEST reste a 0, mesure sur #51) :
  * on balaie la frequence de reception pendant une emission longue de la telecommande

@@ -1,10 +1,10 @@
 /*
- * CC1101 driver — TX + RX for Profalux 868.35 MHz OOK
+ * CC1101 driver : TX + RX for Profalux 868.35 MHz OOK
  *
  * Provides:
  *   - Init SPI + register config for OOK 868.35 MHz ~1550 baud
  *   - TX single frame (=synthesize OOK signal via GDO0 bit-banging)
- *   - RX capture — invokes callback for each detected frame
+ *   - RX capture: invokes callback for each detected frame
  */
 #ifndef CC1101_H
 #define CC1101_H

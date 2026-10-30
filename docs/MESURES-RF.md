@@ -1,4 +1,4 @@
-# Mesures RF sur telecommande Profalux — 2026-08-10
+# Mesures RF sur telecommande Profalux : 2026-08-10
 
 Banc : ESP32-PICO-D4 + CC1101 (E07), cablage M5Stack ATOM Lite de [WIRING.md](WIRING.md).
 Toutes les valeurs ci-dessous sont **mesurees**, jamais deduites d'une specification.
@@ -8,10 +8,10 @@ Toutes les valeurs ci-dessous sont **mesurees**, jamais deduites d'une specifica
 | Grandeur | Valeur mesuree | Ce que dit le depot |
 |---|---|---|
 | Frequence porteuse | **868,425 MHz** | 868,35 MHz (et 868,30 par le `FREQ0` du code) |
-| Puissance en champ proche (20-30 cm) | -38 dBm | — |
-| Plancher de bruit | -94 dBm | — |
-| Marge | +52 a +56 dB | — |
-| Largeur du lobe a -10 dB | moins de 50 kHz | — |
+| Puissance en champ proche (20-30 cm) | -38 dBm | (rien) |
+| Plancher de bruit | -94 dBm | (rien) |
+| Marge | +52 a +56 dB | (rien) |
+| Largeur du lobe a -10 dB | moins de 50 kHz | (rien) |
 
 `FREQ2/1/0` correspondant : **`0x21 0x66 0xA5`**.
 
@@ -30,12 +30,12 @@ modulation : elle ne prejuge ni de l'OOK ni du FSK.
 
 Deux balayages successifs :
 
-1. **Grossier** — 866 a 870 MHz, pas de 50 kHz, filtre 325 kHz.
+1. **Grossier** : 866 a 870 MHz, pas de 50 kHz, filtre 325 kHz.
    238 balayages, 34 positifs. Pic repete a 868,55/868,60 MHz.
    Profil troue et instable d'un balayage a l'autre : en modulation hachee,
    chaque point tombe au hasard sur une emission ou un silence.
 
-2. **Fin, avec maintien du maximum** — 867,8 a 869,2 MHz, pas de 25 kHz,
+2. **Fin, avec maintien du maximum** : 867,8 a 869,2 MHz, pas de 25 kHz,
    filtre 58 kHz, 20 ms de maintien par point, cumule sur 49 balayages.
    Le maintien du maximum supprime l'effet du hachage temporel.
 
@@ -70,11 +70,11 @@ Au-dela, rien n'est etabli. Deux tentatives de conclusion ont ete faites puis
 retirees, elles sont consignees ici parce que les erreurs de methode sont
 reutilisables :
 
-**Tentative 1 — capture OOK a 868,35 MHz.** Sept bursts obtenus, tous du bruit
+**Tentative 1 : capture OOK a 868,35 MHz.** Sept bursts obtenus, tous du bruit
 de slicer : RSSI au plancher, timings non quantifies de 50 a 7000 us. En OOK
 sans porteuse, le slicer amplifie le bruit et sort des transitions aleatoires.
 
-**Tentative 2 — critere d'enveloppe trop grossier.** Le RSSI a ete echantillonne
+**Tentative 2 : critere d'enveloppe trop grossier.** Le RSSI a ete echantillonne
 a 13,9 kHz pour repondre a « OOK ou FSK » : en OOK l'enveloppe est hachee au
 rythme des bits, en FSK elle est constante. Le critere retenu, « dynamique
 superieure a 10 dB donc OOK », ne regardait que l'amplitude et jamais le rythme.

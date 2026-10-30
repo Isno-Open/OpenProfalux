@@ -18,7 +18,7 @@ pratique** pour Profalux.
 ## Contenu
 
 - `gpu-slide-attack/` - portage GPU (CUDA/cupy) de l'attaque **slide-meet-in-the-middle**
-  de Indesteege–Preneel et al. (CRYPTO 2008), à partir du code C d'Enderlein
+  de Indesteege, Preneel et al. (CRYPTO 2008), à partir du code C d'Enderlein
   (projet de semestre EPFL, 2010). Reproduction d'un résultat académique publié.
 
 ## Pourquoi c'est impraticable contre Profalux

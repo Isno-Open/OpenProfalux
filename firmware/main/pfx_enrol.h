@@ -1,5 +1,5 @@
 /*
- * pfx_enrol.h — apprentissage "sans télécommande" (enrôlement d'une identité virtuelle 0x067).
+ * pfx_enrol.h : apprentissage "sans télécommande" (enrôlement d'une identité virtuelle 0x067).
  *
  * EXPÉRIMENTAL. Contrairement au clonage (capture + rejeu d'une vraie télécommande), ce module
  * GÉNÈRE une identité virtuelle PFX (famille 0x067, une des 63 clés du pool) et émet la trame
@@ -17,13 +17,13 @@
 /* Catalogue de modèles. L'index = l'id exposé à l'UI. */
 typedef struct {
     const char *name;      /* libellé affiché */
-    const char *routine;   /* "R6" | "R7" | "R8" — chorégraphie d'apprentissage */
+    const char *routine;   /* "R6" | "R7" | "R8" : chorégraphie d'apprentissage */
 } pfx_model_t;
 
 int                 pfx_enrol_model_count(void);
 const pfx_model_t  *pfx_enrol_model(int id);   /* NULL si hors borne */
 
-/* Boutons PFX 0x067 — directions corrigées d'après test réel FranciaFlex M4G (2026-08-28).
+/* Boutons PFX 0x067 : directions corrigées d'après test réel FranciaFlex M4G (2026-08-28).
  * Partagés avec shutters pour piloter un volet virtuel. */
 #define PFX_BTN_UP     0x2
 #define PFX_BTN_STOP   0x4

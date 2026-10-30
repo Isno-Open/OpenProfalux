@@ -1,8 +1,8 @@
-# OpenProfalux — firmware (ESP32 + CC1101)
+# OpenProfalux : firmware (ESP32 + CC1101)
 
 Pilote des volets roulants **Profalux 868 MHz** (moteurs MAI-EMPX / MAI-EMNOE) depuis
 Home Assistant, **sans la clé constructeur** : le firmware **clone** une télécommande
-existante (capture + rejeu) — le moteur accepte le rejeu (rolling code non contraint).
+existante (capture + rejeu) : le moteur accepte le rejeu (rolling code non contraint).
 
 ## Fonctions
 - **UI web embarquée** : pilotage, apprentissage, calibration, Wi-Fi, MQTT, OTA, système (RF debug).
@@ -34,9 +34,9 @@ idf.py -B build-isno-super set-target esp32s3 && idf.py -B build-isno-super -DBO
 
 ## Flash
 
-### Option A — release pré-compilée (le plus simple, pas d'ESP-IDF)
+### Option A : release pré-compilée (le plus simple, pas d'ESP-IDF)
 Télécharger les binaires de la [dernière release](https://github.com/Isno-Open/OpenProfalux/releases)
-puis, avec juste `esptool` (`pip install esptool`). **Choisir le binaire selon la carte** — les
+puis, avec juste `esptool` (`pip install esptool`). **Choisir le binaire selon la carte** : les
 broches SPI diffèrent, un binaire d'une carte ne marchera pas sur l'autre :
 
 | Carte | Board neuf (`write_flash 0x0`) | Mise à jour OTA (onglet OTA) |
@@ -66,7 +66,7 @@ Windows (PowerShell) : `esptool.exe --chip esp32 --port COM4 --baud 115200 write
 Déjà sous OpenProfalux ? Pas besoin de câble : **onglet OTA → uploader le `-ota.bin`** de ta carte,
 ou pousser son URL via MQTT (`openprofalux/ota/pull`).
 
-### Option B — depuis les sources
+### Option B : depuis les sources
 ```bash
 # le repertoire de build de SA carte (voir Build) : sans -B, idf.py prend build/, isno-super par defaut
 idf.py -B build-m5-atom-lite -p /dev/ttyUSB0 flash monitor

@@ -1,5 +1,5 @@
 #pragma once
-/* enrol_gate — quand l'enrolement peut emettre la trame d'apprentissage (issue #53).
+/* enrol_gate : quand l'enrolement peut emettre la trame d'apprentissage (issue #53).
  *
  * Une capture ratee (aucune trame recue) laissait l'identite de la capture PRECEDENTE
  * selectionnee, et l'apprentissage partait avec elle : une meme identite virtuelle finissait

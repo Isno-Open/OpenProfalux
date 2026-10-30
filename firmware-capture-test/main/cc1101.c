@@ -1,5 +1,5 @@
 /*
- * CC1101 driver — Profalux 868.35 MHz OOK
+ * CC1101 driver : Profalux 868.35 MHz OOK
  *
  * NOTE: This is a functional skeleton. Config registers below are
  * validated against SmartRF Studio output for OOK 868.35 MHz ~1550 baud

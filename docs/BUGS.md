@@ -1,11 +1,11 @@
-# Journal des defauts — session alpha du 2026-08-10
+# Journal des defauts : session alpha du 2026-08-10
 
 Banc de test : ESP32-PICO-D4 (rev v1.1, MAC `c8:85:41:4d:cc:18`), flash 4 Mo,
 relie a un adaptateur FTDI FT232R sur COM4. Cablage CC1101 selon la table
 **M5Stack ATOM Lite** de [WIRING.md](WIRING.md). Build ESP-IDF v5.2.2 sous WSL2,
 flash et console serie depuis Windows (WSL2 n'a pas de passthrough USB ici).
 
-## Etat du materiel — valide
+## Etat du materiel : valide
 
 Sonde SPI dediee, executee avant toute autre chose :
 
@@ -25,7 +25,7 @@ reprend sa valeur par defaut `0x3F`, soit « sortie horloge XOSC/192 ». Le pin 
 bouge prouve donc que **le quartz 26 MHz du module oscille** et que l'alimentation
 3,3 V est correcte.
 
-## Defauts bloquants pour le build — corriges
+## Defauts bloquants pour le build : corriges
 
 ### 1. Aucun `Kconfig` ne definissait les cibles
 
@@ -82,11 +82,11 @@ partitions echoue avant meme la compilation.
 **Correction** : `CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y` dans `sdkconfig.defaults`.
 La puce du banc a bien 4 Mo.
 
-## Defaut bloquant pour la capture — non corrige
+## Defaut bloquant pour la capture : non corrige
 
 ### 6. La reception n'est pas implementee
 
-`cc1101.c:187` — `rx_task()` est un squelette :
+Dans `cc1101.c:187`, `rx_task()` est un squelette :
 
 ```c
 static void rx_task(void *pv) {
@@ -112,7 +112,7 @@ c'est trois dependances de trop entre l'antenne et l'ecran.
 le peripherique RMT de l'ESP32 a 1 us pres et sort les timings bruts sur UART,
 sans WiFi ni MQTT. Voir [SNIFFER.md](SNIFFER.md).
 
-## Fragilites du driver CC1101 — a corriger
+## Fragilites du driver CC1101 : a corriger
 
 ### 7. `cc1101_init()` valide la puce sur le seul PARTNUM
 

@@ -1,5 +1,5 @@
 /*
- * Profalux SIM version — uses mock NVS + no FreeRTOS
+ * Profalux SIM version : uses mock NVS + no FreeRTOS
  * Same logic as profalux.c but PC-compilable for debug
  */
 #ifdef SIM_MODE

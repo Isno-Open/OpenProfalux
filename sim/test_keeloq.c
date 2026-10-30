@@ -1,5 +1,5 @@
 /*
- * KEELOQ test vectors — validate implementation against li0ard/keeloq
+ * KEELOQ test vectors: validate implementation against li0ard/keeloq
  * These are exactly the vectors from the reference TypeScript library tests.
  */
 #include <stdio.h>
