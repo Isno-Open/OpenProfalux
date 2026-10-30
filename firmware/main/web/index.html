@@ -373,7 +373,7 @@
           <div class="row"><button id="diag-tx-btn" class="btn" type="button">Re-tester l'émission (TX)</button></div>
           <div class="row" id="diag-rx-tests"></div>
           <p class="hint" id="diag-rx-status" style="margin-top:8px"></p>
-          <p class="hint">La puce est détectée mais rien ne se capte ? Vérifie que le module est bien sur <b>la bonne bande</b> (868 pour Profalux, 433 pour Somfy), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>. La réception se teste <b>par radio</b> : chaque bouton écoute sa propre puce (presse la télécommande de cette bande).</p>
+          <p class="hint">Ce test lit les télécommandes <b>Profalux / KeeLoq</b> (code tournant, identifiées par leur serial). Une <b>Somfy RTS</b> ou un <b>portail CAME</b> n'y apparaissent pas, même si la puce les reçoit : ces protocoles se traitent ailleurs. La puce est détectée mais une télécommande Profalux ne se capte pas ? Vérifie la <b>bande</b> (868), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>. La réception se teste <b>par radio</b> : chaque bouton écoute sa propre puce.</p>
         </div>
       </div>
 

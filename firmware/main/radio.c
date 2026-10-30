@@ -178,14 +178,18 @@ int radio_apply(int idx, const uint32_t *freq_khz, const uint8_t *rx_gain,
     if (locked) { s_paused = true; xSemaphoreTake(s_mtx, portMAX_DELAY); }
     int prev = cc1101_active_radio();
     cc1101_select(idx);
-    if (freq_khz) cc1101_set_freq_khz(*freq_khz);
+    int r = 0;
+    /* set_freq_khz relit le registre et rend -1 si la radio n'a pas pris la frequence. On
+     * propage cet echec (au lieu de toujours rendre 0) pour que l'UI puisse le signaler ;
+     * on restaure quand meme la radio d'avant et on relache le mutex. */
+    if (freq_khz && cc1101_set_freq_khz(*freq_khz) != 0) r = -1;
     if (rx_gain)  cc1101_set_rx_gain(*rx_gain);
     if (tx_te)    cc1101_set_tx_te(*tx_te);
     if (tx_rpt)   cc1101_set_tx_repeat_bit(*tx_rpt != 0);
     if (tx_rmt)   cc1101_set_tx_rmt(*tx_rmt != 0);
     cc1101_select(prev);
     if (locked) { xSemaphoreGive(s_mtx); s_paused = was; }
-    return 0;
+    return r;
 }
 
 /* ── Auto-calibration du gain RX ──────────────────────────────────────────
@@ -203,26 +207,32 @@ static void cal_task(void *arg) {
     static const uint8_t ladder[] = { 0x27, 0x2F, 0x37, 0x3F };
     char bits[80];
     bool was = s_paused; s_paused = true;              /* suspend l'ecoute permanente */
-    /* Calibre la radio CIBLEE : on la rend active le temps du balayage de gain, puis on
-     * rend la main a la radio d'avant (issue #95). set_rx_gain ecrit alors le slot de CETTE radio. */
-    xSemaphoreTake(s_mtx, portMAX_DELAY);
-    int cal_prev = cc1101_active_radio(); cc1101_select(s_cal_radio);
-    xSemaphoreGive(s_mtx);
+    /* Calibre la radio CIBLEE. La puce cible n'est selectionnee que DANS chaque fenetre tenue
+     * sous mutex, et on restaure la radio d'avant avant de relacher. Sans ca, la secondaire
+     * (433) restait active, mutex relache entre les fenetres, pendant les ~24 s du balayage :
+     * un autre appelant (radio_tx d'un volet Profalux, radio_apply) aurait alors emis sur la
+     * mauvaise puce. s_paused ne suspend que l'ecoute de fond, pas ces appelants. set_rx_gain
+     * ecrit le slot de la radio active, il reste donc lui aussi sous mutex sur la cible. */
     int found = -1;
     for (int i = 0; i < (int)sizeof(ladder) && found < 0 && s_run; i++) {
-        cc1101_set_rx_gain(ladder[i]);
         s_cal_testing = ladder[i];
         int64_t t_end = esp_timer_get_time() + 6 * 1000000;   /* 6 s par cran */
         while (esp_timer_get_time() < t_end && s_run) {
             xSemaphoreTake(s_mtx, portMAX_DELAY);
+            int cal_prev = cc1101_active_radio(); cc1101_select(s_cal_radio);
+            cc1101_set_rx_gain(ladder[i]);
             int n = cc1101_rx_listen_bits(400, bits, 79);
+            cc1101_select(cal_prev);
             xSemaphoreGive(s_mtx);
             if (n >= 64) { found = ladder[i]; break; }         /* trame propre = ce gain va */
         }
     }
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int cal_prev = cc1101_active_radio(); cc1101_select(s_cal_radio);
     if (found > 0) { cc1101_set_rx_gain((uint8_t)found); s_cal_result = (uint8_t)found; s_cal_state = 2; }
     else           { cc1101_set_rx_gain(0x27);            s_cal_result = 0;             s_cal_state = 3; }
-    xSemaphoreTake(s_mtx, portMAX_DELAY); cc1101_select(cal_prev); xSemaphoreGive(s_mtx);
+    cc1101_select(cal_prev);
+    xSemaphoreGive(s_mtx);
     s_paused = was;
     ESP_LOGW(TAG, "calibration gain RX (radio %d) : %s (0x%02X)", s_cal_radio, found > 0 ? "OK" : "ECHEC", found > 0 ? found : 0x27);
     vTaskDelete(NULL);
