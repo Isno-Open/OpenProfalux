@@ -1434,7 +1434,7 @@ static esp_err_t h_io_capture_counter(httpd_req_t *r) {
 }
 
 #ifndef REPORT_RELAY_URL
-#define REPORT_RELAY_URL "https://www.isno.fr/shop/support"   /* relais : ouvre l'issue + envoie l'email (sous /shop/* -> connecteur) */
+#define REPORT_RELAY_URL "https://www.isno.fr/support"   /* relais : ouvre l'issue + envoie l'email */
 #endif
 
 /* /api/report : l'utilisateur remplit {email, brand, model, note, purpose} dans l'UI ; on y joint
