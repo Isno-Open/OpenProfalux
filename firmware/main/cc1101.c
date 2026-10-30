@@ -400,10 +400,16 @@ int cc1101_select(int idx) {
     if (idx < 0 || idx >= CC1101_COUNT) return -1;
     if (idx == s_active) return 0;
     bool had_cap = (s_cap != NULL);
-    if (s_cap) { rmt_del_channel(s_cap); s_cap = NULL; }   /* capture liee a l'ancien GDO0 */
+    /* rmt_del_channel EXIGE un canal desactive (ESP-IDF rmt_rx.c : sinon ESP_ERR_INVALID_STATE,
+     * le canal n'est PAS libere). En ecoute permanente s_cap est ENABLE : sans ce rmt_disable,
+     * la suppression echoue en silence, le canal DMA fuit, et re-creer sur le nouveau GDO0 rend
+     * "no free rx channels" -> s_cap NULL -> toute RX sur la radio secondaire (capture, reception,
+     * calage 433) echoue instantanement. Le sweep y echappe : il lit le registre RSSI, pas le RMT. */
+    if (s_cap) { rmt_disable(s_cap); rmt_del_channel(s_cap); s_cap = NULL; }   /* capture liee a l'ancien GDO0 */
     s_active = idx;
     s_freq_khz = s_chip_khz[idx];                          /* cache = porteuse de cette radio */
-    if (had_cap) cc1101_capture_init();                    /* re-cree la capture sur le nouveau GDO0 */
+    if (had_cap && cc1101_capture_init() != 0)             /* re-cree la capture sur le nouveau GDO0 */
+        ESP_LOGE(TAG, "cc1101_select(%d) : recreation de la capture RMT sur GDO0 KO", idx);
     return 0;
 }
 
