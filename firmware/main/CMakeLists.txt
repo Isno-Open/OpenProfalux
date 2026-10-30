@@ -31,6 +31,7 @@ endif()
 set(WEB_SRCS "${CMAKE_CURRENT_LIST_DIR}/web/index.html"
              "${CMAKE_CURRENT_LIST_DIR}/web/style.css"
              "${CMAKE_CURRENT_LIST_DIR}/web/app.js"
+             "${CMAKE_CURRENT_LIST_DIR}/web/app-capture.js"
              "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest")
 set(WEB_GZ_DIR "${CMAKE_BINARY_DIR}/web")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
@@ -70,6 +71,7 @@ idf_component_register(
         "ota.c"
         "ota_rollback.c"
         "radio.c"
+        "rf_capture.c"
         "radio_profile.c"
         "log_ring.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
@@ -77,6 +79,7 @@ idf_component_register(
         "${WEB_GZ_DIR}/index.html.gz"
         "${WEB_GZ_DIR}/style.css.gz"
         "${WEB_GZ_DIR}/app.js.gz"
+        "${WEB_GZ_DIR}/app-capture.js.gz"
         "${WEB_GZ_DIR}/manifest.webmanifest.gz"
         "web/icon-192.png"
     REQUIRES

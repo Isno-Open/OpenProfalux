@@ -117,6 +117,24 @@ int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, 
     return r;
 }
 
+/* Capture BRUTE OOK sur la radio idx (issue #95) : selectionne la puce sous mutex (p.ex. la 433
+ * pour un portail CAME), capture les impulsions brutes via cc1101_rx_capture_pulses, puis rend la
+ * main a la primaire. Meme patron que radio_listen_confirmed_on. Rend le nb d'impulsions (>0),
+ * <0 si rien/erreur. Appele par le moteur de capture (rf_capture.c). */
+int radio_capture_raw_on(int idx, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+    if (idx < 0 || idx >= cc1101_radio_count()) return -1;
+    if (!s_mtx) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int prev = cc1101_active_radio();
+    cc1101_select(idx);
+    int r = cc1101_rx_capture_pulses(timeout_ms, levels, us, max, rssi_out);
+    cc1101_select(prev);         /* rend la main a la radio primaire (868) */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
 /* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Ecoute en pause + mutex, le
  * temps d'emettre et de RETABLIR l'etat. Si la carte declare une radio dediee a la bande visee
  * (p.ex. la radio 433 de la Super pour le Somfy RTS ou un portail), on bascule sur elle (son

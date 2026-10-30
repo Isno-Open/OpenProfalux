@@ -375,6 +375,7 @@
           <p class="hint" id="diag-rx-status" style="margin-top:8px"></p>
           <p class="hint">Ce test lit les télécommandes <b>Profalux / KeeLoq</b> (code tournant, identifiées par leur serial). Une <b>Somfy RTS</b> ou un <b>portail CAME</b> n'y apparaissent pas, même si la puce les reçoit : ces protocoles se traitent ailleurs. La puce est détectée mais une télécommande Profalux ne se capte pas ? Vérifie la <b>bande</b> (868), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>. La réception se teste <b>par radio</b> : chaque bouton écoute sa propre puce.</p>
         </div>
+        <div class="card" id="capture-root"></div>
       </div>
 
       <div class="subpanel" data-sp="backup">
@@ -438,5 +439,6 @@
 
 <div class="toast" id="toast"></div>
 <script src="/app.js"></script>
+<script src="/app-capture.js"></script>
 </body>
 </html>
