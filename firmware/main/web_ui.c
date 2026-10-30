@@ -1407,7 +1407,7 @@ static esp_err_t h_io_sniff_prog(httpd_req_t *r) {
  * RECUE (avec RSSI) et EMISE, dans l'ordre et horodatee, pour que le testeur nous transmette la
  * sequence complete (qui emet quoi). Alimente par la capture (RX) et l'enrolement (TX). */
 static esp_err_t h_io_trace(httpd_req_t *r) {
-    static char buf[10240];
+    static char buf[16384];   /* raw-ook : une capture = beaucoup d'impulsions, dump plus long */
     int w = io_trace_dump(buf, sizeof buf);
     httpd_resp_set_type(r, "text/plain; charset=utf-8");
     if (w <= 0) return httpd_resp_sendstr(r, "(journal vide : lance une capture, puis Creer)\n");
