@@ -192,6 +192,14 @@ $('#theme').onclick = () => {
 /* Libelles des boutons-symboles ▲ ■ ▼ (lecteurs d'ecran, infobulles), poses apres chaque rendu :
  * les cartes de volets sont regenerees toutes les 3 s. */
 const SYM = { up: 'Monter', stop: 'Stop', down: 'Descendre' };
+/* Type d'appareil (dev_type_t du firmware) : 0 = volet (defaut, absent du JSON), 1 = portail.
+ * La commande (data-cmd up/stop/down) ne change pas, seul l'affichage s'adapte : un volet
+ * monte/descend, un portail ouvre/ferme. On ne declare que les types qu'on pilote. */
+const DEV = {
+  0: { ico: '🪟', up: 'Montée', stop: 'Stop', down: 'Descente' },
+  1: { ico: '🚪', up: 'Ouvrir', stop: 'Stop', down: 'Fermer' },
+};
+const devOf = v => DEV[(v && v.type) || 0] || DEV[0];
 function labelSymbols() {
   const set = (b, l) => { if (b && !b.hasAttribute('aria-label')) { b.setAttribute('aria-label', l); if (!b.title) b.title = l; } };
   $$('.dpad button[data-cmd]').forEach(b => set(b, SYM[b.dataset.cmd]));
@@ -291,10 +299,10 @@ function renderVolets(list, rf) {
     const showP = showPos && !isC && !isZ;
     if (reorderMode) { el.draggable = true; el.dataset.id = v.id; }
     el.innerHTML = `
-      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : isZ ? ' <span class="badge">zone</span>' : ''}</span>${
+      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : devOf(v).ico} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : isZ ? ' <span class="badge">zone</span>' : ''}</span>${
         reorderMode ? '<span class="reorder"><button data-mv="up" title="Monter">▲</button><button data-mv="down" title="Descendre">▼</button></span>'
                     : (showP ? `<span class="pct">${v.position ?? '?'}%</span>` : '')}</div>
-      <div class="dpad"><button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button></div>
+      <div class="dpad"><button data-cmd="up" title="${devOf(v).up}" aria-label="${devOf(v).up}">▲</button><button data-cmd="stop" title="${devOf(v).stop}" aria-label="${devOf(v).stop}">■</button><button data-cmd="down" title="${devOf(v).down}" aria-label="${devOf(v).down}">▼</button></div>
       ${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}
       <div class="serials">${isC
         ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'

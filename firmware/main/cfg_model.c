@@ -71,6 +71,8 @@ static cJSON *volet_to_json(const volet_t *v) {
          * sauvegardes existantes a l'identique. */
         if (v->proto != VOLET_PROTO_PROFALUX)
             cJSON_AddNumberToObject(o, "proto", v->proto);
+        if (v->type != TYPE_VOLET)
+            cJSON_AddNumberToObject(o, "type", v->type);
     }
     if (v->central) cJSON_AddBoolToObject(o, "central", true);
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
@@ -174,6 +176,8 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         v->virt_counter = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_counter"));
         cJSON *pr       = cJSON_GetObjectItem(o, "proto");   /* absent -> Profalux (0) */
         v->proto        = pr ? (uint8_t)cJSON_GetNumberValue(pr) : (uint8_t)VOLET_PROTO_PROFALUX;
+        cJSON *ty       = cJSON_GetObjectItem(o, "type");    /* absent -> volet (0) */
+        v->type         = ty ? (uint8_t)cJSON_GetNumberValue(ty) : (uint8_t)TYPE_VOLET;
     }
     v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
     /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le

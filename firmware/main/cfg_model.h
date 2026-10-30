@@ -29,6 +29,16 @@ typedef enum {
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
 } volet_proto_t;
 
+/* Type d'appareil : ce qu'on PILOTE, orthogonal au protocole d'emission. Il decide le vocabulaire
+ * de commande et les libelles de l'UI (un volet monte/descend, un portail ouvre/ferme), pas la
+ * facon d'emettre. 0 = volet par defaut : les appareils deja persistes, sans ce champ, restent des
+ * volets. On ne declare QUE les types qu'on pilote : l'eclairage s'ajoutera le jour ou on commande
+ * une lumiere (ajout seul, sans casser le NVS). */
+typedef enum {
+    TYPE_VOLET   = 0,
+    TYPE_PORTAIL = 1,
+} dev_type_t;
+
 typedef struct {
     char id[SH_ID_LEN];
     char serials[SH_MAX_SERIALS][SH_SERIAL_LEN];
@@ -41,6 +51,7 @@ typedef struct {
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
     uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
+    uint8_t  type;           /* dev_type_t : ce qu'on pilote (0 = volet, defaut). Oriente l'UI, pas l'emission. */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.

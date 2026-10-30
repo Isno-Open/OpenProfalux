@@ -1470,6 +1470,7 @@ char *shutters_status_json(void) {
         volet_t *v = &s_volets[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", v->id);
+        if (v->type != TYPE_VOLET) cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t : oriente les libelles de l'UI (0 = volet, absent) */
         if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
             cJSON_AddBoolToObject(o, "virt", true);
             bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
