@@ -1,0 +1,27 @@
+{
+  "_contract": "Table de profils : SOURCE UNIQUE de l'ecran unifie 'Ajouter un appareil'. PYRAMIDE type -> marque -> profil. L'UI se batit depuis 'types' (libelle + libelles d-pad par type) et 'profils' (les feuilles). Chaque profil : type+marque+nom s'affichent ; 'mecanisme' et 'flow' decident l'action a lancer ; 'modulation'/'code' sont le metadata du modele. Regle : rejeu = code FIXE OOK (capture->sauve->rejoue, agnostique) ; enrolement = identite virtuelle qui genere (roulant) ; cloner = capture la telecommande d'origine via le flux existant. Ajouter une marque supportee = une entree ici, sans toucher au moteur. CAME (portail, rejeu OOK fixe) arrive en BRANCHE 2 ; d'ou aucun profil 'portail' ici pour l'instant.",
+  "types": {
+    "volet":   { "label": "Volet",   "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" } },
+    "portail": { "label": "Portail", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" } }
+  },
+  "profils": [
+    {
+      "type": "volet", "marque": "Profalux", "nom": "Cloner ma télécommande Profalux",
+      "mecanisme": "cloner", "modulation": "OOK", "code": "roulant",
+      "flow": "learn",
+      "note": "Capture la télécommande KeeLoq d'origine puis la réémet. Flux existant « Cloner une télécommande » (apprentissage + assignation à un volet)."
+    },
+    {
+      "type": "volet", "marque": "Profalux", "nom": "Nouvelle télécommande Profalux",
+      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant",
+      "flow": "enrol-pfx",
+      "note": "Génère une identité virtuelle 0x067 à faire apprendre au moteur. Flux existant « Créer une télécommande »."
+    },
+    {
+      "type": "volet", "marque": "Somfy RTS", "nom": "Nouveau volet Somfy",
+      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant",
+      "flow": "create-somfy", "endpoint": "/api/somfy/create",
+      "note": "Génère une adresse Somfy (24 bits) à faire apprendre au moteur. Flux existant « Somfy »."
+    }
+  ]
+}
