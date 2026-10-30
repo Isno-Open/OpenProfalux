@@ -45,6 +45,7 @@ endif()
 idf_component_register(
     SRCS
         "main.c"
+        "capture_journal.c"
         "cc1101.c"
         "wifi_bridge.c"
         "mqtt_bridge.c"
@@ -80,6 +81,7 @@ idf_component_register(
         "web/icon-192.png"
     REQUIRES
         nvs_flash
+        esp_timer
         spiffs
         esp_wifi
         esp_netif
