@@ -6,7 +6,7 @@
  * l'identique. Protocole-agnostique : aucun decodeur, aucun "filtre de ce qu'on connait". Les
  * codes TOURNANTS/chiffres (Somfy RTS, KeeLoq Profalux, io) ne se rejouent PAS ainsi et restent
  * l'affaire des decodeurs dedies. Remplit le journal commun (capture_journal) quand il est present
- * sur la branche (auto-cable). API appelee par les routes /api/capture/* (web_ui.c). */
+ * sur la branche (auto-cable). API appelee par les routes /api/capture/... (web_ui.c). */
 
 #define RFCAP_MAX_PULSES 512
 

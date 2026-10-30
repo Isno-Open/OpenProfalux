@@ -1017,7 +1017,7 @@ static esp_err_t h_rx_sweep_status(httpd_req_t *r) {
     return e;
 }
 
-/* ── /api/capture/* : capture OOK BRUTE + rejeu (issue #95) ──
+/* ── /api/capture : capture OOK BRUTE + rejeu (issue #95) ──
  * start (POST ?radio=N) : ecoute ~15 s, l'utilisateur presse sa telecommande (portail CAME,
  * capteur...) ; aucun decodeur, on enregistre la forme du signal. last (GET) : derniere capture
  * en JSON (impulsions [[lvl,us]]). replay (POST) : rejoue la derniere capture. Code FIXE : un code
