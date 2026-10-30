@@ -17,6 +17,13 @@
 
 static const char *TAG = "rfcap";
 
+/* Silence inter-trame ajoute entre deux repetitions au rejeu. Une capture ne prend qu'UNE trame
+ * (le creux final n'est pas capte), et sans silence les repetitions arrivent collees : le
+ * recepteur ne delimite plus les trames (constate sur un portail CAME chez un testeur). Valeur
+ * generique qui couvre le CAME (silence nominal ~11,5 ms) et reste tolerable pour les autres
+ * telecommandes OOK a code fixe. A affiner au banc si une marque exige un creux different. */
+#define RFCAP_GAP_US 12000
+
 /* Derniere capture (une seule a la fois ; sous le meme usage manuel que l'enrolement). */
 static uint8_t  s_lvl[RFCAP_MAX_PULSES];
 static uint16_t s_us[RFCAP_MAX_PULSES];
@@ -54,13 +61,19 @@ int rfcap_capture(int radio, uint32_t timeout_ms) {
 int rfcap_replay(int repeats) {
     if (s_n <= 0) return -1;
     if (repeats < 1) repeats = 1;
-    /* radio_tx_ook_pulses prend les durees en uint32_t ; on convertit depuis le stockage uint16_t. */
-    static uint32_t us32[RFCAP_MAX_PULSES];
-    for (int i = 0; i < s_n; i++) us32[i] = s_us[i];
+    /* On rejoue la trame SUIVIE d'un silence inter-trame (porteuse OFF) : sans lui les repetitions
+     * sont collees et le recepteur ne delimite plus les trames. radio_tx_ook_pulses prend les
+     * durees en uint32_t ; on recopie depuis le stockage uint16_t et on ajoute le creux final. */
+    static uint8_t  lvl[RFCAP_MAX_PULSES + 1];
+    static uint32_t us[RFCAP_MAX_PULSES + 1];
+    int n = 0;
+    for (int i = 0; i < s_n; i++) { lvl[n] = s_lvl[i]; us[n] = s_us[i]; n++; }
+    lvl[n] = 0; us[n] = RFCAP_GAP_US; n++;   /* silence inter-trame */
     int r = 0;
     for (int k = 0; k < repeats && r == 0; k++)
-        r = radio_tx_ook_pulses(s_freq_khz, s_lvl, us32, s_n);
-    ESP_LOGW(TAG, "rejeu %d impulsions x%d a %u kHz : rc=%d", s_n, repeats, (unsigned)s_freq_khz, r);
+        r = radio_tx_ook_pulses(s_freq_khz, lvl, us, n);
+    ESP_LOGW(TAG, "rejeu %d impulsions +gap %u us x%d a %u kHz : rc=%d",
+             s_n, (unsigned)RFCAP_GAP_US, repeats, (unsigned)s_freq_khz, r);
     return r;
 }
 
