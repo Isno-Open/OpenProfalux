@@ -29,6 +29,36 @@ def pick_radio(d):
     return radios[0]
 
 
+# Sens de l'horloge RMII, lu du JSON (jamais en dur dans le C). "out" : l'ESP32
+# genere l'horloge 50 MHz et la sort (cartes Olimex POE). "ext_in" : horloge
+# fournie par un oscillateur externe (ESP32-GATEWAY/EVB).
+_ETH_CLK_MODE = {"out": "EMAC_CLK_OUT", "ext_in": "EMAC_CLK_EXT_IN"}
+
+
+def ethernet_lines(d):
+    """Bloc Ethernet filaire, present seulement si la carte declare "ethernet".
+    Le code ne lit ces valeurs que sous la garde BOARD_HAS_ETHERNET."""
+    eth = d.get("ethernet")
+    if not eth:
+        return ["", "#define BOARD_HAS_ETHERNET   0"]
+    mode = str(eth.get("clk_mode", "out"))
+    if mode not in _ETH_CLK_MODE:
+        raise SystemExit("ethernet.clk_mode %r inconnu dans %s (attendu out|ext_in)" % (mode, d["id"]))
+    return [
+        "",
+        "/* Ethernet filaire (voir boards/%s.json). BOARD_HAS_ETHERNET garde le code reseau. */" % d["id"],
+        "#define BOARD_HAS_ETHERNET   1",
+        '#define ETH_PHY_MODEL        "%s"' % eth.get("phy", "LAN8720"),
+        "#define ETH_MDC_GPIO         %d" % int(eth.get("mdc", 23)),
+        "#define ETH_MDIO_GPIO        %d" % int(eth.get("mdio", 18)),
+        "#define ETH_PHY_POWER_GPIO   %d" % int(eth.get("phy_power", -1)),
+        "#define ETH_PHY_ADDR         %d" % int(eth.get("phy_addr", 0)),
+        "#define ETH_CLK_GPIO         %d" % int(eth.get("clk_gpio", 0)),
+        "/* Sens de l'horloge RMII : la POE n'a pas d'oscillateur externe, l'ESP32 la SORT. */",
+        "#define ETH_CLK_MODE         %s" % _ETH_CLK_MODE[mode],
+    ]
+
+
 def header(d):
     ui = d.get("ui", {})
     radio = pick_radio(d)
@@ -72,9 +102,9 @@ def header(d):
         "#define BTN_PIN_DEBUG_UP     -1",
         "#define BTN_PIN_DEBUG_STOP   -1",
         "#define BTN_PIN_DEBUG_DOWN   -1",
-        "",
-        "#endif",
     ]
+    L += ethernet_lines(d)
+    L += ["", "#endif"]
     return "\n".join(L) + "\n"
 
 

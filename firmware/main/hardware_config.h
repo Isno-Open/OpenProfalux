@@ -15,7 +15,7 @@
 /* ═══════════════════════════════════════════════════════════════
  * Le brochage vient de la CARTE choisie a la construction.
  *
- * -DBOARD=isno-super | external | m5-atom-lite selectionne boards/<BOARD>.json,
+ * -DBOARD=isno-super | external | d1-mini | m5-atom-lite selectionne boards/<BOARD>.json,
  * et tools/gen_board.py en engendre board_pins.h a la configuration CMake. Ce
  * firmware ne code AUCUNE broche : il les LIT. Ajouter une carte, c'est ajouter
  * un boards/<nom>.json, pas editer ce fichier.
@@ -33,6 +33,8 @@
     #define CC1101_PIN_GDO0           (-1)
     #define CC1101_PIN_GDO2           (-1)
     #define CC1101_SPI_FREQ_HZ  1000000
+    #define CC1101_BAND_LOW_KHZ       863000
+    #define CC1101_BAND_HIGH_KHZ      870000
     #define BTN_PIN_DEBUG_UP          -1
     #define BTN_PIN_DEBUG_STOP        -1
     #define BTN_PIN_DEBUG_DOWN        -1
@@ -58,6 +60,8 @@
 #define PROFALUX_PREAMBLE_ELEMENTS       23    /* 23 alternances de Te */
 #define PROFALUX_PREAMBLE_US            455    /* = Te */
 #define PROFALUX_HEADER_US             4450    /* silence mesure 4420-4491 us */
+#define TX_TE_DEFAULT_US                400    /* TE d'emission par defaut : nominal HCS300 (datasheet 260-660, typ 400) */
+#define PROFALUX_HEADER_TE               10    /* entete HCS = 10 Te (datasheet ; RTL-SDR : ~4475 us a Te 448) */
 #define PROFALUX_REPEAT_COUNT            10  /* HCS301 typical */
 #define PROFALUX_PAIR_FRAMES             60  /* 1 par seconde */
 #define PROFALUX_PAIR_DELAY_MS         1000

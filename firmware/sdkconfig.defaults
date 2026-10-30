@@ -5,9 +5,14 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# Log defaults - verbose for debug
+# Compilation de production : -Os, et journal plafonne a INFO. Le firmware n'emet aucun
+# ESP_LOGD/ESP_LOGV : le plafond ne retire que le detail interne d'ESP-IDF. Ensemble :
+# ~-160 Ko de flash et ~-9 Ko d'IRAM (ATOM). Pour deboguer (pas-a-pas, traces plus
+# precises), repasser en CONFIG_COMPILER_OPTIMIZATION_DEBUG. Un sdkconfig deja engendre
+# garde ses anciens reglages : le supprimer pour reprendre ces valeurs.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
 
 # Target compile flag - carte de test = M5Stack ATOM Lite (pinout docs/WIRING.md)
 CONFIG_OPENPROFALUX_TARGET_M5STACK=y
@@ -33,6 +38,12 @@ CONFIG_FREERTOS_HZ=1000
 
 # Bootloader
 CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
+# Retour automatique : une mise a jour demarre en essai ; si elle redemarre avant d'etre
+# validee (~60 s, voir ota.c), le bootloader repart sur la version precedente. Vit dans le
+# BOOTLOADER, que l'OTA ne remplace pas : un boitier deja installe l'obtient par USB
+# (firmware/README.md). +64 o de bootloader sur ESP32 (2,4 Ko restent libres).
+# Surtout PAS CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK : il grave des efuses, sans retour possible.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Task watchdog
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=30

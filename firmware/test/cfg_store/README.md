@@ -27,7 +27,7 @@ les tailles voisines de celles mesurées.
 
 | Test | Scénario | Attendu |
 |---|---|---|
-| T0 | Export → import → export ; ancien export sans rang d'affichage ; volet en double | Config identique champ par champ ; `order` absent → -1 ; doublon ignoré |
+| T0 | Export → import → export ; ancien export sans rang d'affichage ; volet en double ; zone et ses suiveurs | Config identique champ par champ ; `order` absent → -1 ; doublon ignoré ; suiveurs relus, `members` absent des volets qui n'en ont pas |
 | T1 | Ancien format (une chaîne unique), dataset qui grossit | Le bug d'origine est reproduit : les sauvegardes échouent |
 | T2 | Premier démarrage du nouveau firmware sur cette NVS | Migration réussie, chaque champ identique, anciennes clés effacées |
 | T3 | 10 000 mouvements de volets | Aucun échec |

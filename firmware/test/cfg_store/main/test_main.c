@@ -84,7 +84,14 @@ size_t __wrap_fwrite(const void *p, size_t sz, size_t n, FILE *f) {
     }
     return __real_fwrite(p, sz, n, f);
 }
-int __wrap_rename(const char *a, const char *b) { return s_dead ? -1 : __real_rename(a, b); }
+/* Comme SPIFFS (SPIFFS_ERR_CONFLICTING_NAME) : pas de renommage vers un fichier qui
+ * existe deja. Le rename du PC le remplacerait, et cacherait le cas. */
+int __wrap_rename(const char *a, const char *b) {
+    if (s_dead) return -1;
+    FILE *e = fopen(b, "rb");
+    if (e) { fclose(e); return -1; }
+    return __real_rename(a, b);
+}
 int __wrap_remove(const char *a) { return s_dead ? -1 : __real_remove(a); }
 
 /* Compile avec AddressSanitizer (CMakeLists.txt) : un acces hors limites, apres
@@ -219,7 +226,7 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
     return !strcmp(a->up, b->up) && !strcmp(a->down, b->down) && !strcmp(a->stop, b->stop)
         && a->up_btn == b->up_btn && a->down_btn == b->down_btn && a->stop_btn == b->stop_btn
         && a->virt == b->virt && a->virt_serial == b->virt_serial
-        && a->virt_counter == b->virt_counter && a->virt_te == b->virt_te
+        && a->virt_counter == b->virt_counter && a->proto == b->proto
         && a->central == b->central && !strcmp(a->members ? a->members : "", b->members ? b->members : "")
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
@@ -378,7 +385,7 @@ static int central_store(store_t *s, int k, int idlen) {
         else                        snprintf(id, sizeof(id), "Baie vitree salon n%03u", (unsigned)i % 1000u);
         volet_t *v = mk_volet(s, id, 40u + (unsigned)i, 21000, 20500);
         v->up[0] = v->down[0] = v->stop[0] = 0; v->up_btn = v->down_btn = v->stop_btn = 0;
-        v->virt = true; v->virt_serial = 0x0670200u + (unsigned)i; v->virt_counter = 100; v->virt_te = 455;
+        v->virt = true; v->virt_serial = 0x0670200u + (unsigned)i; v->virt_counter = 100;
         snprintf(v->serials[0], SH_SERIAL_LEN, "0x%07X", (unsigned)v->virt_serial);
         p += snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", id);
     }
@@ -412,7 +419,10 @@ int main(void) {
         volet_t *q = mk_volet(&g_ref, "Volet \"sud\" \\ 2", 7, 15000, 14000);   /* guillemets et antislash */
         snprintf(q->serials[1], SH_SERIAL_LEN, "0x0ABCDEF"); q->n_serials = 2; q->orientation = 180;
         volet_t *v = mk_volet(&g_ref, "Virtuel", 8, 0, 0);                        /* volet virtuel */
-        v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321; v->virt_te = 455;
+        v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321;
+        v->proto = VOLET_PROTO_SOMFY_RTS;   /* protocole non-Profalux : doit survivre a l'aller-retour */
+        volet_t *z = mk_volet(&g_ref, "Zone salon", 9, 0, 0);                     /* zone : volet appris + suiveurs */
+        cfg_volet_set_members(z, "Volet du salon,Volet cuisine");
         char *js = cfg_model_export(&g_ref.m);
         cJSON *root = cJSON_Parse(js);
         store_reset(&g_tmp);
@@ -420,7 +430,27 @@ int main(void) {
         char *js2 = cfg_model_export(&g_tmp.m);
         bool rt = root && store_equal(&g_tmp, &g_ref) && js2 && !strcmp(js, js2);
         CHECK(rt, "export -> import -> export ne redonne pas la meme config");
-        printf("  aller-retour de %d volets (centrale, virtuel, guillemets, accents) : %s\n", g_ref.nvolets, rt ? "identique" : "DIFFERENT");
+        /* proto d'emission : ecrit seulement s'il n'est pas Profalux (0). Un seul volet en
+         * porte un ici, donc "proto" doit apparaitre exactement une fois ; les volets
+         * Profalux gardent le JSON et les sauvegardes a l'identique. */
+        int nproto = 0;
+        for (const char *p = js; js && (p = strstr(p, "\"proto\"")) != NULL; p += 7) nproto++;
+        CHECK(nproto == 1, "un seul volet doit ecrire \"proto\" (trouve %d)", nproto);
+        printf("  aller-retour de %d volets (centrale, virtuel, zone, guillemets, accents) : %s\n", g_ref.nvolets, rt ? "identique" : "DIFFERENT");
+        /* Zone : ses suiveurs reviennent, sans en faire une centrale ; un volet sans
+         * suiveurs n'ecrit pas de "members" (les sauvegardes restent celles d'avant). */
+        const volet_t *zt = NULL, *pl = NULL;
+        for (int i = 0; i < g_tmp.nvolets; i++) {
+            if (!strcmp(g_tmp.volets[i].id, "Zone salon")) zt = &g_tmp.volets[i];
+            if (!strcmp(g_tmp.volets[i].id, "Volet bureau")) pl = &g_tmp.volets[i];
+        }
+        bool zone_ok = zt && !zt->central && zt->members && !strcmp(zt->members, "Volet du salon,Volet cuisine")
+                    && pl && !pl->members;
+        cJSON *vo; int with_members = 0;
+        cJSON_ArrayForEach(vo, cJSON_GetObjectItem(root, "volets")) with_members += cJSON_HasObjectItem(vo, "members");
+        zone_ok = zone_ok && with_members == 2;   /* la centrale et la zone, rien d'autre */
+        CHECK(zone_ok, "zone : suiveurs perdus, centrale par erreur, ou \"members\" sur %d volets", with_members);
+        printf("  zone (suiveurs relus, pas de \"members\" sur les autres volets) : %s\n", zone_ok ? "OK" : "KO");
         /* Export d'une version sans rang d'affichage : "order" absent -> -1, le reste intact. */
         cJSON *v0;
         cJSON_ArrayForEach(v0, cJSON_GetObjectItem(root, "volets")) cJSON_DeleteItemFromObject(v0, "order");
@@ -865,6 +895,110 @@ int main(void) {
         CHECK(l22 > 383 && el != ESP_OK, "ancien format : liste de %d o, document de %u o, ecriture %s", l22, (unsigned)z22, esp_err_to_name(el));
         printf("  ancien format (cle unique) : liste de %d o, document de %u o -> %s\n",
                l22, (unsigned)z22, el != ESP_OK ? "impossible a enregistrer, OK" : "ENREGISTRE");
+    }
+
+    /* ── T13. Place des volets en NVS (Systeme > Etat) ── */
+    printf("\n[T13] Place des volets en NVS, et estimation de la place restante\n");
+    {
+        wipe(); system_state(); model_init(&g_ref);
+        esp_err_t e = save_ref(fk);
+        int n = 0; size_t ent = cfg_store_volet_entries(&n);
+        CHECK(e == ESP_OK && n == g_ref.nvolets && ent > 0, "%d volet(s) comptes sur %d (%u entrees)", n, g_ref.nvolets, (unsigned)ent);
+
+        /* La formule colle a la vraie NVS : un volet de plus prend exactement les
+         * entrees que la fonction lui attribue (les autres cles ne changent pas). */
+        nvs_stats_t a, b;
+        nvs_get_stats(NULL, &a);
+        add_volet(&g_ref); e = save_ref(fk);
+        nvs_get_stats(NULL, &b);
+        int n2 = 0; size_t ent2 = cfg_store_volet_entries(&n2);
+        long mesure = (long)b.used_entries - (long)a.used_entries, prevu = (long)ent2 - (long)ent;
+        CHECK(e == ESP_OK && n2 == n + 1 && mesure == prevu, "volet ajoute : %ld entrees mesurees, %ld prevues", mesure, prevu);
+        printf("  %d volets : %u entrees ; un de plus : %ld entrees mesurees, %ld prevues -> %s\n",
+               n, (unsigned)ent, mesure, prevu, mesure == prevu ? "OK" : "KO");
+
+        /* L'estimation de l'interface (place disponible / taille moyenne d'un volet), a
+         * chaque remplissage, contre le nombre de volets qui entrent vraiment ensuite. */
+        int est[SH_MAX_VOLETS + 1], steps = 0, added = 0; bool full = false;
+        while (g_ref.nvolets < SH_MAX_VOLETS) {
+            nvs_stats_t s; nvs_get_stats(NULL, &s);
+            int c = 0; size_t en = cfg_store_volet_entries(&c);
+            est[steps++] = en ? (int)((double)s.available_entries * c / en) : -1;
+            add_volet(&g_ref);
+            if (save_ref(fk) != ESP_OK) { full = true; break; }
+            added++;
+        }
+        int worst = 0, over = 0;
+        for (int k = 0; k < steps; k++) {
+            int d = est[k] - (added - k);                /* > 0 : promet plus qu'il n'entre */
+            if (abs(d) > abs(worst)) worst = d;
+            if (d > over) over = d;
+        }
+        printf("  %s apres %d volets de plus ; estimation au depart : %d ; pire ecart : %+d (surestimation max %d)\n",
+               full ? "NVS pleine" : "plafond de volets atteint", added, est[0], worst, over);
+        CHECK(full ? abs(worst) <= 1 : est[0] >= added, "estimation : pire ecart %+d volet(s)", worst);
+    }
+
+    /* ── T14. Restauration : seul le format de sauvegarde passe, copie de la config d'avant ── */
+    printf("\n[T14] Restauration : format de sauvegarde, copie de la config d'avant\n");
+    {
+#define COPY "/tmp/cfg_store_test_copie.json"
+        wipe(); system_state(); model_init(&g_ref);
+        char *exp = cfg_model_export(&g_ref.m);
+        /* Ce qu'un utilisateur peut choisir par erreur dans l'onglet Sauvegarde. */
+        static const struct { const char *nom, *js; bool attendu; } cas[] = {
+            { "export des trames",            "{\"trames\":{\"0x0B20000\":{\"count\":1,\"frames\":[]}}}", false },
+            { "objet vide",                   "{}", false },
+            { "tableau",                      "[]", false },
+            { "texte",                        "\"volets\"", false },
+            { "volets en objet",              "{\"volets\":{}}", false },
+            { "telecommandes en tableau",     "{\"volets\":[],\"remotes\":[]}", false },
+            { "sauvegarde sans volet",        "{\"remotes\":{},\"volets\":[]}", true },
+            { "sauvegarde sans telecommande", "{\"log_frames\":true,\"volets\":[]}", true },
+        };
+        int n = (int)(sizeof(cas) / sizeof(cas[0])), bons = 0;
+        cJSON *j = cJSON_Parse(exp); bool vraie = cfg_model_is_backup(j); cJSON_Delete(j);
+        for (int i = 0; i < n; i++) {
+            cJSON *c = cJSON_Parse(cas[i].js); bool got = cfg_model_is_backup(c); cJSON_Delete(c);
+            if (got == cas[i].attendu) bons++; else printf("  format mal trie : %s -> %d\n", cas[i].nom, got);
+        }
+        CHECK(vraie && bons == n, "format : vraie sauvegarde %d, %d/%d cas", vraie, bons, n);
+        printf("  vraie sauvegarde acceptee, %d/%d cas pieges tries -> %s\n", bons, n, vraie && bons == n ? "OK" : "KO");
+
+        /* La copie egale l'export, et se remplace : SPIFFS refuse de renommer sur un fichier
+         * existant (simule par __wrap_rename), une seconde copie echouait sans le detour. */
+        remove(COPY); remove(COPY ".tmp");
+        bool c1 = cfg_model_save_copy(&g_ref.m, COPY);
+        char *lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool same1 = c1 && lu && !strcmp(lu, exp); free(lu);
+        add_volet(&g_ref);
+        char *exp2 = cfg_model_export(&g_ref.m);
+        bool c2 = cfg_model_save_copy(&g_ref.m, COPY);
+        lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool same2 = c2 && lu && !strcmp(lu, exp2); free(lu);
+        CHECK(same1 && same2, "copie : premiere %d, remplacement %d", same1, same2);
+        printf("  copie identique a l'export, puis remplacee par la suivante -> %s\n", same1 && same2 ? "OK" : "KO");
+
+        /* Coupure pendant l'ecriture d'une nouvelle copie : la precedente reste entiere. */
+        model_init(&g_ref);
+        s_file_cut = true;
+        bool c3 = cfg_model_save_copy(&g_ref.m, COPY);
+        s_dead = false;
+        lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool intact = !c3 && lu && !strcmp(lu, exp2); free(lu);
+        CHECK(intact, "coupure pendant la copie : ecriture %d, precedente %s", c3, intact ? "intacte" : "PERDUE");
+        printf("  coupure pendant une nouvelle copie : la precedente reste entiere -> %s\n", intact ? "OK" : "KO");
+
+        /* Coupure entre l'effacement de l'ancienne et le renommage : seul le temporaire,
+         * complet, existe ; il est repris. */
+        remove(COPY); remove(COPY ".tmp");
+        FILE *t = fopen(COPY ".tmp", "wb"); fputs(exp, t); fclose(t);
+        lu = cfg_read_file(COPY, 64 * 1024, NULL);
+        bool repris = lu && !strcmp(lu, exp); free(lu);
+        CHECK(repris, "temporaire seul non repris");
+        printf("  coupure entre effacement et renommage : temporaire complet repris -> %s\n", repris ? "OK" : "KO");
+        remove(COPY); remove(COPY ".tmp");
+        free(exp); free(exp2);
     }
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");

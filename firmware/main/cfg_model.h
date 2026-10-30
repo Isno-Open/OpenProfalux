@@ -16,8 +16,19 @@
 #include "esp_err.h"
 #include "cfg_store.h"
 #include "shutters.h"
+#include "remote_battery.h"
 
 #define SH_MAX_REMOTES 16
+
+/* Protocole d'emission d'un volet VIRTUEL (qui GENERE sa trame). Profalux/KeeLoq est le
+ * seul cable aujourd'hui, et vaut 0 : les volets deja persistes, sans ce champ, le
+ * prennent par defaut. Les autres protocoles (Somfy RTS - issue #73 - ou d'autres)
+ * s'ajoutent ici et se cablent dans emit_virt (shutters.c). */
+typedef enum {
+    VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
+    VOLET_PROTO_SOMFY_RTS = 1,   /* reserve, pas encore cable */
+    VOLET_PROTO_IO        = 2,   /* io-homecontrol : FSK 868 chiffre AES (module io/, en cours, #87) */
+} volet_proto_t;
 
 typedef struct {
     char id[SH_ID_LEN];
@@ -30,11 +41,14 @@ typedef struct {
     bool     virt;
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
-    uint16_t virt_te;        /* TE d'emission du modele (415 FranciaFlex, 455 Profalux) */
+    uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
-                              * Ne s'ecrit que par cfg_volet_set_members(). */
+                              * Ne s'ecrit que par cfg_volet_set_members().
+                              * Centrale : les volets a qui la commande est diffusee.
+                              * Volet appris (ZONE) : ses SUIVEURS. Sa propre trame les fait
+                              * bouger tous ; ils suivent ses mouvements sans rien emettre. */
     uint32_t travel_up_ms, travel_down_ms;
     int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
@@ -57,6 +71,8 @@ typedef struct {
     dframe_t *hops;          /* SET des trames distinctes (dedup par hop) : hop + bouton + t */
     uint16_t  nhops;         /* = nb de trames DISTINCTES loggees */
     uint16_t  caphops;       /* capacite allouee du set */
+    batt_state_t batt;       /* pile (bit VLOW des trames), recalcule apres chaque demarrage */
+    uint32_t  batt_t;        /* derniere trame complete vue (epoch, 0 si SNTP pas encore synchro) */
 } remote_t;
 
 /* La config, la ou elle vit (tableaux de shutters.c, ou ceux d'un test). */
@@ -66,7 +82,7 @@ typedef struct {
     volet_t  *volets;   int *nvolets;     /* SH_MAX_VOLETS places */
 } cfg_model_t;
 
-/* ── Membres d'une centrale ──
+/* ── Membres d'une centrale (ou suiveurs d'une zone) ──
  * La liste vit sur le tas, et seulement pour une centrale : un tampon fixe dans
  * volet_t se payait sur chacun des SH_MAX_VOLETS volets, et a 384 octets il
  * tronquait en silence les listes longues (les volets coupes ne recevaient plus
@@ -91,6 +107,12 @@ char *cfg_model_export(const cfg_model_t *m);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */
 void  cfg_model_import(const cfg_model_t *m, cJSON *root);
+/* Est-ce une sauvegarde de config (format de cfg_model_export) ? Un objet avec un
+ * tableau "volets", et "remotes" absent ou objet. L'export des trames, {} ou []
+ * ne le sont pas : les restaurer remettait toute la config a zero. */
+bool  cfg_model_is_backup(const cJSON *root);
+/* Copie de la config courante (format de l'export) dans `path`, via cfg_write_file. */
+bool  cfg_model_save_copy(const cfg_model_t *m, const char *path);
 
 /* Ecrit la config en NVS, un document par volet. En cas d'echec, failed_key
  * (8 octets, peut etre NULL) recoit la cle fautive. */
@@ -106,3 +128,12 @@ cfg_layout_t cfg_model_load(const cfg_model_t *m);
  * renomme : s'il ne peut pas etre ecrit, ou si le courant est coupe pendant
  * l'ecriture, le dataset est quand meme rendu et sa copie NVS conservee. */
 bool cfg_frames_load(const char *path, void *buf, size_t cap, size_t *sz);
+
+/* Ecrit `n` octets dans `path` sous un nom temporaire, renomme une fois complet :
+ * une coupure de courant ne laisse jamais un fichier a moitie ecrit sous son vrai
+ * nom (l'ancien reste intact). Renvoie false si rien n'a ete remplace. */
+bool cfg_write_file(const char *path, const void *buf, size_t n);
+/* Lit `path`, ou son temporaire complet si une coupure l'a laisse seul (voir
+ * cfg_write_file), dans un tampon alloue termine par un zero. NULL si absent, vide
+ * ou plus grand que `cap`. *n (peut etre NULL) recoit la taille. */
+char *cfg_read_file(const char *path, size_t cap, size_t *n);

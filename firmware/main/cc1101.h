@@ -1,10 +1,10 @@
 /*
- * CC1101 driver — TX + RX for Profalux 868.35 MHz OOK
+ * CC1101 driver : TX + RX for Profalux 868.35 MHz OOK
  *
  * Provides:
  *   - Init SPI + register config for OOK 868.35 MHz ~1550 baud
  *   - TX single frame (=synthesize OOK signal via GDO0 bit-banging)
- *   - RX capture — invokes callback for each detected frame
+ *   - RX capture : invokes callback for each detected frame
  */
 #ifndef CC1101_H
 #define CC1101_H
@@ -26,6 +26,9 @@ int  cc1101_rx_stop(void);
 
 /* Auto-test emission : renvoie 0 si la puce passe bien en TX (MARCSTATE 0x13). */
 int  cc1101_tx_selftest(void);
+/* Frequence porteuse en kHz (profil radio, voir radio_profile.h). 0=OK, -1=non prise. */
+int      cc1101_set_freq_khz(uint32_t khz);
+uint32_t cc1101_get_freq_khz(void);
 int  cc1101_rx_probe(void);   /* sonde de bruit RX au boot (RSSI + nb d'evenements RMT a vide) */
 
 /* Auto-capture : initialise le RMT sur GDO0 pour relire notre propre emission. */
@@ -40,15 +43,31 @@ int  cc1101_tx_raw_bits(const char *bits, int n, int repeats);
 /* Utils */
 extern int g_tx_marc;   /* MARCSTATE lu apres le dernier STX (0x13=TX). Diagnostic. */
 int8_t cc1101_get_rssi(void);
+/* Balayage RSSI : RSSI max (demi-dB) sur dwell_ms a chaque frequence khz[i]. Filtre RX a 58 kHz
+ * pendant le balayage ; frequence et filtre restaures. L'appelant tient le radio. 0, ou -1. */
+int cc1101_rssi_scan(const uint32_t *khz, int n, int dwell_ms, int16_t *peak_hdb);
 void cc1101_set_rx_debug(bool on);   /* switch DEBUG : logge chaque capture RX (symboles+RSSI+bits+classif) */
 bool cc1101_get_rx_debug(void);
 void cc1101_set_rx_gain(uint8_t agcctrl2);   /* plafond de gain RX (AGCCTRL2) reglable ; defaut 0x27 */
 uint8_t cc1101_get_rx_gain(void);
-void cc1101_set_tx_te(uint32_t te_us);       /* TE d'emission (us) reglable ; defaut 455 (Profalux) */
+void cc1101_set_tx_repeat_bit(bool on);      /* imite la telecommande : RPT 0 puis 1, 18 ms entre trames */
+bool cc1101_get_tx_repeat_bit(void);
+void cc1101_set_tx_rmt(bool on);              /* emission par le RMT (timing materiel) au lieu du bit-bang */
+bool cc1101_get_tx_rmt(void);
+void cc1101_set_tx_te(uint32_t te_us);       /* TE d'emission (us) reglable ; defaut TX_TE_DEFAULT_US (400) */
 uint32_t cc1101_get_tx_te(void);
 int cc1101_last_te(void);                    /* TE (us) mesure sur la derniere trame decodee */
+void cc1101_spi_stats(uint32_t *retries, uint32_t *fails); /* ecritures SPI reessayees / jamais prises */
 void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version); /* diag UI : puce + self-test TX */
+int  cc1101_gdo0_state(int *level);   /* GDO0 : -1 non teste, 1 libre, 0 tenu (*level = niveau) */
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
+/* Acces mode paquet (FIFO + strobes), pour les protocoles FSK comme io-homecontrol.
+ * Transferts burst bornes a 31 octets utiles. Le chemin OOK n'en a pas besoin. */
+void cc1101_strobe_cmd(uint8_t strobe);
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len);
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len);
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
+void cc1101_apply_config_ook(void);
 
 #endif

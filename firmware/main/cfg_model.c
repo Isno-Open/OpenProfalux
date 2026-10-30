@@ -67,12 +67,15 @@ static cJSON *volet_to_json(const volet_t *v) {
         cJSON_AddBoolToObject(o, "virt", true);
         cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
         cJSON_AddNumberToObject(o, "virt_counter", v->virt_counter);
-        cJSON_AddNumberToObject(o, "virt_te", v->virt_te);
+        /* Protocole : omis quand il vaut Profalux (0), pour garder le JSON et les
+         * sauvegardes existantes a l'identique. */
+        if (v->proto != VOLET_PROTO_PROFALUX)
+            cJSON_AddNumberToObject(o, "proto", v->proto);
     }
-    if (v->central) {   /* centrale : liste des volets membres (CSV) */
-        cJSON_AddBoolToObject(o, "central", true);
-        cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
-    }
+    if (v->central) cJSON_AddBoolToObject(o, "central", true);
+    /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
+     * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
+    if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
     return o;
 }
 /* En-tete : tout ce qui n'est pas un volet. */
@@ -169,23 +172,33 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         v->virt         = true;
         v->virt_serial  = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_serial"));
         v->virt_counter = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_counter"));
-        v->virt_te      = (uint16_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "virt_te"));
+        cJSON *pr       = cJSON_GetObjectItem(o, "proto");   /* absent -> Profalux (0) */
+        v->proto        = pr ? (uint8_t)cJSON_GetNumberValue(pr) : (uint8_t)VOLET_PROTO_PROFALUX;
     }
-    if (cJSON_IsTrue(cJSON_GetObjectItem(o, "central"))) {
-        v->central = true;
-        /* Une liste ecrite par le firmware tient toujours : seul un fichier modifie
-         * a la main peut depasser SH_MEMBERS_LEN. Refusee entiere plutot que
-         * tronquee, et signalee dans le journal. */
-        const char *mem = cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "";
-        if (cfg_volet_set_members(v, mem) != 0)
-            ESP_LOGE(TAG, "centrale '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
-                     v->id, (unsigned)strlen(mem));
-    }
+    v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
+    /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le
+     * firmware tient toujours : seul un fichier modifie a la main peut depasser
+     * SH_MEMBERS_LEN. Refusee entiere plutot que tronquee, et signalee. */
+    const char *mem = cJSON_GetStringValue(cJSON_GetObjectItem(o, "members")) ?: "";
+    if (cfg_volet_set_members(v, mem) != 0)
+        ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
+                 v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);
     cJSON *vols = cJSON_GetObjectItem(root, "volets");
     for (cJSON *o = vols ? vols->child : NULL; o; o = o->next) parse_volet_json(m, o);
+}
+bool cfg_model_is_backup(const cJSON *root) {
+    if (!cJSON_IsObject(root)) return false;
+    const cJSON *rem = cJSON_GetObjectItemCaseSensitive(root, "remotes");
+    return cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(root, "volets")) && (!rem || cJSON_IsObject(rem));
+}
+bool cfg_model_save_copy(const cfg_model_t *m, const char *path) {
+    char *js = cfg_model_export(m);
+    bool ok = js && cfg_write_file(path, js, strlen(js));
+    free(js);
+    return ok;
 }
 
 /* ── NVS -> modele ── */
@@ -221,21 +234,40 @@ bool cfg_frames_load(const char *path, void *buf, size_t cap, size_t *sz) {
     size_t n = cfg_store_read_legacy_frames(buf, cap);
     if (!n) return false;
     *sz = n;
-    /* Fichier temporaire, renomme une fois complet. Ecrit directement sous son
-     * nom final, un fichier coupe en cours d'ecriture (panne de courant) passait
-     * au demarrage suivant pour le dataset complet, et sa copie NVS, la seule
-     * entiere, etait effacee. Un temporaire incomplet est simplement reecrit. */
+    /* Ecrit directement sous son nom final, un fichier coupe en cours d'ecriture
+     * (panne de courant) passait au demarrage suivant pour le dataset complet, et
+     * sa copie NVS, la seule entiere, etait effacee : d'ou cfg_write_file. */
+    bool ok = cfg_write_file(path, buf, n);
+    if (ok) ESP_LOGI(TAG, "dataset de trames : NVS -> fichier (%u o)", (unsigned)n);
+    else    ESP_LOGE(TAG, "dataset de trames : ecriture du fichier KO, il reste en NVS");
+    return ok;
+}
+
+/* Le temporaire est complet avant de toucher a l'ancien fichier. SPIFFS refuse de
+ * renommer vers un fichier existant (SPIFFS_ERR_CONFLICTING_NAME) : l'ancien est
+ * alors efface juste avant. Une coupure entre les deux laisse le temporaire complet,
+ * que cfg_read_file reprend ; un temporaire incomplet est reecrit la fois suivante. */
+bool cfg_write_file(const char *path, const void *buf, size_t n) {
     char tmp[96];
     if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp)) return false;
     FILE *w = fopen(tmp, "wb");
     bool ok = w && fwrite(buf, 1, n, w) == n;
     if (w && fclose(w) != 0) ok = false;
-    if (ok && rename(tmp, path) != 0) ok = false;
-    if (ok) {
-        ESP_LOGI(TAG, "dataset de trames : NVS -> fichier (%u o)", (unsigned)n);
-    } else {
-        if (w) remove(tmp);
-        ESP_LOGE(TAG, "dataset de trames : ecriture du fichier KO, il reste en NVS");
-    }
-    return ok;
+    if (!ok) { if (w) remove(tmp); return false; }
+    if (rename(tmp, path) == 0) return true;
+    if (remove(path) != 0) { remove(tmp); return false; }   /* l'ancien reste */
+    return rename(tmp, path) == 0;
+}
+char *cfg_read_file(const char *path, size_t cap, size_t *n) {
+    char tmp[96];
+    FILE *f = fopen(path, "rb");
+    if (!f && snprintf(tmp, sizeof(tmp), "%s.tmp", path) < (int)sizeof(tmp)) f = fopen(tmp, "rb");
+    if (!f) return NULL;
+    char *buf = malloc(cap + 1);
+    size_t got = buf ? fread(buf, 1, cap + 1, f) : 0;
+    fclose(f);
+    if (!buf || got == 0 || got > cap) { free(buf); return NULL; }
+    buf[got] = 0;
+    if (n) *n = got;
+    return buf;
 }

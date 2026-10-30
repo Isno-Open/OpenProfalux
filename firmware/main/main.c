@@ -18,6 +18,7 @@
 
 #include "hardware_config.h"
 #include "cc1101.h"
+#include "radio_profile.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
 #include "shutters.h"
@@ -27,14 +28,22 @@
 #include <esp_timer.h>
 #include <esp_mac.h>
 #include "mdns.h"
+#include "mdns_name.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
 #include "log_ring.h"
+#include <esp_attr.h>     /* RTC_NOINIT_ATTR */
+#include <esp_system.h>   /* esp_reset_reason */
 
 static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
 static bool s_debug      = false;   /* switch UI "debug console" : logge chaque capture RX */
+static bool s_upd_auto   = true;    /* verification de mise a jour automatique (toutes les 6 h) */
+static bool s_tx_rpt     = false;   /* option UI : bit de repetition comme la telecommande */
+static bool s_tx_rmt     = false;   /* option UI : emission par le RMT (timing materiel) */
 static uint8_t s_rx_gain = 0x27;    /* plafond de gain RX (AGCCTRL2) reglable via l'UI ; defaut 0x27 */
-static uint32_t s_tx_te  = 455;     /* TE d'emission (us) reglable via l'UI ; defaut 455 (Profalux) */
+static uint32_t s_tx_te  = TX_TE_DEFAULT_US;   /* TE d'emission (us) reglable via l'UI ; defaut 400 */
+static uint8_t  s_radio_prof = RADIO_PROFILE_DEFAULT;   /* profil radio (radio_profile.h), via l'UI */
+static uint32_t s_freq_custom = 0;                      /* kHz, profil custom seulement */
 
 /* Device name / config from NVS */
 static char s_device_name[32] = "volet_test";
@@ -57,9 +66,21 @@ static void load_config(void) {
     sz = sizeof(s_mqtt_pass);   nvs_get_str(h, "mqtt_pass", s_mqtt_pass, &sz);
     uint8_t lf = 0; nvs_get_u8(h, "log_frames", &lf); s_log_frames = lf;
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
+    uint8_t ua = 1; nvs_get_u8(h, "upd_auto", &ua); s_upd_auto = ua;   /* absent = active */
+    uint8_t rp = 0; nvs_get_u8(h, "tx_rpt", &rp); s_tx_rpt = rp;
+    uint8_t rm = 0; nvs_get_u8(h, "tx_rmt", &rm); s_tx_rmt = rm;
     uint8_t rg = 0; if (nvs_get_u8(h, "rx_gain", &rg) == ESP_OK && rg) s_rx_gain = rg;
-    uint32_t te = 0; if (nvs_get_u32(h, "tx_te", &te) == ESP_OK && te) s_tx_te = te;
+    uint32_t te = 0; if (nvs_get_u32(h, "te_tx", &te) == ESP_OK && te) s_tx_te = te;
+    nvs_get_u8(h, "radio_prof", &s_radio_prof);
+    nvs_get_u32(h, "freq_khz", &s_freq_custom);
     nvs_close(h);
+    /* L'ancienne cle tx_te melait le reglage manuel et le TE cale automatiquement a chaque
+     * apprentissage, sans pouvoir les distinguer : effacee une fois, le boitier repart a 400
+     * (issue #64). Le reglage manuel vit desormais sous te_tx. */
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_erase_key(h, "tx_te") == ESP_OK) { nvs_commit(h); ESP_LOGW(TAG, "TE d'emission : ancien reglage efface, %u us", (unsigned)s_tx_te); }
+        nvs_close(h);
+    }
     /* Nom d'appareil vide -> defaut : sinon client_id MQTT vide + topic de disponibilite
      * qui ne coincide pas avec la decouverte HA. */
     if (!s_device_name[0]) strlcpy(s_device_name, "openprofalux", sizeof(s_device_name));
@@ -84,6 +105,46 @@ static void on_mqtt_connected(void) {
     shutters_mqtt_announce(s_device_name);   /* publie la decouverte HA a la VRAIE connexion broker */
 }
 
+/* ── Retour du Wi-Fi en mode secours (wifi_bridge_start_fallback) ──
+ * Des que le reseau repond, on redemarre : le demarrage normal (MQTT, mDNS, decouverte HA)
+ * est deja eprouve, et rien n'est perdu (config et positions en NVS). Une mise a jour
+ * envoyee par le point d'acces est attendue TANT QU'ELLE AVANCE : un envoi abandonne
+ * (telephone coupe du point d'acces, qui suit le canal de la box au retour) reste "en
+ * cours" sans fin cote serveur web ; 20 s sans octet recu -> on redemarre quand meme
+ * (la partition de demarrage ne change qu'une fois l'image verifiee).
+ * La duree passee en mode secours survit au redemarrage logiciel (memoire RTC, pas de
+ * flash) : le journal du demarrage suivant la donne. */
+#define FALLBACK_MAGIC 0x57494649u   /* "WIFI" */
+static RTC_NOINIT_ATTR uint32_t s_fb_magic;
+static RTC_NOINIT_ATTR uint32_t s_fb_secs;
+static int64_t s_fb_since_us;
+static esp_timer_handle_t s_back_timer;
+static void back_restart_now(void) {
+    s_fb_secs = (uint32_t)((esp_timer_get_time() - s_fb_since_us) / 1000000);
+    s_fb_magic = FALLBACK_MAGIC;
+    ESP_LOGW(TAG, "Wi-Fi de retour apres %u s en mode secours : redemarrage", (unsigned)s_fb_secs);
+    esp_restart();
+}
+static void back_restart_cb(void *arg) {
+    (void)arg;
+    static uint32_t last; static int still;   /* octets recus au passage precedent, passages sans progres */
+    ota_status_t st = {0}; ota_get_status(&st);   /* {0} : rien n'est copie si le verrou ne vient pas */
+    bool busy = st.state == OTA_STATE_RECEIVING || st.state == OTA_STATE_VERIFYING || st.state == OTA_STATE_APPLYING;
+    if (busy && st.written_bytes != last) { last = st.written_bytes; still = 0; }
+    if (busy && still++ < 4) {   /* toutes les 5 s, au plus 4 fois sans progres */
+        esp_timer_start_once(s_back_timer, 5 * 1000000ULL);
+        return;
+    }
+    back_restart_now();
+}
+static void on_wifi_back(void) {   /* appele depuis la tache d'evenements : on ne fait qu'armer */
+    if (!s_back_timer) {
+        const esp_timer_create_args_t ta = { .callback = back_restart_cb, .name = "wifi_back" };
+        if (esp_timer_create(&ta, &s_back_timer) != ESP_OK) { back_restart_now(); return; }   /* sinon connecte sans MQTT */
+    }
+    if (!esp_timer_is_active(s_back_timer)) esp_timer_start_once(s_back_timer, 2 * 1000000ULL);
+}
+
 /* NB : le RX radio (capture permanente arbitree) est demarre par shutters_init() ;
  * les trames recues sont routees vers shutters_on_rx en interne. */
 
@@ -94,6 +155,9 @@ void app_main(void) {
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║ OpenProfalux v%s — target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
+    if (s_fb_magic == FALLBACK_MAGIC && esp_reset_reason() == ESP_RST_SW)
+        ESP_LOGW(TAG, "redemarre apres le retour du Wi-Fi (%u s en mode secours)", (unsigned)s_fb_secs);
+    s_fb_magic = 0;
 
     /* 1. NVS */
     esp_err_t err = nvs_flash_init();
@@ -101,17 +165,49 @@ void app_main(void) {
         nvs_flash_erase(); nvs_flash_init();
     }
 
-    /* 1b. OTA (rollback safety : marque l'image valide plus bas apres ~60 s) */
+    /* 1b. OTA (retour automatique : l'image en essai est validee plus bas apres ~60 s) */
     ota_init();
 
     /* 2. Config */
     load_config();
+    /* Nom mDNS (mdns_name.h), decide AVANT le Wi-Fi : un boitier neuf demarre sans Wi-Fi (point
+     * d'acces), et c'est a ce premier demarrage que son nom a suffixe doit etre fige. Nom choisi
+     * par l'utilisateur, sinon le nom fige (cfg/mdns_host) : openprofalux pour un boitier deja
+     * installe (Wi-Fi deja enregistre : adresse inchangee), openprofalux-xxxx pour un neuf. */
+    {
+        char host[MDNS_NAME_MAX + 1] = "";
+        if (!mdns_name_is_default_device(s_device_name)) mdns_name_sanitize(s_device_name, host, sizeof(host));
+        if (!host[0]) {
+            nvs_handle_t h; size_t sz = sizeof(host);
+            if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+                if (nvs_get_str(h, "mdns_host", host, &sz) != ESP_OK || !host[0]) {
+                    uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+                    mdns_name_first_boot(s_wifi_ssid[0] != 0, mac, host, sizeof(host));
+                    nvs_set_str(h, "mdns_host", host); nvs_commit(h);
+                    ESP_LOGW(TAG, "mDNS : nom fige au premier demarrage : %s.local", host);
+                }
+                nvs_close(h);
+            }
+        }
+        wifi_bridge_set_hostname(host);   /* vide : garde openprofalux */
+    }
     ESP_LOGI(TAG, "device=%s wifi_ssid=%s mqtt=%s",
              s_device_name, s_wifi_ssid, s_mqtt_uri);
 
     /* 3. CC1101 */
     if (cc1101_init() != 0) {
         ESP_LOGE(TAG, "CC1101 init FAILED. Check wiring per hardware_config.h");
+    }
+    /* 3b. Profil radio (frequence par marque). Une config invalide ou hors de la plage de la
+     * carte retombe sur le profil par defaut plutot que de laisser la radio muette. */
+    {
+        uint32_t khz;
+        if (!radio_profile_resolve(s_radio_prof, s_freq_custom, CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, &khz)) {
+            ESP_LOGW(TAG, "profil radio %u / %u kHz invalide pour cette carte : profil %s",
+                     s_radio_prof, (unsigned)s_freq_custom, radio_profile_name(RADIO_PROFILE_DEFAULT));
+            khz = radio_profile_freq_khz(RADIO_PROFILE_DEFAULT, 0);
+        }
+        cc1101_set_freq_khz(khz);
     }
     /* 4b. Auto-test emission au boot (prouve que la puce passe en TX). */
     if (cc1101_tx_selftest() == 0)
@@ -121,16 +217,25 @@ void app_main(void) {
     cc1101_rx_probe();   /* sonde de bruit RX au boot (comparaison module/antenne) */
 
     /* 4c. Modele cover + arbitre radio (RX permanent gere en interne) */
+    shutters_set_update_auto(s_upd_auto);   /* avant shutters_init : la 1re verification en tient compte */
     shutters_init();
     pfx_enrol_init();   /* identite virtuelle 0x067 (apprentissage sans telecommande, experimental) */
     if (s_log_frames) shutters_set_log_frames(true);
     cc1101_set_rx_debug(s_debug);   /* switch DEBUG console restaure au boot */
     cc1101_set_rx_gain(s_rx_gain);  /* plafond de gain RX restaure au boot */
     cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */
+    cc1101_set_tx_repeat_bit(s_tx_rpt);   /* bit de repetition (option) restaure au boot */
+    cc1101_set_tx_rmt(s_tx_rmt);          /* emission RMT (option) restauree au boot */
 
-    /* 5. Wi-Fi */
+    /* 5. Reseau : Ethernet filaire d'abord (si la carte en declare), sinon Wi-Fi. */
     wifi_bridge_init();
-    if (strlen(s_wifi_ssid) > 0) {
+#if BOARD_HAS_ETHERNET
+    wifi_bridge_start_eth();
+    /* Laisse le lien physique monter et le DHCP repondre (jusqu'a ~15 s). */
+    for (int r = 0; !wifi_bridge_is_connected() && r < 30; r++) vTaskDelay(pdMS_TO_TICKS(500));
+    if (wifi_bridge_is_connected()) ESP_LOGI(TAG, "reseau par Ethernet filaire");
+#endif
+    if (!wifi_bridge_is_connected() && strlen(s_wifi_ssid) > 0) {
         wifi_bridge_start_sta(s_wifi_ssid, s_wifi_pass);
         /* Wait for connection or timeout */
         int retry = 0;
@@ -139,13 +244,37 @@ void app_main(void) {
     if (!wifi_bridge_is_connected()) {
         uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
         char ap_ssid[32]; snprintf(ap_ssid, sizeof(ap_ssid), "OpenProfalux_%02X%02X", mac[4], mac[5]);
-        ESP_LOGW(TAG, "Wi-Fi not connected. Starting SoftAP '%s' (open) for config.", ap_ssid);
-        wifi_bridge_start_softap(ap_ssid, "");   /* mdp vide => WIFI_AUTH_OPEN (comme OpenXtraflamme) */
+        if (strlen(s_wifi_ssid) > 0) {
+            /* Reseau configure mais muet (box qui redemarre apres une coupure, ou panne) :
+             * point d'acces ET client, qui continue de chercher le reseau (mode secours). */
+            s_fb_since_us = esp_timer_get_time();
+            wifi_bridge_start_fallback(ap_ssid, on_wifi_back);
+        } else {
+            ESP_LOGW(TAG, "Wi-Fi not connected. Starting SoftAP '%s' (open) for config.", ap_ssid);
+            wifi_bridge_start_softap(ap_ssid, "");   /* mdp vide => WIFI_AUTH_OPEN (comme OpenXtraflamme) */
+        }
     }
 
     /* 5b. mDNS (pour l'auto-decouverte du broker MQTT depuis l'UI) */
     if (wifi_bridge_is_connected()) {
-        if (mdns_init() == ESP_OK) { mdns_hostname_set("openprofalux"); mdns_instance_name_set("OpenProfalux"); }
+        if (mdns_init() == ESP_OK) {
+            mdns_hostname_set(wifi_bridge_hostname());
+            /* Nom d'instance : le nom choisi, sinon le nom d'hote (unique par boitier). */
+            mdns_instance_name_set(mdns_name_is_default_device(s_device_name) ? wifi_bridge_hostname() : s_device_name);
+            ESP_LOGI(TAG, "mDNS : %s.local", wifi_bridge_hostname());
+            /* Service _openprofalux._tcp : un client (script, domotique, outil reseau) retrouve le ou
+             * les boitiers sans connaitre leur nom ni leur IP. id (MAC station, voir mdns_name.h) les
+             * distingue ; ver et board disent ce qui tourne dessus. */
+            uint8_t sta[6] = {0}; esp_read_mac(sta, ESP_MAC_WIFI_STA);
+            char id[13]; mdns_name_id(sta, id, sizeof(id));
+            mdns_txt_item_t txt[] = {
+                { "id", id }, { "ver", esp_app_get_description()->version }, { "board", TARGET_NAME },
+            };
+            if (mdns_service_add(NULL, "_openprofalux", "_tcp", 80, txt, 3) == ESP_OK)
+                ESP_LOGI(TAG, "mDNS : service _openprofalux._tcp annonce (id %s)", id);
+            else
+                ESP_LOGW(TAG, "mDNS : service _openprofalux._tcp non annonce");
+        }
     }
 
     /* 5c. UI web embarquee (config Wi-Fi/MQTT, apprentissage, OTA...) */
@@ -169,8 +298,9 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "PRET (%s). Pilotage via HA/MQTT + UI web. Capture/replay actif.", TARGET_NAME);
 
-    /* Boucle de fond : heartbeat MQTT (~60 s) + validation de l'image OTA apres ~60 s
-     * (rollback safety). Le capture/replay + le suivi de position tournent dans le
+    /* Boucle de fond : heartbeat MQTT (~60 s) + validation de l'image OTA apres ~60 s sans
+     * plantage (retour automatique, voir ota.c : un redemarrage voulu ou une nouvelle mise a
+     * jour la valident aussi). Le capture/replay + le suivi de position tournent dans le
      * module radio et la tache shutters. */
     uint32_t hb = 0; bool ota_marked = false;
     while (1) {

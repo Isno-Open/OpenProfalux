@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Wemos/LOLIN D1 mini ESP32 (ESP32-WROOM-32) + module CC1101 868 en breakout.",
+    "Meme bus SPI que la carte external (VSPI 18/19/23/5), mais GDO0 sur IO26 : sur la",
+    "carte de reference, IO4 n'est pas cable (rangee de broches non soudee).",
+    "SPI a 1 MHz, pas 6 : mesure 2026-10-10 sur ce montage, a 6 MHz les octets ecrits en",
+    "rafale (FIFO, PATABLE) arrivent decales d'un bit (260 trames de test sur 300 au",
+    "contenu faux, CRC juste), aucune a 1 MHz. La datasheet borne le burst sans pause a",
+    "6,5 MHz : trop peu de marge avec des fils. Les acces a un registre passaient.",
+    "Une carte nommee, pas lue : aucun strap d'identification."
+  ],
+  "id": "d1-mini",
+  "name": "D1 mini ESP32 + CC1101 externe",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32",
+  "spi_freq_hz": 1000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "breakout CC1101 868",
+      "pins": { "sck": 18, "miso": 19, "mosi": 23, "cs": 5, "gdo0": 26, "gdo2": -1 } }
+  ],
+  "ui": { "button": -1, "led": 2, "led_active_high": true },
+  "region": "eu",
+  "bands_allowed_khz": [
+    { "radio": "868", "low": 863000, "high": 870000, "carrier_khz": 868350, "max_dbm": 10 }
+  ]
+}

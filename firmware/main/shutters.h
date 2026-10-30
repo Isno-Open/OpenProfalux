@@ -1,5 +1,5 @@
 /*
- * shutters.h — modele "cover" OpenProfalux.
+ * shutters.h : modele "cover" OpenProfalux.
  * Clone/replay : chaque volet stocke 3 trames captees (up/down/stop) rejouees telles quelles.
  * Position estimee par le temps (le moteur ne renvoie rien). Multi-serial par volet.
  */
@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #define SH_MAX_VOLETS   24
 /* Longueur maximale (NUL compris) de la liste des membres d'une centrale, CSV
@@ -15,7 +16,7 @@
  * caracteres + la virgule). Au-dela, la liste est refusee, jamais tronquee. Elle
  * vit sur le tas, a sa taille (cfg_model.h) : rien n'est reserve par volet. */
 #define SH_MEMBERS_LEN  (SH_MAX_VOLETS * SH_ID_LEN + 1)
-#define SH_MAX_SERIALS  4
+#define SH_MAX_SERIALS  8    /* vraies telecommandes d'un volet : une centrale + plusieurs individuelles */
 #define SH_BITS_LEN     72   /* 66 bits + marge + NUL */
 #define SH_ID_LEN       24
 #define SH_SERIAL_LEN   12
@@ -26,15 +27,25 @@ void shutters_init(void);
 /* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
 int  shutters_delete_volet(const char *id);
+int  shutters_delete_remote(const char *serial, const char **why);   /* refuse si un volet s'en sert (*why) */
+int  shutters_ignore_remote(const char *serial, const char **why);   /* retire + n'enregistre plus ; refuse si un volet s'en sert */
+int  shutters_unignore_remote(const char *serial);
 
 /* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet. Cree le volet si absent. */
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
 /* Cree un volet "virtuel PFX" a partir d'une identite 0x067 enrolee (pilote par generation,
  * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
-int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, uint16_t te);
+int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
+int  shutters_create_io_volet(const char *id, uint32_t src);    /* volet io-homecontrol (proto io, 1W), source propre du volet dans virt_serial */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);
+/* ZONE : volet appris dont la trame actionne plusieurs volets (telecommande de piece).
+ * Ses suiveurs (CSV d'ids, "" = aucun) suivent ses mouvements sans rien emettre, pour
+ * que leur etat reste juste. Une zone n'a pas de position (comme une centrale).
+ * Suiveurs : volets simples seulement (ni zone, ni centrale) ; une zone ne suit rien.
+ * Refuse (-1) sinon, *why (peut etre NULL) recevant la raison. */
+int  shutters_set_followers(const char *id, const char *members_csv, const char **why);
 int  shutters_reassign(const char *id, const char *from, const char *to);
 
 /* Calibration : temps de course. */
@@ -51,6 +62,8 @@ int  shutters_remote_name(const char *serial, const char *name);
 void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rssi, uint32_t hop);
 /* Adopte une trame vue dans le journal RF (identifiee par serial+hop) et l'affecte a une action. */
 int  shutters_adopt(const char *id, const char *action, const char *serial, uint32_t hop);
+/* Volet cree depuis une telecommande du journal RF (derniere trame ▲ ■ ▼) ; learned = "up,stop,down". */
+int  shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why);
 /* Rejoue telle quelle une trame captee (serial+hop) depuis le journal RF (bouton "rejouer" du debug). */
 int  shutters_replay_frame(const char *serial, uint32_t hop);
 /* Journal RF pour /api/rf : la page [offset, offset + limit) des trames triees par date
@@ -80,15 +93,32 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len);
 /* Active/desactive la publication MQTT de TOUTES les trames captees (dedup par serial). */
 void shutters_set_log_frames(bool on);
 
+/* ── Verification de mise a jour (GitHub) ── */
+/* Verification automatique toutes les 6 h (defaut : oui). Desactivee, seule une demande
+ * explicite (shutters_update_check_now) interroge GitHub. */
+void shutters_set_update_auto(bool on);
+bool shutters_get_update_auto(void);
+/* Demande une verification tout de suite, en tache de fond (ne bloque pas l'appelant).
+ * Fin observable par ota_check_count(). */
+void shutters_update_check_now(void);
+
 /* ── Sauvegarde / restauration ── */
 /* Exporte toute la config (telecommandes + noms + trames de reference + calibration) en
  * JSON, alloue a sa taille : a liberer par l'appelant (NULL si plus de memoire). */
 char *shutters_export_json(void);
-/* Restaure la config depuis un JSON (remplace tout). Retourne 0 si OK. */
-int  shutters_import_json(const char *js);
+/* Restaure la config depuis un JSON (remplace tout). Retourne 0 si OK ; sinon *err dit
+ * pourquoi : "format" (pas une sauvegarde de config, rien n'est touche), "copie" (la
+ * config actuelle n'a pas pu etre copiee, rien n'est touche) ou "nvs" (restauree mais
+ * pas enregistree). Avant de remplacer, copie la config courante : voir undo. */
+int  shutters_import_json(const char *js, const char **err);
+/* Revient a la config d'avant la derniere restauration ; celle-ci devient la copie. */
+int  shutters_restore_undo(const char **err);
+/* Une copie existe-t-elle ? *t recoit sa date (fiable si l'heure etait synchronisee). */
+bool shutters_prev_cfg_time(time_t *t);
 
 /* ── Identités virtuelles PFX (anti-conflit + resync compteur pour l'enrôlement) ── */
 bool     shutters_virt_serial_used(uint32_t serial);        /* serial 0x067 déjà pris par un volet ? */
+bool     shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap); /* volet virtuel de ce serial */
 uint16_t shutters_virt_counter_for_serial(uint32_t serial); /* compteur du volet de ce serial (0 si aucun) */
 
 #endif

@@ -57,6 +57,9 @@ jobs:
           PY
       - name: Resume
         run: echo '${{ steps.lire.outputs.matrice }}'
+      # Une route de trop n'est pas enregistree (404) : /api/central dehors depuis #42, en v0.2.12.
+      - name: Places des tables de routes (web_ui.c)
+        run: python3 tools/check_routes.py
 
   build:
     needs: cartes
@@ -87,6 +90,19 @@ jobs:
               idf.py -B build-ci set-target ${{ matrix.carte.target }}
               idf.py -B build-ci -DBOARD=${{ matrix.carte.board }} build
             "
+
+      - name: Versions des composants figees
+        run: |
+          # Le build doit avoir pris firmware/dependencies.lock.<puce> tel qu'il est commis.
+          # S'il l'a cree (puce nouvelle) ou recalcule (idf_component.yml modifie), les
+          # versions ne sont plus figees : commettre le fichier produit, ci-dessous.
+          lock="firmware/dependencies.lock.${{ matrix.carte.target }}"
+          if [ -n "$(git status --porcelain -- "$lock")" ]; then
+            echo "::error title=${{ matrix.carte.board }}::$lock cree ou recalcule par le build : le commettre"
+            git diff -- "$lock" || true
+            cat "$lock"
+            exit 1
+          fi
 
       - name: Taille de l'image
         run: |
@@ -127,6 +143,23 @@ jobs:
               ./build/cfg_store_host_test.elf
             "
 
+  # L'alerte pile des telecommandes (remote_battery.c) : decision a partir du bit VLOW.
+  # Pure, un simple gcc suffit.
+  banc-remote-battery:
+    name: Banc de test de l'alerte pile des telecommandes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: decision pile faible (gcc + AddressSanitizer)
+        working-directory: firmware/test/remote-battery
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/remote_battery.c \
+             -o remote_battery_host_test
+          ./remote_battery_host_test
+
   # Le decodeur OOK HCS30x/KeeLoq (keeloq_decode.c) sur des trames en bouchon :
   # voir firmware/test/keeloq/README.md. Il est PUR, donc un simple gcc suffit,
   # sans l'image IDF : quelques secondes, et il rend 1 au premier echec.
@@ -144,6 +177,142 @@ jobs:
              -I main -I ../../main main/test_main.c ../../main/keeloq_decode.c \
              -o keeloq_host_test
           ./keeloq_host_test
+
+  # Le balayage RSSI qui trouve la porteuse d'une telecommande (freq_sweep.c) :
+  # voir firmware/test/freq-sweep/README.md. Pur, un simple gcc suffit (issue #51).
+  banc-freq-sweep:
+    name: Banc de test du balayage RSSI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: freq_sweep sur courbes synthetiques (gcc + AddressSanitizer)
+        working-directory: firmware/test/freq-sweep
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/freq_sweep.c \
+             -o freq_sweep_host_test
+          ./freq_sweep_host_test
+
+  # La porte d'apprentissage de l'enrolement (enrol_gate.c) : pas d'apprentissage sans
+  # capture reussie dans la tentative en cours. Voir firmware/test/enrol-gate (issue #53).
+  banc-enrol-gate:
+    name: Banc de test de la porte d'apprentissage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: enrol_gate (gcc + AddressSanitizer)
+        working-directory: firmware/test/enrol-gate
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/enrol_gate.c \
+             -o enrol_gate_host_test
+          ./enrol_gate_host_test
+
+  # Le retour automatique apres une mise a jour (ota_rollback.c) : ce que le firmware conclut
+  # des etats OTA. Voir firmware/test/ota-rollback. Pur, un simple gcc suffit.
+  banc-ota-rollback:
+    name: Banc de test du retour automatique
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ota_rollback (gcc + AddressSanitizer)
+        working-directory: firmware/test/ota-rollback
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/ota_rollback.c \
+             -o ota_rollback_host_test
+          ./ota_rollback_host_test
+
+  # Le nom mDNS du boitier (mdns_name.c) : nettoyage du nom choisi, nom par defaut a suffixe
+  # pour un boitier neuf. Voir firmware/test/mdns-name.
+  banc-mdns-name:
+    name: Banc de test du nom mDNS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: mdns_name (gcc + AddressSanitizer)
+        working-directory: firmware/test/mdns-name
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/mdns_name.c \
+             -o mdns_name_host_test
+          ./mdns_name_host_test
+
+  # Les envois venus de la page d'un autre site (req_guard.c) : refuses, sans toucher a
+  # l'interface, a Home Assistant ni aux scripts. Voir firmware/test/req-guard.
+  banc-req-guard:
+    name: Banc de test des envois venus d'un autre site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: req_guard (gcc + AddressSanitizer)
+        working-directory: firmware/test/req-guard
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/req_guard.c \
+             -o req_guard_host_test
+          ./req_guard_host_test
+
+  # La confirmation d'une trame recue par une seconde identique (rx_confirm.c) :
+  # voir firmware/test/rx-confirm/README.md. Pure, un simple gcc suffit (issue #39).
+  banc-rx-confirm:
+    name: Banc de test de la confirmation des trames
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: rx_confirm sur trames en bouchon (gcc + AddressSanitizer)
+        working-directory: firmware/test/rx-confirm
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/rx_confirm.c \
+             -o rx_confirm_host_test
+          ./rx_confirm_host_test
+
+  # La politique TLS mqtts (mqtt_tls_policy.c) : quand lever le controle du nom (CN) du
+  # certificat du broker. Pure, un simple gcc suffit. Issu de la revue codex sur #11 (P1).
+  banc-mqtt-tls:
+    name: Banc de test de la politique TLS mqtts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: politique TLS sur URI en bouchon (gcc + AddressSanitizer)
+        working-directory: firmware/test/mqtt-tls
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/mqtt_tls_policy.c \
+             -o mqtt_tls_host_test
+          ./mqtt_tls_host_test
+
+  # Les profils radio (radio_profile.c) : frequence par marque, plage autorisee, mot de
+  # frequence CC1101. Pur, un simple gcc suffit.
+  banc-radio-profile:
+    name: Banc de test des profils radio
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: profils et mots de frequence (gcc + AddressSanitizer)
+        working-directory: firmware/test/radio-profile
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/radio_profile.c \
+             -o radio_profile_host_test
+          ./radio_profile_host_test
 
 env:
   # Version epinglee : une montee d'IDF se decide, elle ne se subit pas au

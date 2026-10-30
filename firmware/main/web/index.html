@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0e7490">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="OpenProfalux">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>OpenProfalux</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%230e7490'/%3E%3Crect x='3' y='3' width='26' height='6.5' rx='3' fill='%23063a47'/%3E%3Cg stroke='%23c9e9f0' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 14h20'/%3E%3Cpath d='M6 18h20'/%3E%3Cpath d='M6 22h20'/%3E%3C/g%3E%3C/svg%3E">
+<script>try{var t=localStorage.getItem('opfx_theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -34,20 +39,21 @@
         <rect x="4" y="4" width="24" height="5.5" rx="2.5" fill="currentColor"/>
         <path d="M6.5 13h19M6.5 16.4h19M6.5 19.8h19" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".8"/>
       </svg>
-      <div><h1>OpenProfalux</h1><div class="tag">Volets Profalux 868 · <span id="version">…</span></div></div>
+      <div><h1>OpenProfalux <span id="hdr-fallback" class="hdr-fb" hidden title="Le boîtier n'a pas pu rejoindre ton Wi-Fi. Il réessaie toutes les 30 s et redémarrera tout seul dès que le réseau répond.">(mode de secours)</span></h1><div class="tag">Volets Profalux 868</div></div>
     </div>
     <div class="hdr-actions">
-      <button class="icon-btn" id="logout" title="Se déconnecter" hidden>⏻</button>
-      <button class="icon-btn" id="theme" title="Thème clair / sombre">◐</button>
+      <button class="icon-btn" id="logout" title="Se déconnecter" aria-label="Se déconnecter" hidden>⏻</button>
+      <button class="icon-btn" id="theme" title="Thème clair / sombre" aria-label="Thème clair / sombre">◐</button>
     </div>
   </header>
+  <div class="offline-bar" id="offline-bar" role="status" hidden></div>
 
   <nav class="tabs" id="tabs">
     <button class="tab active" data-t="control"><span>🪟</span>Volets</button>
     <button class="tab" data-t="remotes"><span>📱</span>Télécommandes</button>
     <button class="tab" data-t="wifi"><span>📶</span>Wi-Fi</button>
     <button class="tab" data-t="mqtt"><span>📡</span>MQTT</button>
-    <button class="tab" data-t="ota"><span>⬆️</span>OTA</button>
+    <button class="tab" data-t="ota"><span>⬆️</span>OTA<b class="tab-badge" id="ota-badge" title="Mise à jour disponible" aria-label="mise à jour disponible" hidden></b></button>
     <button class="tab" data-t="sys"><span>⚙️</span>Système</button>
     <button class="tab" data-t="about"><span>ℹ️</span>À propos</button>
   </nav>
@@ -70,18 +76,21 @@
         <button class="subtab" data-s="enrol">Créer une télécommande</button>
         <button class="subtab" data-s="central">Centrale</button>
         <button class="subtab" data-s="calib">Calibration</button>
+        <button class="subtab" data-s="list">Liste</button>
       </nav>
 
       <div class="subpanel active" data-sp="learn">
         <div class="card">
           <h2>Cloner une télécommande</h2>
           <p class="sub">Tu as ta télécommande Profalux d'origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus. Une capture par commande suffit.</p>
+          <p class="hint radio-reminder"></p>
           <div class="field"><label>Volet</label><div id="volet-picker" class="chips"></div></div>
           <div class="field" id="new-volet-row" hidden><input id="new-volet" placeholder="Nom du nouveau volet"></div>
           <div class="field"><label>Nom de la télécommande</label>
             <div class="row" style="flex-wrap:nowrap"><input id="cap-name" placeholder="ex : Murale chambre parents" style="flex:1;min-width:0">
             <button id="rename-btn" class="btn" hidden>Renommer</button></div></div>
           <div id="learn-slots" class="slots"></div>
+          <div class="statline bad" id="learn-fail" hidden><span class="dot"></span><span></span></div>
           <p class="hint" id="learn-serial"></p>
           <div class="field" id="orient-row" hidden>
             <label>Orientation de la façade (azimut) - pour les automatisations soleil</label>
@@ -89,9 +98,28 @@
             <button id="orient-save" class="btn">Enregistrer</button></div>
             <p class="hint">Nord = 0 · Est = 90 · Sud = 180 · Ouest = 270. Laisser vide = non défini.</p>
           </div>
+          <div class="field" id="zone-row" hidden>
+            <label>Zone : volets actionnés aussi par cette télécommande</label>
+            <div id="zone-members" class="chips"></div>
+            <div class="row" style="margin-top:6px"><button id="zone-save" class="btn">Enregistrer</button></div>
+            <p class="hint">Pour une télécommande de pièce (un seul serial, plusieurs volets). Les volets cochés suivent ses mouvements dans l'application, sans émission supplémentaire. Coche directement les volets, pas une autre zone. Une zone n'a pas de position, comme une centrale.</p>
+          </div>
           <div class="row" id="del-volet-row" hidden><button id="del-volet" class="btn danger">🗑 Supprimer ce volet</button></div>
-          <p class="hint" id="learn-hint">Choisis un volet ci-dessus pour activer la capture. Place-toi à moins d'un mètre du boîtier et appuie une fois sur le bon bouton.</p>
+          <p class="hint" id="learn-hint">Choisis un volet ci-dessus pour activer la capture. Place-toi à moins d'un mètre du boîtier et appuie sur le bon bouton en le tenant une seconde.</p>
           <div class="statline" style="margin-top:14px"><span class="dot"></span><b>Le clonage ne pilote pas ton moteur ?</b> Certains moteurs refusent le rejeu (rolling code strict). Dans ce cas, <a href="#" id="goto-enrol"><b>crée une télécommande virtuelle</b></a> - ça nécessite aussi ta télécommande d'origine.</div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="list">
+        <div class="card">
+          <h2>Télécommandes enregistrées <span class="badge" id="remotes-count"></span></h2>
+          <p class="sub">Toute télécommande captée par le boîtier, même celle d'un voisin, s'enregistre ici (sans nom). Supprime celles qui ne servent pas : une télécommande supprimée revient si elle est de nouveau captée, une télécommande ignorée ne revient plus.</p>
+          <div class="statline bad" id="remotes-full" hidden><span class="dot"></span><b></b></div>
+          <div id="remotes-list"></div>
+          <p class="hint" id="remotes-empty" hidden>Aucune télécommande enregistrée.</p>
+          <h3>Télécommandes ignorées</h3>
+          <p class="sub">Le boîtier ne les enregistre plus quand il les capte (celle d'un voisin, par exemple). Retire-en une avec sa croix, ou ajoute un serial à la main.</p>
+          <div class="tagbox" id="ignored-box"><input id="ignored-input" placeholder="0x… puis Entrée" spellcheck="false" autocomplete="off"></div>
         </div>
       </div>
 
@@ -128,11 +156,24 @@
 
       <div class="subpanel" data-sp="enrol">
         <div class="card">
+          <h2>Créer une télécommande</h2>
+          <p class="sub">Crée une nouvelle télécommande que ton moteur apprend. Choisis d'abord le type de moteur : la suite s'adapte à la marque.</p>
+          <div class="field"><label>Type de moteur / protocole</label>
+            <select id="enrol-proto-sel">
+              <option value="pfx">Profalux / Eveno (868 MHz)</option>
+              <option value="io">Somfy io-homecontrol / Velux</option>
+            </select></div>
+
+          <div id="enrol-pfx" style="margin-top:12px">
           <div class="statline"><span class="dot"></span><b>À utiliser si le clonage ne pilote pas ton moteur.</b> On crée une nouvelle télécommande virtuelle et on l'apprend au moteur. <b>Nécessite ta télécommande d'origine</b> (pour le geste de validation). Appuie dessus : le boîtier l'identifie et attribue une identité - <b>nouvelle</b> si le moteur est inconnu, <b>la même</b> s'il est déjà connu.</div>
-          <h2>Créer une télécommande virtuelle</h2>
+          <h3>Télécommande virtuelle Profalux</h3>
+          <p class="hint radio-reminder"></p>
           <div class="field"><label>Modèle de moteur</label><select id="pfx-model"></select></div>
           <div class="row"><button id="pfx-capture" class="btn primary">📡 Appuie sur ta télécommande d'origine</button></div>
-          <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b></div>
+          <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
+          <div id="pfx-renew-row" hidden>
+            <p class="hint">Tu réenrôles ce moteur : continue avec cette identité. Si elle a été apprise par <b>d'autres moteurs</b> (ils bougent ensemble), crée plutôt une identité neuve : elle ne servira qu'au moteur que tu enrôles maintenant.</p>
+            <div class="row"><button id="pfx-renew" class="btn">🆕 Créer une identité neuve à la place</button></div></div>
           <div class="statline" id="pfx-ident" hidden><span class="dot"></span><b></b></div>
           <div id="pfx-steps" hidden>
             <h3>1. Enrôler l'identité sur le moteur</h3>
@@ -141,18 +182,70 @@
             <div class="row"><button id="pfx-learn" class="btn primary">📡 Émettre la trame d'apprentissage (~5 s)</button></div>
             <div class="statline" id="pfx-learn-status" hidden><span class="dot"></span><b></b></div>
             <div id="pfx-after-emit" hidden>
-              <p class="sub"><b>✅ Émission finie - fais MAINTENANT sur ta télécommande d'origine :</b></p>
+              <p class="sub"><b>✅ Émission finie. Fais MAINTENANT sur ta télécommande d'origine :</b></p>
               <ol class="steps" id="pfx-gestures"></ol>
+              <p class="sub">Quand les gestes sont faits, clique ci-dessous. Beaucoup de moteurs font un petit va-et-vient pour confirmer : bon signe. Certains ne bougent pas du tout : c'est normal aussi.</p>
+              <div class="row"><button id="pfx-gestes-ok" class="btn primary">✅ J'ai fait les gestes</button></div>
+              <div class="statline" id="pfx-wait" hidden><span class="dot"></span><b></b></div>
             </div>
             <h3>2. Tester la nouvelle identité</h3>
-            <p class="sub">Si le moteur a bien appris, ces boutons doivent le piloter.</p>
-            <div class="dpad enrol-pad"><button id="pfx-up">▲</button><button id="pfx-stop">■</button><button id="pfx-down">▼</button></div>
+            <p class="sub">Les boutons restent bloqués pendant le délai de confirmation du moteur (~10 s après les gestes), puis se débloquent. Si le moteur a bien appris, ils doivent le piloter. S'il ne répond pas tout de suite, réessaie : ne recommence pas l'enrôlement.</p>
+            <div class="dpad enrol-pad"><button id="pfx-up" disabled>▲</button><button id="pfx-stop" disabled>■</button><button id="pfx-down" disabled>▼</button></div>
             <h3>3. Enregistrer comme volet</h3>
             <p class="sub">Pour le retrouver dans l'onglet <b>Volets</b> et le piloter depuis Home Assistant.</p>
             <div class="field"><div class="row" style="flex-wrap:nowrap">
               <input id="pfx-volet-name" placeholder="Nom du volet (ex : Salon)" style="flex:1;min-width:0">
               <button id="pfx-save-volet" class="btn primary">💾 Enregistrer</button></div></div>
             <div class="row" style="margin-top:12px"><button id="pfx-forget" class="btn">↩ Désélectionner (garde l'identité et son compteur)</button></div>
+          </div>
+          </div><!-- /enrol-pfx -->
+
+          <div id="enrol-io" hidden>
+            <div class="statline"><span class="dot"></span><b>Pour un moteur Somfy io (ou Velux).</b> Le boîtier s'ajoute comme une nouvelle télécommande. <b>Nécessite ta télécommande d'origine</b> pour mettre le moteur en appairage.</div>
+            <h3>Télécommande virtuelle io</h3>
+            <p class="hint radio-reminder"></p>
+            <div class="field"><label>Mode d'ajout</label>
+              <select id="io-profile-sel">
+                <option value="2">Avec ta télécommande, notre identité (recommandé)</option>
+                <option value="1">Simple, notre identité seule (témoin)</option>
+              </select></div>
+            <p class="sub">Deux captures dans l'ordre, un geste chacune sur ta télécommande d'origine. Le boîtier enregistre tout (reçu + émis) dans un journal que tu récupères en bas.</p>
+
+            <p class="sub"><b>1.</b> Clique, puis <b>appuie normalement</b> sur un bouton de ta télécommande (montée ou descente). ~15 s d'écoute : ça relève son compteur.</p>
+            <div class="row"><button id="io-counter-btn" class="btn primary" type="button">📡 1. Capter le compteur (appui normal)</button></div>
+            <div class="statline" id="io-counter-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
+
+            <p class="sub" style="margin-top:12px"><b>2.</b> Clique, puis <b>presse le bouton à copier</b> quelques secondes (le geste de copie / transfert). ~30 s d'écoute : on regarde si sa clé (<code>0x30</code>) sort. (En mode témoin, pas besoin.)</p>
+            <div class="row"><button id="io-sniff-btn" class="btn primary" type="button">📡 2. Capter la clé (geste de copie)</button></div>
+            <div class="statline" id="io-sniff-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
+
+            <div id="io-step3">
+              <p class="sub" style="margin-top:12px"><b>3.</b> Rien capté au geste de copie ? Mets <b>ta télécommande en PROG</b> : tiens son bouton PROG ~2-3 s (jusqu'au va-et-vient du volet). On capte ce qu'elle émet en appairage.</p>
+              <div class="row"><button id="io-sniff-prog-btn" class="btn primary" type="button">📡 3. Réessayer, télécommande en PROG</button></div>
+              <div class="statline" id="io-sniff-prog-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
+            </div>
+
+            <div id="io-steps" hidden>
+              <h3>1. Enrôler sur le moteur</h3>
+              <div class="statline"><span class="dot"></span>La clé est captée. <b>Mets maintenant ta télécommande d'origine en PROG</b> (tiens son bouton PROG jusqu'au va-et-vient du volet), PUIS clique : la carte émet le rituel + notre identité dans la foulée.</div>
+              <div class="row"><button id="io-pair1w-btn" class="btn primary" type="button">✅ Créer la télécommande (origine en PROG)</button></div>
+              <div class="statline" id="io-pair-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
+
+              <h3 style="margin-top:14px">2. Tester la nouvelle identité</h3>
+              <p class="sub">Si le moteur a bien appris, ces boutons le pilotent. Sinon, choisis un autre mode d'ajout ci-dessus et recommence.</p>
+              <div class="dpad enrol-pad"><button id="io-up" disabled>▲</button><button id="io-stop" disabled>■</button><button id="io-down" disabled>▼</button></div>
+            </div>
+
+            <h3 style="margin-top:14px">Séquence captée (RX + TX)</h3>
+            <p class="sub">Après la capture (et le « Créer »), récupère ici la séquence complète : tout ce que le boîtier a <b>reçu</b> (RX, avec RSSI) et <b>émis</b> (TX), dans l'ordre et horodaté. Copie-la et envoie-la nous.</p>
+            <div class="row"><button id="io-trace-btn" class="btn" type="button">📥 Récupérer la séquence (RX + TX)</button></div>
+            <pre id="io-trace-out" class="io-trace" hidden></pre>
+
+            <h3 style="margin-top:14px">Journal io (debug)</h3>
+            <p class="sub">Écoute io brute : note chaque trame reçue au journal, avec RSSI et horodatage. Outil de capture et de décodage d'une séquence d'enrôlement. Suspend l'écoute Profalux le temps de l'écoute.</p>
+            <div class="row"><button id="io-listen-btn" class="btn" type="button">Écoute io permanente : OFF</button></div>
+            <div class="statline" id="io-listen-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
+            <div id="io-unknowns" class="hint"></div>
           </div>
         </div>
       </div>
@@ -171,9 +264,9 @@
         <details class="field" style="margin-bottom:12px">
           <summary style="cursor:pointer;font-weight:600">🔒 TLS (mqtts://)</summary>
           <p class="hint" style="margin-top:8px">Préfixe le broker par <code>mqtts://</code> pour chiffrer. Colle le certificat de l'autorité (CA) du broker, obligatoire pour un broker auto-signé. Pour le TLS mutuel, ajoute le certificat et la clé du client. Laisser un champ vide ne change pas le certificat déjà enregistré.</p>
-          <div class="field"><label>Certificat de l'autorité (CA) du broker</label><textarea id="mqtt-ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
-          <div class="field"><label>Certificat client (TLS mutuel)</label><textarea id="mqtt-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea></div>
-          <div class="field"><label>Clé privée client</label><textarea id="mqtt-key" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></div>
+          <div class="field"><label>Certificat de l'autorité (CA) du broker</label><textarea id="mqtt-ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea><label class="hint" style="display:block;margin-top:4px"><input type="checkbox" id="mqtt-ca-clear"> Effacer le certificat enregistré (revenir au bundle public)</label></div>
+          <div class="field"><label>Certificat client (TLS mutuel)</label><textarea id="mqtt-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----"></textarea><label class="hint" style="display:block;margin-top:4px"><input type="checkbox" id="mqtt-cert-clear"> Effacer le certificat client enregistré</label></div>
+          <div class="field"><label>Clé privée client</label><textarea id="mqtt-key" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea><label class="hint" style="display:block;margin-top:4px"><input type="checkbox" id="mqtt-key-clear"> Effacer la clé enregistrée</label></div>
         </details>
         <div class="field"><label>Nom de l'appareil (Home Assistant)</label><input id="mqtt-device" placeholder="OpenProfalux"></div>
         <div class="row end"><button id="mqtt-save" class="btn primary">Enregistrer le MQTT</button></div>
@@ -185,15 +278,20 @@
       <div class="card">
         <h2>Mise à jour (OTA)</h2>
         <p class="sub">Version courante : <code id="ota-version">…</code></p>
+        <div class="statline" id="ota-rb" hidden><span class="dot"></span><b style="flex:1;min-width:0"></b></div>
+        <div class="statline bad" id="ota-annulee" hidden><span class="dot"></span><b style="flex:1;min-width:0"></b></div>
         <h3>Depuis GitHub</h3>
         <div class="row"><button id="ota-check" class="btn">Vérifier la dernière version</button>
           <button id="ota-github" class="btn primary" hidden>Installer depuis GitHub</button></div>
-        <p class="hint" id="ota-latest" style="margin:9px 0 0">Récupère la dernière release publiée sur GitHub.</p>
+        <p class="hint" id="ota-latest" style="margin:9px 0 0">Le boîtier interroge GitHub et récupère la dernière release publiée.</p>
+        <label class="switch" style="margin-top:12px"><input type="checkbox" id="ota-auto"><span class="track"></span>
+          <span class="lbl">Vérification automatique<small>Le boîtier interroge GitHub toutes les 6 h (entité de mise à jour Home Assistant). Désactivée, il ne le fait que sur le bouton ci-dessus.</small></span></label>
         <h3>Depuis un fichier</h3>
         <div class="field"><label>Fichier firmware (.bin)</label><input type="file" id="ota-file" accept=".bin"></div>
         <div class="row"><button id="ota-btn" class="btn primary">Flasher</button><button id="ota-rollback" class="btn danger">↩ Version précédente</button></div>
+        <p class="hint" id="ota-rb-why" hidden style="margin:6px 0 0"></p>
         <div id="ota-prog" hidden style="margin-top:12px"><progress id="ota-bar" max="100" value="0"></progress> <span class="hint" id="ota-msg"></span></div>
-        <p class="hint" style="margin-top:12px">Écrit sur la partition inactive ; rollback automatique si le démarrage échoue.</p>
+        <p class="hint" style="margin-top:12px">Écrit sur la partition inactive, puis redémarre dessus. Si la nouvelle version plante dans sa première minute, le boîtier revient tout seul à l'ancienne (retour automatique actif). Ne pas le débrancher pendant cette minute : il reviendrait aussi à l'ancienne version.</p>
       </div>
     </section>
 
@@ -205,9 +303,12 @@
         <div class="statline" id="wifi-status"><span class="dot"></span><b>…</b></div>
         <div class="field"><label>Nom du réseau (SSID)</label><input id="wifi-ssid"></div>
         <div class="field"><label>Mot de passe</label><input id="wifi-pass" type="password" placeholder="•••••••• (inchangé si vide)"></div>
+        <div class="field"><label>Nom du boîtier (facultatif)</label><input id="wifi-device" placeholder="openprofalux">
+          <p class="hint">Donne aussi son adresse sur ton réseau : <code id="wifi-url">…</code></p></div>
         <label class="switch"><input type="checkbox" id="wifi-reboot" checked><span class="track"></span>
           <span class="lbl">Redémarrer après enregistrement<small>Nécessaire pour appliquer un nouveau réseau</small></span></label>
         <div class="row end"><button id="wifi-save" class="btn primary">Enregistrer le Wi-Fi</button></div>
+        <div class="statline ok" id="wifi-next" hidden><span class="dot"></span><b></b></div>
       </div>
     </section>
 
@@ -215,6 +316,7 @@
     <section class="panel" data-p="sys">
       <nav class="subtabs">
         <button class="subtab active" data-s="device">Appareil</button>
+        <button class="subtab" data-s="health">État</button>
         <button class="subtab" data-s="radio">Radio</button>
         <button class="subtab" data-s="backup">Sauvegarde</button>
         <button class="subtab" data-s="rf">RF (debug)</button>
@@ -234,6 +336,19 @@
             <span class="lbl">Écoute RF permanente<small>Active le RF debug en direct, le suivi de position via la vraie télécommande et le dataset MQTT. Désactivée = radio libre (moins de bruit).</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-debug"><span class="track"></span>
             <span class="lbl">Debug console<small>Logge chaque capture RX dans la console série (symboles, RSSI, bits, KeeLoq ou non). Pour diagnostiquer « ça ne capte pas ». À laisser OFF en usage normal (verbeux).</small></span></label>
+          <div class="field" style="margin-top:12px"><label>Profil radio - marque des volets</label>
+            <select id="sys-radioprof">
+              <option value="profalux">Profalux (868,425 MHz)</option>
+              <option value="eveno">Eveno (868,330 MHz)</option>
+              <option value="custom">Fréquence personnalisée</option>
+            </select>
+            <input id="sys-freq" type="number" step="1" placeholder="868330" hidden style="margin-top:8px">
+            <p class="hint" id="sys-freq-hint"></p>
+            <p class="hint">Fréquence d'émission et d'écoute du boîtier. Appliquée tout de suite, sans redémarrage. Si ta télécommande n'est pas captée même collée à l'antenne, essaie l'autre profil : Eveno émet ~100 kHz plus bas que Profalux.</p>
+            <div class="row" style="margin-top:8px"><button id="sys-sweep" class="btn">📡 Caler sur ma télécommande</button></div>
+            <p class="hint">Trouve la fréquence exacte de ta télécommande, telle que ce boîtier la reçoit. Place-la à 1-2 m du boîtier, passe son commutateur sur <b>P</b> (sans appuyer sur STOP : ce n'est pas un apprentissage, le volet ne bouge pas), clique, et laisse-le sur P jusqu'à la fin (~5 s). Remets-le ensuite sur N.</p>
+            <div class="statline" id="sys-sweep-res" hidden><span class="dot"></span><b></b></div>
+            <div class="row" id="sys-sweep-apply-row" hidden><button id="sys-sweep-apply" class="btn primary">Appliquer cette fréquence</button></div></div>
           <div class="field" style="margin-top:12px"><label>Gain RX (AGCCTRL2) - réglage de diagnostic réception</label>
             <select id="sys-rxgain">
               <option value="7">0x07 - gain max (le plus sensible, mais capte le bruit)</option>
@@ -245,12 +360,24 @@
             <p class="hint" style="margin-top:8px"><button id="rxcal-btn" class="btn" type="button">Calibrer la réception (auto)</button>
               <span id="rxcal-status" style="margin-left:8px"></span></p>
             <p class="hint">Clique, puis <b>appuie en continu / répète les appuis</b> sur ta télécommande à moins d'1 m pendant tout le test (~25 s) : le boîtier teste chaque gain 6 s et verrouille le bon dès qu'il capte une trame valide. Presse à chaque changement de valeur affiché.</p></div>
-          <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio du rejeu</label>
-            <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="455">
-            <p class="hint"><b>Auto-réglé à l'apprentissage</b> : le boîtier mesure le tempo de ta télécommande et cale l'émission dessus (Profalux ≈ 455, FranciaFlex ≈ 415). Ce champ n'est qu'un <b>override manuel</b> si besoin.</p></div>
+          <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio des commandes</label>
+            <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="400">
+            <p class="hint"><b>400 µs par défaut</b>, la valeur nominale des télécommandes KeeLoq (HCS300 : 260 à 660 µs selon l'oscillateur). Les moteurs mesurent le TE de chaque trame et tolèrent toute cette plage : ne change cette valeur que si un moteur ignore les commandes du boîtier.</p></div>
+          <label class="switch"><input type="checkbox" id="sys-txrpt"><span class="track"></span>
+            <span class="lbl">Émettre comme la télécommande (bit de répétition)<small>Première trame d'un appui marquée « initiale », les suivantes « répétition », 18 ms entre trames, comme une télécommande KeeLoq. Sans cette option, le boîtier envoie des trames identiques. Les moteurs testés acceptent les deux : n'activer que si un moteur ignore les commandes du boîtier.</small></span></label>
+          <label class="switch"><input type="checkbox" id="sys-txrmt"><span class="track"></span>
+            <span class="lbl">Émission matérielle (RMT)<small>Le minutage de chaque trame est tenu par le périphérique RMT, et non plus par une boucle logicielle que le WiFi peut interrompre. À essayer si des commandes sont parfois ignorées. En cas d'échec, le boîtier repasse automatiquement en émission logicielle.</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>
           <div class="row end"><button id="sys-save" class="btn primary">Enregistrer</button></div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="health">
+        <div class="card">
+          <h2>État du boîtier</h2>
+          <dl class="health" id="health"><dt>Chargement…</dt><dd></dd></dl>
+          <p class="hint">« Au plus bas » : depuis le démarrage. « Plus gros bloc » : ce qu'obtient d'un seul tenant une connexion sécurisée (GitHub, MQTT TLS).</p>
         </div>
       </div>
 
@@ -261,6 +388,7 @@
           <p class="hint" id="diag-line"></p>
           <div class="row"><button id="diag-tx-btn" class="btn" type="button">Re-tester l'émission (TX)</button><button id="diag-rx-btn" class="btn" type="button">Tester la réception (presse ta télécommande)</button></div>
           <p class="hint" id="diag-rx-status" style="margin-top:8px"></p>
+          <p class="hint">Volets <b>io-homecontrol</b> (Somfy io, Velux) : désormais dans <b>Télécommandes → Volet io</b>.</p>
           <p class="hint">La puce est détectée mais rien ne se capte ? Vérifie que ton module est bien en <b>868 MHz</b> (pas 433), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>.</p>
         </div>
       </div>
@@ -273,6 +401,7 @@
           <h3>Restaurer</h3>
           <div class="field"><input type="file" id="restore-file" accept=".json,application/json"></div>
           <div class="row"><button id="restore-btn" class="btn">Restaurer (remplace la config actuelle)</button></div>
+          <p class="hint" id="restore-prev" hidden></p>
         </div>
       </div>
 

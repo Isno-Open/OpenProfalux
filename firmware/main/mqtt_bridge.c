@@ -1,5 +1,6 @@
 #include "mqtt_bridge.h"
-#include "hardware_config.h"   /* TARGET_NAME, utilise ligne 130 */
+#include "hardware_config.h"
+#include "mqtt_tls_policy.h"   /* TARGET_NAME, utilise ligne 130 */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,19 +162,6 @@ static char *read_cert_nvs(const char *which) {
     if (buf) buf[n - 1] = 0;   /* garantit le \0 final */
     return buf;
 }
-/* Hote de l'URI = IPv4 litterale ? Le CN d'un certificat ne peut pas correspondre a une
- * IP, on n'echoue donc pas sur le nom (skip_cert_common_name_check) dans ce cas. */
-static bool host_is_ipv4(const char *uri) {
-    const char *h = strstr(uri, "://");
-    h = h ? h + 3 : uri;
-    int groups = 0, digits = 0;
-    for (; *h && *h != ':' && *h != '/'; h++) {
-        if (*h == '.')      { if (!digits) return false; groups++; digits = 0; }
-        else if (isdigit((unsigned char)*h)) digits++;
-        else return false;
-    }
-    return groups == 3 && digits > 0;
-}
 int mqtt_cert_write(const char *which, const char *pem) {
     const char *key = cert_key(which);
     if (!key) return -1;
@@ -252,14 +240,20 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
         s_tls_key  = read_cert_nvs("key");
         if (s_tls_ca) cfg.broker.verification.certificate = s_tls_ca;          /* autorite du broker */
         else          cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;  /* broker public */
-        cfg.broker.verification.skip_cert_common_name_check = host_is_ipv4(s_uri);
+        /* On ne leve le controle du nom (CN) que pour un broker en IP ET avec un CA prive
+         * fourni : l'utilisateur maitrise alors l'emission, le risque se limite a ses propres
+         * certificats. Avec le bundle public on garde le controle : il echoue sur une IP (aucun
+         * CA public n'emet pour une IP privee), et c'est voulu, sinon n'importe quel certificat
+         * public usurperait le broker. */
+        bool skip_cn = mqtt_tls_skip_cn(s_uri, s_tls_ca != NULL);
+        cfg.broker.verification.skip_cert_common_name_check = skip_cn;
         if (s_tls_cert && s_tls_key) {   /* TLS mutuel : certificat + cle du client */
             cfg.credentials.authentication.certificate = s_tls_cert;
             cfg.credentials.authentication.key         = s_tls_key;
         }
         ESP_LOGI(TAG, "TLS actif : CA=%s, cert client=%s, skip_cn=%d",
                  s_tls_ca ? "fourni" : "bundle", (s_tls_cert && s_tls_key) ? "oui" : "non",
-                 (int)host_is_ipv4(s_uri));
+                 (int)skip_cn);
     }
     s_mqtt = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(s_mqtt, ESP_EVENT_ANY_ID, mqtt_event_cb, NULL);

@@ -1,6 +1,6 @@
 # La cible materielle ne se choisit plus ici.
 #
 # Le brochage est declare par carte dans boards/<carte>.json et selectionne a la
-# construction par -DBOARD=isno-super | external | m5-atom-lite (voir README).
+# construction par -DBOARD=isno-super | external | d1-mini | m5-atom-lite (voir README).
 # Ce fichier ne declare donc aucune option ; il reste pour que le chemin
 # Kconfig.projbuild existe si une vraie option de projet apparait un jour.

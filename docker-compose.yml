@@ -3,11 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.esp-idf
+    # Reconstruire a chaque lancement (quelques secondes en cache) : sans cela, compose garde
+    # l'image deja construite, meme quand Dockerfile.esp-idf change de version d'ESP-IDF.
+    pull_policy: build
     container_name: openprofalux-esp-idf
+    # Tout le depot : le CMake du firmware lit boards/<carte>.json et tools/ a la racine.
     volumes:
-      - ./firmware:/project/firmware
-      - ./docs:/project/docs
-      - ./README.md:/project/README.md
+      - .:/project
     # Port serie : decommenter pour flasher, et ajuster. Laisse actif, docker
     # compose refuse de demarrer sur une machine qui n'a pas ce peripherique.
     # devices:

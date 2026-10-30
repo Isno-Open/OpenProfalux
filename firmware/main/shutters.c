@@ -1,17 +1,19 @@
 /*
- * shutters.c — modele cover OpenProfalux (clone/replay + position time-based).
+ * shutters.c : modele cover OpenProfalux (clone/replay + position time-based).
  * Config persistee en NVS, un document JSON par volet (voir cfg_store.h). Le
  * dataset de trames et le ring RF vivent en SPIFFS (partition "storage").
  */
 #include "shutters.h"
 #include "cfg_store.h"
 #include "cfg_model.h"
+#include "remote_battery.h"
 #include "pfx_enrol.h"
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -23,11 +25,13 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
+#include "io/io_send.h"   /* io_button_for_action : action volet -> code bouton io */
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
 #include "ota.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = version installee */
 #include "esp_wifi.h"
+#include "wifi_bridge.h"
 #include "esp_netif.h"
 
 static const char *TAG = "shutters";
@@ -60,6 +64,98 @@ static bool     s_pos_dirty = false;     /* position d'un volet a changer/figer 
 
 #define LOCK()   xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_lock)
+
+/* ── Liste des telecommandes (SH_MAX_REMOTES places) ── Appeles sous LOCK. */
+static char s_remote_refused[SH_SERIAL_LEN];   /* derniere telecommande refusee, liste pleine ("" = aucune) */
+
+/* Telecommandes IGNOREES (bouton UI) : une trame confirmee ne les enregistre plus. Le suivi
+ * de position d'un volet n'en depend pas (il passe par les serials du volet). NVS cfg/rem_ignore,
+ * CSV. Appeles sous LOCK, sauf ignore_load (boot). */
+#define SH_MAX_IGNORED 32
+static char s_ignored[SH_MAX_IGNORED][SH_SERIAL_LEN];
+static int  s_nignored = 0;
+
+static bool ignored(const char *shex) {
+    for (int i = 0; i < s_nignored; i++) if (!strcmp(s_ignored[i], shex)) return true;
+    return false;
+}
+static void ignore_save(void) {
+    char csv[SH_MAX_IGNORED * SH_SERIAL_LEN + 1] = "";
+    for (int i = 0; i < s_nignored; i++) {
+        if (i) strlcat(csv, ",", sizeof(csv));
+        strlcat(csv, s_ignored[i], sizeof(csv));
+    }
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "rem_ignore", csv); nvs_commit(h); nvs_close(h);
+}
+static void ignore_load(void) {
+    char csv[SH_MAX_IGNORED * SH_SERIAL_LEN + 1] = ""; size_t sz = sizeof(csv);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) return;
+    if (nvs_get_str(h, "rem_ignore", csv, &sz) != ESP_OK) csv[0] = 0;
+    nvs_close(h);
+    s_nignored = 0;
+    for (char *p = csv, *t; s_nignored < SH_MAX_IGNORED && (t = strsep(&p, ",")); )
+        if (*t) strlcpy(s_ignored[s_nignored++], t, SH_SERIAL_LEN);
+}
+
+static remote_t *remote_find(const char *shex) {
+    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) return &s_remotes[i];
+    return NULL;
+}
+/* Trouve ou ajoute (sans nom). Liste pleine : refuse, le journalise et le signale a l'UI
+ * (/api/status remote_refused) au lieu de l'ignorer en silence (issue #39, zone 5 perdue). */
+static remote_t *remote_add(const char *shex) {
+    remote_t *rm = remote_find(shex);
+    if (rm) return rm;
+    if (s_nremotes >= SH_MAX_REMOTES) {
+        if (strcmp(s_remote_refused, shex)) {
+            ESP_LOGW(TAG, "liste des telecommandes pleine (%d) : %s non enregistree, supprimez-en une inutile",
+                     SH_MAX_REMOTES, shex);
+            strlcpy(s_remote_refused, shex, SH_SERIAL_LEN);
+        }
+        return NULL;
+    }
+    rm = &s_remotes[s_nremotes++];
+    memset(rm, 0, sizeof(*rm));
+    strlcpy(rm->serial, shex, SH_SERIAL_LEN);
+    return rm;
+}
+/* Serial (0x%07X) d'une trame stockee : bits[32..59], LSB en tete. "" si trame absente. */
+static void bits_serial_hex(const char *bits, char *out) {
+    out[0] = 0;
+    if ((int)strlen(bits) < 60) return;
+    uint32_t ser = 0;
+    for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
+    snprintf(out, SH_SERIAL_LEN, "0x%07X", (unsigned)ser);
+}
+/* Volet qui utilise cette telecommande (serial de suivi, identite virtuelle, ou commande
+ * apprise), NULL si aucun. */
+static const char *remote_user(const char *shex) {
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        for (int j = 0; j < v->n_serials; j++) if (!strcmp(v->serials[j], shex)) return v->id;
+        if (v->virt) {
+            char vx[SH_SERIAL_LEN]; snprintf(vx, sizeof(vx), "0x%07X", (unsigned)v->virt_serial);
+            if (!strcmp(vx, shex)) return v->id;
+        }
+        const char *cmds[3] = { v->up, v->down, v->stop };
+        for (int k = 0; k < 3; k++) {
+            char cx[SH_SERIAL_LEN]; bits_serial_hex(cmds[k], cx);
+            if (cx[0] && !strcmp(cx, shex)) return v->id;
+        }
+    }
+    return NULL;
+}
+/* Retire la telecommande d'index i (et son jeu de trames). */
+static void remote_remove(int i) {
+    free(s_remotes[i].hops);
+    memmove(&s_remotes[i], &s_remotes[i + 1], (size_t)(s_nremotes - i - 1) * sizeof(remote_t));
+    s_nremotes--;
+    memset(&s_remotes[s_nremotes], 0, sizeof(remote_t));
+    s_remote_refused[0] = 0;   /* une place s'est liberee */
+}
 
 /* ── Publication MQTT DIFFEREE (anti-deadlock) ──────────────────────────────
  * REGLE ABSOLUE : ne JAMAIS appeler mqtt_pub_raw sous le LOCK. Un handler MQTT
@@ -99,6 +195,21 @@ static void update_listening(void);   /* (defini plus bas) : allume le RX si vol
 
 static volet_t *find_volet(const char *id) {
     for (int i = 0; i < s_nvolets; i++) if (!strcmp(s_volets[i].id, id)) return &s_volets[i];
+    return NULL;
+}
+/* ZONE : volet appris qui a des suiveurs (voir zone_follow). Une zone n'est
+ * jamais suiveuse, et un suiveur n'est jamais une zone : on ne coche que des
+ * volets simples. */
+static bool is_zone(const volet_t *v) { return !v->central && v->members && *v->members; }
+/* Vrai si id figure dans la liste de membres csv. */
+static bool in_members(const char *csv, const char *id) {
+    char mid[SH_ID_LEN];
+    for (const char *p = cfg_members_next(csv, mid); p; p = cfg_members_next(p, mid)) if (!strcmp(mid, id)) return true;
+    return false;
+}
+/* Une zone (ou NULL) dont v est suiveur ; il peut en suivre plusieurs. */
+static volet_t *zone_of(const volet_t *v) {
+    for (int i = 0; i < s_nvolets; i++) if (is_zone(&s_volets[i]) && in_members(s_volets[i].members, v->id)) return &s_volets[i];
     return NULL;
 }
 static volet_t *get_or_create(const char *id) {
@@ -202,9 +313,9 @@ static bool load_frames(void) {
     int n = sz / (4 * sizeof(uint32_t));
     for (int i = 0; i < n; i++) {
         char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)buf[i * 4]);
-        remote_t *rm = NULL;
-        for (int j = 0; j < s_nremotes; j++) if (!strcmp(s_remotes[j].serial, shex)) { rm = &s_remotes[j]; break; }
-        if (!rm && s_nremotes < 16) { rm = &s_remotes[s_nremotes++]; memset(rm, 0, sizeof(*rm)); strlcpy(rm->serial, shex, SH_SERIAL_LEN); }
+        /* Telecommandes connues seulement : seule une trame confirmee en cree une (issue #39),
+         * et une telecommande supprimee ne doit pas revenir par son jeu de trames. */
+        remote_t *rm = remote_find(shex);
         if (!rm) continue;
         if (rm->nhops >= rm->caphops && rm->caphops < SH_MAX_HOPS) {
             uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32; if (nc > SH_MAX_HOPS) nc = SH_MAX_HOPS;
@@ -313,9 +424,7 @@ static void ring_fill_from_mqtt(int slot, const char *ser, uint8_t button, uint3
         strlcpy(r->serial, ser, SH_SERIAL_LEN);
         r->button = button; r->hop = hop; r->t = t; r->rssi = rssi;
         s_ring_dirty = true;
-        remote_t *rm = NULL;
-        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, ser)) { rm = &s_remotes[i]; break; }
-        if (!rm && s_nremotes < 16) { rm = &s_remotes[s_nremotes++]; memset(rm, 0, sizeof(*rm)); strlcpy(rm->serial, ser, SH_SERIAL_LEN); }
+        remote_t *rm = remote_find(ser);   /* connues seulement (cf load_frames) */
         if (rm) {
             bool isnew = true;
             for (int i = 0; i < rm->nhops; i++) if (rm->hops[i].hop == hop) { isnew = false; break; }
@@ -422,18 +531,9 @@ static uint8_t bits_button(const char *b) {
     return v;
 }
 
-/* TE d'emission configure (cfg/tx_te) pour restaurer apres une emission virtuelle. */
-static uint32_t sh_cfg_tx_te(void) {
-    uint32_t te = 455; nvs_handle_t h;
-    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
-        uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) te = t;
-        nvs_close(h);
-    }
-    return te;
-}
-/* Volet VIRTUEL : GENERE la trame (keeloq + compteur roulant) au TE du modele, l'emet,
- * puis avance et persiste le compteur. */
-static void emit_virt(volet_t *v, uint8_t button) {
+/* Volet VIRTUEL Profalux : GENERE la trame (keeloq + compteur roulant), l'emet au TE du
+ * boitier, puis avance et persiste le compteur. */
+static void emit_virt_profalux(volet_t *v, uint8_t button) {
     char bits[68];
     uint16_t cnt = v->virt_counter;
     if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return;
@@ -441,13 +541,27 @@ static void emit_virt(volet_t *v, uint8_t button) {
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
     v->virt_counter = cnt + 1;
     save_cfg();
-    uint32_t prev_te = sh_cfg_tx_te();
-    cc1101_set_tx_te(v->virt_te ? v->virt_te : 455);
     radio_tx(bits, PRESS_REPEATS);
-    cc1101_set_tx_te(prev_te);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
-             (unsigned)v->virt_serial, button, cnt, v->virt_te);
+             (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
 }
+
+/* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq est le seul
+ * cable ; les autres (Somfy RTS - issue #73 - ou d'autres) s'ajouteront ici, sans toucher
+ * au chemin Profalux. `button` est un code PFX_BTN_*, traduit par protocole le moment venu. */
+static void emit_virt(volet_t *v, uint8_t button) {
+    switch ((volet_proto_t)v->proto) {
+    case VOLET_PROTO_PROFALUX:
+        emit_virt_profalux(v, button);
+        break;
+    default:
+        ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
+                 v->id, (unsigned)v->proto);
+        break;
+    }
+}
+
+static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suiveurs d'une zone */
 
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
  * On integre juste la position ensuite ; l'arret se fait par do_stop (rafale STOP) au bon moment. */
@@ -457,11 +571,13 @@ static void start_move(volet_t *v, int dir) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     if (v->virt) emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
     else         emit_press(dir > 0 ? v->up : v->down);
+    zone_follow(v, dir);
 }
 static void do_stop(volet_t *v) {
     v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
     if (v->virt) emit_virt(v, PFX_BTN_STOP);
     else         emit_press(v->stop);    /* rafale STOP = fige le moteur a la position voulue */
+    zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
@@ -495,7 +611,71 @@ static void publish_volet_state(volet_t *v) {
     pub_defer(topic, st, 0, 1);
     v->pub_pos = (int)(v->position + 0.5f); v->pub_dir = v->dir;
 }
+/* ZONE : un volet appris dont la trame fait bouger plusieurs volets a la fois
+ * (telecommande de piece). Ses suiveurs (members) reproduisent ses mouvements
+ * SANS emettre : sa trame les a deja actionnes. Chacun integre sa position avec
+ * ses propres temps de course et s'arrete a sa propre butee ; un STOP de la zone
+ * les fige tous. dir = +1 monte, -1 descend, 0 STOP. Un suivi ne se propage pas
+ * plus loin : un suiveur n'est jamais une zone (shutters_set_followers). Appele sous LOCK. */
+static void zone_follow(volet_t *z, int dir) {
+    if (z->central || !z->members) return;
+    char mid[SH_ID_LEN];
+    for (const char *p = cfg_members_next(z->members, mid); p; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (!m || m == z || m->central || is_zone(m)) continue;   /* volets simples seulement */
+        /* Seuls les suiveurs qui changent d'etat sont publies : un STOP arrive en rafale. */
+        if (dir == 0) { if (m->dir == 0) continue; freeze(m); }
+        else { if (m->dir == dir) continue; track_move(m, dir); }   /* deja en route dans ce sens (suivi ou notre commande) : inchange */
+        publish_volet_state(m);
+    }
+}
 /* Publie la config HA discovery d'un cover (retained). Appele sous LOCK. */
+/* ── Pile des telecommandes (bit VLOW) : un binary_sensor HA par telecommande NOMMEE ──
+ * ON = pile faible. Etat retenu sur openprofalux/remote/<serial>/battery, publie des qu'une
+ * trame complete a ete vue depuis le demarrage. Appele sous LOCK (publication differee). */
+static const char *remote_slug(const char *serial) {
+    return (serial[0] == '0' && (serial[1] == 'x' || serial[1] == 'X')) ? serial + 2 : serial;
+}
+static void publish_batt_state(remote_t *r) {
+    if (!s_mqtt_ready || !r->name[0] || !r->batt.known) return;
+    char topic[64];
+    snprintf(topic, sizeof(topic), "openprofalux/remote/%s/battery", remote_slug(r->serial));
+    pub_defer(topic, r->batt.low ? "ON" : "OFF", 0, 1);
+}
+static void announce_batt(remote_t *r) {
+    if (!s_mqtt_ready) return;
+    const char *sl = remote_slug(r->serial);
+    char topic[96], uid[48], st[64];
+    snprintf(topic, sizeof(topic), "homeassistant/binary_sensor/openprofalux_remote_%s_battery/config", sl);
+    if (!r->name[0]) { pub_defer(topic, "", 1, 1); return; }   /* sans nom : pas d'entite (retire l'ancienne) */
+    snprintf(uid, sizeof(uid), "openprofalux_remote_%s_battery", sl);
+    snprintf(st, sizeof(st), "openprofalux/remote/%s/battery", sl);
+    char name[SH_ID_LEN + 8]; snprintf(name, sizeof(name), "Pile %s", r->name);
+    char avail[64]; snprintf(avail, sizeof(avail), "openprofalux/%s/status", s_device);
+    const char *devname = (!s_device[0] || !strcmp(s_device, "openprofalux")) ? "OpenProfalux" : s_device;
+    cJSON *o = cJSON_CreateObject();   /* cJSON : un nom avec guillemets ne casse pas le JSON */
+    cJSON_AddStringToObject(o, "name", name);
+    cJSON_AddStringToObject(o, "unique_id", uid);
+    cJSON_AddStringToObject(o, "object_id", uid);
+    cJSON_AddStringToObject(o, "device_class", "battery");
+    cJSON_AddStringToObject(o, "entity_category", "diagnostic");
+    cJSON_AddStringToObject(o, "state_topic", st);
+    cJSON_AddStringToObject(o, "payload_on", "ON");
+    cJSON_AddStringToObject(o, "payload_off", "OFF");
+    cJSON_AddStringToObject(o, "availability_topic", avail);
+    cJSON_AddStringToObject(o, "payload_available", "online");
+    cJSON_AddStringToObject(o, "payload_not_available", "offline");
+    cJSON *dv = cJSON_AddObjectToObject(o, "device");
+    cJSON *ids = cJSON_AddArrayToObject(dv, "identifiers"); cJSON_AddItemToArray(ids, cJSON_CreateString("openprofalux"));
+    cJSON_AddStringToObject(dv, "name", devname);
+    cJSON_AddStringToObject(dv, "manufacturer", "isno.fr");
+    cJSON_AddStringToObject(dv, "model", "OpenProfalux");
+    char *pl = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (pl) { pub_defer(topic, pl, 1, 1); free(pl); }
+    publish_batt_state(r);
+}
+
 static void announce_one(volet_t *v) {
     if (!s_mqtt_ready) return;
     char topic[160], *pl = malloc(1536);
@@ -519,7 +699,9 @@ static void announce_one(volet_t *v) {
     const char *devname = (!s_device[0] || !strcmp(s_device, "openprofalux")) ? "OpenProfalux" : s_device;
     /* Position seulement si ecoute permanente (sinon % non fiable) */
     char pos[240] = "";
-    if (s_log_frames && !v->central)   /* une centrale n'a pas de position (juste ouvrir/fermer/stop) */
+    /* Ni centrale ni zone n'ont de position (juste ouvrir/fermer/stop) : la leur ne
+     * serait celle d'aucun volet, et un seul STOP arrete des volets de vitesses differentes. */
+    if (s_log_frames && !v->central && !is_zone(v))
         snprintf(pos, sizeof(pos),
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
@@ -568,6 +750,21 @@ static void announce_extras(void) {
     pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);
 }
 
+/* Efface la decouverte HA d'un cover : payload retenu vide sur le topic de config (HA
+ * retire alors l'entite) + ses topics d'etat/position. Sans ca, un volet supprime reste
+ * affiche dans Home Assistant (le discovery retenu survit). Appele sous LOCK. */
+static void clear_one(volet_t *v) {
+    if (!s_mqtt_ready) return;
+    char topic[96], slug[SH_ID_LEN];
+    slugify(slug, sizeof(slug), v->id);
+    snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
+    pub_defer(topic, "", 0, 1);   /* vide + retenu -> HA retire l'entite */
+    snprintf(topic, sizeof(topic), "openprofalux/cover/%s/state", slug);
+    pub_defer(topic, "", 0, 1);
+    snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
+    pub_defer(topic, "", 0, 1);
+}
+
 /* ── API commande ── */
 int shutters_delete_volet(const char *id) {
     if (!id || !*id) return -1;
@@ -575,10 +772,17 @@ int shutters_delete_volet(const char *id) {
     int idx = -1;
     for (int i = 0; i < s_nvolets; i++) if (!strcmp(s_volets[i].id, id)) { idx = i; break; }
     if (idx < 0) { UNLOCK(); return -1; }
+    /* Volet virtuel : son compteur roulant (le seul a jour, il avance a chaque commande) doit
+     * survivre au volet, sinon un re-enrolement du meme moteur repart en retard (issue #45). */
+    bool virt = s_volets[idx].virt;
+    uint32_t vser = s_volets[idx].virt_serial; uint16_t vcnt = s_volets[idx].virt_counter;
+    clear_one(&s_volets[idx]);         /* retire l'entite HA (discovery retenu) AVANT de perdre le volet */
     cfg_model_remove(&s_model, idx);   /* libere la liste d'une centrale */
     save_cfg();
     update_listening();   /* plus aucun volet -> coupe l'ecoute permanente */
     UNLOCK();
+    pub_flush();          /* pousse l'effacement MQTT hors LOCK */
+    if (virt) pfx_enrol_note_counter(vser, vcnt);   /* table d'enrolement, hors LOCK */
     ESP_LOGW(TAG, "volet '%s' supprime", id);
     return 0;
 }
@@ -604,6 +808,22 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         publish_volet_state(v);
         UNLOCK(); pub_flush();
         return 0;
+    }
+    if (!strcmp(cmd, "pos") && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
+        ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
+        UNLOCK(); return -1;
+    }
+    if (v->proto == VOLET_PROTO_IO) {   /* io-homecontrol : emission directe (pas de rejeu de trame) */
+        const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
+        int btn = io_button_for_action(cmd);
+        if (btn < 0) { UNLOCK(); return -1; }
+        int rc = radio_io_send(src, (uint8_t)btn);   /* diffuse depuis la source du volet */
+        if      (!strcmp(cmd, "up"))   { v->target = 0;   v->position = 0; }
+        else if (!strcmp(cmd, "down")) { v->target = 100; v->position = 100; }
+        v->dir = 0;
+        publish_volet_state(v);
+        UNLOCK(); pub_flush();
+        return rc;
     }
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
     if (!strcmp(cmd, "up"))        { v->target = 0;   start_move(v, +1); }   /* ouvrir : monter vers 0 */
@@ -700,6 +920,12 @@ bool shutters_virt_serial_used(uint32_t serial) {
         if (s_volets[i].virt && s_volets[i].virt_serial == serial) return true;
     return false;
 }
+bool shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap) {
+    if (cap) out[0] = 0;
+    for (int i = 0; i < s_nvolets; i++)
+        if (s_volets[i].virt && s_volets[i].virt_serial == serial) { strlcpy(out, s_volets[i].id, cap); return true; }
+    return false;
+}
 /* Compteur roulant courant du volet virtuel de ce serial (0 si aucun). Sert a resynchroniser
  * l'identite d'enrolement sur la valeur reellement emise par le volet (toujours devant le moteur). */
 uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
@@ -710,30 +936,82 @@ uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
 
 /* Cree (ou convertit) un volet VIRTUEL a partir d'une identite 0x067 enrolee : il apparait
  * dans l'onglet Volets + en cover HA, et pilote le moteur par generation (compteur roulant). */
-int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, uint16_t te) {
+int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     if (!id || !*id) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
     v->virt = true;
+    v->proto = VOLET_PROTO_PROFALUX;   /* seul generateur cable aujourd'hui */
     v->virt_serial = serial;
     v->virt_counter = counter;
-    v->virt_te = te;
+    /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
+     * qui pilotent le moteur, pour le suivi de position). L'y melanger bloquait l'ajout d'une vraie
+     * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);
-    bool has = false;
-    for (int i = 0; i < v->n_serials; i++) if (!strcmp(v->serials[i], shex)) { has = true; break; }
-    if (!has && v->n_serials < SH_MAX_SERIALS) strlcpy(v->serials[v->n_serials++], shex, SH_SERIAL_LEN);
-    /* Nomme la télécommande virtuelle -> l'UI affiche son NOM (pas le serial brut). */
-    int ri = -1;
-    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) { ri = i; break; }
-    if (ri < 0 && s_nremotes < 16) { ri = s_nremotes++; strlcpy(s_remotes[ri].serial, shex, SH_SERIAL_LEN); }
-    if (ri >= 0) strlcpy(s_remotes[ri].name, id, SH_ID_LEN);
+    /* Nomme quand meme l'identite virtuelle -> l'UI l'affiche par son NOM. */
+    remote_t *rm = remote_add(shex);
+    if (rm) strlcpy(rm->name, id, SH_ID_LEN);
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u te=%u",
-             id, (unsigned)serial, counter, te);
+    ESP_LOGW(TAG, "volet virtuel '%s' cree : identite 0x%07X cnt=%u",
+             id, (unsigned)serial, counter);
+    return 0;
+}
+
+int shutters_create_io_volet(const char *id, uint32_t src) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = true;
+    v->proto = VOLET_PROTO_IO;
+    v->virt_serial = src & 0xFFFFFF;    /* source (3 o) de CE volet, identite propre dans io_store */
+    v->virt_counter = 0;                /* io 1W : compteur roulant par source, tenu dans io_store */
+    save_cfg();
+    announce_one(v);
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "volet io '%s' cree : source 0x%06X", id, (unsigned)(src & 0xFFFFFF));
+    return 0;
+}
+
+/* ZONE : fixe les suiveurs d'un volet appris (CSV d'ids, "" = plus aucun).
+ * Suiveurs : des volets simples existants, ni la zone elle-meme, ni une centrale,
+ * ni une autre zone. Une zone ne peut pas non plus etre elle-meme suiveuse.
+ * *why recoit la raison d'un refus. */
+int shutters_set_followers(const char *id, const char *members_csv, const char **why) {
+    const char *err = NULL;
+    if (!id || !*id) { if (why) *why = "volet inconnu"; return -1; }
+    LOCK();
+    volet_t *v = find_volet(id), *z;
+    char mid[SH_ID_LEN];
+    bool any = false;
+    if (!v) err = "volet inconnu";
+    else if (v->central) err = "une centrale ne peut pas etre une zone";
+    else for (const char *p = cfg_members_next(members_csv, mid); p && !err; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (!m) err = "suiveur inconnu";
+        else if (m == v) err = "une zone ne peut pas se suivre elle-meme";
+        else if (m->central) err = "une centrale ne peut pas etre suiveuse";
+        else if (is_zone(m)) err = "une zone ne peut pas etre suiveuse";
+        any = true;
+    }
+    if (!err && any && (z = zone_of(v)) && z != v) err = "ce volet suit une zone, il ne peut pas en etre une";
+    if (!err && cfg_volet_set_members(v, members_csv) != 0) err = "trop de suiveurs";
+    if (err) {
+        UNLOCK();
+        ESP_LOGW(TAG, "zone '%s' refusee : %s", id, err);
+        if (why) *why = err;
+        return -1;
+    }
+    save_cfg();
+    announce_one(v);   /* zone <-> volet simple : la position apparait ou disparait dans HA */
+    ESP_LOGW(TAG, "zone '%s' : suiveurs=[%s]", id, v->members ? v->members : "");
+    UNLOCK();
+    pub_flush();
     return 0;
 }
 
@@ -808,6 +1086,42 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
     return shutters_learn_assign(id, action, bits);   /* prend son propre LOCK */
 }
 
+/* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste) : pour chaque
+ * commande, la trame la plus recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les
+ * commandes absentes du journal restent a apprendre. *learned recoit "up,stop,down" (celles
+ * trouvees). Refuse un nom deja pris : on ne reecrit pas un volet existant. */
+int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
+    *why = NULL; if (cap) learned[0] = 0;
+    if (!id || !*id) { *why = "nom manquant"; return -1; }
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    static const struct { const char *action; uint8_t btn; } CMD[] = {
+        { "up", PFX_BTN_UP }, { "stop", PFX_BTN_STOP }, { "down", PFX_BTN_DOWN } };
+    char bits[3][SH_BITS_LEN] = {{0}};
+    LOCK();
+    if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
+    /* du plus recent au plus ancien : s_rfhead est la prochaine place libre de l'anneau */
+    for (int k = 1; k <= RF_RING; k++) {
+        rfrec_t *r = &s_rf[(s_rfhead - k + RF_RING) % RF_RING];
+        if (!r->serial[0] || strcmp(r->serial, serial)) continue;
+        for (int c = 0; c < 3; c++)
+            if (!bits[c][0] && r->button == CMD[c].btn)
+                build_frame_bits(bits[c], (uint32_t)strtoul(serial, NULL, 16), r->button, r->hop);
+    }
+    UNLOCK();
+    if (!bits[0][0] && !bits[1][0] && !bits[2][0]) { *why = "aucune trame ▲ ■ ▼ de cette telecommande dans le journal RF"; return -1; }
+    for (int c = 0; c < 3; c++) {
+        if (!bits[c][0]) continue;
+        if (shutters_learn_assign(id, CMD[c].action, bits[c]) != 0) { *why = "creation du volet impossible"; return -1; }
+        if (cap) { if (learned[0]) strlcat(learned, ",", cap); strlcat(learned, CMD[c].action, cap); }
+    }
+    LOCK();
+    remote_t *rm = remote_find(serial);
+    if (rm && !rm->name[0]) { strlcpy(rm->name, id, SH_ID_LEN); save_cfg(); }   /* nomme la telecommande comme le volet */
+    UNLOCK();
+    ESP_LOGW(TAG, "volet '%s' cree depuis la telecommande %s (journal RF) : %s", id, serial, learned);
+    return 0;
+}
+
 int shutters_calibrate(const char *id, uint32_t up_ms, uint32_t down_ms) {
     LOCK();
     volet_t *v = find_volet(id);
@@ -857,20 +1171,96 @@ int shutters_set_order(const char *ids_csv) {
 }
 
 int shutters_remote_name(const char *serial, const char *name) {
+    if (!serial || !*serial) return -1;
     LOCK();
-    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, serial)) {
-        strlcpy(s_remotes[i].name, name, SH_ID_LEN); save_cfg(); UNLOCK(); return 0;
-    }
-    if (s_nremotes < 16) {
-        strlcpy(s_remotes[s_nremotes].serial, serial, SH_SERIAL_LEN);
-        strlcpy(s_remotes[s_nremotes].name, name, SH_ID_LEN);
-        s_nremotes++; save_cfg();
-    }
+    remote_t *rm = remote_add(serial);
+    if (rm) { strlcpy(rm->name, name, SH_ID_LEN); save_cfg(); announce_batt(rm); }   /* nommee : capteur pile annonce ; nom vide : entite retiree */
     UNLOCK();
+    pub_flush();
+    return rm ? 0 : -1;   /* -1 : liste pleine */
+}
+
+/* Supprime une telecommande de la liste (bouton UI). Refuse si un volet s'en sert : il faut
+ * d'abord supprimer ou reapprendre ce volet. Elle reviendra si elle est de nouveau captee. */
+int shutters_delete_remote(const char *serial, const char **why) {
+    *why = NULL;
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    LOCK();
+    int idx = -1;
+    for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, serial)) { idx = i; break; }
+    const char *user = idx >= 0 ? remote_user(serial) : NULL;
+    static char msg[SH_ID_LEN + 40];
+    if (idx < 0) *why = "telecommande inconnue";
+    else if (user) { snprintf(msg, sizeof(msg), "utilisee par le volet %s", user); *why = msg; }
+    else { remote_remove(idx); save_cfg(); s_frames_dirty = true; }
+    UNLOCK();
+    if (*why) return -1;
+    save_frames();   /* tout de suite : sinon son jeu de trames la recreerait au prochain boot */
+    ESP_LOGW(TAG, "telecommande %s supprimee", serial);
     return 0;
 }
 
-/* ══ FONCTION 1 — Dataset slide (option MQTT "capture toutes les trames") ══
+/* Ignore une telecommande : la retire de la liste (refuse si un volet s'en sert, comme la
+ * suppression) et n'enregistre plus ses trames. Un serial absent de la liste (saisi a la main)
+ * est simplement ajoute aux ignorees. Serial normalise en 0x%07X. */
+int shutters_ignore_remote(const char *serial, const char **why) {
+    *why = NULL;
+    char *end = NULL;
+    unsigned long v = serial ? strtoul(serial, &end, 16) : 0;
+    if (!serial || !*serial || *end || v == 0 || v > 0xFFFFFFFUL) { *why = "serial invalide (0x + 7 chiffres hexa)"; return -1; }
+    char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07lX", v);
+    LOCK();
+    const char *user = remote_user(shex);
+    static char msg[SH_ID_LEN + 40];
+    if (user) { snprintf(msg, sizeof(msg), "utilisee par le volet %s", user); *why = msg; }
+    else if (!ignored(shex) && s_nignored >= SH_MAX_IGNORED) *why = "liste des telecommandes ignorees pleine";
+    else {
+        if (!ignored(shex)) { strlcpy(s_ignored[s_nignored++], shex, SH_SERIAL_LEN); ignore_save(); }
+        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) {
+            remote_remove(i); save_cfg(); s_frames_dirty = true; break;
+        }
+    }
+    UNLOCK();
+    if (*why) return -1;
+    save_frames();
+    ESP_LOGW(TAG, "telecommande %s ignoree", shex);
+    return 0;
+}
+int shutters_unignore_remote(const char *serial) {
+    int rc = -1;
+    LOCK();
+    for (int i = 0; i < s_nignored; i++) if (!strcasecmp(s_ignored[i], serial ? serial : "")) {
+        memmove(s_ignored[i], s_ignored[i + 1], (size_t)(s_nignored - i - 1) * SH_SERIAL_LEN);
+        s_nignored--; ignore_save(); rc = 0; break;
+    }
+    UNLOCK();
+    if (rc == 0) ESP_LOGI(TAG, "telecommande %s n'est plus ignoree", serial);
+    return rc;
+}
+
+/* Purge UNIQUE (cle NVS cfg/rem_purge) des telecommandes sans nom qu'aucun volet n'utilise :
+ * les fantomes enregistres avant la confirmation des trames (issue #39). Une vraie telecommande
+ * purgee revient d'elle-meme a son prochain appui. Au boot, apres load_cfg/load_frames. */
+static void purge_ghost_remotes_once(void) {
+    nvs_handle_t h; uint8_t done = 0;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_get_u8(h, "rem_purge", &done);
+    if (!done) {
+        int n = 0;
+        for (int i = 0; i < s_nremotes; ) {
+            if (!s_remotes[i].name[0] && !remote_user(s_remotes[i].serial)) {
+                ESP_LOGW(TAG, "purge : telecommande %s sans nom ni volet retiree", s_remotes[i].serial);
+                remote_remove(i); n++;
+            } else i++;
+        }
+        if (n) { save_cfg(); save_frames(); }
+        nvs_set_u8(h, "rem_purge", 1); nvs_commit(h);
+        ESP_LOGI(TAG, "purge unique des telecommandes fantomes : %d retiree(s)", n);
+    }
+    nvs_close(h);
+}
+
+/* ══ FONCTION 1 : Dataset slide (option MQTT "capture toutes les trames") ══
  * Publie un hop UNIQUEMENT s'il n'est pas deja dans le set enregistre de ce serial.
  * Sert a collecter les 65536 hops distincts pour l'attaque slide-MITM. Appele sous LOCK. */
 static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, int8_t rssi, uint32_t t) {
@@ -894,7 +1284,7 @@ static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, in
      * Le dataset slide (hops distincts) reste construit ici en RAM/NVS pour l'export /api/frames. */
 }
 
-/* ══ FONCTION 2 — Suivi de position via telecommandes ENREGISTREES ══
+/* ══ FONCTION 2 : Suivi de position via telecommandes ENREGISTREES ══
  * Independante de l'option MQTT : des qu'un volet a appris ce serial+bouton, on suit
  * sa position quand la VRAIE telecommande l'actionne. Appele sous LOCK. */
 static void track_shutter_position(const char *shex, uint8_t button) {
@@ -906,11 +1296,15 @@ static void track_shutter_position(const char *shex, uint8_t button) {
         /* Profalux = appui + stop : ▲/▼ lance le moteur vers la butee, STOP le fige.
          * On demarre le suivi au 1er appui (repetitions du burst ignorees), on fige au STOP. */
         if (v->stop_btn && button == v->stop_btn) {
+            /* Toujours, meme si la zone est deja a l'arret : un suiveur plus lent qu'elle roule
+             * encore quand elle a atteint sa butee estimee, et le STOP de la piece l'arrete aussi.
+             * zone_follow ne fige que les suiveurs en mouvement : les repetitions sont sans effet. */
+            zone_follow(v, 0);
             freeze(v);
         } else if (v->up_btn && button == v->up_btn) {
-            if (!v->own_move && v->dir != +1) track_move(v, +1);
+            if (!v->own_move && v->dir != +1) { track_move(v, +1); zone_follow(v, +1); }
         } else if (v->down_btn && button == v->down_btn) {
-            if (!v->own_move && v->dir != -1) track_move(v, -1);
+            if (!v->own_move && v->dir != -1) { track_move(v, -1); zone_follow(v, -1); }
         }
         /* v->own_move : notre propre echo (meme serial rejoue) -> ignore.
          * PAS de break : un meme serial (telecommande GENERALE) peut piloter plusieurs volets
@@ -920,12 +1314,15 @@ static void track_shutter_position(const char *shex, uint8_t button) {
 
 /* ── RX : chaque trame recue -> journal + les 2 fonctions ci-dessus ── */
 void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rssi, uint32_t hop) {
-    ESP_LOGI(TAG, "RX serial=0x%07X bouton=0x%X hop=0x%08X rssi=%d dBm",
-             (unsigned)serial, button, (unsigned)hop, rssi);
+    /* te : TE de la trame, mesure sur sa periode de bit / 3 (cc1101_last_te, mis a jour au decodage
+     * qui vient de la produire). Permet de relever le TE de chaque telecommande sans console. */
+    ESP_LOGI(TAG, "RX serial=0x%07X bouton=0x%X hop=0x%08X rssi=%d dBm te=%d us",
+             (unsigned)serial, button, (unsigned)hop, rssi, cc1101_last_te());
     bool do_pub = false; int pub_slot = -1; char pub_lf[128];   /* publie APRES UNLOCK (anti-deadlock) */
     LOCK();
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)serial);
-    (void)bits;   /* plus stocke : les 66 bits sont reconstruits a la demande (rejeu/adoption) */
+    /* Les 66 bits ne sont pas stockes (reconstruits a la demande pour le rejeu/adoption) ; seul
+     * le bit 64 (VLOW, pile faible) est exploite, une fois par appui, ci-dessous. */
     /* DEDUP : meme (serial, hop) deja vu -> repetition d'un meme appui, on n'ajoute rien (ni ring ni MQTT). */
     if (!ring_contains(shex, hop)) {
         int slot = s_rfhead;   /* emplacement -> topic MQTT recuperable frames/log/<slot> */
@@ -937,9 +1334,19 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
         s_rfhead = (s_rfhead + 1) % RF_RING;
         s_ring_dirty = true;
         /* auto-enregistre le serial vu (nom vide) */
-        bool known = false;
-        for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) { known = true; break; }
-        if (!known && s_nremotes < 16) { strlcpy(s_remotes[s_nremotes].serial, shex, SH_SERIAL_LEN); s_remotes[s_nremotes].name[0] = 0; s_nremotes++; }
+        if (!ignored(shex)) remote_add(shex);   /* trame confirmee (radio.c) ; liste pleine -> signale a l'UI ; ignoree -> rien */
+        /* Pile : une fois par appui (nouveau hop), sur trame COMPLETE uniquement (bit 64 = VLOW). */
+        if (bits && strlen(bits) >= 66) {
+            for (int i = 0; i < s_nremotes; i++) if (!strcmp(s_remotes[i].serial, shex)) {
+                remote_t *rm = &s_remotes[i];
+                rm->batt_t = t;
+                if (batt_on_press(&rm->batt, bits[64] == '1')) {
+                    if (rm->batt.low) ESP_LOGW(TAG, "pile FAIBLE : telecommande %s (%s)", shex, rm->name);
+                    publish_batt_state(rm);   /* differe, publie apres UNLOCK */
+                }
+                break;
+            }
+        }
         if (s_log_frames && s_mqtt_ready) {
             dataset_log_frame(shex, button, hop, rssi, t);  /* dataset slide (dedup par hop, bouton+t) */
             /* On PREPARE le payload ici, mais on PUBLIE hors du LOCK (voir plus bas). */
@@ -950,6 +1357,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
     }
     track_shutter_position(shex, button);   /* toujours (idempotent sur les repetitions) */
     UNLOCK();
+    pub_flush();   /* etat pile eventuel (empile sous LOCK) */
     /* DEADLOCK FIX : ne JAMAIS publier en MQTT sous le LOCK. Un publish QoS1 retained peut
      * bloquer (outbox pleine pendant une rafale d'apprentissage) ; or l'ESP est abonne a
      * frames/log/# et recoit ses propres publications -> la tache MQTT reprend ce meme LOCK
@@ -981,13 +1389,35 @@ char *shutters_status_json(void) {
     cJSON *root = cJSON_CreateObject();
     cJSON *rem = cJSON_AddObjectToObject(root, "remotes");
     for (int i = 0; i < s_nremotes; i++) cJSON_AddStringToObject(rem, s_remotes[i].serial, s_remotes[i].name);
+    cJSON_AddNumberToObject(root, "remotes_max", SH_MAX_REMOTES);
+    cJSON_AddStringToObject(root, "remote_refused", s_remote_refused);   /* "" = aucune refusee */
+    cJSON *ign = cJSON_AddArrayToObject(root, "remotes_ignored");
+    for (int i = 0; i < s_nignored; i++) cJSON_AddItemToArray(ign, cJSON_CreateString(s_ignored[i]));
+    cJSON *rb = cJSON_AddObjectToObject(root, "remote_battery");   /* pile : telecommandes vues depuis le boot */
+    for (int i = 0; i < s_nremotes; i++) {
+        if (!s_remotes[i].batt.known) continue;
+        cJSON *b = cJSON_AddObjectToObject(rb, s_remotes[i].serial);
+        cJSON_AddBoolToObject(b, "low", s_remotes[i].batt.low);
+        cJSON_AddNumberToObject(b, "t", s_remotes[i].batt_t);
+    }
     cJSON *vols = cJSON_AddArrayToObject(root, "volets");
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", v->id);
-        if (v->virt) cJSON_AddBoolToObject(o, "virt", true);   /* volet a telecommande virtuelle -> pas d'apprentissage */
-        if (v->central) { cJSON_AddBoolToObject(o, "central", true); cJSON_AddStringToObject(o, "members", v->members ? v->members : ""); }
+        if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
+            cJSON_AddBoolToObject(o, "virt", true);
+            char vhex[SH_SERIAL_LEN]; snprintf(vhex, sizeof(vhex), "0x%07X", (unsigned)v->virt_serial);
+            cJSON_AddStringToObject(o, "virt_serial", vhex);   /* identite d'emission du volet (0x067) */
+        }
+        if (v->central) cJSON_AddBoolToObject(o, "central", true);
+        if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");   /* centrale : membres ; zone : suiveurs */
+        if (is_zone(v)) cJSON_AddBoolToObject(o, "zone", true);
+        if (zone_of(v)) {   /* zones que ce volet suit (il peut en suivre plusieurs) */
+            cJSON *fl = cJSON_AddArrayToObject(o, "follows");
+            for (int k = 0; k < s_nvolets; k++)
+                if (is_zone(&s_volets[k]) && in_members(s_volets[k].members, v->id)) cJSON_AddItemToArray(fl, cJSON_CreateString(s_volets[k].id));
+        }
         cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
         cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);     /* pour reafficher la calibration dans l'UI */
         cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
@@ -1020,7 +1450,11 @@ char *shutters_status_json(void) {
     /* Statut Wi-Fi + MQTT (pour l'UI : pastilles + force du signal) */
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
     wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+    /* Le pilote n'est questionne que si le client est connecte : en mode secours (point
+     * d'acces + client non connecte), chaque appel ecrit "Haven't to connect to a suitable
+     * AP now!", soit une ligne par rafraichissement de l'UI (toutes les 3 s), qui noyait
+     * le journal. */
+    if (wifi_bridge_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         cJSON_AddBoolToObject(wifi, "connected", true);
         cJSON_AddStringToObject(wifi, "ssid", (char *)ap.ssid);
         cJSON_AddNumberToObject(wifi, "rssi", ap.rssi);
@@ -1032,6 +1466,7 @@ char *shutters_status_json(void) {
         }
     } else {
         cJSON_AddBoolToObject(wifi, "connected", false);
+        cJSON_AddBoolToObject(wifi, "fallback", wifi_bridge_in_fallback());   /* reessaie seul (mode secours) */
     }
     cJSON_AddBoolToObject(root, "mqtt", s_mqtt_ready);
     cJSON_AddBoolToObject(root, "listening", s_log_frames);   /* ecoute permanente = position fiable */
@@ -1046,15 +1481,39 @@ char *shutters_export_json(void) {
     LOCK();
     char *js = cfg_model_export(&s_model);
     UNLOCK();
+    /* + la table d'enrolement des volets virtuels (cle a part, ignoree par cfg_model_import) */
+    cJSON *root = js ? cJSON_Parse(js) : NULL;
+    if (!root) return js;
+    free(js);
+    cJSON_AddItemToObject(root, "pfx_enrol", pfx_enrol_export());
+    js = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
     return js;
 }
-int shutters_import_json(const char *js) {
-    if (!js) return -1;
-    cJSON *root = cJSON_Parse(js);
-    if (!root) return -1;
+/* Copie de la config d'avant la derniere restauration (Systeme > Sauvegarde, "Revenir"). */
+#define PREV_CFG_FILE "/spiffs/config-avant.json"
+#define PREV_CFG_MAX  (24 * 1024)   /* = RESTORE_MAX_BODY (web_ui.c) */
+
+int shutters_import_json(const char *js, const char **err) {
+    *err = "format";
+    cJSON *root = js ? cJSON_Parse(js) : NULL;
+    /* Une sauvegarde, et rien d'autre : l'export des trames (meme onglet), {} ou []
+     * passaient, et remettaient toute la config a zero avant de n'importer rien. */
+    if (!cfg_model_is_backup(root)) { cJSON_Delete(root); return -1; }
     LOCK();
+    /* Copie de la config courante, pour pouvoir revenir en arriere. Sans copie, on ne
+     * remplace pas une config qui a des volets ; sans volet, il n'y a rien a perdre. */
+    if (!cfg_model_save_copy(&s_model, PREV_CFG_FILE) && s_nvolets > 0) {
+        UNLOCK(); cJSON_Delete(root);
+        ESP_LOGE(TAG, "restauration annulee : copie de la config actuelle impossible");
+        *err = "copie"; return -1;
+    }
     reset_state();
     cfg_model_import(&s_model, root);
+    /* Table d'enrolement, et compteurs-photo des volets virtuels restaures : non confirmes,
+     * un re-enrolement sautera devant le moteur au lieu de repartir derriere (issue #45). */
+    pfx_enrol_import(cJSON_GetObjectItem(root, "pfx_enrol"));
+    for (int i = 0; i < s_nvolets; i++) if (s_volets[i].virt) pfx_enrol_unconfirm(s_volets[i].virt_serial);
     /* L'echec d'ecriture remonte a l'UI : une restauration repondait "ok" meme
      * quand la NVS pleine l'empechait de survivre au redemarrage. */
     esp_err_t saved = save_cfg();
@@ -1065,7 +1524,23 @@ int shutters_import_json(const char *js) {
     cJSON_Delete(root);
     ESP_LOGI(TAG, "config restauree : %d volets, %d telecommandes%s", s_nvolets, s_nremotes,
              saved == ESP_OK ? "" : " (NON enregistree en NVS)");
+    *err = saved == ESP_OK ? NULL : "nvs";
     return saved == ESP_OK ? 0 : -1;
+}
+
+/* Revient a la copie : la config remplacee devient a son tour la copie (aller-retour). */
+int shutters_restore_undo(const char **err) {
+    char *js = cfg_read_file(PREV_CFG_FILE, PREV_CFG_MAX, NULL);
+    if (!js) { *err = "absente"; return -1; }
+    int rc = shutters_import_json(js, err);
+    free(js);
+    return rc;
+}
+bool shutters_prev_cfg_time(time_t *t) {
+    struct stat st;
+    if (stat(PREV_CFG_FILE, &st) != 0 && stat(PREV_CFG_FILE ".tmp", &st) != 0) return false;
+    *t = st.st_mtime;
+    return true;
 }
 
 /* ── Integration Home Assistant (MQTT) ── */
@@ -1106,6 +1581,7 @@ void shutters_mqtt_announce(const char *device) {
     for (int i = 0; i < s_nvolets; i++) announce_one(&s_volets[i]);
     announce_extras();           /* switch "Ecoute RF permanente" + capteur "Derniere trame" */
     announce_update();           /* entite update HA (firmware) */
+    for (int i = 0; i < s_nremotes; i++) if (s_remotes[i].name[0]) announce_batt(&s_remotes[i]);   /* pile des telecommandes nommees */
     UNLOCK();
     pub_flush();                 /* publie la decouverte HORS LOCK (anti-deadlock a la connexion) */
     /* NB : plus de flush en masse du ring ici. Les frames/log/<slot> sont QoS1 RETAINED
@@ -1128,7 +1604,7 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     if (!strcmp(topic, "openprofalux/update/install")) {
         if (ota_latest_url()[0]) {
             ESP_LOGW(TAG, "HA -> installer MAJ %s : %s", ota_latest_version(), ota_latest_url());
-            ota_pull_from_url(ota_latest_url());   /* telecharge + reboot (rollback auto si echec) */
+            ota_pull_from_url(ota_latest_url());   /* telecharge + reboot (retour auto si elle plante, voir ota.c) */
         } else {
             ESP_LOGW(TAG, "HA -> install demande mais aucune version GitHub connue");
         }
@@ -1213,15 +1689,52 @@ static void on_air(const char *bits, uint32_t serial, uint8_t button, uint32_t h
     shutters_on_rx(bits, serial, button, rssi, hop);
 }
 
-/* Verifie GitHub au demarrage puis toutes les 6 h, et republie l'etat de l'entite update HA.
- * Tache dediee : ota_check_github() est bloquant (~s), a ne pas mettre dans tick_task. */
+/* Verifie GitHub au demarrage puis toutes les 6 h (si la verification automatique est
+ * active), ou a la demande (shutters_update_check_now), et republie l'etat de l'entite
+ * update HA. Tache dediee : ota_check_github() est bloquant (~s), a ne pas mettre dans
+ * tick_task.
+ *
+ * ⚠️ Delai en ticks, pas pdMS_TO_TICKS : dans l'IDF, pdMS_TO_TICKS calcule en 32 bits
+ * (projdefs.h), et 6 h = 21 600 000 ms x 1000 Hz depasse 2^32. Le delai retombait a
+ * ~125 s : une connexion TLS vers GitHub toutes les ~2 min au lieu de 4 par jour. */
+static volatile bool s_upd_auto = true;
+static TaskHandle_t  s_upd_task = NULL;
+void shutters_set_update_auto(bool on) { s_upd_auto = on; ESP_LOGI(TAG, "verification MAJ auto %s", on ? "ON" : "OFF"); }
+bool shutters_get_update_auto(void)    { return s_upd_auto; }
+void shutters_update_check_now(void)   { if (s_upd_task) xTaskNotifyGive(s_upd_task); }
+
 static void update_check_task(void *arg) {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(30000));   /* laisse WiFi + MQTT monter */
+    const TickType_t six_h = (TickType_t)6 * 3600 * configTICK_RATE_HZ;
+    /* laisse WiFi + MQTT monter ; une demande explicite passe tout de suite */
+    bool demande = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000)) > 0;
     while (1) {
-        if (s_mqtt_ready) { ota_check_github(); publish_update_state(); pub_flush(); }
-        vTaskDelay(pdMS_TO_TICKS(6UL * 3600UL * 1000UL));   /* toutes les 6 h */
+        if (demande || s_upd_auto) {
+            ota_check_github();
+            if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
+        }
+        demande = ulTaskNotifyTake(pdTRUE, six_h) > 0;
     }
+}
+
+/* Migration : les anciens firmwares rangeaient l'identite d'emission 0x067 dans `serials`
+ * (l'ensemble des VRAIES telecommandes). Ca bloquait l'ajout de la vraie telecommande sur un
+ * volet enrole (garde-fou anti-melange), et affichait le 0x067 comme "la" telecommande du volet.
+ * On l'en retire : `serials` ne porte plus que du reel, l'identite virtuelle vit dans virt_serial.
+ * Renvoie true si au moins un volet a change (il faut alors re-sauver). */
+static bool migrate_strip_virt_serial(void) {
+    bool changed = false;
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        if (!v->virt) continue;
+        char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)v->virt_serial);
+        for (int j = 0; j < v->n_serials; j++) {
+            if (strcmp(v->serials[j], shex)) continue;
+            for (int k = j; k + 1 < v->n_serials; k++) strlcpy(v->serials[k], v->serials[k + 1], SH_SERIAL_LEN);
+            v->n_serials--; j--; changed = true;
+        }
+    }
+    return changed;
 }
 
 void shutters_init(void) {
@@ -1237,9 +1750,12 @@ void shutters_init(void) {
     esp_err_t mig = cfg_store_finish_boot(lay, frames_stored, save_cfg);
     if (mig != ESP_OK) ESP_LOGE(TAG, "migration config : ecriture KO (%s), ancien format conserve", esp_err_to_name(mig));
     else if (lay == CFG_LAYOUT_LEGACY) ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
+    if (migrate_strip_virt_serial()) { save_cfg(); ESP_LOGI(TAG, "migration : identite 0x067 retiree de la liste des vraies telecommandes"); }
     load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
+    ignore_load();
+    purge_ghost_remotes_once();   /* une fois : fantomes d'avant la confirmation des trames (#39) */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
-    xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, NULL);   /* check GitHub -> entite update HA */
+    xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, &s_upd_task);   /* check GitHub -> entite update HA */
     radio_init();
     radio_start(on_air);   /* tache radio prete (arbitre TX) */
     update_listening();    /* ecoute si des volets sont deja appris (suivi position) ou si capture ON */

@@ -4,9 +4,13 @@
 #include "web_ui.h"
 #include "shutters.h"
 #include "pfx_enrol.h"
+#include "enrol_gate.h"
 #include "radio.h"
+#include "io/io_pair.h"   /* io_profile_from_capture : apprendre le profil io d'une capture */
+#include "io/io_trace.h"  /* journal RX+TX d'une instance d'enrolement (diagnostic) */
 #include "ota.h"
-#include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en SPIFFS) */
+#include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
+#include "wifi_bridge.h"
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
 #include <stdlib.h>
@@ -22,7 +26,15 @@
 #include "cJSON.h"
 #include "log_ring.h"
 #include "cc1101.h"
+#include "radio_profile.h"   /* profil radio (frequence par marque) */
 #include "esp_random.h"
+#include "esp_system.h"      /* esp_reset_reason, tas libre (/api/health) */
+#include "esp_heap_caps.h"
+#include "esp_spiffs.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
+#include "cfg_store.h"       /* place des volets en NVS */
+#include "req_guard.h"       /* envois venus d'un autre site (CSRF) */
 #include <inttypes.h>
 
 #ifndef MIN
@@ -148,13 +160,42 @@ static bool ui_auth_ok(httpd_req_t *r) {
     return false;
 }
 
-/* Fichiers UI embarques (voir EMBED_FILES du CMakeLists). */
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
-extern const uint8_t style_css_start[]  asm("_binary_style_css_start");
-extern const uint8_t style_css_end[]    asm("_binary_style_css_end");
-extern const uint8_t app_js_start[]     asm("_binary_app_js_start");
-extern const uint8_t app_js_end[]       asm("_binary_app_js_end");
+/* Valeur d'un en-tete, NULL s'il est absent (tronquee si trop longue : elle reste presente). */
+static const char *hdr_or_null(httpd_req_t *r, const char *name, char *buf, size_t cap) {
+    esp_err_t e = httpd_req_get_hdr_value_str(r, name, buf, cap);
+    return (e == ESP_OK || e == ESP_ERR_HTTPD_RESULT_TRUNC) ? buf : NULL;
+}
+
+/* true si l'envoi est accepte. Un POST lance depuis la page d'un AUTRE site (CSRF : sans mot de
+ * passe, une page piegee pouvait piloter le boitier) recoit 403 ; l'interface, une iframe dans Home
+ * Assistant, Home Assistant en REST et les scripts passent comme avant. Regles : req_guard.h. */
+static bool req_guard_ok(httpd_req_t *r) {
+    if (r->method != HTTP_POST) return true;   /* une autre page ne peut pas lire les reponses */
+    char sfs[24], origin[96], host[96];
+    const char *f = hdr_or_null(r, "Sec-Fetch-Site", sfs, sizeof(sfs));
+    const char *o = hdr_or_null(r, "Origin", origin, sizeof(origin));
+    const char *h = hdr_or_null(r, "Host", host, sizeof(host));
+    if (rg_write_ok(f, o, h)) return true;
+    ESP_LOGW(TAG, "envoi refuse (autre site) : %s, Sec-Fetch-Site=%s Origin=%s Host=%s",
+             r->uri, f ? f : "-", o ? o : "-", h ? h : "-");
+    httpd_resp_set_status(r, "403 Forbidden");
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"origine\"}");
+    return false;
+}
+
+/* Fichiers UI embarques COMPRESSES (tools/gzip_web.py, voir EMBED_FILES du CMakeLists). */
+extern const uint8_t index_html_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_gz_end");
+extern const uint8_t style_css_start[]  asm("_binary_style_css_gz_start");
+extern const uint8_t style_css_end[]    asm("_binary_style_css_gz_end");
+extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
+extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
+/* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
+extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
+extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
+extern const uint8_t icon_png_start[]   asm("_binary_icon_192_png_start");
+extern const uint8_t icon_png_end[]     asm("_binary_icon_192_png_end");
 
 /* ── Etat apprentissage ── */
 static char           s_lbits[SH_BITS_LEN];
@@ -178,12 +219,14 @@ static uint32_t bits_lsb(const char *b, int from, int len) {
 static void learn_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
-    /* Ecoute dediee 15 s : on garde la PREMIERE trame valide, quel que soit le bouton.
+    /* Ecoute dediee 15 s : on garde la PREMIERE trame confirmee, quel que soit le bouton.
      * C'est l'action choisie dans l'UI + le bouton physique presse qui determinent la
      * commande. Filtrer par valeur de bouton etait une erreur (codes reels differents de
-     * ce qu'on supposait) : ca empechait d'apprendre stop et descente. */
-    int n = radio_listen_once(15000, bits, SH_BITS_LEN - 1);
-    if (n >= 60) {
+     * ce qu'on supposait) : ca empechait d'apprendre stop et descente.
+     * Confirmee par une 2e trame identique et complete (66 bits) : une trame isolee a bits
+     * faux donnait un volet au serial ou a la commande corrompus (issue #39). */
+    int n = radio_listen_confirmed(15000, bits, SH_BITS_LEN, true);
+    if (n >= 66) {
         s_lrssi   = cc1101_get_rssi();
         strlcpy(s_lbits, bits, SH_BITS_LEN);
         s_lserial = bits_lsb(bits, 32, 28);
@@ -197,9 +240,24 @@ static void learn_task(void *arg) {
 }
 
 /* ── Helpers HTTP ── */
-static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, const uint8_t *e) {
-    httpd_resp_set_type(r, type);
+/* Interface embarquee en gzip, envoyee telle quelle : le navigateur decompresse. ETag =
+ * empreinte du firmware (app_elf_sha256) : tant qu'il ne change pas, la revalidation
+ * (no-cache) recoit un 304 sans corps au lieu de toute l'interface ; apres une OTA,
+ * l'empreinte change et la nouvelle interface arrive. */
+static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, const uint8_t *e, bool gz) {
+    char etag[19], inm[24];
+    const uint8_t *h = esp_app_get_description()->app_elf_sha256;
+    etag[0] = '"';
+    for (int i = 0; i < 8; i++) snprintf(etag + 1 + 2 * i, 3, "%02x", h[i]);
+    etag[17] = '"'; etag[18] = 0;
     httpd_resp_set_hdr(r, "Cache-Control", "no-cache");   /* toujours revalider : pas d'UI perimee apres MAJ */
+    httpd_resp_set_hdr(r, "ETag", etag);
+    if (httpd_req_get_hdr_value_str(r, "If-None-Match", inm, sizeof(inm)) == ESP_OK && !strcmp(inm, etag)) {
+        httpd_resp_set_status(r, "304 Not Modified");
+        return httpd_resp_send(r, NULL, 0);
+    }
+    httpd_resp_set_type(r, type);
+    if (gz) httpd_resp_set_hdr(r, "Content-Encoding", "gzip");
     return httpd_resp_send(r, (const char *)s, e - s);
 }
 static char *read_body_max(httpd_req_t *r, int max) {
@@ -222,10 +280,24 @@ static const char *jstr(cJSON *o, const char *k) {
     return cJSON_IsString(i) ? i->valuestring : NULL;
 }
 
+/* Lit une chaine hexa de EXACTEMENT n octets (2n caracteres) dans out. Rend true si la
+ * chaine existe et fait la bonne longueur, false sinon (out non modifie). */
+static bool parse_hex(const char *hex, uint8_t *out, int n) {
+    if (!hex || (int)strlen(hex) != 2 * n) return false;
+    for (int i = 0; i < n; i++) {
+        unsigned b;
+        if (sscanf(hex + 2 * i, "%2x", &b) != 1) return false;
+        out[i] = (uint8_t)b;
+    }
+    return true;
+}
+
 /* ── Handlers statiques ── */
-static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end); }
-static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end);  }
-static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end);  }
+static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end, true); }
+static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end,  true); }
+static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
+static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
+static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
 /* ── /api/status ── */
 static esp_err_t h_status(httpd_req_t *r) {
@@ -239,9 +311,9 @@ static esp_err_t h_status(httpd_req_t *r) {
 
 /* ── /api/shutter ── */
 static esp_err_t h_shutter(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
     cJSON *val = cJSON_GetObjectItem(j, "value");
     int rc = (id && cmd) ? shutters_cmd(id, cmd, val ? (int)val->valuedouble : 0) : -1;
@@ -254,9 +326,9 @@ static esp_err_t h_shutter(httpd_req_t *r) {
 
 /* ── /api/volet/delete : supprime un volet (permet de reapprendre proprement) ── */
 static esp_err_t h_volet_delete(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_delete_volet(jstr(j, "id"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -280,36 +352,27 @@ static esp_err_t h_learn_poll(httpd_req_t *r) {
     return ESP_OK;
 }
 static esp_err_t h_learn_assign(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_learn_assign(jstr(j, "id"), jstr(j, "action"), jstr(j, "bits"));
     cJSON_Delete(j); s_lready = false;
-    if (rc == 0) {   /* AUTO : cale le TE d'emission sur le tempo de la trame captee (le champ UI reste un override) */
-        int te = cc1101_last_te();
-        if (te >= 350 && te <= 550) {   /* TE plausible d'une telecommande PFX (Profalux 455, FranciaFlex ~415) */
-            cc1101_set_tx_te((uint32_t)te);
-            nvs_handle_t h;
-            if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u32(h, "tx_te", (uint32_t)te); nvs_commit(h); nvs_close(h); }
-            ESP_LOGI(TAG, "TE d'emission auto-cale a %d us (mesure sur la trame captee)", te);
-        }
-    }
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
 }
 static esp_err_t h_learn_reassign(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_reassign(jstr(j, "id"), jstr(j, "from"), jstr(j, "to"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
 }
 static esp_err_t h_learn_adopt(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *hs = jstr(j, "hop");
     uint32_t hop = hs ? (uint32_t)strtoul(hs, NULL, 16) : 0;
     int rc = shutters_adopt(jstr(j, "id"), jstr(j, "action"), jstr(j, "serial"), hop);
@@ -319,9 +382,9 @@ static esp_err_t h_learn_adopt(httpd_req_t *r) {
 }
 
 static esp_err_t h_rf_replay(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *hs = jstr(j, "hop");
     uint32_t hop = hs ? (uint32_t)strtoul(hs, NULL, 16) : 0;
     int rc = shutters_replay_frame(jstr(j, "serial"), hop);
@@ -332,9 +395,9 @@ static esp_err_t h_rf_replay(httpd_req_t *r) {
 
 /* ── /api/calibrate + /api/remote ── */
 static esp_err_t h_calibrate(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_calibrate(jstr(j, "id"),
         (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "travel_up_ms")),
         (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "travel_down_ms")));
@@ -343,9 +406,9 @@ static esp_err_t h_calibrate(httpd_req_t *r) {
     return ESP_OK;
 }
 static esp_err_t h_orientation(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *ori = cJSON_GetObjectItem(j, "orientation");
     int rc = shutters_set_orientation(jstr(j, "id"), ori ? (int)cJSON_GetNumberValue(ori) : -1);
     cJSON_Delete(j);
@@ -355,9 +418,9 @@ static esp_err_t h_orientation(httpd_req_t *r) {
 /* /api/volet/order : {"ids":["id1","id2",...]} dans l'ordre d'affichage voulu.
  * Purement cosmetique : ne touche ni la radio, ni le pilotage, ni les topics HA. */
 static esp_err_t h_volet_order(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     /* Tous les volets : un tampon de 384 octets (l'ancien SH_MEMBERS_LEN)
      * tronquait la liste en silence au-dela, et les volets coupes repassaient
      * a order = -1 (renvoyes en fin d'affichage). */
@@ -375,12 +438,59 @@ static esp_err_t h_volet_order(httpd_req_t *r) {
 }
 
 static esp_err_t h_remote(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = shutters_remote_name(jstr(j, "serial"), jstr(j, "name") ?: "");
     cJSON_Delete(j);
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0,\"err\":\"liste des telecommandes pleine\"}");
+    return ESP_OK;
+}
+/* ── /api/remote/ignore et /api/remote/unignore : {"serial":"0x..."} ── */
+static esp_err_t h_remote_ignore(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *why = NULL;
+    int rc = shutters_ignore_remote(jstr(j, "serial"), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    httpd_resp_sendstr(r, "{\"ok\":1}");
+    return ESP_OK;
+}
+static esp_err_t h_remote_unignore(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    int rc = shutters_unignore_remote(jstr(j, "serial"));
+    cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+/* ── /api/remote/create_volet : {"serial":"0x...","name":"..."} -> {"ok":1,"learned":"up,stop,down"} ── */
+static esp_err_t h_remote_create_volet(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    char learned[24]; const char *why = NULL;
+    int rc = shutters_create_volet_from_remote(jstr(j, "name"), jstr(j, "serial"), learned, sizeof(learned), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    char out[64]; snprintf(out, sizeof(out), "{\"ok\":1,\"learned\":\"%s\"}", learned);
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, out);
+    return ESP_OK;
+}
+/* ── /api/remote/delete : {"serial":"0x..."} ; refuse (400 + raison) si un volet s'en sert ── */
+static esp_err_t h_remote_delete(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *why = NULL;
+    int rc = shutters_delete_remote(jstr(j, "serial"), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    httpd_resp_sendstr(r, "{\"ok\":1}");
     return ESP_OK;
 }
 
@@ -391,7 +501,9 @@ static void cfg_get(nvs_handle_t h, const char *k, char *out, size_t cap) {
 static esp_err_t h_config_get(httpd_req_t *r) {
     char dev[32] = "", ssid[33] = "", uri[160] = "", user[128] = "", pass[256] = "";
     uint8_t logf = 0, dbg = 0, rg = 0x27;
-    uint32_t txte = 455;
+    uint32_t txte = TX_TE_DEFAULT_US;
+    uint8_t rprof = RADIO_PROFILE_DEFAULT;
+    uint32_t fcustom = 0;
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
         cfg_get(h, "device", dev, sizeof(dev)); cfg_get(h, "wifi_ssid", ssid, sizeof(ssid));
@@ -400,20 +512,41 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         nvs_get_u8(h, "log_frames", &logf);
         nvs_get_u8(h, "debug", &dbg);
         uint8_t tmp; if (nvs_get_u8(h, "rx_gain", &tmp) == ESP_OK && tmp) rg = tmp;
-        uint32_t t; if (nvs_get_u32(h, "tx_te", &t) == ESP_OK && t) txte = t;
+        uint32_t t; if (nvs_get_u32(h, "te_tx", &t) == ESP_OK && t) txte = t;
+        nvs_get_u8(h, "radio_prof", &rprof);
+        nvs_get_u32(h, "freq_khz", &fcustom);
         nvs_close(h);
     }
-    char out[720];
+    char out[900];
     /* ui_auth : etat de la protection (jamais le mot de passe lui-meme, meme tronque).
      * Certificats TLS : on ne renvoie que leur longueur, jamais le contenu (surtout la cle). */
     snprintf(out, sizeof(out),
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
              "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
-             "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d}",
+             "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d,"
+             "\"radio_profile\":\"%s\",\"freq_custom_khz\":%u,\"freq_khz\":%u,\"band_low_khz\":%u,\"band_high_khz\":%u}",
              dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
              (unsigned)mqtt_cert_len("ca"), (unsigned)mqtt_cert_len("cert"), (unsigned)mqtt_cert_len("key"),
-             s_ui_pass[0] ? 1 : 0);
+             s_ui_pass[0] ? 1 : 0,
+             radio_profile_name((radio_profile_t)rprof), (unsigned)fcustom, (unsigned)cc1101_get_freq_khz(),
+             (unsigned)CC1101_BAND_LOW_KHZ, (unsigned)CC1101_BAND_HIGH_KHZ);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
+    {   /* nom mDNS du boitier (<nom>.local) : affiche avant le redemarrage sur le reseau domestique */
+        size_t k = strlen(out);
+        char dflt[33] = ""; size_t dsz = sizeof(dflt); nvs_handle_t hh;   /* nom fige au 1er demarrage */
+        if (nvs_open("cfg", NVS_READONLY, &hh) == ESP_OK) { nvs_get_str(hh, "mdns_host", dflt, &dsz); nvs_close(hh); }
+        if (k > 0 && k + 96 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"mdns_host\":\"%s\",\"mdns_default\":\"%s\"}",
+                                                     wifi_bridge_hostname(), dflt);
+    }
+    {   /* verification de mise a jour automatique : ajoutee en fin d'objet */
+        size_t k = strlen(out);
+        if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
+    }
+    {   /* bit de repetition et emission RMT (options) : ajoutes en fin d'objet */
+        size_t k = strlen(out);
+        if (k > 0 && k + 36 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"tx_repeat_bit\":%d,\"tx_rmt\":%d}",
+                                                     cc1101_get_tx_repeat_bit() ? 1 : 0, cc1101_get_tx_rmt() ? 1 : 0);
+    }
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -422,18 +555,37 @@ static void cfg_set_if(nvs_handle_t h, cJSON *j, const char *field, const char *
     const char *v = jstr(j, field);
     if (v) nvs_set_str(h, key, v);
 }
+/* La config peut porter les 3 certificats TLS (jusqu'a 2 Ko chacun) : le corps depasse alors
+ * la limite par defaut de read_body. On prend une limite dediee plus large, sinon la requete
+ * est rejetee avant d'ecrire quoi que ce soit. */
+#define CONFIG_MAX_BODY (16 * 1024)
 static esp_err_t h_config_post(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body_max(r, CONFIG_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     nvs_handle_t h;
+    /* Profil radio : valide AVANT toute ecriture, pour qu'une requete refusee ne change rien.
+     * radio_profile = "profalux" | "eveno" | "custom" ; freq_khz n'est lu que pour "custom". */
+    int rprof = -1; uint32_t rcustom = 0, rkhz = 0;
+    const char *rpname = jstr(j, "radio_profile");
+    if (rpname) {
+        rprof = radio_profile_from_name(rpname);
+        cJSON *fj = cJSON_GetObjectItem(j, "freq_khz");
+        if (rprof == RADIO_PROFILE_CUSTOM && cJSON_IsNumber(fj) && fj->valuedouble > 0) rcustom = (uint32_t)fj->valuedouble;
+        if (!radio_profile_resolve(rprof, rcustom, CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, &rkhz)) {
+            cJSON_Delete(j);
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST,   /* l'enum, pas 400 : 400 litteral sort en 500 */
+                                       rprof < 0 ? "radio_profile inconnu" : "freq_khz hors de la plage de la carte");
+        }
+    }
+    int radio_ok = -2;   /* -2 = profil non demande, 0 = applique, -1 = non pris par la radio */
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
         cfg_set_if(h, j, "device", "device");
         cfg_set_if(h, j, "wifi_ssid", "wifi_ssid"); cfg_set_if(h, j, "wifi_pass", "wifi_pass");
         cfg_set_if(h, j, "mqtt_uri", "mqtt_uri"); cfg_set_if(h, j, "mqtt_user", "mqtt_user");
         cfg_set_if(h, j, "mqtt_pass", "mqtt_pass");
-        /* Certificats TLS mqtts : ecrits en SPIFFS (pas en NVS, trop petite). Champ absent =
-         * inchange (l'UI n'envoie que ce qui change, comme le mot de passe). */
+        /* Certificats TLS mqtts : ecrits en NVS (namespace dedie). Champ absent = inchange,
+         * chaine vide = efface (l'UI n'envoie que ce qui change, comme le mot de passe). */
         { const char *v;
           if ((v = jstr(j, "mqtt_ca")))   mqtt_cert_write("ca",   v);
           if ((v = jstr(j, "mqtt_cert"))) mqtt_cert_write("cert", v);
@@ -450,6 +602,24 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             nvs_set_u8(h, "debug", on);
             cc1101_set_rx_debug(on);   /* switch DEBUG console : prise en compte immediate */
         }
+        cJSON *uaj = cJSON_GetObjectItem(j, "update_auto");
+        if (cJSON_IsBool(uaj) || cJSON_IsNumber(uaj)) {
+            uint8_t on = cJSON_IsTrue(uaj) || (cJSON_IsNumber(uaj) && uaj->valuedouble != 0);
+            nvs_set_u8(h, "upd_auto", on);
+            shutters_set_update_auto(on);   /* prise en compte au prochain cycle */
+        }
+        cJSON *rpj = cJSON_GetObjectItem(j, "tx_repeat_bit");
+        if (cJSON_IsBool(rpj) || cJSON_IsNumber(rpj)) {
+            uint8_t on = cJSON_IsTrue(rpj) || (cJSON_IsNumber(rpj) && rpj->valuedouble != 0);
+            nvs_set_u8(h, "tx_rpt", on);
+            cc1101_set_tx_repeat_bit(on);   /* prise en compte a la prochaine emission */
+        }
+        cJSON *rmj = cJSON_GetObjectItem(j, "tx_rmt");
+        if (cJSON_IsBool(rmj) || cJSON_IsNumber(rmj)) {
+            uint8_t on = cJSON_IsTrue(rmj) || (cJSON_IsNumber(rmj) && rmj->valuedouble != 0);
+            nvs_set_u8(h, "tx_rmt", on);
+            cc1101_set_tx_rmt(on);   /* prise en compte a la prochaine emission */
+        }
         cJSON *rgj = cJSON_GetObjectItem(j, "rx_gain");
         if (cJSON_IsNumber(rgj)) {
             uint8_t rg = (uint8_t)rgj->valuedouble;   /* AGCCTRL2 : plafond de gain RX */
@@ -459,8 +629,15 @@ static esp_err_t h_config_post(httpd_req_t *r) {
         cJSON *tj = cJSON_GetObjectItem(j, "tx_te");
         if (cJSON_IsNumber(tj)) {
             uint32_t te = (uint32_t)tj->valuedouble;  /* TE d'emission (us) */
-            nvs_set_u32(h, "tx_te", te);
+            nvs_set_u32(h, "te_tx", te);
             cc1101_set_tx_te(te);      /* pris en compte a la prochaine emission */
+        }
+        if (rprof >= 0) {
+            nvs_set_u8(h, "radio_prof", (uint8_t)rprof);
+            if (rprof == RADIO_PROFILE_CUSTOM) nvs_set_u32(h, "freq_khz", rcustom);
+            radio_ok = radio_set_freq_khz(rkhz);   /* immediat, sans reboot */
+            ESP_LOGI(TAG, "profil radio %s : %u kHz%s", radio_profile_name((radio_profile_t)rprof),
+                     (unsigned)rkhz, radio_ok == 0 ? "" : " (NON pris par la radio)");
         }
         /* Mot de passe de l'UI. Trois cas DISTINCTS, d'ou le test sur cJSON_IsString
          * plutot que sur jstr() : champ ABSENT = on ne touche a rien (tout POST de
@@ -487,7 +664,13 @@ static esp_err_t h_config_post(httpd_req_t *r) {
     }
     bool reboot = cJSON_IsTrue(cJSON_GetObjectItem(j, "reboot"));
     cJSON_Delete(j);
-    httpd_resp_sendstr(r, "{\"ok\":1}");
+    if (radio_ok == -2) httpd_resp_sendstr(r, "{\"ok\":1}");
+    else {
+        char resp[64];
+        snprintf(resp, sizeof(resp), "{\"ok\":1,\"radio_applied\":%d,\"freq_khz\":%u}",
+                 radio_ok == 0 ? 1 : 0, (unsigned)cc1101_get_freq_khz());
+        httpd_resp_sendstr(r, resp);
+    }
     if (reboot) { vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
     return ESP_OK;
 }
@@ -591,12 +774,35 @@ static esp_err_t h_backup(httpd_req_t *r) {
 /* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets,
  * dont des centrales a longue liste de membres. */
 #define RESTORE_MAX_BODY (24 * 1024)
+/* Mauvais fichier ou copie absente : 400 ; copie ou NVS en echec cote boitier : 500 (#33).
+ * La raison part dans le corps, l'UI l'affiche en clair. */
+static esp_err_t restore_reply(httpd_req_t *r, int rc, const char *err) {
+    httpd_resp_set_type(r, "application/json");
+    if (rc == 0) return httpd_resp_sendstr(r, "{\"ok\":1}");
+    bool client = !strcmp(err, "format") || !strcmp(err, "absente");
+    httpd_resp_set_status(r, client ? "400 Bad Request" : "500 Internal Server Error");
+    char out[40]; snprintf(out, sizeof(out), "{\"ok\":0,\"err\":\"%s\"}", err);
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_restore(httpd_req_t *r) {
-    char *body = read_body_max(r, RESTORE_MAX_BODY); if (!body) return httpd_resp_send_err(r, 400, "body");
-    int rc = shutters_import_json(body);
+    char *body = read_body_max(r, RESTORE_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    const char *err = NULL;
+    int rc = shutters_import_json(body, &err);
     free(body);
-    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
-    return ESP_OK;
+    return restore_reply(r, rc, err);
+}
+/* ── /api/restore/undo : la config d'avant la derniere restauration (GET : existe-t-elle,
+ * de quand ; POST : y revenir, la config remplacee devient la copie) ── */
+static esp_err_t h_restore_undo_get(httpd_req_t *r) {
+    time_t t = 0; bool ok = shutters_prev_cfg_time(&t);
+    char out[48]; snprintf(out, sizeof(out), "{\"available\":%s,\"t\":%lld}", ok ? "true" : "false", (long long)t);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+static esp_err_t h_restore_undo(httpd_req_t *r) {
+    const char *err = NULL;
+    int rc = shutters_restore_undo(&err);
+    return restore_reply(r, rc, err);
 }
 
 /* ── /api/mqtt/discover : cherche un broker MQTT en mDNS (_mqtt._tcp) ── */
@@ -622,38 +828,75 @@ static esp_err_t h_mqtt_discover(httpd_req_t *r) {
 }
 
 /* ── /api/ota/status + /api/ota/upload ── */
+/* Demande au boitier de verifier GitHub tout de suite (en tache de fond). L'UI suit la fin
+ * par le compteur checks de /api/ota/status. */
+static esp_err_t h_ota_check(httpd_req_t *r) {
+    shutters_update_check_now();
+    httpd_resp_set_type(r, "application/json");
+    char out[48]; snprintf(out, sizeof(out), "{\"ok\":1,\"checks\":%u}", (unsigned)ota_check_count());
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_ota_status(httpd_req_t *r) {
     ota_status_t st; ota_get_status(&st);
-    char out[384];   /* message[128] + version[64] + target + scaffolding JSON */
-    snprintf(out, sizeof(out), "{\"state\":%d,\"total\":%u,\"written\":%u,\"msg\":\"%s\",\"version\":\"%s\",\"target\":\"" TARGET_NAME "\"}",
-             st.state, (unsigned)st.total_bytes, (unsigned)st.written_bytes, st.message, st.active_version);
+    ota_rb_info_t rb; ota_rb_info(&rb);
+    char out[768];   /* message[128] + version[64] + target + derniere version + son URL[192] + version ecartee[32] + JSON */
+    /* latest / latest_url / checks : resultat de la derniere verification GitHub faite PAR LE
+     * BOITIER (automatique ou demandee par /api/ota/check) ; checks avance a chaque fin.
+     * img / rb_auto / annulee : retour automatique (ota_rollback.h). */
+    snprintf(out, sizeof(out), "{\"state\":%d,\"total\":%u,\"written\":%u,\"msg\":\"%s\",\"version\":\"%s\",\"target\":\"" TARGET_NAME "\","
+             "\"latest\":\"%s\",\"latest_url\":\"%s\",\"checks\":%u,"
+             "\"img\":\"%s\",\"rb_auto\":%d,\"annulee\":\"%s\",\"annulee_auto\":%d,"
+             "\"rb_possible\":%d,\"precedente\":\"%s\"}",
+             st.state, (unsigned)st.total_bytes, (unsigned)st.written_bytes, st.message, st.active_version,
+             ota_latest_version(), ota_latest_url(), (unsigned)ota_check_count(),
+             rb.on_trial ? "essai" : "validee", rb.rb_auto, rb.discarded, rb.discarded_auto ? 1 : 0,
+             rb.rb_possible ? 1 : 0, rb.previous);
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
 }
 static esp_err_t h_ota_upload(httpd_req_t *r) {
     int total = r->content_len;
-    if (total <= 0) return httpd_resp_send_err(r, 400, "empty");
-    if (ota_upload_begin(total) != ESP_OK) return httpd_resp_send_err(r, 500, "ota begin");
+    if (total <= 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "empty");
+    if (ota_upload_begin(total) != ESP_OK) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "ota begin");
     wifi_ps_type_t ps = WIFI_PS_MIN_MODEM; esp_wifi_get_ps(&ps); esp_wifi_set_ps(WIFI_PS_NONE);
     char *buf = malloc(1460);
-    if (!buf) { esp_wifi_set_ps(ps); ota_upload_abort(); return httpd_resp_send_err(r, 500, "malloc"); }
-    int rem = total, cc = 0; esp_err_t res = ESP_OK;
+    if (!buf) { esp_wifi_set_ps(ps); ota_upload_abort(); return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "malloc"); }
+    /* Un client qui disparait sans fermer la connexion (portable en veille, telephone hors de
+     * portee) bloquait ici pour toujours l'unique tache du serveur web : interface morte pour
+     * tous jusqu'a une coupure de courant. 3 delais de reception (5 s chacun) sans un octet ->
+     * on abandonne ; chaque octet recu remet le compte a zero (envoi lent mais vivant). */
+    int rem = total, cc = 0, idle = 0, k = 0; esp_err_t res = ESP_OK;
     while (rem > 0) {
-        int k = httpd_req_recv(r, buf, MIN(rem, 1460));
-        if (k == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        k = httpd_req_recv(r, buf, MIN(rem, 1460));
+        if (k == HTTPD_SOCK_ERR_TIMEOUT && ++idle < 3) continue;
         if (k <= 0 || ota_upload_data(buf, k) != ESP_OK) { res = ESP_FAIL; break; }
-        rem -= k;
+        idle = 0; rem -= k;
         if ((++cc & 0x0F) == 0) vTaskDelay(1);
     }
     esp_wifi_set_ps(ps); free(buf);
-    if (res != ESP_OK) { ota_upload_abort(); return httpd_resp_send_err(r, 500, "upload"); }
+    if (res != ESP_OK) {
+        ESP_LOGW(TAG, "mise a jour interrompue a %d o sur %d : %s", total - rem, total,
+                 k == HTTPD_SOCK_ERR_TIMEOUT ? "rien recu depuis 15 s" : k <= 0 ? "connexion fermee" : "image refusee");
+        ota_upload_abort();
+        /* ESP_FAIL : le serveur ferme la connexion tout de suite (avec ESP_OK, il tenterait de
+         * lire le reste de l'envoi et attendrait encore un delai). */
+        if (k == HTTPD_SOCK_ERR_TIMEOUT) { httpd_resp_send_err(r, HTTPD_408_REQ_TIMEOUT, NULL); return ESP_FAIL; }
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "upload");
+    }
     httpd_resp_sendstr(r, "{\"ok\":1}");
     ota_upload_end();   /* vérifie + reboot */
     return ESP_OK;
 }
 /* ── /api/ota/rollback : rebascule sur la partition precedente (comme OpenXtraflame) ── */
 static esp_err_t h_ota_rollback(httpd_req_t *r) {
+    /* Sans version valide dans l'autre partition (premiere installation, mise a jour annulee),
+     * ota_rollback() echouait en silence apres un "ok" : on le dit, sans redemarrer. */
+    if (!ota_rollback_possible()) {
+        httpd_resp_set_status(r, "409 Conflict");
+        httpd_resp_set_type(r, "application/json");
+        return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"Pas de version précédente valide sur ce boîtier.\"}");
+    }
     /* On repond AVANT : ota_rollback() reboote immediatement si l'etat le permet. */
     httpd_resp_sendstr(r, "{\"ok\":1}");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -670,7 +913,7 @@ static void ota_pull_bg_task(void *arg) {
     vTaskDelete(NULL);
 }
 static esp_err_t h_ota_pull(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     const char *url = j ? cJSON_GetStringValue(cJSON_GetObjectItem(j, "url")) : NULL;
     char *dup = (url && !strncmp(url, "https://", 8)) ? strdup(url) : NULL;   /* HTTPS uniquement */
@@ -698,12 +941,106 @@ static esp_err_t h_rx_calibrate_status(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* ── /api/rx/sweep : porteuse de la telecommande par balayage RSSI (issue #51) ──
+ * POST lance (l'utilisateur met le commutateur P de sa telecommande), GET rend l'etat et,
+ * une fois fini, la porteuse trouvee et la courbe [[kHz, RSSI demi-dB], ...]. */
+static esp_err_t h_rx_sweep(httpd_req_t *r) {
+    int rc = radio_sweep_start();
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : (rc == 1 ? "{\"ok\":1,\"busy\":1}" : "{\"ok\":0}"));
+}
+static esp_err_t h_rx_sweep_status(httpd_req_t *r) {
+    int status, n; uint32_t from, center; int16_t peak, floor_; const uint32_t *khz; const int16_t *hdb;
+    int st = radio_sweep_status(&status, &from, &khz, &hdb, &n, &center, &peak, &floor_);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "state", st);
+    if (st == 2) {
+        cJSON_AddNumberToObject(o, "status", status);
+        cJSON_AddNumberToObject(o, "from_khz", from);
+        if (status == 0) cJSON_AddNumberToObject(o, "center_khz", center);
+        cJSON_AddNumberToObject(o, "peak_dbm", peak / 2.0);
+        cJSON_AddNumberToObject(o, "floor_dbm", floor_ / 2.0);
+        cJSON_AddNumberToObject(o, "band_low_khz", CC1101_BAND_LOW_KHZ);
+        cJSON_AddNumberToObject(o, "band_high_khz", CC1101_BAND_HIGH_KHZ);
+        cJSON *pts = cJSON_AddArrayToObject(o, "points");
+        for (int i = 0; i < n; i++) {
+            cJSON *p = cJSON_CreateArray();
+            cJSON_AddItemToArray(p, cJSON_CreateNumber(khz[i]));
+            cJSON_AddItemToArray(p, cJSON_CreateNumber(hdb[i]));
+            cJSON_AddItemToArray(pts, p);
+        }
+    }
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"state\":0}");
+    free(js);
+    return e;
+}
+
 /* ── /api/diag : diagnostic radio (puce + self-test TX) pour l'UI ── */
 static esp_err_t h_diag(httpd_req_t *r) {
     int tx_ok = -1; uint8_t partnum = 0xFF, version = 0xFF;
     cc1101_get_diag(&tx_ok, &partnum, &version);
-    char out[128];
-    snprintf(out, sizeof(out), "{\"tx_ok\":%d,\"partnum\":%d,\"version\":%d}", tx_ok, partnum, version);
+    uint32_t retries = 0, fails = 0;
+    cc1101_spi_stats(&retries, &fails);
+    int gdo0_lvl = -1, gdo0 = cc1101_gdo0_state(&gdo0_lvl);
+    char out[192];
+    snprintf(out, sizeof(out), "{\"tx_ok\":%d,\"partnum\":%d,\"version\":%d,\"spi_retries\":%u,\"spi_fails\":%u,\"gdo0\":%d,\"gdo0_lvl\":%d}",
+             tx_ok, partnum, version, (unsigned)retries, (unsigned)fails, gdo0, gdo0_lvl);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+
+/* ── /api/health : sante du boitier (Systeme > Etat), sans cable USB. Le reste (Wi-Fi,
+ * MQTT, temps de fonctionnement, version) est deja dans /api/status et /api/ota/status.
+ * Cause du dernier redemarrage en numero (esp_reset_reason_t), le texte est dans l'UI.
+ * La version y est aussi : elle n'est plus dans l'en-tete de l'interface.
+ * NVS : available = libre hors page reservee ; l'UI en tire "environ N volets de plus"
+ * avec la taille reelle des volets enregistres (banc firmware/test/cfg_store, T13). ── */
+/* Occupation de la NVS par espace de noms : {"cfg":31,"shutters":138,...} (entrees, en-tetes
+ * compris). Les espaces sont decouverts en parcourant les entrees, y compris ceux d'ESP-IDF
+ * (pile Wi-Fi, calibration radio) : la NVS de 16 Ko est partagee, et c'est elle qui sature. */
+static void nvs_ns_usage(char *out, size_t cap) {
+    char names[16][16]; int nn = 0;
+    nvs_iterator_t it = NULL;
+    esp_err_t e = nvs_entry_find(NVS_DEFAULT_PART_NAME, NULL, NVS_TYPE_ANY, &it);
+    while (e == ESP_OK && it) {
+        nvs_entry_info_t info;
+        if (nvs_entry_info(it, &info) == ESP_OK) {
+            bool seen = false;
+            for (int i = 0; i < nn; i++) if (!strcmp(names[i], info.namespace_name)) { seen = true; break; }
+            if (!seen && nn < 16) strlcpy(names[nn++], info.namespace_name, sizeof(names[0]));
+        }
+        e = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+    int p = snprintf(out, cap, "{");
+    for (int i = 0; i < nn && p < (int)cap - 32; i++) {
+        size_t used = 0; nvs_handle_t h;
+        if (nvs_open(names[i], NVS_READONLY, &h) == ESP_OK) { nvs_get_used_entry_count(h, &used); nvs_close(h); }
+        p += snprintf(out + p, cap - p, "%s\"%s\":%u", i ? "," : "", names[i], (unsigned)used);
+    }
+    snprintf(out + p, cap - p, "}");
+}
+
+static esp_err_t h_health(httpd_req_t *r) {
+    nvs_stats_t nv = {0}; nvs_get_stats(NULL, &nv);
+    char ns[400]; nvs_ns_usage(ns, sizeof(ns));
+    int nvol = 0; size_t vent = cfg_store_volet_entries(&nvol);
+    size_t sp_total = 0, sp_used = 0; esp_spiffs_info("storage", &sp_total, &sp_used);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    char out[760];
+    snprintf(out, sizeof(out),
+             "{\"reset\":%d,\"heap\":%u,\"heap_min\":%u,\"heap_blk\":%u,"
+             "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"nvs_used\":%u,\"nvs_ns\":%s,"
+             "\"volets\":%d,\"volet_entries\":%u,"
+             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\"}",
+             (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries,
+             (unsigned)nv.used_entries, ns, nvol, (unsigned)vent,
+             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
@@ -718,13 +1055,19 @@ static esp_err_t h_diag_tx(httpd_req_t *r) {   /* re-lance le self-test TX a la 
 
 /* ── /api/pfx : enrôlement d'une identité virtuelle 0x067 ── */
 /* Capture RX de la vraie télécommande -> alloue/rappelle l'identité du moteur (tâche dédiée). */
+/* Porte d'apprentissage (issue #53) : l'emission d'apprentissage n'est permise qu'apres une
+ * capture REUSSIE dans la tentative en cours. Une capture ratee ne laisse plus l'identite de la
+ * capture precedente selectionnee : elle partait avec, et finissait sur le mauvais moteur.
+ * Etat initial (zero) = EG_IDLE : au demarrage, une identite restee en NVS n'est pas apprenable. */
+static enrol_gate_t s_egate;
+
 static void pfx_capture_task(void *arg) {
     (void)arg;
     char bits[SH_BITS_LEN];
     ESP_LOGW(TAG, "PFX CAPTURE: ecoute RX 15s (appuie sur la telecommande)...");
-    int n = radio_listen_once(15000, bits, SH_BITS_LEN - 1);   /* 15 s pour appuyer */
-    ESP_LOGW(TAG, "PFX CAPTURE: radio_listen_once -> n=%d bits", n);
-    if (n >= 60) {
+    int n = radio_listen_confirmed(15000, bits, SH_BITS_LEN, false);   /* 15 s pour appuyer ; seul le serial sert */
+    ESP_LOGW(TAG, "PFX CAPTURE: radio_listen_confirmed -> n=%d bits", n);
+    if (n >= 64) {
         uint32_t rem = bits_lsb(bits, 32, 28);                 /* serial de la télécommande */
         bool isnew = false;
         s_pcap_rc     = pfx_enrol_capture(rem, s_pcap_model, &isnew);
@@ -736,32 +1079,63 @@ static void pfx_capture_task(void *arg) {
         s_pcap_remote = 0;
         ESP_LOGW(TAG, "PFX CAPTURE: aucune trame captee (n=%d)", n);
     }
+    eg_capture_result(&s_egate, n >= 64, s_pcap_rc, s_pcap_remote);   /* trame confirmee (#39) */
     s_pcap_done = true; s_pcap_active = false;
     vTaskDelete(NULL);
 }
 static esp_err_t h_pfx_capture(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *mo = cJSON_GetObjectItem(j, "model");
     s_pcap_model = cJSON_IsNumber(mo) ? (int)mo->valuedouble : -1;
     cJSON_Delete(j);
     ESP_LOGW(TAG, "PFX CAPTURE: requete recue (model=%d, active=%d)", s_pcap_model, s_pcap_active);
     if (!s_pcap_active) {
         s_pcap_done = false; s_pcap_rc = 0; s_pcap_remote = 0; s_pcap_new = 0; s_pcap_active = true;
+        /* Nouvelle tentative : l'identite d'avant est deselectionnee TOUT DE SUITE (compteur conserve
+         * dans la table). Une capture ratee ne la remet pas : rien ne doit partir avec elle. */
+        eg_capture_start(&s_egate);
+        pfx_enrol_forget();
         BaseType_t ok = xTaskCreate(pfx_capture_task, "pfxcap", 4096, NULL, 6, NULL);
-        if (ok != pdPASS) { s_pcap_active = false; ESP_LOGE(TAG, "PFX CAPTURE: xTaskCreate ECHEC"); }
+        if (ok != pdPASS) {
+            s_pcap_active = false; eg_capture_result(&s_egate, false, -1, 0);
+            ESP_LOGE(TAG, "PFX CAPTURE: xTaskCreate ECHEC");
+        }
     }
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"ok\":1}");
 }
 static esp_err_t h_pfx_capture_poll(httpd_req_t *r) {
     pfx_ident_t id; pfx_enrol_get(&id);
-    char out[144];
-    snprintf(out, sizeof(out),
-        "{\"active\":%d,\"done\":%d,\"rc\":%d,\"new\":%d,\"remote\":\"0x%07X\",\"serial\":\"0x%07X\",\"counter\":%d}",
-        s_pcap_active ? 1 : 0, s_pcap_done ? 1 : 0, s_pcap_rc, s_pcap_new,
-        (unsigned)s_pcap_remote, (unsigned)id.serial, id.counter);
+    char hex[12];
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "active", s_pcap_active ? 1 : 0);
+    cJSON_AddNumberToObject(o, "done", s_pcap_done ? 1 : 0);
+    cJSON_AddNumberToObject(o, "rc", s_pcap_rc);
+    cJSON_AddNumberToObject(o, "new", s_pcap_new);
+    snprintf(hex, sizeof(hex), "0x%07X", (unsigned)s_pcap_remote); cJSON_AddStringToObject(o, "remote", hex);
+    snprintf(hex, sizeof(hex), "0x%07X", (unsigned)id.serial);     cJSON_AddStringToObject(o, "serial", hex);
+    cJSON_AddNumberToObject(o, "counter", id.counter);
+    /* Identite reprise et deja portee par un volet virtuel : l'UI le signale et propose une
+     * identite neuve (issue #53, une identite partagee fait bouger plusieurs moteurs). */
+    char used[SH_ID_LEN];
+    if (s_pcap_done && s_pcap_rc == 0 && !s_pcap_new && shutters_virt_name_for_serial(id.serial, used, sizeof(used)))
+        cJSON_AddStringToObject(o, "used_by", used);
+    char *js = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{}");
+    free(js);
+    return e;
+}
+/* Identite neuve a la place de celle reprise, juste apres une capture reussie (issue #53). */
+static esp_err_t h_pfx_renew(httpd_req_t *r) {
+    pfx_ident_t id; pfx_enrol_get(&id);
+    int rc = -2;
+    if (eg_learn_allowed(&s_egate) && s_egate.remote == id.remote) rc = pfx_enrol_renew();
+    if (rc == 0) pfx_enrol_get(&id);
+    char out[96];
+    snprintf(out, sizeof(out), "{\"ok\":%d,\"rc\":%d,\"serial\":\"0x%07X\"}", rc == 0 ? 1 : 0, rc, (unsigned)id.serial);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
@@ -769,27 +1143,38 @@ static esp_err_t h_pfx_get(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     char out[720]; int p = 0;
     p += snprintf(out + p, sizeof(out) - p,
-                  "{\"active\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
-                  active ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
+                  "{\"active\":%d,\"learn_ok\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
+                  active ? 1 : 0, eg_learn_allowed(&s_egate) ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
     int nm = pfx_enrol_model_count();
     for (int i = 0; i < nm; i++) {
         const pfx_model_t *m = pfx_enrol_model(i);
-        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"te\":%d,\"routine\":\"%s\"}",
-                      i ? "," : "", m->name, m->te_us, m->routine);
+        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"routine\":\"%s\"}",
+                      i ? "," : "", m->name, m->routine);
     }
     snprintf(out + p, sizeof(out) - p, "]}");
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
 static esp_err_t h_pfx_learn(httpd_req_t *r) {
-    int rc = pfx_enrol_emit_learn();
     httpd_resp_set_type(r, "application/json");
+    const char *why = eg_refusal(&s_egate);
+    if (why) {   /* pas de capture reussie dans cette tentative : on n'emet RIEN */
+        ESP_LOGW(TAG, "PFX APPRENTISSAGE refuse : %s", why);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "ok", 0);
+        cJSON_AddStringToObject(o, "err", why);
+        char *js = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+        esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+        free(js);
+        return e;
+    }
+    int rc = pfx_enrol_emit_learn();
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
 }
 static esp_err_t h_pfx_cmd(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     int rc = pfx_enrol_cmd(jstr(j, "cmd"));
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
@@ -797,32 +1182,39 @@ static esp_err_t h_pfx_cmd(httpd_req_t *r) {
 }
 static esp_err_t h_pfx_forget(httpd_req_t *r) {
     pfx_enrol_forget();
+    eg_reset(&s_egate);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"ok\":1}");
 }
 /* Enregistre l'identite virtuelle enrolee comme volet (onglet Volets + cover HA). */
-/* Cree une centrale : {id, members:[id1,id2,...]} -> diffuse aux volets membres. */
-static esp_err_t h_central(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
-    cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
-    const char *id = jstr(j, "id");
-    /* Une liste qui ne tient pas est refusee, pas tronquee : les membres coupes ne
-     * recevraient plus les commandes de la centrale, sans que rien ne le dise.
-     * Une liste de volets existants tient toujours (SH_MEMBERS_LEN). */
-    char csv[SH_MEMBERS_LEN] = ""; int p = 0;
-    const char *err = NULL;
+/* members:[id1,id2,...] -> CSV (SH_MEMBERS_LEN). Une liste qui ne tient pas est
+ * refusee, pas tronquee : les membres coupes seraient oublies sans que rien ne le
+ * dise. Une liste de volets existants tient toujours. Renvoie la raison d'un refus,
+ * NULL si la liste est bonne. */
+static const char *members_csv(cJSON *j, char csv[SH_MEMBERS_LEN]) {
+    int p = 0;
+    csv[0] = 0;
     cJSON *mem = cJSON_GetObjectItem(j, "members"), *m;
     if (cJSON_IsArray(mem)) cJSON_ArrayForEach(m, mem) {
         const char *s = cJSON_GetStringValue(m);
         if (!s || !*s) continue;
         /* Un nom avec une virgule serait coupe en deux dans la liste : ce membre
          * ne recevrait rien. Refuse, avec la raison. */
-        if (strchr(s, ',')) { err = "un volet membre a une virgule dans son nom"; break; }
-        int n = snprintf(csv + p, sizeof(csv) - p, "%s%s", p ? "," : "", s);
-        if (n >= (int)sizeof(csv) - p) { err = "trop de membres"; break; }
+        if (strchr(s, ',')) return "un volet membre a une virgule dans son nom";
+        int n = snprintf(csv + p, SH_MEMBERS_LEN - p, "%s%s", p ? "," : "", s);
+        if (n >= SH_MEMBERS_LEN - p) return "trop de membres";
         p += n;
     }
+    return NULL;
+}
+/* Cree une centrale : {id, members:[id1,id2,...]} -> diffuse aux volets membres. */
+static esp_err_t h_central(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    char csv[SH_MEMBERS_LEN];
+    const char *err = members_csv(j, csv);
     int rc = (id && *id && !err) ? shutters_create_central(id, csv) : -1;
     if (rc != 0 && !err && id && strchr(id, ',')) err = "virgule dans le nom";
     if (err) ESP_LOGW(TAG, "centrale '%s' refusee : %s", id ? id : "", err);
@@ -836,16 +1228,36 @@ static esp_err_t h_central(httpd_req_t *r) {
     free(js);
     return e;
 }
-static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
-    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, 400, "body");
+/* Zone : {id, members:[id1,...]} -> les volets qui suivent ses mouvements ([] = aucun). */
+static esp_err_t h_followers(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
-    if (!j) return httpd_resp_send_err(r, 400, "json");
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    char csv[SH_MEMBERS_LEN];
+    const char *err = members_csv(j, csv);
+    int rc = (id && *id && !err) ? shutters_set_followers(id, csv, &err) : -1;
+    if (err) ESP_LOGW(TAG, "suiveurs de '%s' refuses : %s", id ? id : "", err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (err) cJSON_AddStringToObject(o, "err", err);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
+static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *name = jstr(j, "id");
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     int rc = -1;
     if (active && name && *name)
-        rc = shutters_create_virtual(name, id.serial, id.counter, pfx_enrol_model_te(id.model));
-    if (rc == 0) pfx_enrol_forget();   /* l'identite vit desormais dans le volet */
+        rc = shutters_create_virtual(name, id.serial, id.counter);
+    if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate); }   /* moteur valide ; l'identite vit desormais dans le volet */
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -857,6 +1269,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
  * rien. /api/session ne dit que si une protection existe et si l'appelant
  * est deja connecte. */
 static esp_err_t h_login(httpd_req_t *r) {
+    if (!req_guard_ok(r)) return ESP_OK;   /* 403 deja envoye */
     char *body = read_body(r);
     httpd_resp_set_type(r, "application/json");
     if (!body) return httpd_resp_sendstr(r, "{\"ok\":0}");
@@ -890,6 +1303,7 @@ static esp_err_t h_login(httpd_req_t *r) {
 }
 
 static esp_err_t h_logout(httpd_req_t *r) {
+    if (!req_guard_ok(r)) return ESP_OK;   /* 403 deja envoye */
     char tok[UI_TOKEN_LEN + 1] = "";
     if (ui_cookie_get(r, tok, sizeof(tok))) ui_sess_drop(tok);
     httpd_resp_set_hdr(r, "Set-Cookie", "opfx_sess=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
@@ -913,13 +1327,20 @@ static esp_err_t h_session(httpd_req_t *r) {
  * oubliee : c'est le seul endroit ou les handlers sont enregistres. Les assets
  * statiques (/, style.css, app.js) passent par reg_open() : le navigateur doit
  * pouvoir afficher la page qui DEMANDE le mot de passe. */
-#define MAX_ROUTES 48
+/* Places des deux tables : routes protegees (reg, ci-dessous) et routes ouvertes (reg_open).
+ * Le serveur web en deduit sa propre limite (max_uri_handlers, web_ui_start) : un seul nombre a
+ * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
+ * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
+ * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
+#define MAX_ROUTES      64
+#define MAX_OPEN_ROUTES 12
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
 
 static esp_err_t auth_trampoline(httpd_req_t *r) {
     int idx = (int)(intptr_t)r->user_ctx;
     if (idx < 0 || idx >= s_nroutes) return ESP_FAIL;
+    if (!req_guard_ok(r)) return ESP_OK;   /* 403 deja envoye */
     if (!ui_auth_ok(r)) return ESP_OK;   /* 401 deja envoye */
     return s_route_h[idx](r);
 }
@@ -942,27 +1363,251 @@ static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (
     else s_nroutes++;
 }
 
+/* Sniff io-homecontrol (experimental) : ecoute UNE trame io (FSK 868) et la rend DESASSEMBLEE
+ * en hexa, puis la radio repasse en OOK Profalux. Sert a capturer un volet io reel (issue #87). */
+/* Capture io = LA divergence avec Profalux : au lieu d'un appui (commande KeeLoq), on attend le 0x30
+ * de la telecommande, diffuse quand elle est en PROG. On clique, PUIS on va la mettre en PROG (fenetre
+ * longue, 30 s, volet parfois a 10 m). Rend la trame 0x30 + sa source (la cle en est decodee a
+ * l'enrolement). Pas de 0x30 a temps -> {ok:0}. */
+static esp_err_t h_io_sniff(httpd_req_t *r) {
+    io_trace_mark("2 - cle (geste de copie)");
+    uint8_t frame[32];
+    int n = radio_io_capture_0x30(frame, sizeof frame, 30000);   /* 30 s : le temps d'aller mettre en PROG */
+    httpd_resp_set_type(r, "application/json");
+    if (n < 31) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    uint8_t src[3], key[16]; int seq = -1;
+    if (!io_decode_0x30(frame, n, src, key, &seq)) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"decode\"}");
+    char hex[2 * sizeof(frame) + 1];
+    for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
+    char out[160];
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"src\":\"%02X%02X%02X\",\"frame\":\"%s\"}",
+             n, src[0], src[1], src[2], hex);
+    return httpd_resp_sendstr(r, out);
+}
+
+/* Etape 3 (#87) : comme h_io_sniff, mais marque le journal "telecommande en PROG". On capte ce que
+ * la telecommande emet quand on la met en PROG (geste different du bouton a copier). */
+static esp_err_t h_io_sniff_prog(httpd_req_t *r) {
+    io_trace_mark("3 - telecommande en PROG");
+    uint8_t frame[32];
+    int n = radio_io_capture_0x30(frame, sizeof frame, 30000);
+    httpd_resp_set_type(r, "application/json");
+    if (n < 31) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    uint8_t src[3], key[16]; int seq = -1;
+    if (!io_decode_0x30(frame, n, src, key, &seq)) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"decode\"}");
+    char hex[2 * sizeof(frame) + 1];
+    for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
+    char out[160];
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"src\":\"%02X%02X%02X\",\"frame\":\"%s\"}",
+             n, src[0], src[1], src[2], hex);
+    return httpd_resp_sendstr(r, out);
+}
+
+/* Journal RX+TX de la derniere instance d'enrolement io (#87) : rend en texte brut chaque trame
+ * RECUE (avec RSSI) et EMISE, dans l'ordre et horodatee, pour que le testeur nous transmette la
+ * sequence complete (qui emet quoi). Alimente par la capture (RX) et l'enrolement (TX). */
+static esp_err_t h_io_trace(httpd_req_t *r) {
+    static char buf[10240];
+    int w = io_trace_dump(buf, sizeof buf);
+    httpd_resp_set_type(r, "text/plain; charset=utf-8");
+    if (w <= 0) return httpd_resp_sendstr(r, "(journal vide : lance une capture, puis Creer)\n");
+    return httpd_resp_send(r, buf, w);
+}
+
+/* Etape 1 du diagnostic io (#87) : REMET A ZERO le journal RX+TX puis capte ~15 s un appui NORMAL
+ * de la telecommande d'origine (0x00/0x20) pour relever le COMPTEUR. Le journal est alimente en RX ;
+ * le testeur enchaine ensuite sur « capter la cle » (ajoute au meme journal) puis « Creer ». */
+static esp_err_t h_io_capture_counter(httpd_req_t *r) {
+    io_trace_reset();
+    io_trace_mark("1 - compteur (appui normal)");
+    uint8_t frame[32];
+    (void)radio_io_capture_0x30(frame, sizeof frame, 15000);
+    int c = io_trace_count();
+    httpd_resp_set_type(r, "application/json");
+    char out[48];
+    snprintf(out, sizeof out, "{\"ok\":%d,\"frames\":%d}", c > 0 ? 1 : 0, c);
+    return httpd_resp_sendstr(r, out);
+}
+
+/* Ecoute io permanente (#87) : POST {"on":true|false} met la radio en ecoute io 2-FSK continue.
+ * Chaque trame recue part au journal ("Trame io captee (N octets) : ..."). EXCLUSIVE de l'ecoute
+ * PFX (un seul protocole radio a la fois). Un POST sans corps rend juste l'etat courant. */
+static esp_err_t h_io_listen(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (body) {
+        cJSON *j = cJSON_Parse(body); free(body);
+        if (j) {
+            cJSON *on = cJSON_GetObjectItem(j, "on");
+            if (cJSON_IsBool(on)) radio_set_io_listening(cJSON_IsTrue(on));
+            cJSON_Delete(j);
+        }
+    }
+    char out[32];
+    snprintf(out, sizeof out, "{\"ok\":1,\"on\":%d}", radio_is_io_listening() ? 1 : 0);
+    return httpd_resp_sendstr(r, out);
+}
+
+
+/* Liste persistante des identites io INCONNUES entendues (trames d'enrolement 0x30 dont on n'a pas
+ * la cle), pour les decoder et les embarquer dans une version suivante. Survit au redemarrage. */
+static esp_err_t h_io_unknowns(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char buf[2048];
+    io_store_unknown_json(buf, sizeof buf);
+    return httpd_resp_sendstr(r, buf);
+}
+
+/* Appairage 1W io (#87) : la carte se presente comme une nouvelle telecommande et pousse sa cle
+ * vers un moteur mis en mode PROG. Le corps porte la trame captee de la VRAIE telecommande du
+ * volet ({"frame":"<hexa>"}, voir /api/io/sniff) : on en apprend la cible et la signature de type
+ * (profil) pour viser et formater comme elle. Pour les modes parraines, "origin_frame" = le 0x30
+ * capte (/api/io/captkey) dont on decode la cle qui signe la ceremonie. Cree un volet io pilotable
+ * aussitot. Mettre le moteur en appairage AVANT d'appeler (bouton PROG). */
+static esp_err_t h_io_pair_1w(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+
+    /* Trame captee -> octets -> profil d'emission. En io la capture est un 0x30 (cle de la
+     * telecommande, captee en PROG) : on en tire la cible (f[2:5]) + un profil Somfy par defaut
+     * (payload [01 43 btn 00 00 00], octet bouton en pos 2, rempli a l'emission). Le banc peut
+     * encore passer une commande 0x00 (ancien chemin io_profile_from_capture). */
+    const char *hex = jstr(j, "frame");
+    uint8_t frame[32]; int n = 0;
+    if (hex) for (const char *p = hex; p[0] && p[1] && n < (int)sizeof frame; p += 2) {
+        unsigned b; if (sscanf(p, "%2x", &b) != 1) break; frame[n++] = (uint8_t)b;
+    }
+    io_profile_t prof;
+    int learned;
+    if (n >= 9 && frame[8] == 0x30) {                 /* 0x30 capte : profil Somfy par defaut */
+        memcpy(prof.target, &frame[2], 3);            /* cible = destination du 0x30 (broadcast 00003F) */
+        static const uint8_t def_payload[6] = {0x01, 0x43, 0x00, 0x00, 0x00, 0x00};
+        memcpy(prof.payload, def_payload, sizeof def_payload);
+        prof.payload_len = sizeof def_payload;
+        learned = 0;
+    } else {
+        learned = io_profile_from_capture(frame, n, &prof);   /* commande 0x00 (banc) */
+    }
+
+    /* Notre identite a nous : par defaut DETERMINISTE (derivee du chip ID + "index", survit au
+     * formatage) ; ou imposee par "src"+"key" (6/32 hexa) pour les essais de banc. "man_id" force
+     * l'octet fabricant du 0x30 (defaut Somfy 0x02). Aucune cle n'est dans les sources. */
+    uint8_t our_src[3], our_key[16];
+    if (!(parse_hex(jstr(j, "src"), our_src, 3) && parse_hex(jstr(j, "key"), our_key, 16))) {
+        cJSON *jidx = cJSON_GetObjectItem(j, "index");
+        uint32_t index = (cJSON_IsNumber(jidx) && jidx->valueint >= 0) ? (uint32_t)jidx->valueint : 0;
+        io_derive_identity(index, our_src, our_key);
+    }
+    cJSON *jman = cJSON_GetObjectItem(j, "man_id");
+    int man_id = cJSON_IsNumber(jman) ? jman->valueint : -1;
+
+    /* Profil = mode d'enrolement (voir io_hc_enroll) : 1 = simple (0x30 seul) ; 2 = parrainage
+     * complet SIGNE ORIGINE + notre identite ; 3 = parrainage complet SIGNE ORIGINE + clone de
+     * l'origine. Les modes 2 et 3 exigent un 0x30 capte de l'origine (identite + cle + compteur). */
+    cJSON *jprof = cJSON_GetObjectItem(j, "profile");
+    int profile = cJSON_IsNumber(jprof) ? jprof->valueint : 1;
+    int mode = profile;
+
+    /* Profil 2 : origine (identite + cle decodees d'un 0x30 capte) + compteur a AVANCER (origin_seq
+     * doit etre > dernier compteur vu de l'origine). gap_ms = timing ; repeats = nb de 0x2e. */
+    uint8_t osrc[3], okey[16];
+    bool have_origin = parse_hex(jstr(j, "origin_src"), osrc, 3) && parse_hex(jstr(j, "origin_key"), okey, 16);
+    cJSON *jos  = cJSON_GetObjectItem(j, "origin_seq");
+    int origin_seq = cJSON_IsNumber(jos) ? jos->valueint : -1;
+    /* Ou : "origin_frame" = un 0x30 capte de l'origine ; la carte en decode identite+cle+compteur,
+     * et AVANCE le compteur au-dela du dernier vu (le moteur rejette un compteur <= dernier). */
+    if (!have_origin) {
+        const char *ohex = jstr(j, "origin_frame");
+        uint8_t of[32]; int on = 0;
+        if (ohex) for (const char *p = ohex; p[0] && p[1] && on < (int)sizeof of; p += 2) {
+            unsigned b; if (sscanf(p, "%2x", &b) != 1) break; of[on++] = (uint8_t)b;
+        }
+        int dseq = -1;
+        if (io_decode_0x30(of, on, osrc, okey, &dseq)) {
+            have_origin = true;
+            if (origin_seq < 0) origin_seq = dseq + 8;   /* avance le compteur de l'origine */
+        }
+    }
+    cJSON *jgap = cJSON_GetObjectItem(j, "gap_ms");
+    int gap_ms = cJSON_IsNumber(jgap) ? jgap->valueint : 0;
+    cJSON *jrep = cJSON_GetObjectItem(j, "repeats");
+    int repeats = cJSON_IsNumber(jrep) ? jrep->valueint : 3;
+    cJSON_Delete(j);
+
+    if (learned != 0)   /* pas de trame 0x00 exploitable : il faut capturer d'abord */
+        return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"capture\"}");
+    /* Mode 2 sans origine fournie : la carte CAPTE elle-meme la cle (0x30) pendant le PROG
+     * (radio_io_enroll). Pas de 0x30 a temps -> rc -3, rendu au navigateur. */
+
+    uint8_t src[3];
+    int rc = radio_io_enroll(&prof, our_src, our_key, man_id, mode,
+                             have_origin ? osrc : NULL, have_origin ? okey : NULL, origin_seq,
+                             gap_ms, repeats, src);
+    if (rc != 0) {
+        char out[48];
+        snprintf(out, sizeof out, "{\"ok\":0,\"rc\":%d}", rc);
+        return httpd_resp_sendstr(r, out);
+    }
+    char id[16];
+    snprintf(id, sizeof id, "io-%02X%02X%02X", src[0], src[1], src[2]);
+    uint32_t s = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
+    shutters_create_io_volet(id, s);   /* le volet io rejoint la liste, pilotable comme les autres */
+    char out[96];
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"src\":\"%02X%02X%02X\",\"profile\":%d}",
+             id, src[0], src[1], src[2], profile);
+    return httpd_resp_sendstr(r, out);
+}
+
+
+/* Portail captif : point d'acces actif (configuration ou secours), toute adresse inconnue
+ * (dont les tests de connexion des telephones : generate_204, hotspot-detect.html, connecttest.txt)
+ * est redirigee vers la page de configuration ; le telephone ouvre alors le portail tout seul.
+ * Hors point d'acces : 404 ordinaire. */
+static esp_err_t h_not_found(httpd_req_t *r, httpd_err_code_t err) {
+    (void)err;
+    if (!wifi_bridge_ap_active()) { httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, NULL); return ESP_OK; }
+    httpd_resp_set_status(r, "302 Found");
+    httpd_resp_set_hdr(r, "Location", "http://192.168.4.1/#wifi");   /* directement l'onglet Wi-Fi */
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    httpd_resp_send(r, NULL, 0);
+    return ESP_OK;
+}
+
 void web_ui_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 56;   /* marge > nb de routes (38 : 35 protegees + 3 assets). Si trop bas, les dernieres
-                                    routes echouent EN SILENCE (ex /api/restore mort a 28). reg() loggue
-                                    desormais les echecs pour ne plus jamais rater ca. */
+    cfg.max_uri_handlers = MAX_ROUTES + MAX_OPEN_ROUTES;   /* voir MAX_ROUTES : trop bas, les dernieres
+                                    routes ne s'enregistrent pas (404) ; reg() et reg_open() le journalisent. */
     cfg.stack_size = 6144;   /* esp_ota_end() consomme la pile en fin d'upload */
     /* ROOT CAUSE "web UI morte au bout d'un moment" : sans lru_purge, une fois les
      * max_open_sockets pris (SPA qui poll en keep-alive), le httpd REFUSE toute nouvelle
      * connexion au lieu de recycler -> port 80 en connection-refused (MQTT non touche).
      * On recycle la socket la moins recente + un peu plus de sockets. */
     cfg.lru_purge_enable = true;
-    cfg.max_open_sockets = 7;   /* max = CONFIG_LWIP_MAX_SOCKETS(10) - 3 */
+    /* Sessions = sockets lwIP - 5 : 3 internes au httpd, 1 pour MQTT (permanent), 1 pour le TLS
+     * de la verification GitHub / l'OTA par URL. Soit 5 avec les 10 sockets par defaut, et pas le
+     * maximum 7 (sockets - 3) : a 7, six sessions navigateur + MQTT epuisaient les 10 sockets,
+     * accept() echouait (errno 23, ENFILE) AVANT la purge LRU, qui n'agit qu'a 7 sessions pleines
+     * -> interface et OTA injoignables tant qu'une page ouverte gardait ses sessions vivantes.
+     * Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne des sessions d'elle-meme. */
+#if CONFIG_LWIP_MAX_SOCKETS < 7
+#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des 5 sockets reserves"
+#endif
+    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - 5;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }
+    httpd_register_err_handler(s, HTTPD_404_NOT_FOUND, h_not_found);   /* portail captif */
     ui_auth_reload();   /* charge le mot de passe UI (vide = UI ouverte) */
     /* Assets statiques NON proteges : sans eux le navigateur ne peut pas afficher
      * la page qui demande le mot de passe. Ils ne divulguent aucune donnee. */
     reg_open(s, "/",          HTTP_GET, h_index);
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
+    /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
+    reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
+    reg_open(s, "/icon-192.png",         HTTP_GET, h_icon);
     /* Routes de session : libres par necessite (voir commentaire plus haut). */
     reg_open(s, "/api/login",   HTTP_POST, h_login);
     reg_open(s, "/api/logout",  HTTP_POST, h_logout);
@@ -978,11 +1623,17 @@ void web_ui_start(void) {
     reg(s, "/api/rf/replay", HTTP_POST, h_rf_replay);
     reg(s, "/api/calibrate", HTTP_POST, h_calibrate);
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
+    reg(s, "/api/volet/followers", HTTP_POST, h_followers);
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
+    reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);
+    reg(s, "/api/remote/create_volet", HTTP_POST, h_remote_create_volet);
+    reg(s, "/api/remote/ignore", HTTP_POST, h_remote_ignore);
+    reg(s, "/api/remote/unignore", HTTP_POST, h_remote_unignore);
     reg(s, "/api/config",    HTTP_GET,  h_config_get);
     reg(s, "/api/config",    HTTP_POST, h_config_post);
     reg(s, "/api/ota/status",   HTTP_GET,  h_ota_status);
+    reg(s, "/api/ota/check",    HTTP_POST, h_ota_check);
     reg(s, "/api/ota/upload",   HTTP_POST, h_ota_upload);
     reg(s, "/api/ota/rollback", HTTP_POST, h_ota_rollback);
     reg(s, "/api/ota/pull",     HTTP_POST, h_ota_pull);
@@ -990,19 +1641,32 @@ void web_ui_start(void) {
     reg(s, "/api/rf",           HTTP_GET,  h_rf);
     reg(s, "/api/rx/calibrate", HTTP_POST, h_rx_calibrate);
     reg(s, "/api/rx/calibrate", HTTP_GET,  h_rx_calibrate_status);
+    reg(s, "/api/rx/sweep",     HTTP_POST, h_rx_sweep);
+    reg(s, "/api/rx/sweep",     HTTP_GET,  h_rx_sweep_status);
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
+    reg(s, "/api/health",       HTTP_GET,  h_health);
     reg(s, "/api/diag/tx",      HTTP_POST, h_diag_tx);
     reg(s, "/api/backup",       HTTP_GET,  h_backup);
     reg(s, "/api/log",          HTTP_GET,  h_log);
     reg(s, "/api/restore",      HTTP_POST, h_restore);
+    reg(s, "/api/restore/undo", HTTP_GET,  h_restore_undo_get);
+    reg(s, "/api/restore/undo", HTTP_POST, h_restore_undo);
     reg(s, "/api/mqtt/discover", HTTP_GET, h_mqtt_discover);
     reg(s, "/api/pfx",        HTTP_GET,  h_pfx_get);
     reg(s, "/api/pfx/capture", HTTP_POST, h_pfx_capture);
     reg(s, "/api/pfx/capture/poll", HTTP_GET, h_pfx_capture_poll);
+    reg(s, "/api/pfx/renew", HTTP_POST, h_pfx_renew);
     reg(s, "/api/pfx/learn",  HTTP_POST, h_pfx_learn);
     reg(s, "/api/pfx/cmd",    HTTP_POST, h_pfx_cmd);
     reg(s, "/api/pfx/forget", HTTP_POST, h_pfx_forget);
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
+    reg(s, "/api/io/sniff", HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
+    reg(s, "/api/io/listen", HTTP_POST, h_io_listen); /* io-homecontrol : ecoute io permanente ON/OFF (#87) */
+    reg(s, "/api/io/pair/1w", HTTP_POST, h_io_pair_1w); /* io-homecontrol : appairage 1W, telecommande (#87) */
+    reg(s, "/api/io/unknowns", HTTP_GET, h_io_unknowns); /* io-homecontrol : identites 0x30 inconnues entendues, a decoder (#87) */
+    reg(s, "/api/io/trace", HTTP_GET, h_io_trace); /* io-homecontrol : journal RX+TX de l'enrolement (#87) */
+    reg(s, "/api/io/capture-counter", HTTP_POST, h_io_capture_counter); /* io-homecontrol : etape 1, remet a zero + capte le compteur (#87) */
+    reg(s, "/api/io/sniff-prog", HTTP_POST, h_io_sniff_prog); /* io-homecontrol : etape 3, capture telecommande en PROG (#87) */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

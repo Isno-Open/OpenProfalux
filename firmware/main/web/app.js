@@ -67,7 +67,7 @@ function activateMain(name) {
   const t = $(`.tab[data-t="${name}"]`); if (!t) return false;
   $$('.tab').forEach(x => x.classList.toggle('active', x === t));
   $$('.panel').forEach(p => p.classList.toggle('active', p.dataset.p === name));
-  if (['sys', 'wifi', 'mqtt', 'ota'].includes(name)) loadConfig();
+  if (['sys', 'wifi', 'mqtt', 'ota', 'remotes'].includes(name)) loadConfig();   /* remotes : profil radio rappele aux captures */
   return true;
 }
 function activateSub(sec, name) {
@@ -85,11 +85,14 @@ function applyRoute() {
   if (sub === 'rf') { if (typeof loadRf === 'function') loadRf(true); if (typeof loadFrames === 'function') loadFrames(); }
   if (sub === 'calib' && !calibLive && typeof fillCalib === 'function') fillCalib();   /* affiche les temps enregistres */
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
+  if (sub === 'enrol' && typeof syncEnrolProto === 'function') syncEnrolProto();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
+  if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
+  if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
 }
 /* Rafraichit la 1re page quand l'onglet RF est actif ET qu'on n'a pas defile (sinon on garde la position). */
-setInterval(() => { if ((location.hash || '').includes('/rf') && typeof loadRf === 'function' && rfOffset <= RF_PAGE) loadRf(true); }, 5000);
+setInterval(() => { if (!document.hidden && (location.hash || '').includes('/rf') && typeof loadRf === 'function' && rfOffset <= RF_PAGE) loadRf(true); }, 5000);
 async function loadFrames() {
   const box = $('#frames-dataset'); if (!box) return;
   box.innerHTML = '<p class="hint">Chargement…</p>';
@@ -124,7 +127,7 @@ async function loadLog(toEnd) {
   const n = logText.split('\n').filter(Boolean).length;
   $('#log-info').textContent = `${n} ligne(s), ${logText.length} octets · ${new Date().toLocaleTimeString()}`;
 }
-setInterval(() => { if ((location.hash || '').includes('sys/log') && $('#log-follow') && $('#log-follow').checked) loadLog(false); }, 2000);
+setInterval(() => { if (!document.hidden && (location.hash || '').includes('sys/log') && $('#log-follow') && $('#log-follow').checked) loadLog(false); }, 2000);
 if ($('#log-reload')) $('#log-reload').onclick = () => loadLog(true);
 if ($('#log-copy')) $('#log-copy').onclick = async () => {
   /* navigator.clipboard exige HTTPS : l'interface est en HTTP, d'ou le repli par selection */
@@ -133,6 +136,47 @@ if ($('#log-copy')) $('#log-copy').onclick = async () => {
   const ok = document.execCommand('copy'); ta.remove();
   toast(ok ? 'Journal copié' : 'Copie impossible : utilise « Télécharger »');
 };
+/* ── Etat du boitier (Systeme > Etat) : /api/health + statusCache ── */
+const WDT = 'chien de garde (blocage)', RESET_TXT = ['inconnue', 'mise sous tension', 'bouton reset',
+  'redémarrage logiciel (mise à jour, réglages, retour du Wi-Fi…)', 'plantage', WDT, WDT, WDT, 'réveil de veille',
+  'alimentation trop faible', 'SDIO', 'console USB', 'console USB', 'eFuse', "coupure brève de l'alimentation", 'plantage'];
+const RESET_BAD = [4, 5, 6, 7, 9, 14, 15];
+const ko = b => `${Math.round(b / 1024)} Ko`;
+const dur = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} j ${h} h` : h ? `${h} h ${m} min` : `${m} min`; };
+/* Occupation de la NVS par espace de noms (entrees), du plus gros au plus petit. */
+const NVS_NS_TXT = { shutters: 'volets', cfg: 'réglages', pfx_enrol: 'enrôlement',
+  'nvs.net80211': 'pile Wi-Fi', phy: 'calibration radio' };
+function nvsDetail(h) {
+  const ns = Object.entries(h.nvs_ns || {}).sort((a, b) => b[1] - a[1]);
+  if (!ns.length) return '…';
+  return ns.map(([k, v]) => `${esc(NVS_NS_TXT[k] || k)} ${v}`).join(' · ')
+    + ` (entrées, sur ${h.nvs_total - (h.nvs_free - h.nvs_avail)} utilisables)`;
+}
+async function loadHealth() {
+  const box = $('#health'); if (!box) return;
+  const h = await api('/api/health').catch(() => null);
+  if (!h) { box.innerHTML = '<dt>État indisponible pour le moment.</dt><dd></dd>'; return; }
+  const s = statusCache, w = s.wifi || {};
+  /* NVS sans la page reservee ; volets de plus = place libre / taille moyenne (banc cfg_store T13) */
+  const usable = h.nvs_total - (h.nvs_free - h.nvs_avail);
+  const pct = usable > 0 ? Math.round(100 * (1 - h.nvs_avail / usable)) : 0;
+  const more = h.volets && h.volet_entries ? Math.floor(h.nvs_avail * h.volets / h.volet_entries) : null;
+  const rows = [
+    ['Allumé depuis', s.uptime != null ? dur(s.uptime) : '…'],
+    ['Dernier redémarrage', RESET_TXT[h.reset] || `code ${h.reset}`, RESET_BAD.includes(h.reset)],
+    ['Mémoire', `${ko(h.heap)} libres · au plus bas ${ko(h.heap_min)} · plus gros bloc ${ko(h.heap_blk)}`, h.heap_min < 20480],
+    ['Réglages (NVS)', `${pct} % utilisés` + (more != null ? ` · environ ${more} volet${more > 1 ? 's' : ''} de plus` : ''), more != null && more < 2],
+    ['NVS par usage', nvsDetail(h)],
+    ['Stockage', `${ko(h.spiffs_used)} sur ${ko(h.spiffs_total)}`],
+    ['Wi-Fi', w.connected ? sig(w.rssi) : 'non connecté'],
+    ['MQTT', s.mqtt ? 'connecté' : 'déconnecté'],
+    ['Firmware', `v${esc(h.version)} · partition ${esc(h.part)}`],
+  ];
+  box.innerHTML = rows.map(([k, v, warn]) => `<dt>${k}</dt><dd${warn ? ' class="warn"' : ''}>${v}</dd>`).join('');
+}
+setInterval(() => { if (!document.hidden && (location.hash || '').includes('sys/health')) loadHealth(); }, 5000);
+
 $$('.tab').forEach(t => t.onclick = () => { location.hash = t.dataset.t; });
 $$('.subtab').forEach(t => t.onclick = () => {
   location.hash = `${t.closest('.panel').dataset.p}/${t.dataset.s}`;
@@ -142,8 +186,21 @@ $('#theme').onclick = () => {
   const r = document.documentElement;
   const dark = r.getAttribute('data-theme') === 'dark' ||
     (!r.getAttribute('data-theme') && matchMedia('(prefers-color-scheme:dark)').matches);
-  r.setAttribute('data-theme', dark ? 'light' : 'dark');
+  const t = dark ? 'light' : 'dark';
+  r.setAttribute('data-theme', t);
+  try { localStorage.setItem('opfx_theme', t); } catch (e) {}   /* memorise, reapplique dans le <head> */
 };
+/* Libelles des boutons-symboles ▲ ■ ▼ (lecteurs d'ecran, infobulles), poses apres chaque rendu :
+ * les cartes de volets sont regenerees toutes les 3 s. */
+const SYM = { up: 'Monter', stop: 'Stop', down: 'Descendre' };
+function labelSymbols() {
+  const set = (b, l) => { if (b && !b.hasAttribute('aria-label')) { b.setAttribute('aria-label', l); if (!b.title) b.title = l; } };
+  $$('.dpad button[data-cmd]').forEach(b => set(b, SYM[b.dataset.cmd]));
+  $$('.reorder button[data-mv]').forEach(b => set(b, b.dataset.mv === 'up' ? 'Monter dans la liste' : 'Descendre dans la liste'));
+  set($('#pfx-up'), SYM.up); set($('#pfx-stop'), SYM.stop); set($('#pfx-down'), SYM.down);
+}
+labelSymbols();
+if ($('#volets')) new MutationObserver(labelSymbols).observe($('#volets'), { childList: true });
 
 /* ── Helpers ── */
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1600); }
@@ -231,17 +288,23 @@ function renderVolets(list, rf) {
     const el = document.createElement('div');
     el.className = 'card volet' + (reorderMode ? ' draggable' : '');
     const isC = !!v.central;
-    const showP = showPos && !isC;
+    const isZ = !isC && !!v.zone;   /* zone : comme une centrale, pas de position */
+    const showP = showPos && !isC && !isZ;
     if (reorderMode) { el.draggable = true; el.dataset.id = v.id; }
     el.innerHTML = `
-      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : ''}</span>${
+      <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : '🪟'} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : isZ ? ' <span class="badge">zone</span>' : ''}</span>${
         reorderMode ? '<span class="reorder"><button data-mv="up" title="Monter">▲</button><button data-mv="down" title="Descendre">▼</button></span>'
                     : (showP ? `<span class="pct">${v.position ?? '?'}%</span>` : '')}</div>
       <div class="dpad"><button data-cmd="up">▲</button><button data-cmd="stop">■</button><button data-cmd="down">▼</button></div>
       ${showP ? `<div class="slat" style="--p:${v.position ?? 50}"></div>` : ''}
       <div class="serials">${isC
         ? 'volets : ' + (esc(v.members || '') || 'aucun') + ' <span class="hint">(gérer dans Télécommandes -> Centrale)</span>'
-        : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>`).join(' ') || 'aucun') + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')}</div>`;
+        : (v.virt
+            ? 'identité : <code>' + esc(remoteName(v.virt_serial)) + '</code>'
+              + ((v.serials || []).length ? ' · télécommandes : ' + v.serials.map(s => `<code>${esc(remoteName(s))}</code>${battIcon(s)}`).join(' ') : '')
+            : 'serials : ' + ((v.serials || []).map(s => `<code>${esc(remoteName(s))}</code>${battIcon(s)}`).join(' ') || 'aucun'))
+          + (r != null ? `<span style="margin-left:6px">· reçu ${sig(r)}</span>` : '')
+          + (isZ ? `<br>suiveurs : ${esc(v.members)}` : (v.follows || []).length ? `<br>suit : ${esc(v.follows.join(', '))}` : '')}</div>`;
     /* En mode reorganisation, le pilotage est NEUTRALISE : un clic mal place ne
        doit pas faire partir un volet pendant qu'on range l'affichage. */
     el.querySelectorAll('[data-cmd]').forEach(b => {
@@ -298,20 +361,64 @@ function renderVoletPicker() {
   box.appendChild(add);
 }
 
+/* ── Rappel du profil radio aux captures (issue #63) ──
+ * Une capture qui echoue vient souvent du mauvais profil (Eveno emet ~100 kHz plus bas que
+ * Profalux) : on rappelle le profil actif sur les ecrans de capture, et le message d'echec
+ * renvoie vers le choix du profil ou le calage sur la telecommande (balayage RSSI). */
+const PROFILE_NAMES = { profalux: 'Profalux', eveno: 'Eveno', custom: 'Personnalisé' };
+function radioProfileNow() {
+  const p = cfgCache.radio_profile || 'profalux';
+  const khz = cfgCache.freq_khz || (p === 'eveno' ? 868330 : 868425);
+  return { p, name: PROFILE_NAMES[p] || p, mhz: (khz / 1000).toFixed(3).replace('.', ',') + ' MHz' };
+}
+const RADIO_LINKS = '<a href="#sys/device" data-goto="sys-radioprof">Vérifier</a> · '
+                  + '<a href="#sys/device" data-goto="sys-sweep">Caler sur ma télécommande</a>';
+function refreshRadioReminder() {
+  const r = radioProfileNow();
+  $$('.radio-reminder').forEach(el => el.innerHTML = `📻 Profil radio : <b>${esc(r.name)} (${r.mhz})</b> · ${RADIO_LINKS}`);
+}
+function radioProfileHelp() {
+  const r = radioProfileNow();
+  const why = r.p === 'eveno' ? 'Profalux émet environ 100 kHz plus haut'
+            : r.p === 'custom' ? 'elle ne correspond peut-être pas à ta télécommande'
+            : 'Eveno émet environ 100 kHz plus bas';
+  return `Toujours rien ? Le profil radio est peut-être le mauvais (actuel : <b>${esc(r.name)}</b>, ${r.mhz}) : ${why}. ${RADIO_LINKS}`;
+}
+function learnFail(show, label) {
+  const el = $('#learn-fail'); if (!el) return;
+  el.hidden = !show;
+  if (show) el.querySelector('span:last-child').innerHTML =
+    `<b>Rien capté pour ${esc(label)}.</b> Rapproche la télécommande à moins d'un mètre, tiens le bouton une seconde, et réessaie.<br>${radioProfileHelp()}`;
+}
+/* Lien vers un reglage de Systeme > Appareil : ouvre l'onglet, amene le champ a l'ecran et
+ * l'allume un instant pour qu'on voie ou cliquer. */
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-goto]'); if (!a) return;
+  e.preventDefault();
+  location.hash = a.getAttribute('href');
+  setTimeout(() => {
+    const el = document.getElementById(a.dataset.goto); if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  }, 150);
+});
 function renderLearnSlots() {
   const box = $('#learn-slots'); if (!box) return;
   const id = activeVolet;
   const v = (statusCache.volets || []).find(x => x.id === id);
   if (v && v.central) {   // une centrale n'a pas de télécommande propre
     box.innerHTML = `<div class="statline ok"><span class="dot"></span><b>C'est une centrale</b> (groupe de volets) - pas d'apprentissage. Gère ses membres dans <b>Volets → Créer une centrale</b>.</div>`;
-    return;
-  }
-  if (v && v.virt) {   // volet enrôlé (télécommande virtuelle) -> pas d'apprentissage/clonage
-    box.innerHTML = `<div class="statline ok"><span class="dot"></span><b>Ce volet a une télécommande virtuelle.</b> Pas de clonage nécessaire - il est piloté par génération. Gère-le dans <b>Créer une télécommande</b>.</div>`;
+    renderZoneMembers(v);   /* masque la zone (pas de suiveurs pour une centrale) */
     return;
   }
   const cmd = (v && v.cmd) || {};
-  box.innerHTML = '';
+  /* Volet enrôlé : piloté par génération, le clonage n'est pas nécessaire. On autorise
+   * quand même d'apprendre ici sa VRAIE télécommande d'origine, uniquement pour SUIVRE
+   * la position (le pilotage reste par génération, ces trames ne sont pas rejouées). */
+  const virtNote = (v && v.virt)
+    ? `<div class="statline ok"><span class="dot"></span><b>Volet enrôlé (télécommande virtuelle).</b> Il est piloté par génération, pas besoin de cloner. En option, apprends ci-dessous sa <b>télécommande d'origine</b> : le boîtier suivra alors la position quand tu l'utilises.</div>`
+    : '';
+  box.innerHTML = virtNote;
   for (const A of LEARN_ACTIONS) {
     const c = cmd[A.a];
     const learned = c != null;
@@ -345,21 +452,27 @@ function renderLearnSlots() {
   const serialEl = $('#learn-serial');
   if (serialEl) {
     const sers = (v && v.serials) || [];
-    serialEl.innerHTML = sers.length > 1
-      ? `⚠ Commandes de plusieurs télécommandes : ${sers.map(s => `<code>${esc(s)}</code>`).join(' ')}`
-      : sers.length ? `Télécommande : <code>${esc(sers[0])}</code>` : '';
+    serialEl.innerHTML = (v && v.virt)   /* virtuel : son identité d'émission (virt_serial) + les vraies télécommandes associées */
+      ? `Identité virtuelle : <code>${esc(remoteName(v.virt_serial))}</code>`
+        + (sers.length ? ` · Télécommandes : ${sers.map(s => `<code>${esc(remoteName(s))}</code>`).join(' ')}` : '')
+      : sers.length > 1
+        ? `⚠ Commandes de plusieurs télécommandes : ${sers.map(s => `<code>${esc(s)}</code>`).join(' ')}`
+        : sers.length ? `Télécommande : <code>${esc(sers[0])}</code>` : '';
   }
   const orientRow = $('#orient-row');
   if (orientRow) orientRow.hidden = !v;
   const orientInp = $('#orient-input');
   if (orientInp && v && document.activeElement !== orientInp)
     orientInp.value = (v.orientation != null && v.orientation >= 0) ? v.orientation : '';
+  renderZoneMembers(v);
   const delRow = $('#del-volet-row');
   if (delRow) delRow.hidden = !v;
   const hint = $('#learn-hint');
-  if (hint) hint.textContent = id
-    ? `Volet « ${id} » : clique Capturer, puis appuie une fois sur le bouton de ta télécommande (< 1 m du boîtier).`
-    : 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.';
+  if (hint) hint.textContent = !id
+    ? 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.'
+    : (v && v.virt)
+      ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie sur sa télécommande d'origine en tenant le bouton une seconde (< 1 m du boîtier). Facultatif.`
+      : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
   updateRemoteNameField();
 }
 
@@ -383,6 +496,39 @@ if (renameBtn) renameBtn.onclick = async () => {
   if (!serial) return;
   await api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
   toast('Télécommande renommée'); await loadStatus();
+};
+/* Zone : volets suiveurs du volet choisi (cases a cocher). On ne coche que des
+ * volets simples : ni centrale, ni zone. Un volet qui suit deja une zone ne peut
+ * pas en etre une. Les coches en cours survivent au polling tant que le volet
+ * choisi ne change pas. */
+let zoneFor = null;
+function renderZoneMembers(v) {
+  const row = $('#zone-row'), box = $('#zone-members'), save = $('#zone-save'); if (!row || !box) return;
+  row.hidden = !v || !!v.central;
+  if (row.hidden) { zoneFor = null; return; }
+  const follows = v.follows || [];
+  if (follows.length) {
+    zoneFor = null;
+    if (save) save.hidden = true;
+    box.innerHTML = `<span class="hint">Ce volet suit ${follows.map(z => `« ${esc(z)} »`).join(', ')} : il ne peut pas être une zone. Décoche-le d'abord dans ${follows.length > 1 ? 'ces zones' : 'cette zone'}.</span>`;
+    return;
+  }
+  if (save) save.hidden = false;
+  const saved = (v.members || '').split(',').map(s => s.trim()).filter(Boolean);
+  const checked = zoneFor === v.id ? new Set($$('#zone-members input:checked').map(c => c.value)) : new Set(saved);
+  zoneFor = v.id;
+  const vols = (statusCache.volets || []).filter(x => !x.central && !x.zone && x.id !== v.id);
+  box.innerHTML = vols.length
+    ? vols.map(x => `<label class="chip" style="cursor:pointer"><input type="checkbox" value="${esc(x.id)}"${checked.has(x.id) ? ' checked' : ''} style="margin-right:5px">${esc(x.id)}</label>`).join('')
+    : '<span class="hint">Aucun volet simple à cocher.</span>';
+}
+const zoneSave = $('#zone-save');
+if (zoneSave) zoneSave.onclick = async () => {
+  if (!activeVolet) return;
+  const members = $$('#zone-members input:checked').map(c => c.value);
+  const r = await api('/api/volet/followers', { method: 'POST', body: JSON.stringify({ id: activeVolet, members }) }).catch(() => null);
+  if (r && r.ok) { toast(members.length ? 'Zone enregistrée' : 'Plus de volets suiveurs'); zoneFor = null; await loadStatus(); }
+  else toast('Échec de l\'enregistrement' + (r && r.err ? ' : ' + r.err : ''));
 };
 const orientSave = $('#orient-save');
 if (orientSave) orientSave.onclick = async () => {
@@ -410,6 +556,7 @@ async function captureAction(action, btn) {
   if (isNewNameWithComma(id)) { toast(COMMA_MSG); return; }
   const label = LEARN_ACTIONS.find(x => x.a === action).lbl;
   learning = true; renderLearnSlots();
+  learnFail(false);
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
   await api('/api/learn/start', { method: 'POST', body: JSON.stringify({ action }) });
   const t0 = Date.now();
@@ -417,11 +564,13 @@ async function captureAction(action, btn) {
     const r = await api('/api/learn/poll').catch(() => null);
     if (r && r.bits) {
       clearInterval(poll); learning = false;
-      /* meme volet = meme telecommande : refuse une trame d'un autre serial que
-       * celui deja appris (evite un stop d'une telecommande + montee d'une autre). */
+      /* Volet CLONE : les 3 trames up/down/stop doivent venir de la MEME telecommande
+       * (sinon on rejoue un melange) -> garde-fou. Volet ENROLE : `serials` est l'ENSEMBLE
+       * des vraies telecommandes a reconnaitre pour le suivi de position (origine, box tierce,
+       * centrale...), on en associe plusieurs -> pas de garde-fou "meme telecommande". */
       const vol = (statusCache.volets || []).find(x => x.id === id);
       const known = (vol && vol.serials) || [];
-      if (known.length && !known.includes(r.serial)) {
+      if (!(vol && vol.virt) && known.length && !known.includes(r.serial)) {
         toast(`Pas la bonne télécommande : trame de ${r.serial}, le volet utilise ${known[0]}`);
         renderLearnSlots();
         return;
@@ -433,7 +582,7 @@ async function captureAction(action, btn) {
       await loadStatus();     // rafraîchit -> le slot passe en ✓
     } else if (Date.now() - t0 > 16000) {
       clearInterval(poll); learning = false;
-      toast(`Rien capté pour ${label}, rapproche-toi et réessaie`);
+      learnFail(true, label);
       renderLearnSlots();
     }
   }, 400);
@@ -456,22 +605,125 @@ if (delVoletBtn) delVoletBtn.onclick = async () => {
 };
 
 /* ── Télécommandes ── */
-function renderRemotes(map, rf) {
+function renderRemotes(s, rf) {
   const box = $('#remotes-list'); if (!box) return;
-  const entries = Object.entries(map || {});
+  renderIgnored(s.remotes_ignored || []);
+  const ae = document.activeElement;   /* saisie d'un nom en cours : ne pas l'ecraser au poll */
+  if (ae && ae.tagName === 'INPUT' && box.contains(ae)) return;
+  const entries = Object.entries(s.remotes || {});
+  const max = s.remotes_max || 16;
   $('#remotes-empty').hidden = entries.length > 0;
+  $('#remotes-count').textContent = `${entries.length} / ${max}`;
+  /* Liste pleine : le firmware refuse les nouvelles et dit laquelle (issue #39). */
+  const full = $('#remotes-full');
+  full.hidden = entries.length < max;
+  full.querySelector('b').textContent = s.remote_refused
+    ? `Liste pleine : la télécommande ${s.remote_refused} n'a pas pu être enregistrée. Supprime une télécommande inutile.`
+    : `Liste pleine : une nouvelle télécommande ne pourra pas être enregistrée. Supprime une télécommande inutile.`;
   box.innerHTML = '';
   for (const [serial, name] of entries) {
     const r = rssiForSerials([serial], rf);
-    const row = document.createElement('div'); row.className = 'row'; row.style.alignItems = 'center';
-    row.innerHTML = `<code class="badge">${esc(serial)}</code>
-      <input style="flex:1" value="${esc(name)}" placeholder="nom…">${sig(r)}`;
+    const used = voletForSerial(serial);
+    /* Grille a colonnes fixes (style.css .remote-row) : cellules toujours presentes, meme
+     * vides, pour que le champ du nom ait la meme largeur sur toutes les lignes. */
+    const row = document.createElement('div'); row.className = 'remote-row';
+    row.innerHTML = `<code class="badge r-ser">${esc(serial)}</code>
+      <input class="r-name" value="${esc(name)}" placeholder="nom…">
+      <span class="r-sig">${sig(r)}</span>
+      <span class="hint r-used" title="${esc(used || '')}">${used ? esc(used)
+        : '<button class="btn r-mk" title="Créer un volet avec ce nom, à partir des dernières trames ▲ ■ ▼ de cette télécommande dans le journal RF">➕ Créer le volet</button>'}</span>
+      <span class="r-act"><button class="btn r-ign" title="Ignorer : ne plus l'enregistrer quand elle est captée">🚫</button><button class="btn danger r-del" title="Supprimer cette télécommande">🗑</button></span>`;
     const inp = row.querySelector('input');
     inp.onchange = () => api('/api/remote', { method: 'POST', body: JSON.stringify({ serial, name: inp.value.trim() }) });
+    const label = name ? `« ${name} » (${serial})` : serial;
+    /* Sans confirmation : une telecommande supprimee ou ignoree se recupere d'un appui
+     * (ou d'un clic sur sa croix dans les ignorees). */
+    row.querySelector('.r-del').onclick = async () => {
+      const rep = await fetch('/api/remote/delete', { method: 'POST', body: JSON.stringify({ serial }) });
+      toast(rep.ok ? `${label} supprimée` : `Refusé : ${await rep.text()}`);
+      await loadStatus();
+    };
+    /* Creer le volet : un champ « nom du volet » apparait dans la cellule, distinct du nom de la
+     * telecommande (prerempli avec celui-ci). ✓ ou Entree cree, Echap annule. */
+    const mk = row.querySelector('.r-mk');
+    if (mk) mk.onclick = () => {
+      const cell = mk.parentElement;
+      cell.classList.add('r-mkform');
+      cell.innerHTML = `<input class="r-vname" placeholder="nom du volet" spellcheck="false"><button class="btn r-mkok" title="Créer le volet">✓</button>`;
+      const vin = cell.querySelector('input');
+      vin.value = inp.value.trim();
+      vin.focus(); vin.select();
+      const create = async () => {
+        const vname = vin.value.trim();
+        if (!vname) { toast('Donne un nom au volet'); vin.focus(); return; }
+        if (isNewNameWithComma(vname)) { toast(COMMA_MSG); vin.focus(); return; }
+        const rep = await fetch('/api/remote/create_volet', { method: 'POST', body: JSON.stringify({ serial, name: vname }) });
+        if (!rep.ok) { toast(`Refusé : ${await rep.text()}`); vin.focus(); return; }
+        const d = await rep.json().catch(() => ({}));
+        const lab = { up: '▲', stop: '■', down: '▼' };
+        const got = (d.learned || '').split(',').filter(Boolean);
+        const miss = ['up', 'stop', 'down'].filter(a => !got.includes(a));
+        toast(`Volet « ${vname} » créé : ${got.map(a => lab[a]).join(' ')} appris`
+          + (miss.length ? ` · ${miss.map(a => lab[a]).join(' ')} à apprendre (aucune trame dans le journal)` : ''));
+        vin.blur(); await loadStatus();
+      };
+      cell.querySelector('.r-mkok').onclick = create;
+      vin.onkeydown = e => {
+        if (e.key === 'Enter') create();
+        else if (e.key === 'Escape') { vin.blur(); loadStatus(); }   /* annule : la ligne est redessinee */
+      };
+    };
+    row.querySelector('.r-ign').onclick = async () => {
+      const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
+      toast(rep.ok ? `${label} ignorée` : `Refusé : ${await rep.text()}`);
+      await loadStatus();
+    };
     box.appendChild(row);
   }
 }
+
+/* Telecommandes ignorees : une bulle par serial (croix = ne plus l'ignorer), et un champ pour
+ * en ajouter une a la main. */
+function renderIgnored(list) {
+  const box = $('#ignored-box'); if (!box) return;
+  const inp = $('#ignored-input');
+  const key = list.join(',');
+  if (box.dataset.k === key) return;   /* inchange : ne pas recreer (garde la saisie) */
+  box.dataset.k = key;
+  $$('.tag', box).forEach(t => t.remove());
+  for (const serial of list) {
+    const t = document.createElement('span'); t.className = 'tag';
+    t.innerHTML = `<code>${esc(serial)}</code><button title="Ne plus ignorer">×</button>`;
+    t.querySelector('button').onclick = async (e) => {
+      e.stopPropagation();
+      await api('/api/remote/unignore', { method: 'POST', body: JSON.stringify({ serial }) }).catch(() => {});
+      toast(`${serial} n'est plus ignorée`);
+      await loadStatus();
+    };
+    box.insertBefore(t, inp);
+  }
+}
+if ($('#ignored-box')) {
+  $('#ignored-box').onclick = () => $('#ignored-input').focus();
+  $('#ignored-input').onkeydown = async (e) => {
+    if (e.key !== 'Enter') return;
+    const serial = e.target.value.trim(); if (!serial) return;
+    const rep = await fetch('/api/remote/ignore', { method: 'POST', body: JSON.stringify({ serial }) });
+    toast(rep.ok ? 'Télécommande ignorée' : `Refusé : ${await rep.text()}`);
+    if (rep.ok) e.target.value = '';
+    await loadStatus();
+  };
+}
 const remoteName = s => (statusCache.remotes || {})[s] || s;
+/* Pile d'une telecommande (bit VLOW des trames) : rien tant qu'aucune trame complete n'a ete
+   vue depuis le demarrage du boitier. */
+function battIcon(s) {
+  const b = (statusCache.remote_battery || {})[s];
+  if (!b) return '';
+  return b.low
+    ? ' <span class="badge" style="color:var(--danger)" title="Bit « pile faible » vu sur plusieurs appuis d\'affilée">🪫 pile faible</span>'
+    : ' <span title="Pile OK (dernière trame reçue)">🔋</span>';
+}
 
 /* ── Calibration ── */
 let calT = {}, calStart = 0, calibLive = false;   /* calibLive : true pendant un chrono -> ne pas ecraser l'affichage */
@@ -526,17 +778,17 @@ const PFX_GESTURES = {
     'Monte le volet jusqu\'en butée haute.',
     'Descends de ~4 lames.',
     'Remonte jusqu\'en butée haute.',
-    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ ci-dessous.',
+    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même : beaucoup de moteurs confirment sans bouger.',
   ],
   R7: [
     'Monte → descends ~4 lames → remonte (procédure proche, à confirmer).',
-    'Va-et-vient = enrôlé. Teste ▲ ■ ▼. Rapporte le résultat sur GitHub.',
+    'Va-et-vient = enrôlé. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.',
   ],
   R8: [
     'Montée → laisse le volet s\'arrêter seul en butée haute.',
     'Descente → laisse ~4 lames apparentes.',
     'Montée → laisse s\'arrêter seul.',
-    'Le volet fait un va-et-vient = enrôlé ✅. Teste ▲ ■ ▼ et rapporte le résultat sur GitHub.',
+    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.',
   ],
 };
 /* Geste PHYSIQUE à faire AVANT l'émission (certains modèles l'exigent, ex. NeoSol :
@@ -545,17 +797,21 @@ const PFX_PREGESTURES = {
   R8: 'NeoSol : AVANT d\'émettre, descends le volet et laisse ~4 lames apparentes.',
 };
 let pfxModels = [];
+let pfxTestLocked = true;   // dpad de test (▲ ■ ▼) verrouille tant que le delai de confirmation du moteur n'est pas ecoule
 async function loadPfx() {
   const d = await api('/api/pfx').catch(() => null);
   if (!d) return;
   pfxModels = d.models || [];
   const sel = $('#pfx-model');
   if (sel && !sel.dataset.filled && pfxModels.length) {
-    sel.innerHTML = pfxModels.map((m, i) => `<option value="${i}">${esc(m.name)} · TE ${m.te}µs · ${esc(m.routine)}</option>`).join('');
+    sel.innerHTML = pfxModels.map((m, i) => `<option value="${i}">${esc(m.name)} · ${esc(m.routine)}</option>`).join('');
     sel.dataset.filled = '1';
   }
   const box = $('#pfx-ident'), steps = $('#pfx-steps');
   if (!box) return;
+  /* L'apprentissage n'est permis qu'apres une capture reussie dans cette tentative (issue #53). */
+  const lb = $('#pfx-learn');
+  if (lb) { lb.disabled = !d.learn_ok; lb.title = d.learn_ok ? '' : 'Capte d’abord la télécommande de ce volet'; }
   if (d.active) {
     box.hidden = false; steps.hidden = false; box.className = 'statline ok';
     box.querySelector('b').textContent = `Identité ${d.serial} · slot ${d.idx + 1}/63 · compteur ${d.counter}`
@@ -570,17 +826,32 @@ async function loadPfx() {
 function pfxResetSteps() {   // nouvelle identité -> on recache les gestes jusqu'à la prochaine émission
   const after = $('#pfx-after-emit'); if (after) after.hidden = true;
   const st = $('#pfx-learn-status'); if (st) st.hidden = true;
+  const w = $('#pfx-wait'); if (w) w.hidden = true;
+  const go = $('#pfx-gestes-ok'); if (go) { go.hidden = false; go.disabled = false; }
+  pfxLockTest(true);
 }
-function pfxCapStatus(txt, cls) {
+/* Verrouille/déverrouille le dpad de test (▲ ■ ▼) pendant le délai de confirmation du moteur. */
+function pfxLockTest(locked) {
+  pfxTestLocked = locked;
+  ['#pfx-up', '#pfx-stop', '#pfx-down'].forEach(s => { const b = $(s); if (b) b.disabled = locked; });
+}
+function pfxWait(txt, cls) {
+  const w = $('#pfx-wait'); if (!w) return;
+  w.hidden = false; w.className = 'statline' + (cls ? ' ' + cls : '');
+  w.querySelector('b').textContent = txt;
+}
+function pfxCapStatus(txt, cls, moreHtml) {
   const st = $('#pfx-capture-status'); if (!st) return;
   st.hidden = false; st.className = 'statline' + (cls ? ' ' + cls : '');
   st.querySelector('b').textContent = txt;
+  st.querySelector('.more').innerHTML = moreHtml || '';
 }
 if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   const b = $('#pfx-capture'), o = b.textContent;
   const model = Number($('#pfx-model').value || 0);
   const wait = ms => new Promise(r => setTimeout(r, ms));
   b.disabled = true; setRadioBusy(true);
+  if ($('#pfx-renew-row')) $('#pfx-renew-row').hidden = true;
   const r = await api('/api/pfx/capture', { method: 'POST', body: JSON.stringify({ model }) }).catch(() => null);
   if (!r || !r.ok) { pfxCapStatus('Échec du démarrage de la capture', 'bad'); b.disabled = false; setRadioBusy(false); return; }
   let n = 15, d = null;
@@ -591,10 +862,28 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   b.disabled = false; b.textContent = o; setRadioBusy(false);
   if (!d || !d.done) pfxCapStatus('Aucune réponse du boîtier', 'bad');
   else if (d.rc === 0 && d.new) { pfxCapStatus(`✅ Nouveau moteur - identité ${d.serial} attribuée (télécommande ${d.remote})`, 'ok'); pfxResetSteps(); }
-  else if (d.rc === 0) pfxCapStatus(`✅ Moteur déjà connu - même identité ${d.serial} (télécommande ${d.remote})`, 'ok');
+  else if (d.rc === 0) {
+    /* Identite reprise : proposer une identite neuve, au cas ou d'autres moteurs la connaissent (issue #53). */
+    pfxCapStatus(`✅ Moteur déjà connu - même identité ${d.serial} (télécommande ${d.remote})`, 'ok',
+      d.used_by ? `⚠️ Cette identité pilote déjà le volet virtuel « <b>${esc(d.used_by)}</b> » : tout moteur qui la connaît bouge avec lui.` : '');
+    if ($('#pfx-renew-row')) $('#pfx-renew-row').hidden = false;
+  }
   else if (d.rc === -1) pfxCapStatus('⚠️ 63 identités déjà attribuées : oublie-en une pour libérer un slot.', 'bad');
-  else if (d.rc === -3) pfxCapStatus("⏱ Aucune trame captée - réessaie en appuyant sur la télécommande.", 'bad');
-  else pfxCapStatus('Télécommande non reconnue', 'bad');
+  /* Capture ratee : l'identite d'avant est deselectionnee, rien ne partira avec elle (issue #53). */
+  else if (d.rc === -3) pfxCapStatus("❌ La capture a échoué : le boîtier n'a rien reçu. Rapproche la télécommande du boîtier (moins d'un mètre), tiens le bouton une seconde, et recommence.", 'bad', radioProfileHelp());
+  else pfxCapStatus("❌ La capture a échoué : télécommande non reconnue. Recommence avec la télécommande de ce volet.", 'bad');
+  await loadPfx();
+};
+if ($('#pfx-renew')) $('#pfx-renew').onclick = async () => {
+  const b = $('#pfx-renew'); b.disabled = true;
+  const r = await api('/api/pfx/renew', { method: 'POST' }).catch(() => null);
+  b.disabled = false;
+  if (r && r.ok) {
+    $('#pfx-renew-row').hidden = true;
+    pfxCapStatus(`✅ Identité neuve ${r.serial} attribuée : l'ancienne reste réservée, aucun autre moteur ne la recevra.`, 'ok');
+    pfxResetSteps();
+  } else if (r && r.rc === -1) pfxCapStatus('⚠️ 63 identités déjà attribuées : plus de slot libre pour une identité neuve.', 'bad');
+  else pfxCapStatus('❌ Refusé : refais la capture de la télécommande, puis recommence.', 'bad');
   await loadPfx();
 };
 function pfxStatus(txt, cls) {
@@ -614,14 +903,18 @@ if ($('#pfx-learn')) $('#pfx-learn').onclick = async () => {
     const r = await api('/api/pfx/learn', { method: 'POST' });
     clearInterval(timer);
     if (r && r.ok) {
-      pfxStatus('✅ Émission finie - fais les gestes ci-dessous MAINTENANT.', 'ok');
+      pfxStatus('✅ Émission finie. Fais les gestes ci-dessous MAINTENANT, puis clique « J\'ai fait les gestes ».', 'ok');
       if (after) after.hidden = false;                     // révèle les gestes SEULEMENT à la fin
-    } else pfxStatus('Échec (radio occupée ?)', 'bad');
+      pfxLockTest(true);                                   // le test reste bloqué jusqu'à la fin du délai de confirmation
+      const go = $('#pfx-gestes-ok'); if (go) { go.hidden = false; go.disabled = false; }
+      const w = $('#pfx-wait'); if (w) w.hidden = true;
+    } else pfxStatus(r && r.err ? '❌ ' + r.err : 'Échec (radio occupée ?)', 'bad');   /* refus : pas de capture reussie */
   }
   catch (e) { clearInterval(timer); pfxStatus('Radio occupée, réessaie dans un instant.', 'bad'); }
   finally { b.disabled = false; b.textContent = o; setRadioBusy(false); await loadPfx(); }
 };
 async function pfxCmd(cmd, btn) {
+  if (pfxTestLocked) return;   // délai de confirmation du moteur pas encore écoulé
   if (radioBusy) return;
   setRadioBusy(true); if (btn) btn.classList.add('sending');
   try { await api('/api/pfx/cmd', { method: 'POST', body: JSON.stringify({ cmd }) }); }
@@ -631,6 +924,19 @@ async function pfxCmd(cmd, btn) {
 if ($('#pfx-up')) $('#pfx-up').onclick = () => pfxCmd('up', $('#pfx-up'));
 if ($('#pfx-stop')) $('#pfx-stop').onclick = () => pfxCmd('stop', $('#pfx-stop'));
 if ($('#pfx-down')) $('#pfx-down').onclick = () => pfxCmd('down', $('#pfx-down'));
+/* Les gestes faits : on force le délai de confirmation du moteur (~10 s) avant d'autoriser le test. */
+if ($('#pfx-gestes-ok')) $('#pfx-gestes-ok').onclick = () => {
+  const go = $('#pfx-gestes-ok'); go.disabled = true; go.hidden = true;
+  pfxLockTest(true);
+  let n = 10;
+  pfxWait('⏳ Le moteur confirme, patiente… ' + n + ' s');
+  const t = setInterval(() => {
+    n = Math.max(0, n - 1);
+    if (n > 0) { pfxWait('⏳ Le moteur confirme, patiente… ' + n + ' s'); return; }
+    clearInterval(t); pfxLockTest(false);
+    pfxWait('✅ Tu peux tester maintenant avec ▲ ■ ▼.', 'ok');
+  }, 1000);
+};
 if ($('#pfx-save-volet')) $('#pfx-save-volet').onclick = async () => {
   const name = ($('#pfx-volet-name').value || '').trim();
   if (!name) { toast('Donne un nom au volet'); return; }
@@ -648,10 +954,54 @@ if ($('#pfx-forget')) $('#pfx-forget').onclick = async () => {
   toast('Identité désélectionnée · compteur conservé'); await loadPfx();
 };
 
+/* ── Calage sur la télécommande : balayage RSSI (issue #51) ── */
+let sweepKhz = 0;
+function sweepShow(txt, cls, applyKhz) {
+  const st = $('#sys-sweep-res'); if (!st) return;
+  st.hidden = false; st.className = 'statline' + (cls ? ' ' + cls : '');
+  st.querySelector('b').textContent = txt;
+  sweepKhz = applyKhz || 0;
+  $('#sys-sweep-apply-row').hidden = !sweepKhz;
+}
+if ($('#sys-sweep')) $('#sys-sweep').onclick = async () => {
+  const b = $('#sys-sweep');
+  const wait = ms => new Promise(res => setTimeout(res, ms));
+  const r = await api('/api/rx/sweep', { method: 'POST' }).catch(() => null);
+  if (!r || !r.ok) { sweepShow('Lancement impossible', 'bad'); return; }
+  b.disabled = true; setRadioBusy(true);
+  sweepShow('📡 Balayage en cours, garde la télécommande sur P…');
+  let d = null;
+  for (let i = 0; i < 20; i++) { await wait(1000); d = await api('/api/rx/sweep').catch(() => null); if (d && d.state === 2) break; }
+  b.disabled = false; setRadioBusy(false);
+  if (!d || d.state !== 2) { sweepShow('Pas de réponse du boîtier', 'bad'); return; }
+  const mhz = k => (k / 1000).toFixed(3).replace('.', ',') + ' MHz';
+  const lvl = `signal ${Math.round(d.peak_dbm)} dBm, bruit ${Math.round(d.floor_dbm)} dBm`;
+  if (d.status === 0) {
+    const off = d.center_khz - d.from_khz;
+    sweepShow(`Porteuse de la télécommande : ${mhz(d.center_khz)} (${off >= 0 ? '+' : ''}${off} kHz par rapport à la fréquence actuelle) · ${lvl}`,
+      'ok', d.center_khz);
+  } else if (d.status === -2) sweepShow(`Signal trop faible (${lvl}) : rapproche la télécommande, vérifie qu'elle est bien sur P, et recommence.`, 'bad');
+  else if (d.status === -3) sweepShow(`Porteuse hors de la plage balayée (±150 kHz) : choisis l'autre profil radio et recommence.`, 'bad');
+  else sweepShow(`Échec du balayage (${d.status})`, 'bad');
+};
+if ($('#sys-sweep-apply')) $('#sys-sweep-apply').onclick = async () => {
+  if (!sweepKhz) return;
+  const ok = await api('/api/config', { method: 'POST', body: JSON.stringify({ radio_profile: 'custom', freq_khz: sweepKhz }) })
+    .then(() => true).catch(() => false);
+  toast(ok ? `Fréquence personnalisée : ${sweepKhz} kHz` : 'Refusé (fréquence hors de la plage de la carte ?)');
+  if (ok) { $('#sys-sweep-apply-row').hidden = true; if (typeof loadConfig === 'function') await loadConfig(); }
+};
+
 /* ── Config : Wi-Fi / MQTT / Système (sauvegardes séparées, partielles) ── */
 async function loadConfig() {
   const c = await api('/api/config').catch(() => ({}));
   $('#wifi-ssid').value = c.wifi_ssid || '';
+  cfgCache = c;
+  if ($('#wifi-device')) {
+    $('#wifi-device').value = c.device || '';
+    $('#wifi-device').placeholder = c.mdns_default || c.mdns_host || 'openprofalux';   /* nom pris si le champ reste vide */
+    refreshWifiUrl();
+  }
   $('#mqtt-uri').value = c.mqtt_uri || ''; $('#mqtt-user').value = c.mqtt_user || '';
   if ($('#mqtt-pass')) $('#mqtt-pass').placeholder = c.mqtt_pass_len
     ? `•••••••• (${c.mqtt_pass_len} car. enregistrés, laisser vide pour ne pas changer)`
@@ -673,46 +1023,100 @@ async function loadConfig() {
   if (upi) upi.placeholder = c.ui_auth ? 'nouveau mot de passe (inchangé si vide)' : 'mot de passe à définir';
   if (upc) upc.hidden = !c.ui_auth;   /* desactivation par un bouton EXPLICITE, pas par un champ vide */
   if ($('#sys-debug')) $('#sys-debug').checked = !!c.debug;
+  if ($('#sys-txrpt')) $('#sys-txrpt').checked = !!c.tx_repeat_bit;
+  if ($('#sys-txrmt')) $('#sys-txrmt').checked = !!c.tx_rmt;
   if ($('#sys-rxgain')) $('#sys-rxgain').value = c.rx_gain || 39;
-  if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 455;
+  if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 400;
+  const rp = $('#sys-radioprof'), fq = $('#sys-freq');
+  if (rp && fq) {
+    rp.value = c.radio_profile || 'profalux';
+    fq.min = c.band_low_khz || 863000; fq.max = c.band_high_khz || 870000;
+    fq.value = c.freq_custom_khz || c.freq_khz || '';
+    fq.hidden = rp.value !== 'custom';
+    const fh = $('#sys-freq-hint');
+    if (fh) fh.textContent = `Fréquence active : ${c.freq_khz ? (c.freq_khz / 1000).toFixed(3) + ' MHz' : '?'}` +
+      (rp.value === 'custom' ? ` (saisie en kHz, entre ${fq.min} et ${fq.max})` : '');
+  }
   if ($('#mqtt-device')) $('#mqtt-device').value = c.device || '';
+  refreshRadioReminder();
   const st = await api('/api/ota/status').catch(() => ({}));
   $('#ota-version').textContent = st.version || '…';
-  if ($('#version')) $('#version').textContent = st.version ? 'v' + st.version : '…';
+  otaRetour(st);
+  if ($('#ota-auto')) $('#ota-auto').checked = c.update_auto !== 0;   /* absent (ancien firmware) = active */
 }
-/* Version du header. Appelee par boot(), donc APRES ouverture de session : en
-   appel immediat au chargement du script, la requete partait avant le login et
-   echouait en 401 -> la version restait vide jusqu'a l'ouverture d'un onglet. */
-async function loadVersion() {
-  try { const s = await api('/api/ota/status'); if (s && s.version && $('#version')) $('#version').textContent = 'v' + s.version; }
-  catch (e) {}
-}
+if ($('#ota-auto')) $('#ota-auto').onchange = async (e) => {
+  const on = e.target.checked;
+  const r = await api('/api/config', { method: 'POST', body: JSON.stringify({ update_auto: on }) }).catch(() => null);
+  if (r && r.ok) toast(on ? 'Vérification automatique activée' : 'Vérification automatique désactivée');
+  else { e.target.checked = !on; toast('Échec de l\'enregistrement'); }
+};
+if ($('#wifi-device')) $('#wifi-device').oninput = refreshWifiUrl;
 $('#wifi-save').onclick = async () => {
   const b = { wifi_ssid: $('#wifi-ssid').value.trim(), reboot: $('#wifi-reboot').checked };
   if ($('#wifi-pass').value) b.wifi_pass = $('#wifi-pass').value;
+  if ($('#wifi-device')) b.device = $('#wifi-device').value.trim();   /* nom du boitier = son adresse */
+  const url = boxUrl(b.device);
   await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
   b.reboot ? toast('Wi-Fi enregistré, redémarrage…') : savedBtn($('#wifi-save'), 'Enregistrer le Wi-Fi');
+  /* Le portail (point d'acces) disparait au redemarrage : dire ou retrouver le boitier. */
+  const nx = $('#wifi-next');
+  if (nx && b.reboot) {
+    nx.hidden = false;
+    nx.querySelector('b').innerHTML = `Après le redémarrage, reconnecte-toi à « ${esc(b.wifi_ssid)} » et ouvre `
+      + `<a href="${esc(url)}/">${esc(url)}</a>. `
+      + `Sur Android, si l'adresse ne répond pas, utilise l'adresse IP du boîtier indiquée par ta box internet.`;
+  }
 };
 $('#mqtt-save').onclick = async () => {
   const b = { mqtt_uri: $('#mqtt-uri').value.trim(), mqtt_user: $('#mqtt-user').value.trim(), reboot: true };
   if ($('#mqtt-pass').value) b.mqtt_pass = $('#mqtt-pass').value;
-  /* Certificats TLS : envoyés seulement si remplis (sinon inchangés), comme le mot de passe. */
-  if ($('#mqtt-ca') && $('#mqtt-ca').value.trim()) b.mqtt_ca = $('#mqtt-ca').value.trim();
-  if ($('#mqtt-cert') && $('#mqtt-cert').value.trim()) b.mqtt_cert = $('#mqtt-cert').value.trim();
-  if ($('#mqtt-key') && $('#mqtt-key').value.trim()) b.mqtt_key = $('#mqtt-key').value.trim();
+  /* Certificats TLS : champ rempli = remplace, case « effacer » cochée = envoie "" (supprime en
+   * NVS cote firmware), sinon inchangé (comme le mot de passe). */
+  const certField = (id, key) => {
+    const el = $('#' + id), clr = $('#' + id + '-clear');
+    if (clr && clr.checked) b[key] = '';
+    else if (el && el.value.trim()) b[key] = el.value.trim();
+  };
+  certField('mqtt-ca', 'mqtt_ca');
+  certField('mqtt-cert', 'mqtt_cert');
+  certField('mqtt-key', 'mqtt_key');
   if ($('#mqtt-device')) b.device = $('#mqtt-device').value.trim();
-  await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
-  toast('MQTT enregistré, redémarrage…');
+  try {
+    await api('/api/config', { method: 'POST', body: JSON.stringify(b) });
+    toast('MQTT enregistré, redémarrage…');
+  } catch (e) {
+    /* 400 = corps rejeté (certificats trop volumineux) ; sinon erreur générique. On NE dit
+     * PAS « enregistré » sur un échec, sinon l'utilisateur croit ses certificats pris. */
+    toast(e === 400 ? 'Échec : certificats trop volumineux ou requête invalide' : 'Échec de l’enregistrement MQTT');
+  }
 };
+if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
-  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 455, reboot: $('#sys-reboot').checked };
+  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 400, reboot: $('#sys-reboot').checked };
+  if ($('#sys-txrpt')) b.tx_repeat_bit = $('#sys-txrpt').checked;
+  if ($('#sys-txrmt')) b.tx_rmt = $('#sys-txrmt').checked;
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
      desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche
      jamais le mot de passe) -> la desactivation passe par le bouton dedie ci-dessous. */
+  /* Profil radio : le firmware refuse toute la requete (400) si la frequence sort de la plage
+     de la carte. On le verifie ici pour un message clair, et on ne dit pas « enregistré » sur
+     un refus. */
+  const rp = $('#sys-radioprof'), fq = $('#sys-freq');
+  if (rp) {
+    b.radio_profile = rp.value;
+    if (rp.value === 'custom') {
+      const f = Number(fq.value);
+      if (!(f >= Number(fq.min) && f <= Number(fq.max))) { toast(`Fréquence invalide : entre ${fq.min} et ${fq.max} kHz`); return; }
+      b.freq_khz = f;
+    }
+  }
   const up = $('#sys-uipass');
   const newPass = up && up.value !== '';
   if (newPass) b.ui_pass = up.value;
-  await api('/api/config', { method: 'POST', body: JSON.stringify(b) }).catch(() => {});
+  let res;
+  try { res = await api('/api/config', { method: 'POST', body: JSON.stringify(b) }); }
+  catch (e) { toast(e === 400 ? 'Refusé : profil radio ou fréquence invalide, rien n’a été enregistré' : 'Échec de l’enregistrement'); return; }
+  if (res && res.radio_applied === 0) toast('Enregistré, mais la radio n’a pas pris la nouvelle fréquence (voir Diagnostic)');
   if (up) up.value = '';
   if (newPass) {
     /* Le firmware invalide toutes les sessions quand le mot de passe change :
@@ -772,11 +1176,19 @@ async function loadDiag() {
   if (vd) {
     let cls, msg;
     if (!chipOk) { cls = 'bad'; msg = '🔴 Module NON détecté (câblage / SPI). VERSION=' + vh; }
+    else if (d.spi_fails > 0) { cls = 'bad'; msg = '🔴 Réglages radio non pris par le module : couper l\'alimentation puis redémarrer'; }
     else if (!txOk) { cls = 'bad'; msg = '🔴 Détecté mais émission KO (TX HS)'; }
+    else if (d.gdo0 === 0) { cls = 'bad'; msg = '🔴 GDO0 tenu par un autre composant : l\'émission n\'atteint pas le module'; }
     else { cls = 'ok'; msg = '🟢 Module OK (détecté + émission)'; }
     vd.className = 'statline ' + cls; vd.querySelector('b').textContent = msg;
   }
-  if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}. Réception : bouton ci-dessous.`;
+  /* Ecritures SPI reessayees / jamais prises : un module sain reste a 0. Des reprises qui
+     montent signalent un module qui decroche (il a deja ete vu chaud et instable). */
+  const spi = (d.spi_retries || d.spi_fails) ? ` · SPI : ${d.spi_retries} reprise(s), ${d.spi_fails} échec(s)` : '';
+  /* GDO0 (issue #60) : libre si la broche suit les tirages internes, sinon un autre composant la tient */
+  const gdo0 = d.gdo0 === 1 ? ' · GDO0 libre ✓'
+             : d.gdo0 === 0 ? ` · GDO0 tenu par un autre composant (bloqué à ${d.gdo0_lvl}) ✗` : '';
+  if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}${gdo0}${spi}. Réception : bouton ci-dessous.`;
 }
 if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   const btn = $('#diag-tx-btn'); btn.disabled = true;
@@ -784,6 +1196,141 @@ if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   await api('/api/diag/tx', { method: 'POST' }).catch(() => {});
   await loadDiag(); btn.disabled = false;
 };
+/* Derniere trame io captee : sert de modele a l'appairage 1W (cible + signature de type). */
+let lastIoFrame = null;
+let lastIoOriginFrame = null;   /* 0x30 capté de la télécommande (sa clé) pour les modes parrainés */
+let lastIoVolet = null;   /* volet io créé (étape 1) : cible du pavé de test (étape 2) */
+/* Créer une télécommande : écran unifié, un COMPOSANT par marque affiché selon la liste déroulante
+ * (Profalux, Somfy io, et les marques à venir). Même cadre, seul le composant de marque change. */
+function syncEnrolProto() {
+  const sel = $('#enrol-proto-sel');
+  const proto = sel ? sel.value : 'pfx';
+  const p = $('#enrol-pfx'), i = $('#enrol-io');
+  if (p) p.hidden = (proto !== 'pfx');
+  if (i) i.hidden = (proto !== 'io');
+  if (proto === 'io' && typeof loadIoUnknowns === 'function') loadIoUnknowns();
+}
+if ($('#enrol-proto-sel')) $('#enrol-proto-sel').addEventListener('change', syncEnrolProto);
+
+/* Identités io entendues mais inconnues (0x30 persistés) : à décoder puis embarquer. */
+async function loadIoUnknowns() {
+  const box = $('#io-unknowns'); if (!box) return;
+  const d = await api('/api/io/unknowns').catch(() => null);
+  if (!Array.isArray(d) || !d.length) { box.textContent = "Aucune pour l'instant."; return; }
+  box.innerHTML = d.map(u => `<div><code>${esc(u.src)}</code> <small>RSSI ${u.rssi} dBm · t=${u.t}s · ${esc(u.frame)}</small></div>`).join('');
+}
+
+/* Statut io en statline (comme Profalux) : affiche la ligne et pose le contenu dans son <b>. */
+function ioStat(st, html) { if (!st) return; st.hidden = false; const b = st.querySelector('b'); if (b) b.innerHTML = html; else st.innerHTML = html; }
+
+/* Étape 1 : remet à zéro le journal RX+TX et capte un appui NORMAL (compteur). */
+if ($('#io-counter-btn')) $('#io-counter-btn').onclick = async () => {
+  const btn = $('#io-counter-btn'), st = $('#io-counter-status');
+  btn.disabled = true; setRadioBusy(true);
+  ioStat(st, '📡 Écoute ~15 s. Sur ta télécommande, <b>appuie normalement</b> sur un bouton (montée ou descente).');
+  const d = await api('/api/io/capture-counter', { method: 'POST' }).catch(() => null);
+  btn.disabled = false; setRadioBusy(false);
+  if (d && d.ok) ioStat(st, `✅ ${d.frames} trame(s) captée(s). Passe à l'étape 2 (capter la clé).`);
+  else ioStat(st, '❌ Rien capté. Reclique, puis appuie sur un bouton de ta télécommande pendant l\'écoute.');
+};
+/* Capture d'une clé io (0x30) : écoute 30 s, AJOUTE au journal, révèle « Créer » si un vrai 0x30
+ * est décodé. Partagée par l'étape 2 (geste de copie) et l'étape 3 (télécommande en PROG). */
+async function ioCaptureKey(st, pre, url) {
+  ioStat(st, pre);
+  const d = await api(url || '/api/io/sniff', { method: 'POST' }).catch(() => null);
+  if (d && d.ok) {
+    lastIoFrame = d.frame; lastIoOriginFrame = d.frame;
+    if ($('#io-steps')) $('#io-steps').hidden = false;
+    ioStat(st, `✅ Clé captée de <code>${esc(d.src)}</code>. Passe à « Créer la télécommande ».`);
+    return true;
+  }
+  return false;
+}
+/* Étape 2 : geste de copie. Si rien, on révèle l'étape 3 (télécommande en PROG) pour mettre les
+ * chances de notre côté : la clé ne sort peut-être qu'en appairage. */
+if ($('#io-sniff-btn')) $('#io-sniff-btn').onclick = async () => {
+  const btn = $('#io-sniff-btn'), st = $('#io-sniff-status');
+  btn.disabled = true; setRadioBusy(true);
+  const ok = await ioCaptureKey(st, '📡 Écoute ~30 s. Sur ta télécommande, <b>presse le bouton à copier pendant quelques secondes</b> (le geste de copie / transfert).', '/api/io/sniff');
+  btn.disabled = false; setRadioBusy(false);
+  if (!ok) {
+    if ($('#io-step3')) $('#io-step3').hidden = false;
+    ioStat(st, "❌ Aucune clé au geste de copie. Essaie l'étape 3 ci-dessous (télécommande en PROG) : elle ne sort peut-être qu'en appairage.");
+  }
+};
+/* Étape 3 (secours) : télécommande d'origine en PROG, au cas où elle n'émet son 0x30 qu'en appairage. */
+if ($('#io-sniff-prog-btn')) $('#io-sniff-prog-btn').onclick = async () => {
+  const btn = $('#io-sniff-prog-btn'), st = $('#io-sniff-prog-status');
+  btn.disabled = true; setRadioBusy(true);
+  const ok = await ioCaptureKey(st, "📡 Écoute ~30 s. <b>Mets ta télécommande d'origine en PROG</b> : tiens son bouton PROG ~2-3 s, jusqu'au va-et-vient du volet.", '/api/io/sniff-prog');
+  btn.disabled = false; setRadioBusy(false);
+  if (!ok) ioStat(st, "❌ Toujours aucun 0x30, même télécommande en PROG. Récupère la séquence (RX+TX) en bas et envoie-la nous : on verra ce qui est sorti.");
+};
+/* Écoute io permanente (debug) : la carte reste en mode io (2-FSK) et note chaque trame au journal
+ * (avec RSSI). Exclusive de l'écoute Profalux/PFX. Outil de capture/décodage de séquence (#87). */
+let ioListenOn = false;
+if ($('#io-listen-btn')) $('#io-listen-btn').onclick = async () => {
+  const btn = $('#io-listen-btn'), st = $('#io-listen-status');
+  const want = !ioListenOn;
+  btn.disabled = true;
+  const d = await api('/api/io/listen', { method: 'POST', body: JSON.stringify({ on: want }) }).catch(() => null);
+  btn.disabled = false;
+  if (d && d.ok) {
+    ioListenOn = !!d.on;
+    btn.textContent = `Écoute io permanente : ${ioListenOn ? 'ON' : 'OFF'} · expérimental`;
+    ioStat(st, ioListenOn
+      ? '📡 Écoute io active : chaque trame reçue est notée au journal (« Trame io captée... »), avec RSSI. L\'écoute Profalux est suspendue le temps de l\'écoute.'
+      : 'Écoute io arrêtée. L\'écoute Profalux reprend si elle était active.');
+    if (ioListenOn && typeof loadIoUnknowns === 'function') loadIoUnknowns();
+  } else ioStat(st, '❌ Impossible de changer l\'écoute io.');
+};
+/* Enroler : la clé a déjà été captée aux étapes de capture (le 0x30). Au clic, la carte émet le
+ * rituel signé avec cette clé + NOTRE identité, pendant que la télécommande d'origine est en PROG. */
+if ($('#io-pair1w-btn')) $('#io-pair1w-btn').onclick = async () => {
+  const btn = $('#io-pair1w-btn'), st = $('#io-pair-status');
+  if (!lastIoFrame) { ioStat(st, '⚠️ Fais d\'abord la capture (étapes 1 et 2).'); return; }
+  const profile = parseInt(($('#io-profile-sel') || {}).value || '1', 10);
+  const payload = { frame: lastIoFrame, profile, gap_ms: 200, repeats: 3 };
+  if (profile === 2 && lastIoOriginFrame) payload.origin_frame = lastIoOriginFrame;
+  btn.disabled = true; setRadioBusy(true);
+  ioStat(st, '✅ Télécommande d\'origine en PROG ? La carte émet le rituel + notre identité. Patiente...');
+  const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify(payload) }).catch(() => null);
+  btn.disabled = false; setRadioBusy(false);
+  if (d && d.ok) {
+    lastIoVolet = d.id;
+    ['#io-up', '#io-stop', '#io-down'].forEach(s => { const b = $(s); if (b) b.disabled = false; });
+    ioStat(st, `✅ Télécommande créée : <code>${esc(d.id)}</code> (mode ${d.profile}). Teste-la ci-dessous. Si ta télécommande d\'origine ne répond plus, choisis le mode témoin et recommence.`);
+    if (typeof loadStatus === 'function') loadStatus();
+  } else if (d && (d.err === 'capture' || d.err === 'origin' || d.rc === -3))
+    ioStat(st, '❌ Pas de clé captée. Refais la capture (étape 2), puis mets ta télécommande d\'origine en PROG avant de cliquer.');
+  else ioStat(st, '❌ Non confirmé. Réessaie, ou choisis le mode témoin.');
+};
+/* Pavé de test du volet io créé (étape 2), même geste que Profalux. */
+function ioCmd(cmd, btn) {
+  if (!lastIoVolet) { toast('Crée d\'abord la télécommande'); return; }
+  if (btn) btn.classList.add('sending');
+  api('/api/shutter', { method: 'POST', body: JSON.stringify({ id: lastIoVolet, cmd }) })
+    .catch(() => toast('Radio occupée, réessaie'))
+    .finally(() => { if (btn) btn.classList.remove('sending'); });
+}
+if ($('#io-up')) $('#io-up').onclick = () => ioCmd('up', $('#io-up'));
+if ($('#io-stop')) $('#io-stop').onclick = () => ioCmd('stop', $('#io-stop'));
+if ($('#io-down')) $('#io-down').onclick = () => ioCmd('down', $('#io-down'));
+
+/* Récupère la séquence complète RX+TX de la dernière instance (capture + enrôlement) : chaque trame
+ * reçue (avec RSSI) et émise, horodatée, pour que le testeur nous la transmette telle quelle. */
+if ($('#io-trace-btn')) $('#io-trace-btn').onclick = async () => {
+  const btn = $('#io-trace-btn'), out = $('#io-trace-out');
+  btn.disabled = true;
+  try {
+    const t = await fetch('/api/io/trace').then(r => r.text());
+    if (out) { out.textContent = (t && t.trim()) || '(journal vide)'; out.hidden = false; }
+  } catch (e) {
+    if (out) { out.textContent = 'Erreur : ' + e; out.hidden = false; }
+  }
+  btn.disabled = false;
+};
+
 if ($('#diag-rx-btn')) $('#diag-rx-btn').onclick = async () => {
   const btn = $('#diag-rx-btn'), st = $('#diag-rx-status');
   btn.disabled = true; setRadioBusy(true);
@@ -830,33 +1377,87 @@ $('#ota-btn').onclick = async () => {
   xhr.onerror = () => { $('#ota-msg').textContent = '✗ échec de l\'envoi (lien coupé ?)'; $('#ota-btn').disabled = false; };
   xhr.send(buf);
 };
+const OTA_RB_NON = 'Pas de version précédente valide sur ce boîtier : rien vers quoi revenir (première installation, ou mise à jour annulée).';
+let otaPrecedente = '';
+/* Retour automatique apres une mise a jour (voir ota_rollback.h) : actif, inactif (bootloader
+ * d'avant l'option), version en essai, et la mise a jour qu'il vient d'annuler. */
+function otaRetour(st) {
+  const l = $('#ota-rb'), a = $('#ota-annulee');
+  if (!l || st.rb_auto === undefined) return;   /* firmware d'avant : rien a afficher */
+  l.hidden = false;
+  l.className = 'statline' + (st.rb_auto === 1 && st.img !== 'essai' ? ' ok' : '');
+  l.querySelector('b').textContent = st.img === 'essai'
+    ? 'Version en essai : validée après 1 min sans plantage, sinon retour automatique à la précédente.'
+    : st.rb_auto === 1 ? 'Retour automatique : actif (une mise à jour qui plante au démarrage est annulée toute seule).'
+    : st.rb_auto === 0 ? 'Retour automatique : inactif sur ce boîtier (bootloader d\'avant, voir le README du firmware pour l\'activer).'
+    : 'Retour automatique : vérifié à la prochaine mise à jour.';
+  if (a) {
+    a.hidden = !(st.annulee && st.annulee_auto);
+    if (!a.hidden) a.querySelector('b').textContent =
+      `La mise à jour ${st.annulee} n'a pas démarré correctement : le boîtier est revenu tout seul à la version précédente.`;
+  }
+  if (st.img === 'essai') setTimeout(async () => otaRetour(await api('/api/ota/status').catch(() => ({}))), 65000);
+  /* Bouton Version precedente : grise quand aucune version valide n'attend dans l'autre partition
+   * (premiere installation, mise a jour annulee). Firmware d'avant : champ absent, bouton inchange. */
+  const rb = $('#ota-rollback'), why = $('#ota-rb-why');
+  otaPrecedente = st.precedente || '';
+  if (rb && st.rb_possible !== undefined) {
+    rb.disabled = !st.rb_possible;
+    if (why) { why.hidden = !!st.rb_possible; why.textContent = OTA_RB_NON; }
+  }
+}
 $('#ota-rollback').onclick = async () => {
-  if (!confirm('Revenir à la version précédente et redémarrer ?')) return;
-  await api('/api/ota/rollback', { method: 'POST' }).catch(() => {});
+  if (!confirm(otaPrecedente ? `Revenir à la version ${otaPrecedente} et redémarrer ?` : 'Revenir à la version précédente et redémarrer ?')) return;
+  await api('/api/ota/rollback', { method: 'POST' }).catch(e => {
+    if (e !== 409) return;   /* refus : aucune version precedente valide (le boitier ne redemarre pas) */
+    $('#ota-rollback').disabled = true;
+    const why = $('#ota-rb-why'); if (why) { why.hidden = false; why.textContent = OTA_RB_NON; }
+  });
 };
 /* OTA depuis GitHub (la dernière release publique) */
 let githubUrl = null;
 $('#ota-check').onclick = async () => {
-  const span = $('#ota-latest'); span.textContent = '⏳ Interrogation de GitHub…'; $('#ota-github').hidden = true;
-  try {
-    /* asset de CETTE carte : openprofalux-<carte>-ota.bin, <carte> = id de boards/<carte>.json,
-       renvoye tel quel par /api/ota/status (jamais le -full.bin, invalide en OTA) */
-    const stt = await api('/api/ota/status').catch(() => ({}));
-    const variant = stt.target || null;
-    const r = await fetch('https://api.github.com/repos/Isno-Open/OpenProfalux/releases/latest');
-    if (!r.ok) { span.textContent = r.status === 404 ? '❌ Aucune release publique (dépôt privé ?)' : `❌ HTTP ${r.status}`; return; }
-    const j = await r.json();
-    const latest = (j.tag_name || j.name || '?').replace(/^v/, '');   /* "v0.1.1" -> "0.1.1" */
-    const cur = ($('#ota-version').textContent || '').replace(/^v/, '');
-    githubUrl = variant
-      ? (j.assets || []).map(a => a.browser_download_url).find(u => u.endsWith(`openprofalux-${variant}-ota.bin`))
-      : null;
-    if (githubUrl) $('#ota-github').hidden = false;
-    span.textContent = (cur && cur === latest) ? `✅ ${cur} = dernière version`
-      : !variant ? `⚠️ Disponible ${latest} - variante inconnue, utilise le flash manuel`
-      : `⚠️ Installée ${cur}, disponible ${latest}${githubUrl ? '' : ' (pas d’asset OTA pour cette variante)'}`;
-  } catch { span.textContent = '❌ Pas d’accès Internet ?'; }
+  /* C'est le BOITIER qui interroge GitHub (pas le navigateur) : on lui demande une
+     verification, puis on attend qu'elle se termine (compteur checks de /api/ota/status). */
+  const span = $('#ota-latest'); span.textContent = '⏳ Le boîtier interroge GitHub…'; $('#ota-github').hidden = true;
+  const r = await api('/api/ota/check', { method: 'POST' }).catch(() => null);
+  if (!r || !r.ok) { span.textContent = '❌ Le boîtier ne répond pas'; return; }
+  let st = null;
+  for (let i = 0; i < 25; i++) {   /* ~25 s max : la requete GitHub a 10 s de delai */
+    await new Promise(res => setTimeout(res, 1000));
+    st = await api('/api/ota/status').catch(() => null);
+    if (st && st.checks > r.checks) break;
+    st = null;
+  }
+  if (!st) { span.textContent = '❌ Pas de réponse de GitHub (Internet ?)'; return; }
+  const latest = (st.latest || '').replace(/^v/, '');
+  if (!latest) { span.textContent = '❌ Le boîtier n\'a pas pu lire la dernière version (Internet ? limite de l\'API GitHub ?)'; return; }
+  const cur = (st.version || '').replace(/^v/, '');
+  githubUrl = st.latest_url || null;   /* asset de CETTE carte : openprofalux-<carte>-ota.bin */
+  const plus = newerThan(latest, cur);   /* jamais proposer une release PLUS ANCIENNE (version de dev) */
+  if (githubUrl && plus) $('#ota-github').hidden = false;
+  span.textContent = plus ? `⚠️ Installée ${cur}, disponible ${latest}`
+    : cur === latest ? `✅ ${cur} = dernière version` : `✅ Installée ${cur}, dernière release ${latest}`;
+  updateBadge(st);
 };
+/* "0.2.12" plus recente que "0.2.11" ? Comparaison numerique ; suffixe ("-dev") ignore. */
+function newerThan(a, b) {
+  const p = v => ((String(v || '').replace(/^v/, '').match(/^\d+(?:\.\d+)*/) || [null])[0]);
+  const x = p(a), y = p(b); if (!x || !y) return false;
+  const xa = x.split('.').map(Number), ya = y.split('.').map(Number);
+  for (let i = 0; i < Math.max(xa.length, ya.length); i++) { const d = (xa[i] || 0) - (ya[i] || 0); if (d) return d > 0; }
+  return false;
+}
+/* Mise a jour disponible (verification GitHub faite par le boitier, toutes les 6 h) : pastille
+ * sur l'onglet OTA, et dans l'onglet la ligne + le bouton d'installation, sans cliquer. */
+function updateBadge(st) {
+  const avail = !!(st && st.latest_url && newerThan(st.latest, st.version));
+  const b = $('#ota-badge'); if (b) b.hidden = !avail;
+  if (!avail) return;
+  githubUrl = st.latest_url; $('#ota-github').hidden = false;
+  $('#ota-latest').textContent = `⚠️ Installée ${String(st.version).replace(/^v/, '')}, disponible ${String(st.latest).replace(/^v/, '')}`;
+}
+async function checkUpdate() { updateBadge(await api('/api/ota/status').catch(() => null)); }
 $('#ota-github').onclick = () => {
   if (!githubUrl) return;
   /* Confirmation IN-PAGE (pas d'alert natif) : on affiche un avertissement + 2 boutons. */
@@ -899,16 +1500,60 @@ $('#restore-btn').onclick = async () => {
   if (!confirm('Remplacer toute la config actuelle par cette sauvegarde ?')) return;
   const text = await f.text();
   const r = await fetch('/api/restore', { method: 'POST', body: text }).then(x => x.json()).catch(() => ({}));
-  if (r.ok) { toast('Sauvegarde restaurée'); loadStatus(); } else alert('Échec de la restauration (fichier invalide ?)');
+  restoreDone(r, 'Sauvegarde restaurée');
 };
+/* Restauration refusee : le boitier dit pourquoi. Toute restauration acceptee garde une
+ * copie de la config qu'elle remplace (bouton "Revenir", aller-retour possible). */
+const RESTORE_ERR = {
+  format: "Ce fichier n'est pas une sauvegarde de config (l'export des trames ?). Rien n'a été modifié.",
+  copie: "Copie de la config actuelle impossible : restauration annulée, rien n'a été modifié.",
+  nvs: 'Config restaurée mais pas enregistrée (mémoire pleine) : elle sera perdue au redémarrage.',
+  absente: "Aucune config d'avant à restaurer." };
+function restoreDone(r, okMsg) {
+  if (r.ok) { toast(okMsg); loadStatus(); } else alert(RESTORE_ERR[r.err] || 'Échec de la restauration');
+  loadPrevCfg();
+}
+async function loadPrevCfg() {
+  const el = $('#restore-prev'); if (!el) return;
+  const p = await api('/api/restore/undo').catch(() => null);
+  el.hidden = !(p && p.available); if (el.hidden) return;
+  const when = p.t > 1600000000 ? ' du ' + new Date(p.t * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  el.innerHTML = `Config d'avant la dernière restauration${when} : <button id="restore-undo" class="btn" type="button">↩ Revenir à cette config</button>`;
+  $('#restore-undo').onclick = async () => {
+    if (!confirm("Revenir à la config d'avant la dernière restauration ? La config actuelle sera gardée à sa place.")) return;
+    restoreDone(await fetch('/api/restore/undo', { method: 'POST' }).then(x => x.json()).catch(() => ({})), "Config d'avant restaurée");
+  };
+}
 
 /* ── Statut global (polling) ── */
 let statusCache = { volets: [], rf: [], remotes: {} };
 function fillVoletPickers(volets) {
-  const ids = (volets || []).filter(v => !v.central).map(v => v.id);   /* pas de calibration pour une centrale */
+  const ids = (volets || []).filter(v => !v.central && !v.zone).map(v => v.id);   /* pas de calibration pour une centrale ni une zone (pas de position) */
   const sel = $('#calib-id');
   if (sel) { const cur = sel.value; sel.innerHTML = ids.map(id => `<option>${esc(id)}</option>`).join(''); if (ids.includes(cur)) sel.value = cur; }
   const dl = $('#volet-list'); if (dl) dl.innerHTML = ids.map(id => `<option value="${esc(id)}">`).join('');
+}
+/* Adresse mDNS du boitier, comme le firmware la calcule (mdns_name.c) : nom choisi nettoye
+ * (minuscules, a-z/0-9, autre caractere -> tiret, pas de tiret en tete/queue/double, 32 max),
+ * sinon le nom fige au premier demarrage (mdns_default). */
+let cfgCache = {};
+function mdnsSanitize(n) {
+  let o = '';
+  for (const ch of (n || '').toLowerCase()) {
+    if (o.length >= 32) break;
+    if (/[a-z0-9]/.test(ch)) o += ch; else if (o && !o.endsWith('-')) o += '-';
+  }
+  return o.replace(/-+$/, '');
+}
+function boxHost(device) {
+  const d = (device ?? cfgCache.device ?? '').trim();
+  const dflt = !d || ['openprofalux', 'volet_test'].includes(d.toLowerCase());   /* comme mdns_name.c */
+  return (!dflt && mdnsSanitize(d)) || cfgCache.mdns_default || cfgCache.mdns_host || 'openprofalux';
+}
+function boxUrl(device) { return `http://${boxHost(device)}.local`; }
+function refreshWifiUrl() {
+  const u = $('#wifi-url'); if (u) u.textContent = boxUrl($('#wifi-device') ? $('#wifi-device').value : undefined);
+  wifiStatusLine(statusCache.wifi);
 }
 function wifiStatusLine(w) {
   const el = $('#wifi-status'); if (!el) return;
@@ -917,7 +1562,9 @@ function wifiStatusLine(w) {
     el.innerHTML = `<span class="dot"></span><b>Connecté</b> à « ${esc(w.ssid)} » ${sig(w.rssi)}<span class="r">${esc(w.ip || '')}</span>`;
   } else {
     el.className = 'statline bad';
-    el.innerHTML = `<span class="dot"></span><b>Non connecté</b> : le boîtier est en point d'accès de configuration`;
+    const dv = $('#wifi-device') ? $('#wifi-device').value : undefined;
+    el.innerHTML = `<span class="dot"></span><b>Non connecté</b> : le boîtier est en point d'accès de configuration.`
+      + ` Une fois sur ton Wi-Fi, il sera à l'adresse <b>${esc(boxUrl(dv))}</b>`;
   }
 }
 function mqttStatusLine(ok) {
@@ -939,7 +1586,7 @@ function renderCentralsList() {
   if (!centrals.length) { box.innerHTML = '<p class="hint">Aucune centrale pour l\'instant.</p>'; return; }
   box.innerHTML = '<p class="hint" style="margin-bottom:6px">Clique une centrale pour la modifier ci-dessous.</p>' + centrals.map(v =>
     `<div class="statline ce" data-id="${esc(v.id)}" style="cursor:pointer"><span class="dot"></span><b>🎛 ${esc(v.id)}</b> <span class="hint" style="margin-left:6px">${esc(v.members || 'aucun volet')}</span>
-     <span class="r"><button class="btn danger cd" data-id="${esc(v.id)}" style="padding:2px 9px">🗑</button></span></div>`).join('');
+     <span class="r"><button class="btn danger cd" data-id="${esc(v.id)}" title="Supprimer" aria-label="Supprimer la centrale ${esc(v.id)}" style="padding:2px 9px">🗑</button></span></div>`).join('');
   box.querySelectorAll('.ce').forEach(row => row.onclick = () => {
     const v = (statusCache.volets || []).find(x => x.id === row.dataset.id); if (v) editCentral(v);
   });
@@ -970,17 +1617,41 @@ if ($('#central-create')) $('#central-create').onclick = async () => {
   if (r && r.ok) { toast('Centrale enregistrée'); $('#central-name').value = ''; $$('#central-members input').forEach(c => c.checked = false); await loadStatus(); }
   else toast('Échec de l\'enregistrement' + (r && r.err ? ' : ' + r.err : ''));
 };
+/* Rafraichissement de l'etat : une requete a la fois, abandonnee au bout de 4 s (sans delai,
+ * elles s'empilaient pendant une coupure). Un echec ne vide plus l'interface : on garde la
+ * derniere reponse, et apres 2 echecs de suite un bandeau dit que le boitier ne repond pas
+ * (mise a jour, redemarrage, Wi-Fi). Un 401 reste l'affaire d'api() : ecran de connexion. */
+let statusBusy = false, statusFails = 0, statusOkAt = 0, lastUptime = null;
+function offline(n) {
+  document.body.classList.toggle('offline', n >= 2);
+  const bar = $('#offline-bar'); if (!bar) return;
+  bar.hidden = n < 2;
+  if (!bar.hidden) bar.textContent = 'Boîtier injoignable : nouvelle tentative toutes les 3 s.' +
+    (statusOkAt ? ` Affiché : l'état de ${new Date(statusOkAt).toLocaleTimeString('fr-FR')}.` : '');
+}
 async function loadStatus() {
-  const s = await api('/api/status').catch(() => ({ volets: [], rf: [], remotes: {} }));
+  if (statusBusy) return;
+  statusBusy = true;
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 4000);
+  let s = null, err = null;
+  try { s = await api('/api/status', { signal: ctl.signal }); } catch (e) { err = e; }
+  clearTimeout(timer); statusBusy = false;
+  if (!s) { if (err !== 401) offline(++statusFails); return; }
+  if (lastUptime != null && s.uptime < lastUptime) toast('Le boîtier a redémarré');
+  statusFails = 0; statusOkAt = Date.now(); lastUptime = s.uptime; offline(0);
   statusCache = s;
   const rf = s.rf || [];
   renderVolets(s.volets || [], rf);
   renderCentralMembers();
   renderCentralsList();
+  renderRemotes(s, rf);
   fillVoletPickers(s.volets || []);
   if ((location.hash || '').includes('/calib') && !calibLive) fillCalib();   /* affiche les temps enregistres */
   if (!learning) { renderVoletPicker(); renderLearnSlots(); }
   wifiStatusLine(s.wifi); mqttStatusLine(s.mqtt);
+  /* Mode secours (reseau configure mais muet, le boitier reessaie seul) : visible sur toutes
+   * les pages, a cote du titre. */
+  const fb = $('#hdr-fallback'); if (fb) fb.hidden = !(s.wifi && s.wifi.fallback);
   const ci = $('#calib-info'); if (ci) ci.hidden = !!s.listening;   /* bandeau visible seulement si option OFF */
 }
 /* Volet auquel une telecommande (serial) est rattachee, sinon null. */
@@ -1014,7 +1685,7 @@ function rfRow(f) {
   const btnCell = bl ? `<span class="badge">${esc(bl)}</span>` : `<span class="badge m">0x${esc(f.button)}</span>`;
   return `<tr><td class="m">${ts}</td><td>${nameCell}</td>
     <td>${btnCell}</td><td class="m">0x${esc(f.hop)}</td><td class="m">${f.rssi} dBm</td>
-    <td><button class="replay" title="Rejouer cette trame" data-s="${esc(f.serial)}" data-h="${esc(f.hop)}">▶</button></td></tr>`;
+    <td><button class="replay" title="Rejouer cette trame" aria-label="Rejouer cette trame" data-s="${esc(f.serial)}" data-h="${esc(f.hop)}">▶</button></td></tr>`;
 }
 /* Onglet RF : trames du ring, chargees par pages (scroll infini). Trie serveur par date. */
 let rfOffset = 0, rfTotal = 0, rfLoading = false;
@@ -1064,9 +1735,12 @@ let booted = false, pollTimer = null;
 function boot() {
   hideLogin();              /* toujours : un rappel de boot() doit lever l'ecran de login */
   refreshAuthUi();
-  loadVersion();            /* version du header : apres session, sinon 401 */
   loadStatus();
-  if (!pollTimer) pollTimer = setInterval(loadStatus, 3000);   /* un seul timer, meme apres reconnexion */
+  if (!pollTimer) {   /* un seul timer, meme apres reconnexion ; rien tant que l'onglet est cache */
+    pollTimer = setInterval(() => { if (!document.hidden) loadStatus(); }, 3000);
+    checkUpdate(); setInterval(() => { if (!document.hidden) checkUpdate(); }, 30 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStatus(); });
+  }
   if (booted) return;       /* le routage ne s'arme qu'une fois */
   booted = true;
   applyRoute();
