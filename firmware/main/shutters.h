@@ -37,6 +37,7 @@ int  shutters_learn_assign(const char *id, const char *action, const char *bits)
  * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
 int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
 int  shutters_create_virtual_somfy(const char *id, uint32_t address);   /* volet Somfy RTS (adresse 24 bits, pas de capture) */
+int  shutters_create_virtual_came(const char *id, uint16_t code12);     /* portail CAME TOP-432 (code fixe 12 bits) */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);

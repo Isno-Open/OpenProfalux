@@ -1055,6 +1055,28 @@ int shutters_create_virtual_somfy(const char *id, uint32_t address) {
     return 0;
 }
 
+/* Portail CAME TOP-432 : appareil virtuel a code FIXE 12 bits. Le code tient dans virt_serial
+ * (comme l'adresse Somfy), pas de compteur (code fixe). type = portail -> l'UI l'affiche en
+ * Ouvrir/Fermer. Un code 12 bits (< 4096) ne peut pas ressembler a une identite Profalux 0x067,
+ * donc aucun risque qu'un vieux firmware sans le champ proto l'emette en 868. */
+int shutters_create_virtual_came(const char *id, uint16_t code12) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = true;
+    v->proto = VOLET_PROTO_CAME_TOP432;
+    v->type = TYPE_PORTAIL;
+    v->virt_serial = code12 & 0x0FFF;
+    v->virt_counter = 0;
+    save_cfg();
+    announce_one(v);
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "portail CAME '%s' cree : code 0x%03X", id, (unsigned)(code12 & 0x0FFF));
+    return 0;
+}
+
 /* ZONE : fixe les suiveurs d'un volet appris (CSV d'ids, "" = plus aucun).
  * Suiveurs : des volets simples existants, ni la zone elle-meme, ni une centrale,
  * ni une autre zone. Une zone ne peut pas non plus etre elle-meme suiveuse.

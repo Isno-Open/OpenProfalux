@@ -1428,6 +1428,32 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
     free(js);
     return e;
 }
+static esp_err_t h_came_create(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    cJSON *c = cJSON_GetObjectItem(j, "code");
+    uint32_t code = 0;
+    if (cJSON_IsString(c) && c->valuestring) code = (uint32_t)strtoul(c->valuestring, NULL, 0);
+    else if (cJSON_IsNumber(c)) code = (uint32_t)c->valuedouble;
+    const char *err = NULL;
+    if (!id || !*id) err = "nom manquant";
+    else if (strchr(id, ',')) err = "virgule dans le nom";
+    else if ((code & 0x0FFF) == 0) err = "code manquant ou nul";
+    else if (code > 0x0FFF) err = "code au-dela de 12 bits (1 a 4095)";
+    int rc = err ? -1 : shutters_create_virtual_came(id, (uint16_t)(code & 0x0FFF));
+    if (err) ESP_LOGW(TAG, "portail CAME '%s' refuse : %s", id ? id : "", err);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (err) cJSON_AddStringToObject(o, "err", err);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1723,5 +1749,6 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
+    reg(s, "/api/came/create", HTTP_POST, h_came_create);
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

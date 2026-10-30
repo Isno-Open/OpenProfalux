@@ -1668,6 +1668,26 @@ if ($('#somfy-create')) $('#somfy-create').onclick = async () => {
     somfyShowStatus('#somfy-create-status', false, 'Échec' + (r && r.err ? ' : ' + r.err : ''));
   }
 };
+if ($('#came-gen')) $('#came-gen').onclick = () => {
+  /* Code 12 bits pseudo-aleatoire non nul, pour une telecommande CAME neuve a apprendre au portail. */
+  const c = (Math.floor(Math.random() * 0x0FFF) + 1) & 0x0FFF;
+  $('#came-code').value = c.toString();
+};
+if ($('#came-create')) $('#came-create').onclick = async () => {
+  const name = ($('#came-name').value || '').trim();
+  const code = ($('#came-code').value || '').trim();
+  if (!name) return toast('Donne un nom au portail');
+  if (isNewNameWithComma(name)) return toast(COMMA_MSG);
+  if (!code) return toast('Donne ou génère un code');
+  const r = await api('/api/came/create', { method: 'POST', body: JSON.stringify({ id: name, code: code }) }).catch(() => null);
+  if (r && r.ok) {
+    somfyShowStatus('#came-create-status', true, 'Portail « ' + name + ' » créé. Il apparaît dans Pilotage avec Ouvrir / Fermer.');
+    $('#came-name').value = ''; $('#came-code').value = '';
+    await loadStatus();
+  } else {
+    somfyShowStatus('#came-create-status', false, 'Échec' + (r && r.err ? ' : ' + r.err : ''));
+  }
+};
 if ($('#somfy-prog')) $('#somfy-prog').onclick = async (e) => {
   if (!somfyActive) return toast('Crée d\'abord un volet Somfy');
   await sendCmd({ id: somfyActive, cmd: 'prog' }, e.currentTarget);

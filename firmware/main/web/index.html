@@ -84,6 +84,7 @@
         <button class="subtab" data-s="enrol">Créer une télécommande</button>
         <button class="subtab" data-s="central">Centrale</button>
         <button class="subtab" data-s="somfy">Somfy</button>
+        <button class="subtab" data-s="came">Portail CAME</button>
         <button class="subtab" data-s="calib">Calibration</button>
         <button class="subtab" data-s="list">Liste</button>
       </nav>
@@ -141,6 +142,23 @@
           <div class="field"><label>Nom</label><input id="central-name" placeholder="ex : Tous les volets"></div>
           <div class="field"><label>Volets pilotés</label><div id="central-members" class="chips"></div></div>
           <div class="row"><button id="central-create" class="btn primary">Enregistrer la centrale</button><button id="central-cancel" class="btn">Annuler</button></div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="came">
+        <div class="card">
+          <div class="statline"><span class="dot"></span><b>Portail CAME TOP-432 (433,92 MHz).</b> Télécommande à code <b>fixe</b> 12 bits. Entre le code de ta télécommande (lu par la capture ou rtl_433), ou génère-en un neuf à faire apprendre au portail.</div>
+          <h2>Créer un portail CAME</h2>
+          <p class="hint">Fonction expérimentale (issue #102), à valider sur un vrai portail CAME.</p>
+          <div class="field"><label>Nom du portail</label><input id="came-name" placeholder="ex : Portail entrée"></div>
+          <div class="field"><label>Code (12 bits)</label>
+            <div class="row" style="flex-wrap:nowrap">
+              <input id="came-code" placeholder="ex : 926 ou 0x39E" spellcheck="false" autocomplete="off" style="flex:1;min-width:0">
+              <button id="came-gen" class="btn">🎲 Générer</button></div>
+            <p class="hint">Le code de la télécommande d'origine (pour la cloner), ou un code neuf à apprendre au portail.</p>
+          </div>
+          <div class="row"><button id="came-create" class="btn primary">💾 Créer le portail</button></div>
+          <div class="statline" id="came-create-status" hidden><span class="dot"></span><b></b></div>
         </div>
       </div>
 
