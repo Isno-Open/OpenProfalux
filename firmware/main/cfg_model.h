@@ -22,7 +22,7 @@
 
 /* Protocole d'emission d'un volet VIRTUEL (qui GENERE sa trame). Profalux/KeeLoq est le
  * seul cable aujourd'hui, et vaut 0 : les volets deja persistes, sans ce champ, le
- * prennent par defaut. Les autres protocoles (Somfy RTS - issue #73 - ou d'autres)
+ * prennent par defaut. Les autres protocoles (Somfy RTS, issue #73, ou d'autres)
  * s'ajoutent ici et se cablent dans emit_virt (shutters.c). */
 typedef enum {
     VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
