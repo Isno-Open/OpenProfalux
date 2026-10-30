@@ -1355,7 +1355,7 @@ async function runRxTest(idx, band, btn) {
   if (!st) return;
   const where = band ? `la radio ${esc(band)} MHz` : 'la radio primaire';
   if (got) st.innerHTML = `✅ Réception OK sur ${where} : serial <code>${esc(got.serial)}</code>, bouton 0x${esc(got.button)}, RSSI ${got.rssi} dBm.`;
-  else st.innerHTML = `❌ Rien capté en 15 s sur ${where}. Vérifie que la télécommande émet bien sur cette bande, l'antenne, la distance < 1 m, et le gain RX.`;
+  else st.innerHTML = `❌ Rien capté en 15 s sur ${where}. Ce test lit les télécommandes Profalux/KeeLoq (à code tournant) : une Somfy RTS ou un portail CAME ne s'y verront pas, même reçus. Sinon vérifie l'antenne, la distance < 1 m, et le gain RX.`;
 }
 loadDiag();
 $('#mqtt-detect').onclick = async () => {
