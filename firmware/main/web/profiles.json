@@ -6,6 +6,12 @@
   },
   "profils": [
     {
+      "type": "portail", "marque": "CAME", "nom": "Portail CAME (cloner la télécommande)",
+      "mecanisme": "rejeu", "modulation": "OOK", "code": "fixe",
+      "flow": "rejeu",
+      "note": "Capture chaque bouton du portail (Ouvrir/Fermer) en brut OOK et le rejoue à l'identique. Agnostique, code fixe (CAME TOP-432 et similaires). Moteur de rejeu brut par commande."
+    },
+    {
       "type": "volet", "marque": "Profalux", "nom": "Cloner ma télécommande Profalux",
       "mecanisme": "cloner", "modulation": "OOK", "code": "roulant",
       "flow": "learn",
