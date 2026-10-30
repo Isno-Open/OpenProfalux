@@ -1,0 +1,33 @@
+name: Capture radio (debug ou nouvelle marque)
+description: Envoyer une capture radio OpenProfalux (le boitier peut la remplir tout seul)
+title: "[capture] "
+labels: ["capture", "a-trier"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci ! Le boitier peut remplir ce rapport automatiquement (**Systeme -> Rapport**).
+        Sinon, remplis a la main. **La cle de ta telecommande (`0x30`) doit etre masquee** dans le journal.
+  - type: input
+    id: board
+    attributes: { label: Carte, placeholder: "isno-super, external..." }
+  - type: input
+    id: version
+    attributes: { label: Version firmware }
+  - type: input
+    id: brand
+    attributes: { label: Marque / modele de moteur, placeholder: "Somfy io, CAME, Velux..." }
+  - type: input
+    id: model
+    attributes: { label: Modele de telecommande (optionnel) }
+  - type: dropdown
+    id: purpose
+    attributes:
+      label: But
+      options: ["Debug (ca ne marche pas)", "Nouvelle marque a ajouter"]
+  - type: textarea
+    id: steps
+    attributes: { label: Ce que tu as fait, etape par etape }
+  - type: textarea
+    id: journal
+    attributes: { label: "Journal de capture (cle 0x30 masquee)", render: text }
