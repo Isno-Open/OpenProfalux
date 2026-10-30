@@ -263,6 +263,23 @@ jobs:
              -o req_guard_host_test
           ./req_guard_host_test
 
+  # Le compteur des telecommandes virtuelles a la restauration (virt_counter.c) : une sauvegarde
+  # plus ancienne ne le fait plus reculer. Voir firmware/test/virt-counter.
+  banc-virt-counter:
+    name: Banc de test du compteur des telecommandes virtuelles
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: virt_counter (gcc + AddressSanitizer)
+        working-directory: firmware/test/virt-counter
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/virt_counter.c \
+             -o virt_counter_host_test
+          ./virt_counter_host_test
+
   # La confirmation d'une trame recue par une seconde identique (rx_confirm.c) :
   # voir firmware/test/rx-confirm/README.md. Pure, un simple gcc suffit (issue #39).
   banc-rx-confirm:
