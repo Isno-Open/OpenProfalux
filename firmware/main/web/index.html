@@ -80,16 +80,23 @@
     <!-- Télécommandes (sous-onglets) -->
     <section class="panel" data-p="remotes">
       <nav class="subtabs">
-        <button class="subtab active" data-s="learn">Cloner une télécommande</button>
-        <button class="subtab" data-s="enrol">Créer une télécommande</button>
+        <button class="subtab active" data-s="add">Ajouter un appareil</button>
         <button class="subtab" data-s="central">Centrale</button>
-        <button class="subtab" data-s="somfy">Somfy</button>
         <button class="subtab" data-s="calib">Calibration</button>
         <button class="subtab" data-s="list">Liste</button>
       </nav>
 
-      <div class="subpanel active" data-sp="learn">
+      <div class="subpanel active" data-sp="add">
         <div class="card">
+          <h2>Ajouter un appareil</h2>
+          <p class="sub">Choisis le type d'appareil, puis la marque, puis la méthode. On te guide étape par étape.</p>
+          <div id="add-pyramid"></div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="learn">
+        <div class="card">
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2>Cloner une télécommande</h2>
           <p class="sub">Tu as ta télécommande Profalux d'origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus. Une capture par commande suffit.</p>
           <p class="hint radio-reminder"></p>
@@ -147,6 +154,7 @@
       <div class="subpanel" data-sp="somfy">
         <div class="card">
           <div class="statline"><span class="dot"></span><b>Volet Somfy RTS (433,42 MHz).</b> Pour un moteur Somfy, pas Profalux. Pas besoin de télécommande d'origine : on choisit une adresse et on la fait apprendre au moteur par le mode appairage.</div>
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2>Créer un volet Somfy</h2>
           <p class="hint">Fonction expérimentale (issue #73), à valider sur un vrai moteur Somfy RTS.</p>
           <div class="field"><label>Nom du volet</label><input id="somfy-name" placeholder="ex : Volet salon Somfy"></div>
@@ -194,6 +202,7 @@
       <div class="subpanel" data-sp="enrol">
         <div class="card">
           <div class="statline"><span class="dot"></span><b>À utiliser si le clonage ne pilote pas ton moteur.</b> On crée une nouvelle télécommande virtuelle et on l'apprend au moteur. <b>Nécessite ta télécommande d'origine</b> (pour le geste de validation). Appuie dessus : le boîtier l'identifie et attribue une identité - <b>nouvelle</b> si le moteur est inconnu, <b>la même</b> s'il est déjà connu.</div>
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2>Créer une télécommande virtuelle</h2>
           <p class="hint radio-reminder"></p>
           <div class="field"><label>Modèle de moteur</label><select id="pfx-model"></select></div>

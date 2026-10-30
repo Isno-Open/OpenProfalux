@@ -87,6 +87,7 @@ function applyRoute() {
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
+  if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
   if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
 }
@@ -1847,3 +1848,64 @@ fetch('/api/session')
     if (pre) { pre.textContent = (t && t.trim()) || '(aucune capture)'; pre.hidden = false; }
   };
 })();
+
+/* ── Écran unifié « Ajouter un appareil » : pyramide TYPE → MARQUE → PROFIL, rendue depuis
+   profiles.json (source unique). La pyramide ne fait que ROUTER vers les flux existants
+   (Cloner/Créer/Somfy) via le hash ; elle ne réécrit aucun de leurs panneaux ni handlers. ── */
+let PROFILES = null;
+const ADD_FLOW_PANEL = { 'learn': 'learn', 'enrol-pfx': 'enrol', 'create-somfy': 'somfy' };
+
+async function loadAddPyramid() {
+  const host = $('#add-pyramid');
+  if (!host) return;
+  if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);
+  renderAddStep(host, null, null);
+}
+
+function renderAddStep(host, type, marque) {
+  if (!PROFILES || !Array.isArray(PROFILES.profils) || !PROFILES.types) {
+    host.innerHTML = '<p class="hint">Table des profils indisponible.</p>';
+    return;
+  }
+  const profils = PROFILES.profils;
+  const labelType = t => (PROFILES.types[t] && PROFILES.types[t].label) || t;
+  const crumb = (t, m) =>
+    `<p class="hint" style="margin-bottom:10px"><a href="#" class="add-restart">← Recommencer</a>${t ? ' · ' + esc(labelType(t)) : ''}${m ? ' · ' + esc(m) : ''}</p>`;
+  const wireRestart = () => { const a = host.querySelector('.add-restart'); if (a) a.onclick = e => { e.preventDefault(); renderAddStep(host, null, null); }; };
+
+  // Étape 1 : le TYPE d'appareil.
+  if (!type) {
+    const present = new Set(profils.map(p => p.type));
+    host.innerHTML = '<p class="sub" style="margin-top:0">Quel type d\'appareil ?</p><div class="chips">' +
+      Object.keys(PROFILES.types).map(k => {
+        const has = present.has(k);
+        return `<button class="chip" data-type="${esc(k)}"${has ? '' : ' disabled'}>${esc(labelType(k))}${has ? '' : ' · bientôt'}</button>`;
+      }).join('') + '</div>';
+    host.querySelectorAll('[data-type]').forEach(b => { if (!b.disabled) b.onclick = () => renderAddStep(host, b.dataset.type, null); });
+    return;
+  }
+  // Étape 2 : la MARQUE (pour ce type).
+  if (!marque) {
+    const marques = [...new Set(profils.filter(p => p.type === type).map(p => p.marque))];
+    host.innerHTML = crumb(type, null) + '<p class="sub">Quelle marque ?</p><div class="chips">' +
+      marques.map(m => `<button class="chip" data-marque="${esc(m)}">${esc(m)}</button>`).join('') + '</div>';
+    wireRestart();
+    host.querySelectorAll('[data-marque]').forEach(b => b.onclick = () => renderAddStep(host, type, b.dataset.marque));
+    return;
+  }
+  // Étape 3 : le PROFIL (méthode). Le clic route vers le flux existant via le hash.
+  const feuilles = profils.filter(p => p.type === type && p.marque === marque);
+  host.innerHTML = crumb(type, marque) + '<p class="sub">Comment l\'ajouter ?</p>' +
+    feuilles.map((p, i) =>
+      `<div class="card add-profil" data-i="${i}" role="button" tabindex="0" style="cursor:pointer;margin:8px 0">
+         <b>${esc(p.nom)}</b>
+         <p class="hint" style="margin:4px 0 0">${esc(p.note || '')}</p>
+       </div>`).join('');
+  wireRestart();
+  host.querySelectorAll('.add-profil').forEach((el, i) => {
+    el.onclick = () => {
+      const panel = ADD_FLOW_PANEL[feuilles[i].flow];
+      if (panel) location.hash = `remotes/${panel}`;
+    };
+  });
+}

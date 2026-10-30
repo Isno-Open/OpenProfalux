@@ -199,6 +199,8 @@ extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end")
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
+extern const uint8_t profiles_json_start[] asm("_binary_profiles_json_gz_start");   /* table de profils de l'ecran "Ajouter un appareil" */
+extern const uint8_t profiles_json_end[]   asm("_binary_profiles_json_gz_end");
 extern const uint8_t icon_png_start[]   asm("_binary_icon_192_png_start");
 extern const uint8_t icon_png_end[]     asm("_binary_icon_192_png_end");
 
@@ -294,6 +296,7 @@ static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",     
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
 static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
+static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
 /* ── /api/status ── */
@@ -1512,7 +1515,7 @@ static esp_err_t h_session(httpd_req_t *r) {
  * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
-#define MAX_ROUTES      64
+#define MAX_ROUTES      80
 #define MAX_OPEN_ROUTES 12
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
@@ -1661,6 +1664,7 @@ void web_ui_start(void) {
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
     reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
+    reg_open(s, "/profiles.json", HTTP_GET, h_profiles);   /* table de profils de l'ecran "Ajouter un appareil" */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
     reg_open(s, "/icon-192.png",         HTTP_GET, h_icon);

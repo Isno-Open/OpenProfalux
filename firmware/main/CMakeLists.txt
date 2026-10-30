@@ -32,7 +32,8 @@ set(WEB_SRCS "${CMAKE_CURRENT_LIST_DIR}/web/index.html"
              "${CMAKE_CURRENT_LIST_DIR}/web/style.css"
              "${CMAKE_CURRENT_LIST_DIR}/web/app.js"
              "${CMAKE_CURRENT_LIST_DIR}/web/app-capture.js"
-             "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest")
+             "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest"
+             "${CMAKE_CURRENT_LIST_DIR}/web/profiles.json")
 set(WEB_GZ_DIR "${CMAKE_BINARY_DIR}/web")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gzip_web.py" "${WEB_GZ_DIR}" ${WEB_SRCS}
@@ -81,6 +82,7 @@ idf_component_register(
         "${WEB_GZ_DIR}/app.js.gz"
         "${WEB_GZ_DIR}/app-capture.js.gz"
         "${WEB_GZ_DIR}/manifest.webmanifest.gz"
+        "${WEB_GZ_DIR}/profiles.json.gz"
         "web/icon-192.png"
     REQUIRES
         nvs_flash
