@@ -1906,7 +1906,11 @@ function renderAddStep(host, type, marque) {
   host.querySelectorAll('.add-profil').forEach((el, i) => {
     el.onclick = () => {
       const prof = feuilles[i];
-      if (prof.flow === 'rejeu') REJEU_PROFILE = prof;   // le panneau rejeu lit le profil (son type)
+      if (prof.flow === 'rejeu') {   // on met l'INDEX du profil dans le hash : il survit à un F5
+        REJEU_PROFILE = prof;
+        location.hash = `remotes/rejeu/${PROFILES.profils.indexOf(prof)}`;
+        return;
+      }
       const panel = ADD_FLOW_PANEL[prof.flow];
       if (panel) location.hash = `remotes/${panel}`;
     };
@@ -1929,6 +1933,13 @@ const rejeuStat = (st, msg, bad) => {
 };
 
 async function loadRejeuPanel() {
+  // Récupère le profil depuis le hash (#remotes/rejeu/<index>) : survit à un F5 (sinon le profil
+  // n'est qu'en mémoire JS, et un portail serait recréé comme un volet).
+  const idx = parseInt((location.hash || '').split('/')[2] || '', 10);
+  if (!Number.isNaN(idx)) {
+    if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);
+    if (PROFILES && Array.isArray(PROFILES.profils) && PROFILES.profils[idx]) REJEU_PROFILE = PROFILES.profils[idx];
+  }
   const p = REJEU_PROFILE;
   const type = p && p.type === 'portail' ? 1 : 0;   // dev_type_t
   const dev = DEV[type] || DEV[0];
