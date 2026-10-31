@@ -336,6 +336,21 @@ static int cc1101_configure_active_chip(void) {
 }
 
 int cc1101_init(void) {
+#if BOARD_HAS_INIT_GPIO
+    /* Broches menees a un niveau fixe AVANT le bus SPI, declarees par la carte (voir
+     * board_pins.h / boards/<carte>.json, champ init_gpio) : alimentation de la radio,
+     * selection de bande, CS des peripheriques d'un SPI partage tenus hauts. Une carte
+     * qui n'en declare pas (BOARD_HAS_INIT_GPIO 0), comme la Super, ne compile rien ici :
+     * les numeros de broches ne sont ecrits nulle part dans le C. Retour #112 (@mckbrmn),
+     * carte LILYGO T-Embed CC1101 ou l'ecran et la carte SD partagent le bus du CC1101. */
+    {
+        static const struct { int pin; int level; } init_gpio[] = BOARD_INIT_GPIO;
+        for (int i = 0; i < BOARD_INIT_GPIO_COUNT; i++) {
+            gpio_set_direction(init_gpio[i].pin, GPIO_MODE_OUTPUT);
+            gpio_set_level(init_gpio[i].pin, init_gpio[i].level);
+        }
+    }
+#endif
     /* Defauts PAR RADIO (issue #95) : gain nominal, TE nominal, options off. main.c les
      * ecrase ensuite par les reglages NVS de chaque radio (apply_radio_config). */
     for (int i = 0; i < CC1101_COUNT; i++) {

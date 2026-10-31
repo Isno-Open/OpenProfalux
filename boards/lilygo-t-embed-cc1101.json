@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "Carte communautaire : retour de @mckbrmn, issue #112. CC1101 integre a la carte,",
+    "selectionnable 315/434/868/915 MHz par deux broches (SW0/SW1). Ici declaree en 868.",
+    "L'ecran TFT et le lecteur de carte SD partagent le bus SPI du CC1101 : leurs CS sont",
+    "tenus hauts au demarrage par init_gpio, sinon ils parlent sur le bus en meme temps.",
+    "init_gpio est LU par cc1101_init (garde BOARD_HAS_INIT_GPIO) ; une carte qui n'en",
+    "declare pas, comme la Super, ne pilote aucune de ces broches."
+  ],
+  "id": "lilygo-t-embed-cc1101",
+  "name": "LILYGO T-Embed CC1101",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32s3",
+  "radios": [
+    {
+      "chip": "CC1101",
+      "band": "868",
+      "module": "CC1101",
+      "pins": {
+        "sck": 11,
+        "miso": 10,
+        "mosi": 9,
+        "cs": 12,
+        "gdo0": 3,
+        "gdo2": 38
+      }
+    }
+  ],
+  "spi_freq_hz": 8000000,
+  "init_gpio": [
+    { "pin": 15, "level": 1, "note": "alimentation du CC1101" },
+    { "pin": 47, "level": 0, "note": "SW1 : selection de bande 868" },
+    { "pin": 48, "level": 1, "note": "SW0 : selection de bande 868" },
+    { "pin": 41, "level": 1, "note": "CS de l'ecran TFT tenu haut (SPI partage)" },
+    { "pin": 13, "level": 1, "note": "CS de la carte SD tenu haut (SPI partage)" },
+    { "pin": 12, "level": 1, "note": "CS du CC1101 haut au demarrage" }
+  ],
+  "region": "eu",
+  "bands_allowed_khz": [
+    {
+      "radio": "868",
+      "low": 863000,
+      "high": 870000,
+      "carrier_khz": 868350,
+      "max_dbm": 10
+    }
+  ]
+}

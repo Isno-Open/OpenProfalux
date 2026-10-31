@@ -62,6 +62,32 @@ def ethernet_lines(d):
     ]
 
 
+def init_gpio_lines(d):
+    """Broches menees a un niveau fixe au tout debut de cc1101_init, AVANT le SPI :
+    alimentation de la radio, selection de bande, CS des peripheriques du bus partage
+    tenus hauts. Present seulement si la carte declare "init_gpio" ; le code ne les
+    pilote que sous la garde BOARD_HAS_INIT_GPIO (la Super n'en declare aucune)."""
+    gpios = d.get("init_gpio")
+    if not gpios:
+        return ["", "#define BOARD_HAS_INIT_GPIO  0"]
+    rows = [(int(g["pin"]), 1 if int(g["level"]) else 0, str(g.get("note", ""))) for g in gpios]
+    L = [
+        "",
+        "/* GPIO menes a un niveau fixe au tout debut de cc1101_init (voir boards/%s.json) :" % d["id"],
+        " * alimentation radio, selection de bande, CS des peripheriques du SPI partage.",
+    ]
+    L += [" *   GPIO%-3d = %d%s" % (p, l, ("  (%s)" % n) if n else "") for p, l, n in rows]
+    L += [
+        " * Lu seulement sous BOARD_HAS_INIT_GPIO. */",
+        "#define BOARD_HAS_INIT_GPIO   1",
+        "#define BOARD_INIT_GPIO_COUNT %d" % len(rows),
+        "#define BOARD_INIT_GPIO { \\",
+    ]
+    L += ["  { %d, %d }%s \\" % (p, l, "," if i + 1 < len(rows) else "") for i, (p, l, n) in enumerate(rows)]
+    L += ["}"]
+    return L
+
+
 def radio_table_lines(d, primary, bands):
     """Table de TOUTES les radios declarees, la primaire (868) en index 0.
     Chaque entree : {bande, CS, GDO0, GDO2, bande basse kHz, bande haute kHz, porteuse kHz}.
@@ -139,6 +165,7 @@ def header(d):
         "#define BTN_PIN_DEBUG_DOWN   -1",
     ]
     L += ethernet_lines(d)
+    L += init_gpio_lines(d)
     L += ["", "#endif"]
     return "\n".join(L) + "\n"
 
