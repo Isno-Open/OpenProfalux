@@ -1861,9 +1861,10 @@ async function loadAddPyramid() {
   const host = $('#add-pyramid');
   if (!host) return;
   if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);
-  if (!PYRAMID_BANDS) {   // bandes de la carte : on ne proposera que les profils que sa radio peut faire
-    const radios = await fetch('/api/radios').then(r => r.json()).then(d => d.radios || []).catch(() => []);
-    PYRAMID_BANDS = new Set(radios.map(r => String(r.band)));
+  if (!PYRAMID_BANDS) {   // bandes de la carte ; sur ECHEC ou liste vide on laisse PYRAMID_BANDS a null,
+    // pour que le filtre montre TOUT (fail-open, le filet annonce) et re-essaie au prochain affichage.
+    const radios = await fetch('/api/radios').then(r => r.json()).then(d => d.radios).catch(() => null);
+    if (Array.isArray(radios) && radios.length) PYRAMID_BANDS = new Set(radios.map(r => String(r.band)));
   }
   renderAddStep(host, null, null);
 }
