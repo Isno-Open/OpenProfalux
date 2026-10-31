@@ -1855,11 +1855,16 @@ fetch('/api/session')
    (Cloner/Créer/Somfy) via le hash ; elle ne réécrit aucun de leurs panneaux ni handlers. ── */
 let PROFILES = null;
 const ADD_FLOW_PANEL = { 'learn': 'learn', 'enrol-pfx': 'enrol', 'create-somfy': 'somfy', 'rejeu': 'rejeu' };
+let PYRAMID_BANDS = null;   // bandes (433/868) réellement présentes sur la carte, pour filtrer les profils
 
 async function loadAddPyramid() {
   const host = $('#add-pyramid');
   if (!host) return;
   if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);
+  if (!PYRAMID_BANDS) {   // bandes de la carte : on ne proposera que les profils que sa radio peut faire
+    const radios = await fetch('/api/radios').then(r => r.json()).then(d => d.radios || []).catch(() => []);
+    PYRAMID_BANDS = new Set(radios.map(r => String(r.band)));
+  }
   renderAddStep(host, null, null);
 }
 
@@ -1868,7 +1873,9 @@ function renderAddStep(host, type, marque) {
     host.innerHTML = '<p class="hint">Table des profils indisponible.</p>';
     return;
   }
-  const profils = PROFILES.profils;
+  // On ne montre un profil que si la carte a une radio sur sa bande (un profil sans `band` = toujours
+  // montré, filet de sécurité). Évite de proposer un portail CAME 433 sur une carte 868 seule.
+  const profils = PROFILES.profils.filter(p => !p.band || !PYRAMID_BANDS || PYRAMID_BANDS.has(String(p.band)));
   const labelType = t => (PROFILES.types[t] && PROFILES.types[t].label) || t;
   const crumb = (t, m) =>
     `<p class="hint" style="margin-bottom:10px"><a href="#" class="add-restart">← Recommencer</a>${t ? ' · ' + esc(labelType(t)) : ''}${m ? ' · ' + esc(m) : ''}</p>`;
