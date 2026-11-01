@@ -196,6 +196,8 @@ extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
 extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
 extern const uint8_t app_capture_js_start[] asm("_binary_app_capture_js_gz_start");   /* UI capture brute (issue #95) */
 extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end");
+extern const uint8_t pyramid_detect_js_start[] asm("_binary_pyramid_detect_js_gz_start");   /* detection de profil (pyramide, #111) */
+extern const uint8_t pyramid_detect_js_end[]   asm("_binary_pyramid_detect_js_gz_end");
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
@@ -295,6 +297,7 @@ static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",    
 static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end,  true); }
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
 static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
+static esp_err_t h_js_detect(httpd_req_t *r) { return send_asset(r, "application/javascript", pyramid_detect_js_start, pyramid_detect_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
 static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
@@ -1029,7 +1032,22 @@ static esp_err_t h_rx_sweep_status(httpd_req_t *r) {
  * en JSON (impulsions [[lvl,us]]). replay (POST) : rejoue la derniere capture. Code FIXE : un code
  * tournant (Somfy RTS, Profalux) ne se rejoue pas ainsi, c'est l'affaire des decodeurs dedies. */
 static esp_err_t h_capture_start(httpd_req_t *r) {
-    int n = rfcap_capture(req_radio_idx(r), 15000);   /* bloquant : capture dediee, comme l'enrolement */
+    /* ?radio=N (quelle radio), + profil RX OPTIONNEL ?datarate_baud=&bandwidth_khz= : regle la
+     * demodulation pour le protocole capte (ces valeurs viennent du profil profiles.json, pas du
+     * code). Absents = config courante (capture agnostique de decouverte). Un seul parse (buffer
+     * assez grand), sinon req_radio_idx tronquerait la query et retomberait sur la 868. */
+    char q[112], v[12];
+    int radio = 0; uint32_t drate = 0, bw = 0; bool has_rx = false;
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK) {
+        if (httpd_query_key_value(q, "radio", v, sizeof v) == ESP_OK) { int i = atoi(v); if (i > 0) radio = i; }
+        if (httpd_query_key_value(q, "datarate_baud", v, sizeof v) == ESP_OK) { drate = (uint32_t)strtoul(v, NULL, 10); has_rx = true; }
+        if (httpd_query_key_value(q, "bandwidth_khz", v, sizeof v) == ESP_OK) { bw = (uint32_t)strtoul(v, NULL, 10); has_rx = true; }
+    }
+    /* Profil RX persistant : on ne le (re)pose QUE s'il est fourni. Un clic UI sans params
+     * (le "Capture brute" de Pascal) n'efface donc pas le reglage pose par l'API juste avant.
+     * Mettre datarate_baud=0 pour effacer (revenir a l'agnostique). */
+    if (has_rx) cc1101_set_capture_rx(drate, bw);
+    int n = rfcap_capture(radio, 15000);   /* bloquant : capture dediee, comme l'enrolement */
     char out[48];
     snprintf(out, sizeof(out), "{\"n\":%d}", n);
     httpd_resp_set_type(r, "application/json");
@@ -1457,6 +1475,14 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
     int radio = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "radio"));
+    /* Profil RX du protocole (depuis profiles.json, porte par l'UI pyramide) : (re)pose debit et
+     * bande passante de demodulation AVANT la capture, exactement comme h_capture_start. Re-applique
+     * a CHAQUE capture de rejeu -> l'etat au boot (s_cap_drate_baud init 0) ne recasse plus le rejeu
+     * (E4). Absent = config courante (agnostique). */
+    cJSON *drj = cJSON_GetObjectItem(j, "datarate_baud");
+    cJSON *bwj = cJSON_GetObjectItem(j, "bandwidth_khz");
+    if (cJSON_IsNumber(drj) && cJSON_IsNumber(bwj))
+        cc1101_set_capture_rx((uint32_t)drj->valuedouble, (uint32_t)bwj->valuedouble);
     int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio) : -1;
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "n", n);
@@ -1700,6 +1726,7 @@ void web_ui_start(void) {
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
     reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
+    reg_open(s, "/pyramid-detect.js", HTTP_GET, h_js_detect);   /* detection de profil (pyramide, #111) */
     reg(s, "/profiles.json", HTTP_GET, h_profiles);   /* table de profils (protegee, soulage la table ouverte ; l'UI la fetch apres login) */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);

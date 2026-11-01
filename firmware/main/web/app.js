@@ -1889,8 +1889,10 @@ function renderAddStep(host, type, marque) {
       Object.keys(PROFILES.types).map(k => {
         const has = present.has(k);
         return `<button class="chip" data-type="${esc(k)}"${has ? '' : ' disabled'}>${esc(labelType(k))}${has ? '' : ' · bientôt'}</button>`;
-      }).join('') + '</div>';
+      }).join('') + '</div>' +
+      '<p class="hint" style="margin-top:14px">Tu ne connais pas la marque ? <a href="#" class="add-detect">Détecter en pressant la télécommande</a></p>';
     host.querySelectorAll('[data-type]').forEach(b => { if (!b.disabled) b.onclick = () => renderAddStep(host, b.dataset.type, null); });
+    const dt = host.querySelector('.add-detect'); if (dt) dt.onclick = e => { e.preventDefault(); detectDevice(host); };
     return;
   }
   // Étape 2 : la MARQUE (pour ce type).
@@ -1904,25 +1906,64 @@ function renderAddStep(host, type, marque) {
   }
   // Étape 3 : le PROFIL (méthode). Le clic route vers le flux existant via le hash.
   const feuilles = profils.filter(p => p.type === type && p.marque === marque);
-  host.innerHTML = crumb(type, marque) + '<p class="sub">Comment l\'ajouter ?</p>' +
-    feuilles.map((p, i) =>
-      `<div class="card add-profil" data-i="${i}" role="button" tabindex="0" style="cursor:pointer;margin:8px 0">
-         <b>${esc(p.nom)}</b>
-         <p class="hint" style="margin:4px 0 0">${esc(p.note || '')}</p>
-       </div>`).join('');
+  renderLeafChoices(host, feuilles, crumb(type, marque) + '<p class="sub">Comment l\'ajouter ?</p>');
   wireRestart();
-  host.querySelectorAll('.add-profil').forEach((el, i) => {
-    el.onclick = () => {
-      const prof = feuilles[i];
-      if (prof.flow === 'rejeu') {   // on met l'INDEX du profil dans le hash : il survit à un F5
-        REJEU_PROFILE = prof;
-        location.hash = `remotes/rejeu/${PROFILES.profils.indexOf(prof)}`;
-        return;
-      }
-      const panel = ADD_FLOW_PANEL[prof.flow];
-      if (panel) location.hash = `remotes/${panel}`;
-    };
-  });
+}
+
+/* Route une feuille (profil) de la pyramide vers le flux existant via le hash. Partage entre le
+   choix manuel (etape 3) et la proposition de la detection : meme carte, meme routage. */
+function routeLeaf(prof) {
+  if (prof.flow === 'rejeu') {   // on met l'INDEX du profil dans le hash : il survit a un F5
+    REJEU_PROFILE = prof;
+    location.hash = `remotes/rejeu/${PROFILES.profils.indexOf(prof)}`;
+    return;
+  }
+  const panel = ADD_FLOW_PANEL[prof.flow];
+  if (panel) location.hash = `remotes/${panel}`;
+}
+
+/* Rend une liste de feuilles en cartes cliquables, chacune routant vers son flux. */
+function renderLeafChoices(host, feuilles, headerHtml) {
+  host.innerHTML = headerHtml + feuilles.map((p, i) =>
+    `<div class="card add-profil" data-i="${i}" role="button" tabindex="0" style="cursor:pointer;margin:8px 0">
+       <b>${esc(p.nom)}</b>
+       <p class="hint" style="margin:4px 0 0">${esc(p.note || '')}</p>
+     </div>`).join('');
+  host.querySelectorAll('.add-profil').forEach((el, i) => { el.onclick = () => routeLeaf(feuilles[i]); });
+}
+
+/* Detection : on ecoute chaque radio de la carte pendant que l'utilisateur presse sa telecommande,
+   on retient la bande qui a entendu, puis on PROPOSE les profils de cette bande. On n'impose rien :
+   l'utilisateur choisit, et peut revenir au choix manuel. Seule la bande est observable (voir
+   pyramid-detect.js) ; le reste reste un choix. */
+async function detectDevice(host) {
+  if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);
+  const radios = (REJEU_RADIOS && REJEU_RADIOS.length)
+    ? REJEU_RADIOS
+    : await fetch('/api/radios').then(r => r.json()).then(d => d.radios || []).catch(() => []);
+  REJEU_RADIOS = radios;
+  if (!window.PyramidDetect || !radios.length) { renderAddStep(host, null, null); return; }
+  let best = null;
+  for (const r of radios) {
+    host.innerHTML = `<p class="hint">📡 Presse et MAINTIENS ta télécommande. J'écoute la bande ${esc(String(r.band))} MHz (~15 s)…</p>`;
+    await api('/api/capture/start?radio=' + (r.idx || 0), { method: 'POST' }).catch(() => null);
+    const last = await fetch('/api/capture/last').then(x => x.json()).catch(() => null);
+    if (last && last.n > 0 && (!best || last.rssi > best.rssi)) best = { band: String(last.band), rssi: last.rssi };
+    if (best) break;   // une bande a entendu : inutile de scanner les autres
+  }
+  renderProposal(host, window.PyramidDetect.rankProfiles(best ? { band: best.band } : {}, PROFILES), best);
+}
+
+/* Affiche la proposition de la detection. Confiant = un seul profil mis en avant ; ambigu = on
+   montre les candidats, l'utilisateur tranche ; rien d'entendu = retour au choix manuel complet. */
+function renderProposal(host, res, best) {
+  if (!res || !res.proposed.length) { renderAddStep(host, null, null); return; }
+  const back = `<p class="hint" style="margin-bottom:10px"><a href="#" class="add-restart">← Choisir manuellement</a></p>`;
+  const feuilles = res.proposed.map(c => c.profil);
+  const heard = best ? `Entendu sur la bande ${esc(best.band)} MHz. ` : '';
+  const title = res.confident ? 'Profil proposé, confirme ou choisis autrement :' : 'Plusieurs profils possibles, choisis :';
+  renderLeafChoices(host, feuilles, back + `<p class="sub">${heard}${title}</p>`);
+  const a = host.querySelector('.add-restart'); if (a) a.onclick = e => { e.preventDefault(); renderAddStep(host, null, null); };
 }
 
 /* ── Panneau « rejeu » (moteur de rejeu brut par commande, flow="rejeu") : créer un appareil, puis
@@ -1997,7 +2038,15 @@ async function rejeuCapture(btn, dev) {
   const st = $('#rejeu-cap-status');
   btn.disabled = true;
   rejeuStat(st, '📡 Appuie MAINTENANT sur « ' + label + ' » de ta télécommande (~15 s)…');
-  const d = await api('/api/rejeu/capture', { method: 'POST', body: JSON.stringify({ id, cmd, radio }) }).catch(() => null);
+  // E4 : la capture de rejeu lit le profil RX du protocole (depuis profiles.json), plus le global.
+  // Re-applique a chaque capture -> l'etat au boot ne recasse plus le rejeu. Absent = agnostique.
+  const rx = (REJEU_PROFILE && REJEU_PROFILE.rx) || null;
+  const body = { id, cmd, radio };
+  if (rx && typeof rx.datarate_baud === 'number' && typeof rx.bandwidth_khz === 'number') {
+    body.datarate_baud = rx.datarate_baud;
+    body.bandwidth_khz = rx.bandwidth_khz;
+  }
+  const d = await api('/api/rejeu/capture', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
   btn.disabled = false;
   if (d && d.n > 0) {
     rejeuStat(st, '✅ « ' + label + ' » captée (' + d.n + ' impulsions).');
