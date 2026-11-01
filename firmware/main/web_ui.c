@@ -1493,6 +1493,36 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     free(js);
     return e;
 }
+/* ── io-homecontrol (2-FSK 868, experimental #87) : capture/ecoute pour l'enrolement io.
+ * EXCLUSIF de l'ecoute PFX (un seul protocole radio a la fois). Pilotent le backend radio_io_*. ── */
+static esp_err_t h_io_sniff(httpd_req_t *r) {
+    uint8_t frame[32];
+    int n = radio_io_sniff(frame, sizeof frame, 8000);   /* 8 s d'ecoute d'UNE trame io */
+    httpd_resp_set_type(r, "application/json");
+    if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    char hex[2 * sizeof(frame) + 1];
+    for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
+    char out[128];
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
+    return httpd_resp_sendstr(r, out);
+}
+/* POST {"on":true|false} : met la radio en ecoute io 2-FSK continue ; chaque trame recue part au
+ * journal ("Trame io captee (N octets) : ..."). Un POST sans corps rend juste l'etat courant. */
+static esp_err_t h_io_listen(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (body) {
+        cJSON *j = cJSON_Parse(body); free(body);
+        if (j) {
+            cJSON *on = cJSON_GetObjectItem(j, "on");
+            if (cJSON_IsBool(on)) radio_set_io_listening(cJSON_IsTrue(on));
+            cJSON_Delete(j);
+        }
+    }
+    char out[32];
+    snprintf(out, sizeof out, "{\"ok\":1,\"on\":%d}", radio_is_io_listening() ? 1 : 0);
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1792,5 +1822,7 @@ void web_ui_start(void) {
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
     reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
+    reg(s, "/api/io/sniff",  HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
+    reg(s, "/api/io/listen", HTTP_POST, h_io_listen);  /* io-homecontrol : ecoute io permanente ON/OFF (#87) */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }
