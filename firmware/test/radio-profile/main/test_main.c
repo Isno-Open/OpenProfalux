@@ -31,6 +31,8 @@ int main(void) {
     check_u("868350   -> 0x2165E8", radio_cc1101_freq_word(868350), 0x2165E8);
     check_u("863000   -> 0x21313B", radio_cc1101_freq_word(863000), 0x21313B);
     check_u("870000   -> 0x217627", radio_cc1101_freq_word(870000), 0x217627);
+    /* Porteuse CAME declaree dans profiles.json (tx.freq_khz = 433920), bande 433. */
+    check_u("came 433920 -> 0x10B071", radio_cc1101_freq_word(433920), 0x10B071);
 
     /* Noms <-> profils, aller-retour et inconnus. */
     for (int p = 0; p < RADIO_PROFILE_COUNT; p++) {
@@ -48,6 +50,14 @@ int main(void) {
     check_u("sous la plage",       radio_freq_in_band(862999, 863000, 870000), 0);
     check_u("au-dessus",           radio_freq_in_band(870001, 863000, 870000), 0);
     check_u("433 hors plage 868",  radio_freq_in_band(433920, 863000, 870000), 0);
+
+    /* Bande 433 (ISM EU, 433,05..434,79 MHz) : la porteuse CAME declaree (profiles.json
+     * tx.freq_khz = 433920) DOIT y etre (reglage = un choix, verifie contre la plage de la
+     * carte, cf. CLAUDE.md), et une porteuse 868 ne doit pas. */
+    check_u("came 433920 dans 433", radio_freq_in_band(433920, 433050, 434790), 1);
+    check_u("borne 433 basse",      radio_freq_in_band(433050, 433050, 434790), 1);
+    check_u("borne 433 haute",      radio_freq_in_band(434790, 433050, 434790), 1);
+    check_u("868 hors 433",         radio_freq_in_band(868425, 433050, 434790), 0);
 
     /* Resolution profil + saisie, controlee contre la plage. */
     uint32_t f = 1;

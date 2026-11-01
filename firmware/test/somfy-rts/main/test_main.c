@@ -295,6 +295,76 @@ static void t10_demanchester(void) {
     CHECK(somfy_rts_demanchester("0101", back1) == -1, "longueur fausse refusee");
 }
 
+/* T11 : extension 80 bits (RTS "80-S", course complete sur Situo Variation). Les 3 octets
+ * ajoutes viennent d'ESPSomfy-RTS (encode80BitFrame / calc80Checksum). Les valeurs attendues
+ * sont RECALCULEES A LA MAIN (comme T0/T7), pas relues du code : une erreur de byte7 ou de
+ * checksum casserait. Ne prouve PAS la course reelle sur un moteur (banc, #73), prouve la trame
+ * octet pour octet. Les 7 premiers octets = la trame 56 bits inchangee ; l'extension depend de
+ * cmd + repeat seulement. */
+static void t11_frame80(void) {
+    printf("T11 extension 80 bits (cmd + repeat)\n");
+    const struct { somfy_rts_cmd_t cmd; uint8_t rep; uint8_t ext[3]; const char *nom; } cas[] = {
+        { SOMFY_RTS_CMD_UP,   0, { 0xC4, 0x20, 0x0A }, "UP repeat 0 -> C4 20 0A" },
+        { SOMFY_RTS_CMD_DOWN, 0, { 0xC4, 0x2C, 0x8E }, "DOWN repeat 0 -> C4 2C 8E" },
+        { SOMFY_RTS_CMD_MY,   0, { 0xC4, 0x2F, 0xFA }, "MY/stop repeat 0 -> C4 2F FA" },
+        { SOMFY_RTS_CMD_UP,   1, { 0xC8, 0x20, 0x06 }, "UP repeat 1 -> C8 20 06 (byte7 +4)" },
+    };
+    for (unsigned i = 0; i < sizeof(cas) / sizeof(cas[0]); i++) {
+        const somfy_rts_frame_t f = {
+            .key = 0xA3, .cmd = cas[i].cmd, .rolling_code = 0x1E63, .address = 0x421FEEu
+        };
+        uint8_t base[SOMFY_RTS_FRAME_BYTES];
+        somfy_rts_pack(&f, base);
+        uint8_t out[SOMFY_RTS_FRAME_BYTES_80];
+        somfy_rts_frame80(base, cas[i].cmd, cas[i].rep, out);
+        CHECK(memcmp(out, base, SOMFY_RTS_FRAME_BYTES) == 0, "56 premiers octets = trame de base");
+        CHECK(memcmp(out + SOMFY_RTS_FRAME_BYTES, cas[i].ext, 3) == 0, cas[i].nom);
+    }
+    /* Repli de byte7 : repeat 15 ramene start (196) sans deborder 255, meme octet que repeat 0. */
+    const somfy_rts_frame_t f = {
+        .key = 0xA3, .cmd = SOMFY_RTS_CMD_UP, .rolling_code = 0x1E63, .address = 0x421FEEu
+    };
+    uint8_t base[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_pack(&f, base);
+    uint8_t out[SOMFY_RTS_FRAME_BYTES_80];
+    somfy_rts_frame80(base, SOMFY_RTS_CMD_UP, 15, out);
+    CHECK(out[7] == 0xC4, "repeat 15 : byte7 repli a 0xC4 (pas de debordement)");
+}
+
+/* T12 : sequence d'impulsions 80 bits. Meme STRUCTURE que T8 (sync materiel, sync logiciel,
+ * demi-symboles fusionnes) mais sur 80 bits de donnees. La polarite reelle reste a valider au
+ * banc (#73) : on prouve ici l'ossature et la duree totale. */
+static void t12_tx_pulses80(void) {
+    printf("T12 sequence d'impulsions 80 bits\n");
+    const somfy_rts_frame_t f = {
+        .key = 0xA3, .cmd = SOMFY_RTS_CMD_UP, .rolling_code = 0x1E63, .address = 0x421FEEu
+    };
+    uint8_t base[SOMFY_RTS_FRAME_BYTES];
+    somfy_rts_pack(&f, base);
+    uint8_t w[SOMFY_RTS_FRAME_BYTES_80];
+    somfy_rts_frame80(base, SOMFY_RTS_CMD_UP, 0, w);
+    somfy_rts_pulse_t p[SOMFY_RTS_MAX_PULSES_80];
+
+    int n = somfy_rts_tx_pulses80(w, true, p, SOMFY_RTS_MAX_PULSES_80);
+    CHECK(n > 0 && n <= SOMFY_RTS_MAX_PULSES_80, "1re trame : n valide");
+    CHECK(p[0].level == 1 && p[0].us == SOMFY_RTS_HW_SYNC_US, "[0] = sync materiel haut");
+    CHECK(p[4].level == 1 && p[4].us == SOMFY_RTS_SW_SYNC_US, "[4] = sync logiciel (apres 2 paires)");
+    int alt = 1;
+    for (int i = 1; i < n; i++) if (p[i].level == p[i - 1].level) alt = 0;
+    CHECK(alt, "niveaux adjacents toujours differents (fusion)");
+    unsigned long tot = 0; for (int i = 0; i < n; i++) tot += p[i].us;
+    const unsigned long att = 2ul * SOMFY_RTS_HW_SYNC_FIRST * SOMFY_RTS_HW_SYNC_US
+        + SOMFY_RTS_SW_SYNC_US + SOMFY_RTS_HALF_SYMBOL_US
+        + 2ul * SOMFY_RTS_FRAME_BITS_80 * SOMFY_RTS_HALF_SYMBOL_US;
+    CHECK(tot == att, "duree totale 1re trame = somme attendue (80 bits)");
+
+    int m = somfy_rts_tx_pulses80(w, false, p, SOMFY_RTS_MAX_PULSES_80);
+    CHECK(m > n, "repetition : plus d'impulsions (7 paires contre 2)");
+
+    somfy_rts_pulse_t tiny[4];
+    CHECK(somfy_rts_tx_pulses80(w, true, tiny, 4) == -1, "tampon trop court -> -1");
+}
+
 int main(void) {
     printf("== Banc Somfy RTS (codec logique) ==\n");
     t0_checksum();
@@ -308,6 +378,8 @@ int main(void) {
     t8_tx_pulses();
     t9_remote_next();
     t10_demanchester();
+    t11_frame80();
+    t12_tx_pulses80();
     if (g_fail) {
         printf("\n%d verification(s) en echec.\n", g_fail);
         return 1;
