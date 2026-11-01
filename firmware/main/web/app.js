@@ -1333,6 +1333,25 @@ async function loadDiag() {
              : d.gdo0 === 0 ? ` · GDO0 tenu par un autre composant (bloqué à ${d.gdo0_lvl}) ✗` : '';
   if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}${gdo0}${spi}. Réception : bouton ci-dessous.`;
 }
+/* io-homecontrol : ecoute io permanente (toggle). Capture la trame 0x30 pendant la PROG (#87).
+   Separe de la pyramide (section Diagnostic radio), experimental. Pas de bouton "appui normal" :
+   le 0x30 ne sort qu'en PROG, pas sur un appui normal. */
+if ($('#io-listen-btn')) {
+  let ioOn = false;
+  $('#io-listen-btn').onclick = async () => {
+    const btn = $('#io-listen-btn'), st = $('#io-listen-status');
+    btn.disabled = true;
+    const d = await api('/api/io/listen', { method: 'POST', body: JSON.stringify({ on: !ioOn }) }).catch(() => null);
+    btn.disabled = false;
+    if (d && d.ok) {
+      ioOn = !!d.on;
+      btn.textContent = 'Écoute io permanente : ' + (ioOn ? 'ON' : 'OFF');
+      st.textContent = ioOn
+        ? '📡 Écoute io active. Mets ta télécommande en PROG, puis regarde le Journal (une ligne cmd=0x30 = la clé). L\'écoute Profalux est suspendue pendant ce temps.'
+        : 'Écoute io arrêtée.';
+    } else { st.textContent = '❌ Impossible de changer l\'écoute io.'; }
+  };
+}
 if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   const btn = $('#diag-tx-btn'); btn.disabled = true;
   const vd = $('#diag-verdict'); if (vd) vd.querySelector('b').textContent = 'Test d\'émission en cours...';
