@@ -286,6 +286,37 @@ static void strobe(uint8_t s) {
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
 }
 
+/* ── Acces mode PAQUET (FIFO + strobes) pour les protocoles FSK comme io-homecontrol (#87).
+ * Transferts burst bornes a 31 octets utiles. Le chemin OOK n'en a pas besoin ; ces primitives
+ * ne sont utilisees que par le backend io (io/io_radio.c). ── */
+void cc1101_strobe_cmd(uint8_t s) { strobe(s); }
+
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 31) return;
+    uint8_t tx[32], rx[32];
+    tx[0] = addr | 0x40;   /* bit burst */
+    for (size_t i = 0; i < len; i++) tx[i + 1] = buf[i];
+    cs_low(); spi_xfer(tx, rx, len + 1); cs_high();
+}
+
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 31) return;
+    uint8_t tx[32] = {0}, rx[32];
+    tx[0] = addr | 0xC0;   /* bits burst + lecture */
+    cs_low(); spi_xfer(tx, rx, len + 1); cs_high();
+    for (size_t i = 0; i < len; i++) buf[i] = rx[i + 1];
+}
+
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
+void cc1101_apply_config_ook(void) {
+    strobe(CC_SIDLE);
+    for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++)
+        cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
+    /* PATABLE OOK (burst) : index0=eteint 0x00, index1=puissance 0xC0 (comme l'init) */
+    uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
+    cs_low(); spi_xfer(tx, rx, 3); cs_high();
+}
+
 /* Configure la radio ACTIVE : GPIO (CS/GDO0), reset, registres, PATABLE, porteuse.
  * Le bus SPI est partage et deja initialise par cc1101_init. Renvoie 0 si la puce
  * repond (PARTNUM 0x00), -1 sinon. */

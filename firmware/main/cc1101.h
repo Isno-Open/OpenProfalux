@@ -90,4 +90,12 @@ int  cc1101_gdo0_state(int *level);   /* GDO0 : -1 non teste, 1 libre, 0 tenu (*
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
 
+/* Acces mode PAQUET (FIFO + strobes), pour les protocoles FSK comme io-homecontrol (#87).
+ * Transferts burst bornes a 31 octets utiles ; le chemin OOK n'en a pas besoin. */
+void cc1101_strobe_cmd(uint8_t strobe);
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len);
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len);
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
+void cc1101_apply_config_ook(void);
+
 #endif
