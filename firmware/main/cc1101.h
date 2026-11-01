@@ -53,6 +53,11 @@ int  cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits);
 /* Capture OOK BRUTE (issue #95) : rend les impulsions brutes (levels[]/us[]) sans decoder,
  * pour rejouer les telecommandes a code fixe (CAME, capteurs) hors protocole Profalux/Somfy. */
 int  cc1101_rx_capture_pulses(uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out);
+/* Profil RX des captures brutes (PERSISTANT jusqu'au prochain appel) : debit (baud) et bande
+ * passante (kHz) de demodulation, mappes en MDMCFG4/MDMCFG3 a chaque capture puis restaures.
+ * 0/0 = config courante (agnostique). Les valeurs viennent du profil (profiles.json), pas du
+ * code. Commodite de test ; la production passe le profil par capture (UI -> API rejeu). */
+void cc1101_set_capture_rx(uint32_t drate_baud, uint32_t bw_khz);
 /* Rejoue (TX) une trame brute (chaine '0'/'1' en ordre du fil) en OOK HCS30x. */
 int  cc1101_tx_raw_bits(const char *bits, int n, int repeats);
 

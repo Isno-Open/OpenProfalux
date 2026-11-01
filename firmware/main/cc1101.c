@@ -25,6 +25,7 @@
 #include "soc/gpio_sig_map.h"  /* SIG_GPIO_OUT_IDX */
 #include <esp_heap_caps.h>   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
 #include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
+#include <math.h>            /* fabs/lround : mapping debit/bande passante -> registres */
 
 static const char *TAG = "cc1101";
 
@@ -904,6 +905,35 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     return r;
 }
 
+/* Profil RX de capture (one-shot) : le PROFIL (profiles.json) declare un debit et une bande
+ * passante en unites humaines ; on les pose ici juste avant la prochaine capture, qui les
+ * mappe en MDMCFG4/MDMCFG3 puis restaure. 0/0 = garder la config courante (cas agnostique).
+ * Aucun octet de registre fige dans le code : la valeur vit dans le profil. */
+static uint32_t s_cap_drate_baud = 0, s_cap_bw_khz = 0;
+void cc1101_set_capture_rx(uint32_t drate_baud, uint32_t bw_khz) {
+    s_cap_drate_baud = drate_baud; s_cap_bw_khz = bw_khz;
+}
+/* Mappe (debit baud, bande passante kHz) vers MDMCFG4/MDMCFG3, fosc 26 MHz (verifie : l'actuel
+ * 0xC6 rend 101,6 kHz). MDMCFG4 = CHANBW_E<<6 | CHANBW_M<<4 | DRATE_E ; MDMCFG3 = DRATE_M.
+ * BW = fosc/(8*(4+M)*2^E) ; DRATE = (256+M)*2^E/2^28*fosc. On cherche les (E,M) les plus proches. */
+static void cc1101_ook_rx_regs(uint32_t drate_baud, uint32_t bw_khz, uint8_t *mdmcfg4, uint8_t *mdmcfg3) {
+    const double fosc = 26000000.0;
+    int bw_e = 0, bw_m = 0; double bw_best = 1e18, bw_tgt = (double)bw_khz * 1000.0;
+    for (int e = 0; e < 4; e++) for (int m = 0; m < 4; m++) {
+        double bw = fosc / (8.0 * (4 + m) * (double)(1u << e));
+        if (fabs(bw - bw_tgt) < bw_best) { bw_best = fabs(bw - bw_tgt); bw_e = e; bw_m = m; }
+    }
+    int dr_e = 0, dr_m = 0; double dr_best = 1e18, dr_tgt = (double)drate_baud;
+    for (int e = 0; e < 16; e++) {
+        long mm = lround(dr_tgt * 268435456.0 / ((double)(1u << e) * fosc)) - 256;
+        if (mm < 0 || mm > 255) continue;
+        double rr = (256.0 + (double)mm) * (double)(1u << e) / 268435456.0 * fosc;
+        if (fabs(rr - dr_tgt) < dr_best) { dr_best = fabs(rr - dr_tgt); dr_e = e; dr_m = (int)mm; }
+    }
+    *mdmcfg4 = (uint8_t)(((bw_e & 3) << 6) | ((bw_m & 3) << 4) | (dr_e & 0x0F));
+    *mdmcfg3 = (uint8_t)dr_m;
+}
+
 /* Capture BRUTE OOK (issue #95) : ecoute idle-delimitee et rend les impulsions brutes
  * (niveau + duree us) SANS decoder - pour rejouer n'importe quelle telecommande OOK a CODE FIXE
  * (portail CAME, capteurs...) que le decodeur Profalux ne connait pas. L'appelant tient le radio
@@ -914,12 +944,39 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
 int cc1101_rx_capture_pulses(uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
     if (!levels || !us || max < 2) return -1;
     if (!s_cap && cc1101_capture_init() != 0) return -1;
-    /* ⚠️ Armement RX OOK async : COPIE VOLONTAIRE de cc1101_rx_listen_bits (meme mode, memes
-     * registres, meme gain s_rx_gain). A factoriser (arm_ook_rx) une fois valide sur une vraie
-     * Super ; dupliquee ici pour ne PAS toucher le chemin d'ecoute eprouve sans materiel de test. */
+    /* Profil RX du protocole (depuis profiles.json, via cc1101_set_capture_rx) : regle le debit
+     * et la bande passante de demodulation pour CE protocole (CAME : 3800 baud / 135 kHz, contre
+     * ~2400 / 102 kHz herites du 868 qui lisaient une sequence fausse). 0/0 = garder la config
+     * courante (agnostique). PERSISTANT jusqu'au prochain cc1101_set_capture_rx (pose une fois
+     * par l'API, re-utilise a chaque capture suivante) ; restaure les registres a la sortie pour
+     * ne pas fuir sur le chemin Profalux. Commodite de TEST : le vrai chemin production passe le
+     * profil par capture (UI pyramide -> /api/rejeu/capture), pas par un reglage global. */
+    uint8_t mdm4_save = 0, mdm3_save = 0;
+    bool mdm_over = (s_cap_drate_baud != 0 && s_cap_bw_khz != 0);
+    if (mdm_over) {
+        mdm4_save = cc1101_read_reg(CC_MDMCFG4); mdm3_save = cc1101_read_reg(CC_MDMCFG3);
+        uint8_t m4 = 0, m3 = 0; cc1101_ook_rx_regs(s_cap_drate_baud, s_cap_bw_khz, &m4, &m3);
+        cc1101_write_reg(CC_MDMCFG4, m4); cc1101_write_reg(CC_MDMCFG3, m3);
+        ESP_LOGW(TAG, "capture : profil RX %u baud / %u kHz -> MDMCFG4=0x%02X MDMCFG3=0x%02X",
+                 (unsigned)s_cap_drate_baud, (unsigned)s_cap_bw_khz, m4, m3);
+    }
+    /* ⚠️ Armement RX OOK async, calque sur cc1101_rx_listen_bits (meme mode, meme gain
+     * s_rx_gain) SAUF AGCCTRL0 : la capture brute se rejoue A L'IDENTIQUE, son enveloppe doit
+     * donc etre PROPRE, la ou l'ecoute Profalux passe par un decodeur KeeLoq qui tolere le bave.
+     * A factoriser (arm_ook_rx) une fois valide sur une vraie Super. */
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
     cc1101_write_reg(0x02, 0x0D); cc1101_write_reg(0x0B, 0x06); cc1101_write_reg(0x19, 0x14);
-    cc1101_write_reg(0x1B, s_rx_gain[s_active]); cc1101_write_reg(0x1C, 0x00); cc1101_write_reg(0x1D, 0x91);
+    cc1101_write_reg(0x1B, s_rx_gain[s_active]); cc1101_write_reg(0x1C, 0x00);
+    /* AGCCTRL0 : decision ASK/OOK a 8 dB + hysteresis LARGE (0xD1), pas 8 dB simple (0x91)
+     * du chemin Profalux. Mesures Pascal 2026-10-31 (portail CAME 433, rfdecode) :
+     *  - 8 dB simple (0x91) : l'AGC remonte le gain dans les creux, le slicer bascule sur le
+     *    bruit -> parasites 52/55 us, trame illisible (0xc) ;
+     *  - 12 dB (0x92) : bruit tue (plus rien <120 us) MAIS le seuil haut RONGE les fronts
+     *    (640->555, 320->230, creux gonfles), la separation court/long s'ecrase -> 0xc930 ;
+     *  - 8 dB + grande hysteresis (0xD1) : garde les fronts du 8 dB, et la bande morte autour
+     *    du seuil tue les re-bascules de bruit dans les creux SANS deplacer le point de decision.
+     * But : restaurer le 320/640 propre (le registre n'offre que 8/12/16 dB, pas de 10). #102. */
+    cc1101_write_reg(0x1D, 0xD1);
     strobe(CC_SIDLE); esp_rom_delay_us(200);
     strobe(0x33); vTaskDelay(pdMS_TO_TICKS(3));
     strobe(0x3A); strobe(0x34);
@@ -952,6 +1009,7 @@ int cc1101_rx_capture_pulses(uint32_t timeout_ms, uint8_t *levels, uint16_t *us,
             if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;   /* re-arme */
         }
     } else n = -2;
+    if (mdm_over) { cc1101_write_reg(CC_MDMCFG4, mdm4_save); cc1101_write_reg(CC_MDMCFG3, mdm3_save); }
     strobe(CC_SIDLE);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* restaure pour le TX bit-bang */
     return n;
