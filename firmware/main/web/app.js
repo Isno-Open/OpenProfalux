@@ -1927,8 +1927,10 @@ function renderAddStep(host, type, marque) {
     host.querySelectorAll('[data-marque]').forEach(b => b.onclick = () => renderAddStep(host, type, b.dataset.marque));
     return;
   }
-  // Étape 3 : le PROFIL (méthode). Le clic route vers le flux existant via le hash.
+  // Étape 3 : le PROFIL (méthode). Une seule méthode pour cette marque (Somfy, Eveno, NeoSol, CAME) :
+  // on va DIRECTEMENT au formulaire, l'écran « Comment l'ajouter ? » à choix unique n'apporte rien.
   const feuilles = profils.filter(p => p.type === type && p.marque === marque);
+  if (feuilles.length === 1) { routeLeaf(feuilles[0]); return; }
   renderLeafChoices(host, feuilles, crumb(type, marque) + '<p class="sub">Comment l\'ajouter ?</p>');
   wireRestart();
 }
