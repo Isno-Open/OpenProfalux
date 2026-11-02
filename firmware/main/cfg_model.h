@@ -72,6 +72,7 @@ typedef struct {
     uint16_t te_us;          /* TE d'emission KeeLoq (0 = heriter du defaut firmware, 400 us) */
     uint8_t  tx_rpt;         /* tx_override_t : bit de repetition pour cet appareil */
     uint8_t  tx_rmt;         /* tx_override_t : emission materielle RMT pour cet appareil */
+    uint8_t  frame_bits;     /* Somfy RTS : format de trame (0 = defaut 56 ; 56 ou 80, le 80 ajoute une extension) */
     char     marque[SH_ID_LEN];  /* provenance : marque du profil choisi a l'ajout (affichage + resolution des defauts) */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;

@@ -680,13 +680,12 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    /* 56 bits, rafale COURTE, comme la vraie telecommande (#73). Sur un recepteur a lames
-     * orientables (BSO), c'est la DUREE de l'appui qui decide : bref (peu de trames) = course
-     * complete, long (beaucoup de trames) = orientation des lames. Une longue salve orientait
-     * les lames au lieu de faire la course (l'ancien SOMFY_RTS_TX_REPEATS_MAX = 8 trames en
-     * etait une). Le format 80 bits (somfy_tx_emit80) reste dans le codec mais n'a PAS ete le
-     * levier : c'est la rafale courte qui fait la course complete, pas le format. */
-    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS);
+    /* Format de trame PAR VOLET (fiche, issue #73) : 56 bits par defaut (rafale COURTE, comme la vraie
+     * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
+     * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
+     * courte fait la course complete dans les deux cas. frame_bits 0 (defaut memset) = 56. */
+    if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS, v->freq_khz);
+    else                     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS, v->freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
@@ -1364,7 +1363,7 @@ int shutters_set_orientation(const char *id, int orientation) {
  * freq_khz/te_us a 0 = heriter du defaut ; tx_rpt/tx_rmt = tx_override_t (0 heriter, 1 off, 2 on).
  * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
 int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
-                           int rpt, int rmt, const char *marque) {
+                           int rpt, int rmt, int frame_bits, const char *marque) {
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
@@ -1372,6 +1371,7 @@ int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
     v->te_us    = (te_us && (te_us < 200 || te_us > 900)) ? v->te_us : te_us;   /* hors plage HCS300 : on garde */
     if (rpt >= TXOVR_INHERIT && rpt <= TXOVR_ON) v->tx_rpt = (uint8_t)rpt;
     if (rmt >= TXOVR_INHERIT && rmt <= TXOVR_ON) v->tx_rmt = (uint8_t)rmt;
+    if (frame_bits == 56 || frame_bits == 80) v->frame_bits = (uint8_t)frame_bits;   /* Somfy ; autre = inchange */
     if (marque) strlcpy(v->marque, marque, SH_ID_LEN);
     save_cfg();
     UNLOCK();
@@ -1723,6 +1723,7 @@ char *shutters_status_json(void) {
         cJSON_AddNumberToObject(o, "te_us",    v->te_us);
         cJSON_AddNumberToObject(o, "tx_rpt",   v->tx_rpt);
         cJSON_AddNumberToObject(o, "tx_rmt",   v->tx_rmt);
+        cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
         cJSON *sr = cJSON_AddArrayToObject(o, "serials");
         for (int j = 0; j < v->n_serials; j++) cJSON_AddItemToArray(sr, cJSON_CreateString(v->serials[j]));
         /* etat des 3 commandes : bouton appris (nibble) si le slot est rempli, absent sinon.

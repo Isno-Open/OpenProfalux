@@ -444,11 +444,13 @@ static esp_err_t h_volet_txparams(httpd_req_t *r) {
     cJSON *tu = cJSON_GetObjectItem(j, "te_us");
     cJSON *xp = cJSON_GetObjectItem(j, "tx_rpt");
     cJSON *xm = cJSON_GetObjectItem(j, "tx_rmt");
+    cJSON *fb = cJSON_GetObjectItem(j, "frame_bits");
     int rc = shutters_set_tx_params(jstr(j, "id"),
         cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0,
         cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0,
         cJSON_IsNumber(xp) ? (int)xp->valuedouble : -1,
         cJSON_IsNumber(xm) ? (int)xm->valuedouble : -1,
+        cJSON_IsNumber(fb) ? (int)fb->valuedouble : 0,
         jstr(j, "marque"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -1585,8 +1587,8 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
          * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet
          * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
          * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
-        shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt,
-                               s_enrol_marque[0] ? s_enrol_marque : NULL);
+        shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt, 0,
+                               s_enrol_marque[0] ? s_enrol_marque : NULL);   /* enrolement KeeLoq : pas de frame_bits */
         pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
     }
     cJSON_Delete(j);

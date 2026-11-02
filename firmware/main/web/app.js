@@ -1959,56 +1959,91 @@ function routeLeaf(prof) {
 let ENROL_PROFILE = null;   // profil choisi dans la pyramide pour un enrôlement
 let ENROL_ADV = null;       // lecture du panneau avancé courant d'enrôlement (fonction read())
 
-/* Défauts d'émission DU PROFIL (source unique profiles.json) : fréquence porteuse + tx{te_us,
-   repeat_bit, rmt}. C'est ce que le panneau avancé affiche et pré-remplit. */
-function profileDefaultsOf(prof) {
-  const tx = (prof && prof.tx) || {};
-  return { freq_khz: (prof && prof.freq_khz) || 0, te_us: tx.te_us || 0, rpt: !!tx.repeat_bit, rmt: !!tx.rmt };
+/* SCHÉMA de champs éditables d'un profil (le "params = schéma" du doc, E7). On dérive les champs des
+   clés que le profil déclare dans `tx` (+ la porteuse), avec le bon widget. La source est profiles.json,
+   jamais codée en dur. Chaque champ : { name (= clé fiche/endpoint), label, widget, def, readonly?, options? }.
+   - freq_khz  : number. En Somfy l'émission passe par somfy_tx (433,42 FIXE) : lecture seule.
+   - te_us     : number (KeeLoq).
+   - repeat_bit/rmt : tri-état on/off (KeeLoq).
+   - frame_bits: sélecteur 56/80 (Somfy). */
+function profileFields(prof) {
+  if (!prof) return [];
+  const tx = prof.tx || {}, F = [];
+  if (prof.freq_khz) F.push({ name: 'freq_khz', label: 'Fréquence porteuse (kHz)', widget: 'number', def: prof.freq_khz });
+  if ('te_us' in tx)      F.push({ name: 'te_us',  label: "TE d'émission (µs)", widget: 'number', def: tx.te_us });
+  if ('repeat_bit' in tx) F.push({ name: 'tx_rpt', label: 'Bit de répétition (émettre comme la télécommande)', widget: 'onoff', def: tx.repeat_bit });
+  if ('rmt' in tx)        F.push({ name: 'tx_rmt', label: 'Émission matérielle (RMT)', widget: 'onoff', def: tx.rmt });
+  if ('frame_bits' in tx) F.push({ name: 'frame_bits', label: 'Format de trame', widget: 'choice', def: tx.frame_bits, options: [[56, '56 bits (standard)'], [80, '80 bits (étendu)']] });
+  return F;
 }
 
-/* Profil d'un appareil, pour résoudre ses défauts à l'édition. Le navigateur lit profiles.json (le
-   firmware ne peut pas). On matche sur la marque gravée dans la fiche, sinon on la déduit (un cloné
-   868 sans marque est du Profalux ; c'est la seule marque KeeLoq historique sur 868). */
+/* Résumé du défaut d'un champ, pour la ligne "Pré-réglé depuis le profil X : ...". */
+function fieldDefaultText(f) {
+  switch (f.name) {
+    case 'freq_khz':   return f.def + ' kHz';
+    case 'te_us':      return 'TE ' + f.def + ' µs';
+    case 'tx_rpt':     return 'bit ' + (f.def ? 'activé' : 'désactivé');
+    case 'tx_rmt':     return 'RMT ' + (f.def ? 'activé' : 'désactivé');
+    case 'frame_bits': return f.def + ' bits';
+    default:           return String(f.def);
+  }
+}
+
+/* Profil d'un appareil, pour résoudre ses défauts/son schéma à l'édition. Le navigateur lit
+   profiles.json (le firmware ne peut pas). On matche sur la marque gravée dans la fiche, sinon on la
+   déduit du protocole : somfy -> Somfy RTS, rejeu -> CAME, sinon Profalux (seule marque KeeLoq
+   historique sur 868 ; un cloné sans marque en est). */
 function profileForDevice(v) {
   const profs = (PROFILES && PROFILES.profils) || [];
-  const marque = v.marque || (v.proto === 'profalux' || (!v.virt && !v.rejeu) ? 'Profalux' : null);
+  let marque = v.marque;
+  if (!marque) {
+    if (v.proto === 'somfy') marque = 'Somfy RTS';
+    else if (v.rejeu)        marque = 'CAME';
+    else if (v.proto === 'profalux' || (!v.virt && !v.rejeu)) marque = 'Profalux';
+  }
   if (!marque) return null;
   const mec = v.rejeu ? 'rejeu' : v.virt ? 'enrolement' : 'cloner';
   return profs.find(p => p.marque === marque && p.mecanisme === mec) || profs.find(p => p.marque === marque) || null;
 }
 
-/* Construit le composant. opts = { values, profile, marque, saveLabel, onSave(values)->bool, open }.
-   `values` = surcharges de la fiche de l'appareil ; `profile` = défauts DU PROFIL (profileDefaultsOf,
-   source unique profiles.json). Les champs sont pré-remplis à la valeur effective (surcharge, sinon
-   défaut du profil) : « le défaut vient du profil ». onSave absent = lecture seule (via read()).
-   Renvoie { el, read }. */
+/* Panneau avancé GÉNÉRIQUE (E7) : les champs viennent du SCHÉMA du profil (profileFields), pas codés
+   en dur. opts = { profile (objet profil complet), values (surcharges de la fiche), marque, saveLabel,
+   onSave(values)->bool, open }. Chaque champ est pré-rempli à sa valeur effective (surcharge, sinon
+   défaut du profil). read() renvoie { clé_fiche: valeur } (freq_khz/te_us/tx_rpt/tx_rmt/frame_bits selon
+   la marque). Un champ readonly (ex. porteuse Somfy, fixe) est affiché mais pas dans read(). */
 function txAdvanced(opts) {
-  const v = opts.values || {}, pd = opts.profile || {};   // v = surcharges de la fiche ; pd = défauts DU PROFIL
-  /* Valeur effective pré-remplie : surcharge de l'appareil si posée, sinon le défaut du profil. */
-  const effFreq = v.freq_khz || pd.freq_khz || '';
-  const effTe = v.te_us || pd.te_us || 400;
-  const effRpt = v.tx_rpt ? (v.tx_rpt === 2 ? 2 : 1) : (pd.rpt ? 2 : 1);
-  const effRmt = v.tx_rmt ? (v.tx_rmt === 2 ? 2 : 1) : (pd.rmt ? 2 : 1);
-  const onoff = (cur) => `<option value="2"${cur === 2 ? ' selected' : ''}>Activé</option><option value="1"${cur === 1 ? ' selected' : ''}>Désactivé</option>`;
+  const v = opts.values || {}, fields = profileFields(opts.profile);
+  const renderField = (f) => {
+    if (f.readonly) return `<div class="field"><label>${esc(f.label)}</label><p class="hint" style="margin:2px 0 0"><b>${esc(String(f.def))}</b> (fixe pour cette marque)</p></div>`;
+    if (f.widget === 'number') {
+      const val = v[f.name] || f.def || '';
+      return `<div class="field"><label>${esc(f.label)}</label><input class="advf" data-name="${f.name}" type="number" step="1" value="${val}"></div>`;
+    }
+    if (f.widget === 'onoff') {
+      const cur = v[f.name] ? (v[f.name] === 2 ? 2 : 1) : (f.def ? 2 : 1);
+      return `<div class="field"><label>${esc(f.label)}</label><select class="advf" data-name="${f.name}"><option value="2"${cur === 2 ? ' selected' : ''}>Activé</option><option value="1"${cur === 1 ? ' selected' : ''}>Désactivé</option></select></div>`;
+    }
+    if (f.widget === 'choice') {
+      const cur = v[f.name] || f.def;
+      return `<div class="field"><label>${esc(f.label)}</label><select class="advf" data-name="${f.name}">${f.options.map(([val, lbl]) => `<option value="${val}"${val === cur ? ' selected' : ''}>${esc(lbl)}</option>`).join('')}</select></div>`;
+    }
+    return '';
+  };
   const profLine = opts.marque
-    ? `Pré-réglé depuis le profil <b>${esc(opts.marque)}</b> : ${pd.freq_khz || '?'} kHz · TE ${pd.te_us || 400} µs · bit ${pd.rpt ? 'activé' : 'désactivé'} · RMT ${pd.rmt ? 'activé' : 'désactivé'}.`
+    ? `Pré-réglé depuis le profil <b>${esc(opts.marque)}</b> : ${fields.map(fieldDefaultText).join(' · ')}.`
     : 'Réglages d\'émission de cet appareil.';
   const el = document.createElement('details');
   el.className = 'field adv-panel'; el.style.margin = '10px 0';
   if (opts.open) el.open = true;
   el.innerHTML = `<summary style="cursor:pointer;font-weight:600">⚙️ Réglages avancés d'émission${opts.marque ? ' · ' + esc(opts.marque) : ''}</summary>
     <p class="hint adv-intro">${profLine} Change une valeur pour cet appareil seulement : ça ne touche aucune autre marque, même sur la même radio.</p>
-    <div class="field"><label>Fréquence porteuse (kHz)</label><input class="adv-freq" type="number" min="300000" max="928000" step="1" value="${effFreq}"></div>
-    <div class="field"><label>TE d'émission (µs)</label><input class="adv-te" type="number" min="200" max="900" step="1" value="${effTe}"></div>
-    <div class="field"><label>Bit de répétition (émettre comme la télécommande)</label><select class="adv-rpt">${onoff(effRpt)}</select></div>
-    <div class="field"><label>Émission matérielle (RMT)</label><select class="adv-rmt">${onoff(effRmt)}</select></div>
-    ${opts.onSave ? `<div class="row" style="margin-top:4px"><button class="btn primary adv-save">${esc(opts.saveLabel || 'Enregistrer')}</button>${(pd.freq_khz || pd.te_us || opts.marque) ? '<button class="btn adv-reset" type="button" title="Remet fréquence, TE, bit et RMT sur les valeurs du profil">↺ Valeurs du profil</button>' : ''}</div><div class="statline adv-stat" hidden><span class="dot"></span><b></b></div>` : ''}`;
-  const read = () => ({
-    freq_khz: Number(el.querySelector('.adv-freq').value) || 0,
-    te_us: Number(el.querySelector('.adv-te').value) || 0,
-    tx_rpt: Number(el.querySelector('.adv-rpt').value) || 0,
-    tx_rmt: Number(el.querySelector('.adv-rmt').value) || 0,
-  });
+    ${fields.map(renderField).join('')}
+    ${opts.onSave ? `<div class="row" style="margin-top:4px"><button class="btn primary adv-save">${esc(opts.saveLabel || 'Enregistrer')}</button>${fields.some(f => !f.readonly) ? '<button class="btn adv-reset" type="button" title="Remet les champs sur les valeurs du profil">↺ Valeurs du profil</button>' : ''}</div><div class="statline adv-stat" hidden><span class="dot"></span><b></b></div>` : ''}`;
+  const read = () => {
+    const out = {};
+    el.querySelectorAll('.advf').forEach(e => { out[e.dataset.name] = Number(e.value) || 0; });
+    return out;
+  };
   if (opts.onSave) {
     const btn = el.querySelector('.adv-save'), stat = el.querySelector('.adv-stat');
     btn.onclick = async () => {
@@ -2018,13 +2053,15 @@ function txAdvanced(opts) {
       stat.hidden = false; stat.classList.toggle('bad', !ok);
       stat.querySelector('b').textContent = ok ? '✅ Enregistré' : '❌ Échec';
     };
-    /* Remet les champs sur les valeurs du profil (ne sauvegarde pas : l'utilisateur relit puis Enregistre). */
+    /* Remet les champs éditables sur les valeurs du profil (ne sauvegarde pas : relire puis Enregistrer). */
     const reset = el.querySelector('.adv-reset');
     if (reset) reset.onclick = () => {
-      el.querySelector('.adv-freq').value = pd.freq_khz || '';
-      el.querySelector('.adv-te').value = pd.te_us || 400;
-      el.querySelector('.adv-rpt').value = pd.rpt ? '2' : '1';
-      el.querySelector('.adv-rmt').value = pd.rmt ? '2' : '1';
+      fields.forEach(f => {
+        const e = el.querySelector(`.advf[data-name="${f.name}"]`); if (!e) return;
+        if (f.widget === 'number') e.value = f.def || '';
+        else if (f.widget === 'onoff') e.value = f.def ? '2' : '1';
+        else if (f.widget === 'choice') e.value = f.def;
+      });
       stat.hidden = false; stat.classList.remove('bad');
       stat.querySelector('b').textContent = '↺ Valeurs du profil remises. Clique Enregistrer pour appliquer.';
     };
@@ -2038,7 +2075,7 @@ function mountEnrolAdvanced() {
   const host = $('#pfx-advanced'); if (!host) return;
   host.innerHTML = ''; ENROL_ADV = null;
   if (!ENROL_PROFILE) return;
-  const comp = txAdvanced({ values: {}, profile: profileDefaultsOf(ENROL_PROFILE), marque: ENROL_PROFILE.marque });
+  const comp = txAdvanced({ values: {}, profile: ENROL_PROFILE, marque: ENROL_PROFILE.marque });
   host.appendChild(comp.el);
   ENROL_ADV = comp.read;
 }
@@ -2069,13 +2106,13 @@ function renderLeafChoices(host, feuilles, headerHtml) {
    vit ICI, pas dans l'onglet Volets (qui ne sert qu'au pilotage). On y règle l'émission PAR APPAREIL
    et on supprime. Le RENOMMAGE n'est pas offert : l'id d'un volet sert de clé (zones, centrales, entité
    Home Assistant) ; le changer sans endpoint dédié orphelinerait ces références. À ajouter séparément. ── */
-function deviceKind(v) {   // tx = porte des réglages d'émission KeeLoq (porteuse/TE/rpt/rmt)
+function deviceKind(v) {   // tx = porte des réglages d'émission (le panneau avancé générique s'affiche)
   if (v.central) return { ico: '🎛', lbl: 'centrale', tx: false };
   if (v.zone) return { ico: '🔗', lbl: 'zone', tx: false };
-  if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: false };   // CAME : chemin OOK, insensible à rpt/rmt
+  if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: false };   // CAME : params de CAPTURE, pas d'émission
   if (v.virt) return v.proto === 'profalux'
     ? { ico: '🪟', lbl: 'virtuelle Profalux', tx: true }
-    : { ico: '🪟', lbl: 'Somfy RTS', tx: false };                           // 433,42 fixe, chemin somfy_tx séparé
+    : { ico: '🪟', lbl: 'Somfy RTS', tx: true };                            // freq fixe (lecture seule) + format 56/80
   return { ico: '🪟', lbl: 'télécommande clonée', tx: true };               // capturée (KeeLoq, émis par emit_press)
 }
 
@@ -2113,10 +2150,10 @@ async function openDeviceEdit(v) {
   let curProf = profileForDevice(v);          // profil courant (mutable si l'utilisateur en change)
   const origMarque = (curProf && curProf.marque) || v.marque || '';
   const mec = v.rejeu ? 'rejeu' : v.virt ? 'enrolement' : 'cloner';
-  /* Profils INTERCHANGEABLES : meme mecanisme (on ne transforme pas un enrole en rejeu) et meme type
-     d'emission KeeLoq (porte un tx.te_us). Ex. un enrole Profalux -> Eveno/NeoSol : seule la porteuse
-     et les defauts changent, l'identite et le compteur restent. */
-  const compat = ((PROFILES && PROFILES.profils) || []).filter(p => p.mecanisme === mec && p.tx && p.tx.te_us);
+  /* Profils INTERCHANGEABLES : meme mecanisme ET meme bande (on ne transforme pas un enrole 868 en 433,
+     ni un enrole en rejeu). Ex. enrole Profalux 868 -> Eveno/NeoSol : seule la porteuse et les defauts
+     changent, l'identite et le compteur restent. Somfy 433 -> seulement Somfy. */
+  const compat = ((PROFILES && PROFILES.profils) || []).filter(p => p.mecanisme === mec && curProf && p.band === curProf.band);
   const profSelect = (k.tx && compat.length > 1)
     ? `<div class="field"><label>Profil (marque)</label><select class="dev-prof">${compat.map(p =>
         `<option value="${esc(p.marque)}"${curProf && p.marque === curProf.marque ? ' selected' : ''}>${esc(p.nom || p.marque)}</option>`).join('')}</select>
@@ -2137,15 +2174,15 @@ async function openDeviceEdit(v) {
      des défauts du nouveau profil (on n'héberge plus l'ancienne surcharge) ; sinon on montre la fiche. */
   const mountAdv = () => {
     adv.innerHTML = '';
-    if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission avancés pour ce type (${esc(k.lbl)}) : il n'utilise pas la porteuse/TE/rpt/rmt KeeLoq.</p>`; return; }
+    if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`; return; }
     const switched = curProf && curProf.marque !== origMarque;
     const comp = txAdvanced({
-      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0 },
-      profile: curProf ? profileDefaultsOf(curProf) : {}, marque: (curProf && curProf.marque) || origMarque,
+      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0 },
+      profile: curProf, marque: (curProf && curProf.marque) || origMarque,
       open: true, saveLabel: 'Enregistrer les réglages',
-      onSave: async (vals) => {
+      onSave: async (vals) => {   /* vals = champs du schéma (générique) : on les envoie tels quels */
         const resp = await api('/api/volet/txparams', { method: 'POST',
-          body: JSON.stringify({ id: v.id, marque: (curProf && curProf.marque) || origMarque, freq_khz: vals.freq_khz, te_us: vals.te_us, tx_rpt: vals.tx_rpt, tx_rmt: vals.tx_rmt }) }).catch(() => null);
+          body: JSON.stringify({ id: v.id, marque: (curProf && curProf.marque) || origMarque, ...vals }) }).catch(() => null);
         if (resp && resp.ok) { await loadStatus(); renderDevices(); }
         return !!(resp && resp.ok);
       },

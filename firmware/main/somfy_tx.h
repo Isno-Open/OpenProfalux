@@ -28,15 +28,15 @@
 somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn);
 
 /* Emet la rafale Somfy RTS de `frame` (7 octets DEJA empaquetes, sortie du codec) :
- * reveil, 1 trame + `repeats` repetitions separees par le silence inter-trame, a
- * 433,42 MHz, puis retour a la porteuse Profalux. `repeats` est borne a
- * SOMFY_RTS_TX_REPEATS_MAX. Rend 0 si emis, -1 sinon. */
-int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats);
+ * reveil, 1 trame + `repeats` repetitions separees par le silence inter-trame, puis retour
+ * a la porteuse Profalux. `freq_khz` = porteuse PAR APPAREIL (0 = defaut 433,42 ; ajustement
+ * par installation, comme KeeLoq). `repeats` borne a SOMFY_RTS_TX_REPEATS_MAX. 0 si emis, -1 sinon. */
+int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats, uint32_t freq_khz);
 
 /* Emet en FORMAT 80 BITS (RTS "80-S") : reveil, 1 trame + `repeats` repetitions, chaque
  * trame = `base56` (7 octets empaquetes) + 3 octets d'extension recalcules selon `cmd` et
  * l'index de repetition (somfy_rts_frame80). C'est ce format qui declenche la course complete
- * sur les moteurs concernes (#73). Rend 0 si emis, -1 sinon. */
-int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd, int repeats);
+ * sur les moteurs concernes (#73). `freq_khz` = porteuse par appareil (0 = defaut). 0 si emis, -1 sinon. */
+int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd, int repeats, uint32_t freq_khz);
 
 #endif

@@ -88,6 +88,7 @@ static cJSON *volet_to_json(const volet_t *v) {
     if (v->te_us)    cJSON_AddNumberToObject(o, "te_us", v->te_us);
     if (v->tx_rpt)   cJSON_AddNumberToObject(o, "tx_rpt", v->tx_rpt);
     if (v->tx_rmt)   cJSON_AddNumberToObject(o, "tx_rmt", v->tx_rmt);
+    if (v->frame_bits) cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
     if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
     return o;
 }
@@ -206,6 +207,7 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     cJSON *tu = cJSON_GetObjectItem(o, "te_us");    if (tu) v->te_us    = (uint16_t)cJSON_GetNumberValue(tu);
     cJSON *xp = cJSON_GetObjectItem(o, "tx_rpt");   if (xp) v->tx_rpt   = (uint8_t)cJSON_GetNumberValue(xp);
     cJSON *xm = cJSON_GetObjectItem(o, "tx_rmt");   if (xm) v->tx_rmt   = (uint8_t)cJSON_GetNumberValue(xm);
+    cJSON *fb = cJSON_GetObjectItem(o, "frame_bits"); if (fb) v->frame_bits = (uint8_t)cJSON_GetNumberValue(fb);
     strlcpy(v->marque, cJSON_GetStringValue(cJSON_GetObjectItem(o, "marque")) ?: "", SH_ID_LEN);
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
