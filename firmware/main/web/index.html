@@ -81,9 +81,10 @@
     <section class="panel" data-p="remotes">
       <nav class="subtabs">
         <button class="subtab active" data-s="add">Ajouter un appareil</button>
+        <button class="subtab" data-s="devices">Mes appareils</button>
         <button class="subtab" data-s="central">Centrale</button>
         <button class="subtab" data-s="calib">Calibration</button>
-        <button class="subtab" data-s="list">Liste</button>
+        <button class="subtab" data-s="list">Captées</button>
       </nav>
 
       <div class="subpanel active" data-sp="add">
@@ -91,6 +92,18 @@
           <h2>Ajouter un appareil</h2>
           <p class="sub">Choisis le type d'appareil, puis la marque, puis la méthode. On te guide étape par étape.</p>
           <div id="add-pyramid"></div>
+        </div>
+      </div>
+
+      <!-- Mes appareils : liste des appareils enrôlés/clonés, chacun ouvre son écran Modifier
+           (nom, réglages d'émission par appareil, suppression). Séparé du pilotage (onglet Volets). -->
+      <div class="subpanel" data-sp="devices">
+        <div class="card">
+          <h2>Mes appareils</h2>
+          <p class="sub">Tes volets et télécommandes. Clique <b>Modifier</b> pour régler l'émission (fréquence, TE, bit de répétition, RMT) propre à un appareil, ou le supprimer.</p>
+          <div id="devices-list"></div>
+          <p class="hint" id="devices-empty" hidden>Aucun appareil. Va dans <b>Ajouter un appareil</b>.</p>
+          <div id="device-edit"></div>
         </div>
       </div>
 
@@ -225,6 +238,7 @@
           <h2>Créer une télécommande virtuelle</h2>
           <p class="hint radio-reminder"></p>
           <div class="field"><label>Modèle de moteur</label><select id="pfx-model"></select></div>
+          <div id="pfx-advanced"></div>
           <div class="row"><button id="pfx-capture" class="btn primary">📡 Appuie sur ta télécommande d'origine</button></div>
           <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
           <div id="pfx-renew-row" hidden>
@@ -370,13 +384,7 @@
             <p class="hint" style="margin-top:8px"><button id="rxcal-btn" class="btn" type="button">Calibrer la réception (auto)</button>
               <span id="rxcal-status" style="margin-left:8px"></span></p>
             <p class="hint">Clique, puis <b>appuie en continu / répète les appuis</b> sur ta télécommande à moins d'1 m pendant tout le test (~25 s) : le boîtier teste chaque gain 6 s et verrouille le bon dès qu'il capte une trame valide. Presse à chaque changement de valeur affiché.</p></div>
-          <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio des commandes</label>
-            <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="400">
-            <p class="hint"><b>400 µs par défaut</b>, la valeur nominale des télécommandes KeeLoq (HCS300 : 260 à 660 µs selon l'oscillateur). Les moteurs mesurent le TE de chaque trame et tolèrent toute cette plage : ne change cette valeur que si un moteur ignore les commandes du boîtier.</p></div>
-          <label class="switch"><input type="checkbox" id="sys-txrpt"><span class="track"></span>
-            <span class="lbl">Émettre comme la télécommande (bit de répétition)<small>Première trame d'un appui marquée « initiale », les suivantes « répétition », 18 ms entre trames, comme une télécommande KeeLoq. Sans cette option, le boîtier envoie des trames identiques. Les moteurs testés acceptent les deux : n'activer que si un moteur ignore les commandes du boîtier.</small></span></label>
-          <label class="switch"><input type="checkbox" id="sys-txrmt"><span class="track"></span>
-            <span class="lbl">Émission matérielle (RMT)<small>Le minutage de chaque trame est tenu par le périphérique RMT, et non plus par une boucle logicielle que le WiFi peut interrompre. À essayer si des commandes sont parfois ignorées. En cas d'échec, le boîtier repasse automatiquement en émission logicielle.</small></span></label>
+          <p class="hint" style="margin-top:12px">Le <b>TE d'émission</b>, le <b>bit de répétition</b> et l'<b>émission matérielle (RMT)</b> ne sont plus des réglages globaux : ils vivent désormais <b>par appareil</b>. On les règle dans le <b>panneau avancé</b>, à l'ajout d'un appareil et dans <b>Appareils → Mes appareils → Modifier</b>. Deux marques sur la même radio (Profalux, Eveno) gardent ainsi chacune ses réglages. Défaut KeeLoq : TE 400 µs (plage tolérée 260..660).</p>
           <div id="sys-radios-extra"></div>
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>

@@ -353,10 +353,17 @@ int pfx_enrol_frame(uint32_t serial, uint8_t button, uint16_t counter, char out[
     return 0;
 }
 
+/* Params d'emission de la SESSION d'enrolement (issue #111) : poses depuis le profil choisi dans la
+ * pyramide (fréquence de la marque, TE, bit de repetition, RMT) avant la capture/l'apprentissage, pour
+ * que le moteur apprenne et obeisse sur SA porteuse (Eveno/NeoSol 868330, Profalux 868425). La fiche
+ * du volet enregistre ensuite ces memes valeurs (web_ui), pour les commandes ulterieures. */
+static tx_params_t s_tx = { 0, 0, -1, -1 };
+void pfx_enrol_set_tx_params(const tx_params_t *p) { s_tx = p ? *p : (tx_params_t){ 0, 0, -1, -1 }; }
+
 static int emit(uint8_t button, uint16_t counter) {
     if (!s_id.active) return -1;
     char bits[68]; frame_with_key(s_id.serial, s_id.key, button, counter, bits);
-    radio_tx(bits, PFX_BURST);           /* rafale, compteur figé sur toute la rafale */
+    radio_tx_device(bits, PFX_BURST, &s_tx);   /* rafale, compteur figé sur toute la rafale */
     ESP_LOGW(TAG, "TX 0x067 serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)s_id.serial, button, counter, (unsigned)cc1101_get_tx_te());
     return 0;
@@ -378,7 +385,7 @@ int pfx_enrol_emit_learn(void) {
     char bits[68];
     frame_with_key(s_id.serial, s_id.key, BTN_LEARN, cnt, bits);
     for (int i = 0; i < PFX_LEARN_ROUNDS; i++) {
-        radio_tx(bits, PFX_BURST);
+        radio_tx_device(bits, PFX_BURST, &s_tx);
         vTaskDelay(pdMS_TO_TICKS(15));
     }
     ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=%u (~5s, %d salves) te=%u",

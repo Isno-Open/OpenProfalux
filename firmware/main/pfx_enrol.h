@@ -11,6 +11,7 @@
  */
 #pragma once
 #include "cJSON.h"
+#include "radio.h"   /* tx_params_t : params d'emission par appareil (issue #111) */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -82,5 +83,8 @@ void pfx_enrol_confirm(void);
 
 /* Émet la trame d'apprentissage (bouton LEARN, compteur courant de l'identité) en rafale. 0 si OK. */
 int  pfx_enrol_emit_learn(void);
+/* Pose les params d'emission de la session d'enrolement (porteuse de la marque, TE, bit de repetition,
+ * RMT), issus du profil choisi. p=NULL remet les defauts. A appeler avant capture/apprentissage. */
+void pfx_enrol_set_tx_params(const tx_params_t *p);
 /* Émet une commande après enrôlement : "up" | "stop" | "down" (compteur roulant). 0 si OK. */
 int  pfx_enrol_cmd(const char *cmd);

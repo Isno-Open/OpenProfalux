@@ -81,6 +81,14 @@ static cJSON *volet_to_json(const volet_t *v) {
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
     if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
+    /* Parametres d'emission par appareil (etage 2, issue #111). Omis quand ils valent le defaut
+     * (0 = heriter), pour garder les sauvegardes existantes a l'identique et rester compatible dans
+     * les deux sens : une version anterieure ignore ces cles, celle-ci les retrouve a 0 si absentes. */
+    if (v->freq_khz) cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
+    if (v->te_us)    cJSON_AddNumberToObject(o, "te_us", v->te_us);
+    if (v->tx_rpt)   cJSON_AddNumberToObject(o, "tx_rpt", v->tx_rpt);
+    if (v->tx_rmt)   cJSON_AddNumberToObject(o, "tx_rmt", v->tx_rmt);
+    if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
     return o;
 }
 /* En-tete : tout ce qui n'est pas un volet. */
@@ -192,6 +200,13 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
                  v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
     const char *rj = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu"));
     v->rejeu = (rj && *rj) ? strdup(rj) : NULL;   /* rejeu brut par commande ; libere par cfg_volet_release */
+    /* Parametres d'emission par appareil (etage 2, issue #111). memset() a deja mis 0 = heriter : on
+     * ne surcharge que si la cle est presente. Compatible avec une config anterieure (cles absentes). */
+    cJSON *fk = cJSON_GetObjectItem(o, "freq_khz"); if (fk) v->freq_khz = (uint32_t)cJSON_GetNumberValue(fk);
+    cJSON *tu = cJSON_GetObjectItem(o, "te_us");    if (tu) v->te_us    = (uint16_t)cJSON_GetNumberValue(tu);
+    cJSON *xp = cJSON_GetObjectItem(o, "tx_rpt");   if (xp) v->tx_rpt   = (uint8_t)cJSON_GetNumberValue(xp);
+    cJSON *xm = cJSON_GetObjectItem(o, "tx_rmt");   if (xm) v->tx_rmt   = (uint8_t)cJSON_GetNumberValue(xm);
+    strlcpy(v->marque, cJSON_GetStringValue(cJSON_GetObjectItem(o, "marque")) ?: "", SH_ID_LEN);
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);

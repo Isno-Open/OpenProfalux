@@ -22,6 +22,15 @@ typedef void (*radio_frame_cb_t)(const char *bits, uint32_t serial, uint8_t butt
 void radio_init(void);                 /* cree le mutex (idempotent) */
 void radio_start(radio_frame_cb_t cb); /* demarre la tache RX (en veille tant que listening OFF) */
 void radio_tx(const char *bits, int repeats);   /* rejoue une trame `repeats` fois en UNE rafale TX (mutex-garde) */
+/* Parametres d'emission d'UN appareil (etage 2 de la pyramide, issue #111) : la porteuse, le TE, et
+ * les deux options bit de repetition / RMT, PAR APPAREIL et non plus en global. Deux marques sur la
+ * meme radio (Profalux 868425, Eveno/NeoSol 868330) coexistent ainsi sans qu'un reglage en casse une
+ * autre. Sentinelles : freq_khz / te_us a 0 = garder le defaut courant ; rpt / rmt a -1 = idem, 0/1 =
+ * forcer. */
+typedef struct { uint32_t freq_khz; uint32_t te_us; int8_t rpt; int8_t rmt; } tx_params_t;
+/* Comme radio_tx, mais pose les params de CET appareil juste avant la rafale et les RESTAURE apres
+ * (transactionnel, comme radio_tx_ook_pulses pour la freq). p=NULL -> comportement de radio_tx. */
+void radio_tx_device(const char *bits, int repeats, const tx_params_t *p);
 /* Emet un train d'impulsions OOK sur une AUTRE porteuse (p.ex. Somfy RTS a 433,42 MHz),
  * puis RETABLIT la porteuse Profalux, meme si l'emission echoue. Sous mutex + ecoute en
  * pause, comme radio_tx : l'unique CC1101 est a nous le temps de la rafale. 0=emis, -1=non. */

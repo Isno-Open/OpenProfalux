@@ -3,6 +3,7 @@
  */
 #include "web_ui.h"
 #include "shutters.h"
+#include "cfg_model.h"   /* tx_override_t (TXOVR_*) : tri-etat des options d'emission par appareil */
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "enrol_gate.h"
@@ -338,6 +339,19 @@ static esp_err_t h_volet_delete(httpd_req_t *r) {
     return ESP_OK;
 }
 
+/* ── /api/volet/rename : {"id":"ancien","name":"nouveau"} -> change l'id + met a jour les references.
+ * -4 = nom deja pris (on le signale pour un message clair cote UI). ── */
+static esp_err_t h_volet_rename(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    int rc = shutters_rename_volet(jstr(j, "id"), jstr(j, "name"));
+    cJSON_Delete(j);
+    if (rc == -4) { httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"exists\"}"); return ESP_OK; }
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+
 /* ── /api/learn/start + /poll ── */
 static esp_err_t h_learn_start(httpd_req_t *r) {
     char *body = read_body(r); if (body) free(body);   /* le corps {action} n'est plus utilise cote firmware */
@@ -414,6 +428,28 @@ static esp_err_t h_orientation(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *ori = cJSON_GetObjectItem(j, "orientation");
     int rc = shutters_set_orientation(jstr(j, "id"), ori ? (int)cJSON_GetNumberValue(ori) : -1);
+    cJSON_Delete(j);
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+/* /api/volet/txparams : edition PAR APPAREIL de la porteuse, du TE, du bit de repetition et du RMT
+ * (etage 2, issue #111 ; panneau avance). freq_khz/te_us a 0 = heriter du defaut ; tx_rpt/tx_rmt =
+ * tri-etat (0 heriter, 1 off, 2 on). Chaque appareil garde SES valeurs : en regler un ne touche aucun
+ * autre, meme sur la meme radio (c'est le correctif du bug "ajouter de l'Eveno casse le Profalux"). */
+static esp_err_t h_volet_txparams(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz");
+    cJSON *tu = cJSON_GetObjectItem(j, "te_us");
+    cJSON *xp = cJSON_GetObjectItem(j, "tx_rpt");
+    cJSON *xm = cJSON_GetObjectItem(j, "tx_rmt");
+    int rc = shutters_set_tx_params(jstr(j, "id"),
+        cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0,
+        cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0,
+        cJSON_IsNumber(xp) ? (int)xp->valuedouble : -1,
+        cJSON_IsNumber(xm) ? (int)xm->valuedouble : -1,
+        jstr(j, "marque"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -545,11 +581,8 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         size_t k = strlen(out);
         if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
     }
-    {   /* bit de repetition et emission RMT (options) : ajoutes en fin d'objet */
-        size_t k = strlen(out);
-        if (k > 0 && k + 36 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"tx_repeat_bit\":%d,\"tx_rmt\":%d}",
-                                                     cc1101_get_tx_repeat_bit() ? 1 : 0, cc1101_get_tx_rmt() ? 1 : 0);
-    }
+    /* Bit de repetition et RMT ne sont plus des reglages GLOBAUX (issue #111) : ils vivent PAR
+     * APPAREIL (fiche du volet, panneau avance). Plus exposes ici. */
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -655,18 +688,11 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             nvs_set_u8(h, "upd_auto", on);
             shutters_set_update_auto(on);   /* prise en compte au prochain cycle */
         }
-        cJSON *rpj = cJSON_GetObjectItem(j, "tx_repeat_bit");
-        if (cJSON_IsBool(rpj) || cJSON_IsNumber(rpj)) {
-            uint8_t on = cJSON_IsTrue(rpj) || (cJSON_IsNumber(rpj) && rpj->valuedouble != 0);
-            nvs_set_u8(h, "tx_rpt", on);
-            cc1101_set_tx_repeat_bit(on);   /* prise en compte a la prochaine emission */
-        }
-        cJSON *rmj = cJSON_GetObjectItem(j, "tx_rmt");
-        if (cJSON_IsBool(rmj) || cJSON_IsNumber(rmj)) {
-            uint8_t on = cJSON_IsTrue(rmj) || (cJSON_IsNumber(rmj) && rmj->valuedouble != 0);
-            nvs_set_u8(h, "tx_rmt", on);
-            cc1101_set_tx_rmt(on);   /* prise en compte a la prochaine emission */
-        }
+        /* Bit de repetition et RMT : retires d'ici (issue #111). Ces options vivent PAR APPAREIL
+         * (fiche du volet), posees a l'enrolement depuis le profil et editables au panneau avance.
+         * L'ancien global NVS tx_rpt/tx_rmt n'est plus ecrit ici ; il reste lu une fois par la
+         * migration (shutters.c migrate_tx_overrides) pour que les appareils deja enroles gardent
+         * leur comportement, puis il n'a plus d'effet. */
         cJSON *rgj = cJSON_GetObjectItem(j, "rx_gain");
         if (cJSON_IsNumber(rgj)) {
             uint8_t rg = (uint8_t)rgj->valuedouble;   /* AGCCTRL2 : plafond de gain RX */
@@ -1254,12 +1280,34 @@ static void pfx_capture_task(void *arg) {
     s_pcap_done = true; s_pcap_active = false;
     vTaskDelete(NULL);
 }
+/* Params d'emission resolus depuis le PROFIL choisi dans la pyramide (porteuse de la marque, TE, bit
+ * de repetition, RMT), recus a la capture d'enrolement, poses pour l'emission d'apprentissage, puis
+ * graves dans la fiche du volet au save (issue #111). Tri-etat tx_override_t pour rpt/rmt. */
+static uint32_t s_enrol_freq = 0, s_enrol_te = 0;
+static uint8_t  s_enrol_rpt = TXOVR_INHERIT, s_enrol_rmt = TXOVR_INHERIT;
+static char     s_enrol_marque[SH_ID_LEN] = "";
+/* cJSON bool/number -> tri-etat tx_override_t (absent = heriter). */
+static uint8_t txovr_of(cJSON *j, const char *key) {
+    cJSON *x = cJSON_GetObjectItem(j, key);
+    if (!cJSON_IsBool(x) && !cJSON_IsNumber(x)) return TXOVR_INHERIT;
+    return (cJSON_IsTrue(x) || (cJSON_IsNumber(x) && x->valuedouble != 0)) ? TXOVR_ON : TXOVR_OFF;
+}
 static esp_err_t h_pfx_capture(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *mo = cJSON_GetObjectItem(j, "model");
     s_pcap_model = cJSON_IsNumber(mo) ? (int)mo->valuedouble : -1;
+    /* Params du profil (facultatifs) : memorises pour la fiche, et poses pour l'apprentissage. */
+    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz"); s_enrol_freq = cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0;
+    cJSON *tu = cJSON_GetObjectItem(j, "te_us");     s_enrol_te   = cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0;
+    s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
+    s_enrol_rmt = txovr_of(j, "tx_rmt");
+    strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
+    tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
+                       .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
+                       .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
+    pfx_enrol_set_tx_params(&tp);
     cJSON_Delete(j);
     ESP_LOGW(TAG, "PFX CAPTURE: requete recue (model=%d, active=%d)", s_pcap_model, s_pcap_active);
     if (!s_pcap_active) {
@@ -1532,7 +1580,15 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     int rc = -1;
     if (active && name && *name)
         rc = shutters_create_virtual(name, id.serial, id.counter);
-    if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate); }   /* moteur valide ; l'identite vit desormais dans le volet */
+    if (rc == 0) {
+        /* Grave dans la fiche les params d'emission resolus du profil (issue #111) : la porteuse de la
+         * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet
+         * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
+         * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
+        shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt,
+                               s_enrol_marque[0] ? s_enrol_marque : NULL);
+        pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
+    }
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -1768,6 +1824,7 @@ void web_ui_start(void) {
     reg(s, "/api/status",  HTTP_GET,  h_status);
     reg(s, "/api/shutter", HTTP_POST, h_shutter);
     reg(s, "/api/volet/delete", HTTP_POST, h_volet_delete);
+    reg(s, "/api/volet/rename", HTTP_POST, h_volet_rename);
     reg(s, "/api/learn/start",  HTTP_POST, h_learn_start);
     reg(s, "/api/learn/poll",   HTTP_GET,  h_learn_poll);
     reg(s, "/api/learn/assign", HTTP_POST, h_learn_assign);
@@ -1776,6 +1833,7 @@ void web_ui_start(void) {
     reg(s, "/api/rf/replay", HTTP_POST, h_rf_replay);
     reg(s, "/api/calibrate", HTTP_POST, h_calibrate);
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
+    reg(s, "/api/volet/txparams", HTTP_POST, h_volet_txparams);
     reg(s, "/api/volet/followers", HTTP_POST, h_followers);
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);

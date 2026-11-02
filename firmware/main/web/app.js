@@ -88,6 +88,7 @@ function applyRoute() {
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
   if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
+  if (main === 'remotes' && sub === 'devices' && typeof renderDevices === 'function') renderDevices();
   if (sub === 'rejeu' && typeof loadRejeuPanel === 'function') loadRejeuPanel();
   if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
@@ -327,6 +328,8 @@ function renderVolets(list, rf) {
     };
     el.querySelectorAll('[data-mv]').forEach(b =>
       b.onclick = () => moveVolet(v.id, b.dataset.mv === 'up' ? -1 : 1));
+    /* Les réglages d'émission PAR APPAREIL (porteuse/TE/rpt/rmt) ne sont PLUS ici : l'onglet Volets ne
+       sert qu'au pilotage. Ils vivent dans Appareils → Mes appareils → Modifier (écran dédié). */
     /* Glisser-deposer (souris/trackpad). Les fleches restent disponibles : le
        drag HTML5 ne fonctionne pas au doigt sur mobile. */
     if (reorderMode) {
@@ -810,6 +813,7 @@ let pfxTestLocked = true;   // dpad de test (▲ ■ ▼) verrouille tant que le
 async function loadPfx() {
   const d = await api('/api/pfx').catch(() => null);
   if (!d) return;
+  mountEnrolAdvanced();   /* panneau avancé pré-rempli depuis le profil choisi (issue #111) */
   pfxModels = d.models || [];
   const sel = $('#pfx-model');
   if (sel && !sel.dataset.filled && pfxModels.length) {
@@ -861,7 +865,11 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   b.disabled = true; setRadioBusy(true);
   if ($('#pfx-renew-row')) $('#pfx-renew-row').hidden = true;
-  const r = await api('/api/pfx/capture', { method: 'POST', body: JSON.stringify({ model }) }).catch(() => null);
+  /* On envoie les params du profil (porteuse de la marque, TE, bit de répétition, RMT) : le boîtier
+     émet l'apprentissage sur SA fréquence (Eveno/NeoSol 868330, Profalux 868425) et les grave dans la
+     fiche au save. Le panneau avancé permet de surcharger avant la capture. */
+  const advBody = ENROL_ADV ? advToCaptureBody(ENROL_ADV()) : {};
+  const r = await api('/api/pfx/capture', { method: 'POST', body: JSON.stringify({ model, ...advBody }) }).catch(() => null);
   if (!r || !r.ok) { pfxCapStatus('Échec du démarrage de la capture', 'bad'); b.disabled = false; setRadioBusy(false); return; }
   let n = 15, d = null;
   const timer = setInterval(() => { n = Math.max(0, n - 1); pfxCapStatus(`📡 Appuie MAINTENANT sur ta télécommande d'origine… ${n} s`); }, 1000);
@@ -1032,10 +1040,9 @@ async function loadConfig() {
   if (upi) upi.placeholder = c.ui_auth ? 'nouveau mot de passe (inchangé si vide)' : 'mot de passe à définir';
   if (upc) upc.hidden = !c.ui_auth;   /* desactivation par un bouton EXPLICITE, pas par un champ vide */
   if ($('#sys-debug')) $('#sys-debug').checked = !!c.debug;
-  if ($('#sys-txrpt')) $('#sys-txrpt').checked = !!c.tx_repeat_bit;
-  if ($('#sys-txrmt')) $('#sys-txrmt').checked = !!c.tx_rmt;
+  /* Bit de répétition et RMT : plus de bascule globale (issue #111), ils vivent par appareil. */
   if ($('#sys-rxgain')) $('#sys-rxgain').value = c.rx_gain || 39;
-  if ($('#sys-txte')) $('#sys-txte').value = c.tx_te || 400;
+  /* TE d'émission : plus de réglage global (issue #111), il vit par appareil (panneau avancé). */
   const rp = $('#sys-radioprof'), fq = $('#sys-freq');
   if (rp && fq) {
     rp.value = c.radio_profile || 'profalux';
@@ -1103,9 +1110,8 @@ $('#mqtt-save').onclick = async () => {
 };
 if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
-  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), tx_te: Number($('#sys-txte').value) || 400, reboot: $('#sys-reboot').checked };
-  if ($('#sys-txrpt')) b.tx_repeat_bit = $('#sys-txrpt').checked;
-  if ($('#sys-txrmt')) b.tx_rmt = $('#sys-txrmt').checked;
+  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), reboot: $('#sys-reboot').checked };
+  /* TE d'émission, bit de répétition et RMT retirés d'ici : réglés par appareil (panneau avancé), issue #111. */
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
      desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche
      jamais le mot de passe) -> la desactivation passe par le bouton dedie ci-dessous. */
@@ -1237,9 +1243,9 @@ function radioCard(rd) {
     + `<div class="field" style="margin-top:12px"><label>Gain RX (AGCCTRL2)</label>`
     + `<select class="rr-gain">${gainOpts}</select>`
     + `<p class="hint" style="margin-top:8px"><button class="btn rr-cal" type="button">Calibrer la réception (auto)</button> <span class="rr-cal-status" style="margin-left:8px"></span></p></div>`
-    + `<div class="field" style="margin-top:12px"><label>TE d'émission (µs)</label><input class="rr-te" type="number" min="200" max="900" step="1"></div>`
-    + `<label class="switch"><input type="checkbox" class="rr-rpt"><span class="track"></span><span class="lbl">Émettre comme la télécommande (bit de répétition)</span></label>`
-    + `<label class="switch"><input type="checkbox" class="rr-rmt"><span class="track"></span><span class="lbl">Émission matérielle (RMT)</span></label>`
+    /* TE / bit de répétition / RMT retirés des cartes radio : ce sont des paramètres d'ÉMISSION,
+       réglés par appareil (panneau avancé), issue #111. La carte radio ne garde que le radio-level :
+       profil/fréquence/calage/gain (réception). */
     + `<div class="row end"><button class="btn primary rr-save" type="button">Enregistrer cette radio</button></div>`;
   const q = s => card.querySelector(s);
   const fq = q('.rr-freq');
@@ -1248,9 +1254,6 @@ function radioCard(rd) {
   fq.hidden = q('.rr-prof').value !== 'custom';
   q('.rr-freq-hint').textContent = `Fréquence active : ${(rd.freq_khz / 1000).toFixed(3)} MHz (saisie en kHz, entre ${lo} et ${hi})`;
   q('.rr-gain').value = String(rd.rx_gain || 39);
-  q('.rr-te').value = rd.tx_te || 400;
-  q('.rr-rpt').checked = !!rd.tx_repeat_bit;
-  q('.rr-rmt').checked = !!rd.tx_rmt;
   q('.rr-prof').onchange = () => { fq.hidden = q('.rr-prof').value !== 'custom'; };
   let sweepKhz = 0;
   q('.rr-sweep').onclick = async () => {
@@ -1292,7 +1295,7 @@ function radioCard(rd) {
   };
   q('.rr-save').onclick = async () => {
     const prof = q('.rr-prof').value;
-    const body = { radio: idx, radio_profile: prof, rx_gain: Number(q('.rr-gain').value), tx_te: Number(q('.rr-te').value) || 400, tx_repeat_bit: q('.rr-rpt').checked, tx_rmt: q('.rr-rmt').checked };
+    const body = { radio: idx, radio_profile: prof, rx_gain: Number(q('.rr-gain').value) };
     if (prof === 'custom') {
       const f = Number(fq.value);
       if (!(f >= lo && f <= hi)) { toast(`Fréquence invalide : entre ${lo} et ${hi} kHz`); return; }
@@ -1725,6 +1728,7 @@ async function loadStatus() {
   renderCentralMembers();
   renderCentralsList();
   renderRemotes(s, rf);
+  if ((location.hash || '').includes('/devices')) renderDevices();   /* refresh de la liste ; l'écran Modifier ouvert n'est pas touché */
   fillVoletPickers(s.volets || []);
   if ((location.hash || '').includes('/calib') && !calibLive) fillCalib();   /* affiche les temps enregistres */
   if (!learning) { renderVoletPicker(); renderLearnSlots(); }
@@ -1937,8 +1941,116 @@ function routeLeaf(prof) {
     location.hash = `remotes/rejeu/${PROFILES.profils.indexOf(prof)}`;
     return;
   }
+  /* Enrôlement : on PORTE le profil choisi jusqu'au panneau d'enrôlement (issue #111). Sa fréquence,
+     son TE, son bit de répétition et son RMT pré-remplissent le panneau avancé et seront gravés dans la
+     fiche de l'appareil. Sans ça, Profalux/Eveno/NeoSol atterrissaient sur le même panneau générique et
+     la marque était perdue (d'où l'Eveno qui émettait à la fréquence du Profalux). */
+  if (prof.flow === 'enrol-pfx') ENROL_PROFILE = prof;
   const panel = ADD_FLOW_PANEL[prof.flow];
   if (panel) location.hash = `remotes/${panel}`;
+}
+
+/* ── Panneau avancé des paramètres d'émission PAR APPAREIL (issue #111) : porteuse, TE, bit de
+   répétition, RMT. UN SEUL composant, utilisé à l'AJOUT (enrôlement, pré-rempli depuis le profil) ET à
+   l'ÉDITION d'un appareil (pré-rempli depuis sa fiche). Seul le CONTENU varie (valeurs, libellé, ce que
+   fait « Enregistrer ») ; la forme est identique partout. ── */
+let ENROL_PROFILE = null;   // profil choisi dans la pyramide pour un enrôlement
+let ENROL_ADV = null;       // lecture du panneau avancé courant d'enrôlement (fonction read())
+
+/* Défauts d'émission DU PROFIL (source unique profiles.json) : fréquence porteuse + tx{te_us,
+   repeat_bit, rmt}. C'est ce que le panneau avancé affiche et pré-remplit. */
+function profileDefaultsOf(prof) {
+  const tx = (prof && prof.tx) || {};
+  return { freq_khz: (prof && prof.freq_khz) || 0, te_us: tx.te_us || 0, rpt: !!tx.repeat_bit, rmt: !!tx.rmt };
+}
+
+/* Profil d'un appareil, pour résoudre ses défauts à l'édition. Le navigateur lit profiles.json (le
+   firmware ne peut pas). On matche sur la marque gravée dans la fiche, sinon on la déduit (un cloné
+   868 sans marque est du Profalux ; c'est la seule marque KeeLoq historique sur 868). */
+function profileForDevice(v) {
+  const profs = (PROFILES && PROFILES.profils) || [];
+  const marque = v.marque || (v.proto === 'profalux' || (!v.virt && !v.rejeu) ? 'Profalux' : null);
+  if (!marque) return null;
+  const mec = v.rejeu ? 'rejeu' : v.virt ? 'enrolement' : 'cloner';
+  return profs.find(p => p.marque === marque && p.mecanisme === mec) || profs.find(p => p.marque === marque) || null;
+}
+
+/* Construit le composant. opts = { values, profile, marque, saveLabel, onSave(values)->bool, open }.
+   `values` = surcharges de la fiche de l'appareil ; `profile` = défauts DU PROFIL (profileDefaultsOf,
+   source unique profiles.json). Les champs sont pré-remplis à la valeur effective (surcharge, sinon
+   défaut du profil) : « le défaut vient du profil ». onSave absent = lecture seule (via read()).
+   Renvoie { el, read }. */
+function txAdvanced(opts) {
+  const v = opts.values || {}, pd = opts.profile || {};   // v = surcharges de la fiche ; pd = défauts DU PROFIL
+  /* Valeur effective pré-remplie : surcharge de l'appareil si posée, sinon le défaut du profil. */
+  const effFreq = v.freq_khz || pd.freq_khz || '';
+  const effTe = v.te_us || pd.te_us || 400;
+  const effRpt = v.tx_rpt ? (v.tx_rpt === 2 ? 2 : 1) : (pd.rpt ? 2 : 1);
+  const effRmt = v.tx_rmt ? (v.tx_rmt === 2 ? 2 : 1) : (pd.rmt ? 2 : 1);
+  const onoff = (cur) => `<option value="2"${cur === 2 ? ' selected' : ''}>Activé</option><option value="1"${cur === 1 ? ' selected' : ''}>Désactivé</option>`;
+  const profLine = opts.marque
+    ? `Pré-réglé depuis le profil <b>${esc(opts.marque)}</b> : ${pd.freq_khz || '?'} kHz · TE ${pd.te_us || 400} µs · bit ${pd.rpt ? 'activé' : 'désactivé'} · RMT ${pd.rmt ? 'activé' : 'désactivé'}.`
+    : 'Réglages d\'émission de cet appareil.';
+  const el = document.createElement('details');
+  el.className = 'field adv-panel'; el.style.margin = '10px 0';
+  if (opts.open) el.open = true;
+  el.innerHTML = `<summary style="cursor:pointer;font-weight:600">⚙️ Réglages avancés d'émission${opts.marque ? ' · ' + esc(opts.marque) : ''}</summary>
+    <p class="hint adv-intro">${profLine} Change une valeur pour cet appareil seulement : ça ne touche aucune autre marque, même sur la même radio.</p>
+    <div class="field"><label>Fréquence porteuse (kHz)</label><input class="adv-freq" type="number" min="300000" max="928000" step="1" value="${effFreq}"></div>
+    <div class="field"><label>TE d'émission (µs)</label><input class="adv-te" type="number" min="200" max="900" step="1" value="${effTe}"></div>
+    <div class="field"><label>Bit de répétition (émettre comme la télécommande)</label><select class="adv-rpt">${onoff(effRpt)}</select></div>
+    <div class="field"><label>Émission matérielle (RMT)</label><select class="adv-rmt">${onoff(effRmt)}</select></div>
+    ${opts.onSave ? `<div class="row" style="margin-top:4px"><button class="btn primary adv-save">${esc(opts.saveLabel || 'Enregistrer')}</button>${(pd.freq_khz || pd.te_us || opts.marque) ? '<button class="btn adv-reset" type="button" title="Remet fréquence, TE, bit et RMT sur les valeurs du profil">↺ Valeurs du profil</button>' : ''}</div><div class="statline adv-stat" hidden><span class="dot"></span><b></b></div>` : ''}`;
+  const read = () => ({
+    freq_khz: Number(el.querySelector('.adv-freq').value) || 0,
+    te_us: Number(el.querySelector('.adv-te').value) || 0,
+    tx_rpt: Number(el.querySelector('.adv-rpt').value) || 0,
+    tx_rmt: Number(el.querySelector('.adv-rmt').value) || 0,
+  });
+  if (opts.onSave) {
+    const btn = el.querySelector('.adv-save'), stat = el.querySelector('.adv-stat');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      const ok = await opts.onSave(read());
+      btn.disabled = false;
+      stat.hidden = false; stat.classList.toggle('bad', !ok);
+      stat.querySelector('b').textContent = ok ? '✅ Enregistré' : '❌ Échec';
+    };
+    /* Remet les champs sur les valeurs du profil (ne sauvegarde pas : l'utilisateur relit puis Enregistre). */
+    const reset = el.querySelector('.adv-reset');
+    if (reset) reset.onclick = () => {
+      el.querySelector('.adv-freq').value = pd.freq_khz || '';
+      el.querySelector('.adv-te').value = pd.te_us || 400;
+      el.querySelector('.adv-rpt').value = pd.rpt ? '2' : '1';
+      el.querySelector('.adv-rmt').value = pd.rmt ? '2' : '1';
+      stat.hidden = false; stat.classList.remove('bad');
+      stat.querySelector('b').textContent = '↺ Valeurs du profil remises. Clique Enregistrer pour appliquer.';
+    };
+  }
+  return { el, read };
+}
+
+/* Monte le panneau avancé d'enrôlement, pré-rempli depuis le profil choisi dans la pyramide. Sans
+   profil (accès direct au panneau), rien n'est montré : l'enrôlement garde les défauts du firmware. */
+function mountEnrolAdvanced() {
+  const host = $('#pfx-advanced'); if (!host) return;
+  host.innerHTML = ''; ENROL_ADV = null;
+  if (!ENROL_PROFILE) return;
+  const comp = txAdvanced({ values: {}, profile: profileDefaultsOf(ENROL_PROFILE), marque: ENROL_PROFILE.marque });
+  host.appendChild(comp.el);
+  ENROL_ADV = comp.read;
+}
+
+/* Valeurs du panneau -> corps de /api/pfx/capture. Le backend (txovr_of) lit des booléens ; une option
+   absente reste « hériter ». freq/TE à 0 = hériter (on n'envoie pas la clé). */
+function advToCaptureBody(v) {
+  const b = {};
+  if (v.freq_khz) b.freq_khz = v.freq_khz;
+  if (v.te_us) b.te_us = v.te_us;
+  if (v.tx_rpt) b.tx_repeat_bit = (v.tx_rpt === 2);
+  if (v.tx_rmt) b.tx_rmt = (v.tx_rmt === 2);
+  if (ENROL_PROFILE && ENROL_PROFILE.marque) b.marque = ENROL_PROFILE.marque;
+  return b;
 }
 
 /* Rend une liste de feuilles en cartes cliquables, chacune routant vers son flux. */
@@ -1949,6 +2061,113 @@ function renderLeafChoices(host, feuilles, headerHtml) {
        <p class="hint" style="margin:4px 0 0">${esc(p.note || '')}</p>
      </div>`).join('');
   host.querySelectorAll('.add-profil').forEach((el, i) => { el.onclick = () => routeLeaf(feuilles[i]); });
+}
+
+/* ── Appareils > Mes appareils : liste + écran « Modifier » (issue #111, E7). L'édition d'un appareil
+   vit ICI, pas dans l'onglet Volets (qui ne sert qu'au pilotage). On y règle l'émission PAR APPAREIL
+   et on supprime. Le RENOMMAGE n'est pas offert : l'id d'un volet sert de clé (zones, centrales, entité
+   Home Assistant) ; le changer sans endpoint dédié orphelinerait ces références. À ajouter séparément. ── */
+function deviceKind(v) {   // tx = porte des réglages d'émission KeeLoq (porteuse/TE/rpt/rmt)
+  if (v.central) return { ico: '🎛', lbl: 'centrale', tx: false };
+  if (v.zone) return { ico: '🔗', lbl: 'zone', tx: false };
+  if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: false };   // CAME : chemin OOK, insensible à rpt/rmt
+  if (v.virt) return v.proto === 'profalux'
+    ? { ico: '🪟', lbl: 'virtuelle Profalux', tx: true }
+    : { ico: '🪟', lbl: 'Somfy RTS', tx: false };                           // 433,42 fixe, chemin somfy_tx séparé
+  return { ico: '🪟', lbl: 'télécommande clonée', tx: true };               // capturée (KeeLoq, émis par emit_press)
+}
+
+/* Nom du profil d'un appareil, pour l'afficher : le nom complet du profil résolu (profiles.json),
+   sinon la marque gravée dans la fiche, sinon le type déduit. */
+function deviceProfileLabel(v) {
+  const p = profileForDevice(v);
+  if (p) return p.nom || p.marque;
+  return v.marque || deviceKind(v).lbl;
+}
+
+/* Rebuild de la LISTE seulement : ne touche pas #device-edit (l'écran ouvert survit aux refresh 3 s). */
+async function renderDevices() {
+  const box = $('#devices-list'); if (!box) return;
+  if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);   /* pour nommer le profil */
+  const list = (statusCache.volets || []);
+  const empty = $('#devices-empty'); if (empty) empty.hidden = list.length > 0;
+  box.innerHTML = list.map(v => {
+    const k = deviceKind(v);
+    return `<div class="radio-row"><span>${k.ico}</span><b class="rr-name">${esc(v.id)}</b>`
+      + `<span class="rr-meta">${esc(deviceProfileLabel(v))}</span>`
+      + `<button class="btn dev-edit" data-id="${esc(v.id)}" style="margin-left:auto">Modifier</button></div>`;
+  }).join('');
+  box.querySelectorAll('.dev-edit').forEach(b => b.onclick = () => {
+    const v = (statusCache.volets || []).find(x => x.id === b.dataset.id);
+    if (v) openDeviceEdit(v);
+  });
+}
+
+async function openDeviceEdit(v) {
+  const host = $('#device-edit'); if (!host) return;
+  const k = deviceKind(v);
+  /* Les défauts viennent du PROFIL (source unique profiles.json), résolus ici par le navigateur. */
+  if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);
+  let curProf = profileForDevice(v);          // profil courant (mutable si l'utilisateur en change)
+  const origMarque = (curProf && curProf.marque) || v.marque || '';
+  const mec = v.rejeu ? 'rejeu' : v.virt ? 'enrolement' : 'cloner';
+  /* Profils INTERCHANGEABLES : meme mecanisme (on ne transforme pas un enrole en rejeu) et meme type
+     d'emission KeeLoq (porte un tx.te_us). Ex. un enrole Profalux -> Eveno/NeoSol : seule la porteuse
+     et les defauts changent, l'identite et le compteur restent. */
+  const compat = ((PROFILES && PROFILES.profils) || []).filter(p => p.mecanisme === mec && p.tx && p.tx.te_us);
+  const profSelect = (k.tx && compat.length > 1)
+    ? `<div class="field"><label>Profil (marque)</label><select class="dev-prof">${compat.map(p =>
+        `<option value="${esc(p.marque)}"${curProf && p.marque === curProf.marque ? ' selected' : ''}>${esc(p.nom || p.marque)}</option>`).join('')}</select>
+        <p class="hint">Change la marque/profil de cet appareil : la fréquence et les défauts suivent. L'identité et le compteur sont conservés.</p></div>`
+    : (k.tx ? `<div class="field"><label>Profil</label><p class="hint" style="margin:2px 0 0"><b>${esc((curProf && curProf.nom) || origMarque || '—')}</b></p></div>` : '');
+  host.innerHTML = `<div class="card" style="margin-top:12px">
+    <h3>Modifier : ${esc(v.id)} <span class="badge">${esc(k.lbl)}</span></h3>
+    <div class="field"><label>Nom de l'appareil</label>
+      <div class="row" style="flex-wrap:nowrap"><input class="dev-name" value="${esc(v.id)}" style="flex:1;min-width:0" maxlength="23"><button class="btn dev-rename" type="button">Renommer</button></div>
+      <p class="hint">Le nom sert d'identifiant (zones, centrales, entité Home Assistant) : le renommer met à jour ces références. Côté Home Assistant, une nouvelle entité apparaît et l'ancienne devient indisponible. Pas de virgule.</p></div>
+    ${profSelect}
+    <div id="device-adv"></div>
+    <div class="row end" style="margin-top:12px"><button class="btn danger dev-del">🗑 Supprimer cet appareil</button></div>
+    <div class="statline bad dev-del-stat" hidden><span class="dot"></span><b></b></div>
+  </div>`;
+  const adv = $('#device-adv');
+  /* (Re)monte le panneau avancé pour le profil courant. Si l'utilisateur a CHANGÉ de profil, on part
+     des défauts du nouveau profil (on n'héberge plus l'ancienne surcharge) ; sinon on montre la fiche. */
+  const mountAdv = () => {
+    adv.innerHTML = '';
+    if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission avancés pour ce type (${esc(k.lbl)}) : il n'utilise pas la porteuse/TE/rpt/rmt KeeLoq.</p>`; return; }
+    const switched = curProf && curProf.marque !== origMarque;
+    const comp = txAdvanced({
+      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0 },
+      profile: curProf ? profileDefaultsOf(curProf) : {}, marque: (curProf && curProf.marque) || origMarque,
+      open: true, saveLabel: 'Enregistrer les réglages',
+      onSave: async (vals) => {
+        const resp = await api('/api/volet/txparams', { method: 'POST',
+          body: JSON.stringify({ id: v.id, marque: (curProf && curProf.marque) || origMarque, freq_khz: vals.freq_khz, te_us: vals.te_us, tx_rpt: vals.tx_rpt, tx_rmt: vals.tx_rmt }) }).catch(() => null);
+        if (resp && resp.ok) { await loadStatus(); renderDevices(); }
+        return !!(resp && resp.ok);
+      },
+    });
+    adv.appendChild(comp.el);
+  };
+  mountAdv();
+  const ps = host.querySelector('.dev-prof');
+  if (ps) ps.onchange = () => { curProf = compat.find(p => p.marque === ps.value) || curProf; mountAdv(); };
+  host.querySelector('.dev-rename').onclick = async () => {
+    const nn = host.querySelector('.dev-name').value.trim();
+    if (!nn || nn === v.id) return;
+    const resp = await api('/api/volet/rename', { method: 'POST', body: JSON.stringify({ id: v.id, name: nn }) }).catch(() => null);
+    if (resp && resp.ok) {
+      toast('Renommé'); await loadStatus(); renderDevices();
+      const nv = (statusCache.volets || []).find(x => x.id === nn); if (nv) openDeviceEdit(nv); else host.innerHTML = '';
+    } else toast(resp && resp.err === 'exists' ? 'Ce nom existe déjà' : 'Échec du renommage');
+  };
+  host.querySelector('.dev-del').onclick = async () => {
+    const ok = await api('/api/volet/delete', { method: 'POST', body: JSON.stringify({ id: v.id }) }).then(r => r && r.ok).catch(() => false);
+    if (ok) { host.innerHTML = ''; toast('Appareil supprimé'); await loadStatus(); renderDevices(); }
+    else { const s = host.querySelector('.dev-del-stat'); s.hidden = false; s.querySelector('b').textContent = 'Échec de la suppression'; }
+  };
+  host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /* Detection : on ecoute chaque radio de la carte pendant que l'utilisateur presse sa telecommande,

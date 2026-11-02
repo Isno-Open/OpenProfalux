@@ -1,5 +1,6 @@
 /* Thème isno.fr - mode nuit (bleu foncé) par défaut. */
 :root{
+  color-scheme:dark;   /* les listes déroulantes natives des <select> suivent le thème sombre (sinon blanches) */
   --bg:#0a1424; --surface:#101f38; --surface-2:#0d1b30; --border:#1d3457;
   --text:#e8eef8; --muted:#8598ba;
   --accent:#2e86ff; --accent-fg:#ffffff; --accent-weak:rgba(46,134,255,.14); --accent-line:rgba(46,134,255,.34);
@@ -11,6 +12,7 @@
 }
 /* Thème clair isno, seulement si l'utilisateur le force explicitement. */
 :root[data-theme="light"]{
+  color-scheme:light;
   --bg:#f1f5fb; --surface:#ffffff; --surface-2:#e9eff8; --border:#d3ddee;
   --text:#0a1424; --muted:#566a8f;
   --accent:#1560bd; --accent-fg:#ffffff; --accent-weak:rgba(21,96,189,.10); --accent-line:rgba(21,96,189,.30);
@@ -74,7 +76,7 @@ select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 [hidden]{display:none!important}   /* une classe .field/.row ne doit jamais reafficher un element cache */
 .field{display:grid;gap:5px;margin-bottom:12px}
 .field label{font-size:.78rem;font-weight:600;color:var(--muted);letter-spacing:.01em}
-.field input[type=text],.field input[type=password],.field input[type=file],.field input:not([type]){width:100%;padding:9px 11px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.92rem}
+.field input[type=text],.field input[type=password],.field input[type=file],.field input[type=number],.field input:not([type]){width:100%;padding:9px 11px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.92rem}
 .field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
 .field .help{font-size:.74rem;color:var(--muted);line-height:1.45}
 
@@ -172,6 +174,12 @@ progress::-webkit-progress-value{background:var(--accent)}
 .offline-bar{margin:12px 0 0;padding:9px 13px;border:1px solid var(--warn);border-radius:var(--radius-sm);color:var(--warn);font-size:.85rem;font-weight:600}
 .offline .dpad button{opacity:.45;pointer-events:none}
 .hint{font-size:.78rem;color:var(--muted)}
+/* Panneau avance d'emission (Appareils > Modifier) : de l'air entre les champs (moins tasse). */
+.adv-panel{padding:2px}
+.adv-panel>summary{padding:6px 0;margin-bottom:2px}
+.adv-panel .adv-intro{margin:8px 0 18px}
+.adv-panel .field{margin-bottom:18px}
+.adv-panel .field:last-of-type{margin-bottom:14px}
 /* Apprentissage : selection du volet (chips) + slots de commande */
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{padding:8px 13px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);color:var(--text);font-size:.85rem;font-weight:600;cursor:pointer}
