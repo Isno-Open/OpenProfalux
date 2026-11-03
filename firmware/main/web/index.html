@@ -241,7 +241,7 @@
           <p class="hint radio-reminder"></p>
           <div class="field"><label>Modèle de moteur</label><select id="pfx-model"></select></div>
           <div id="pfx-advanced"></div>
-          <div class="row"><button id="pfx-capture" class="btn primary">📡 Appuie sur ta télécommande d'origine</button></div>
+          <div class="row"><button id="pfx-capture" class="btn primary">📡 Appuie sur ta télécommande</button></div>
           <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
           <div id="pfx-renew-row" hidden>
             <p class="hint">Tu réenrôles ce moteur : continue avec cette identité. Si elle a été apprise par <b>d'autres moteurs</b> (ils bougent ensemble), crée plutôt une identité neuve : elle ne servira qu'au moteur que tu enrôles maintenant.</p>
@@ -251,13 +251,13 @@
             <h3>1. Enrôler l'identité sur le moteur</h3>
             <div class="statline" id="pfx-pre" hidden><span class="dot"></span><b></b></div>
             <p class="sub">Clique ci-dessous : l'émission dure ~5 s. <b>Ne touche à rien</b> pendant. Les gestes à faire sur ta télécommande s'afficheront <b>à la fin</b> de l'émission.</p>
-            <div class="row"><button id="pfx-learn" class="btn primary">📡 Émettre la trame d'apprentissage (~5 s)</button></div>
+            <div class="row"><button id="pfx-learn" class="btn">📡 Émettre la trame d'apprentissage (~5 s)</button></div>
             <div class="statline" id="pfx-learn-status" hidden><span class="dot"></span><b></b></div>
             <div id="pfx-after-emit" hidden>
               <p class="sub"><b>✅ Émission finie. Fais MAINTENANT sur ta télécommande d'origine :</b></p>
               <ol class="steps" id="pfx-gestures"></ol>
               <p class="sub">Quand les gestes sont faits, clique ci-dessous. Beaucoup de moteurs font un petit va-et-vient pour confirmer : bon signe. Certains ne bougent pas du tout : c'est normal aussi.</p>
-              <div class="row"><button id="pfx-gestes-ok" class="btn primary">✅ J'ai fait les gestes</button></div>
+              <div class="row"><button id="pfx-gestes-ok" class="btn">✅ J'ai fait les gestes</button></div>
               <div class="statline" id="pfx-wait" hidden><span class="dot"></span><b></b></div>
             </div>
             <h3>2. Tester la nouvelle identité</h3>
@@ -267,7 +267,7 @@
             <p class="sub">Pour le retrouver dans l'onglet <b>Volets</b> et le piloter depuis Home Assistant.</p>
             <div class="field"><div class="row" style="flex-wrap:nowrap">
               <input id="pfx-volet-name" placeholder="Nom du volet (ex : Salon)" style="flex:1;min-width:0">
-              <button id="pfx-save-volet" class="btn primary">💾 Enregistrer</button></div></div>
+              <button id="pfx-save-volet" class="btn">💾 Enregistrer</button></div></div>
             <div class="row" style="margin-top:12px"><button id="pfx-forget" class="btn">↩ Désélectionner (garde l'identité et son compteur)</button></div>
           </div>
         </div>
