@@ -50,6 +50,14 @@ int  cc1101_capture_init(void);
 int  cc1101_tx_and_capture_bits(const uint8_t *frame, size_t bits, char *out_bits, int max_bits);
 /* Ecoute en RX pendant timeout_ms, decode la 1re trame recue. Retourne nbits (<0=rien). */
 int  cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits);
+/* Capture OOK BRUTE (issue #95) : rend les impulsions brutes (levels[]/us[]) sans decoder,
+ * pour rejouer les telecommandes a code fixe (CAME, capteurs) hors protocole Profalux/Somfy. */
+int  cc1101_rx_capture_pulses(uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out);
+/* Profil RX des captures brutes (PERSISTANT jusqu'au prochain appel) : debit (baud) et bande
+ * passante (kHz) de demodulation, mappes en MDMCFG4/MDMCFG3 a chaque capture puis restaures.
+ * 0/0 = config courante (agnostique). Les valeurs viennent du profil (profiles.json), pas du
+ * code. Commodite de test ; la production passe le profil par capture (UI -> API rejeu). */
+void cc1101_set_capture_rx(uint32_t drate_baud, uint32_t bw_khz);
 /* Rejoue (TX) une trame brute (chaine '0'/'1' en ordre du fil) en OOK HCS30x. */
 int  cc1101_tx_raw_bits(const char *bits, int n, int repeats);
 
@@ -81,5 +89,13 @@ void cc1101_get_diag(int *tx_ok, uint8_t *partnum, uint8_t *version); /* diag UI
 int  cc1101_gdo0_state(int *level);   /* GDO0 : -1 non teste, 1 libre, 0 tenu (*level = niveau) */
 uint8_t cc1101_read_reg(uint8_t addr);
 void   cc1101_write_reg(uint8_t addr, uint8_t val);
+
+/* Acces mode PAQUET (FIFO + strobes), pour les protocoles FSK comme io-homecontrol (#87).
+ * Transferts burst bornes a 31 octets utiles ; le chemin OOK n'en a pas besoin. */
+void cc1101_strobe_cmd(uint8_t strobe);
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len);
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len);
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
+void cc1101_apply_config_ook(void);
 
 #endif

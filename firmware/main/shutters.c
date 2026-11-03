@@ -448,20 +448,48 @@ static void reset_state(void) {
     for (int i = 0; i < s_nvolets; i++) cfg_volet_release(&s_volets[i]);   /* listes des centrales */
     s_nremotes = 0; s_nvolets = 0;
 }
+/* Migration (issue #111) : bit de repetition et RMT passent de GLOBAUX box a PAR APPAREIL. ORDRE
+ * IMPERATIF : chaque appareil DEJA ENROLE herite de la valeur courante de l'ancien global AVANT que
+ * le global ne disparaisse, sinon il retomberait sur le defaut et changerait de comportement. On lit
+ * donc l'ancienne cle NVS "cfg" (tx_rpt/tx_rmt), pas l'etat runtime (qui n'est plus restaure au boot).
+ * Une fiche deja resolue (valeur != heriter, enrolee par la nouvelle version) n'est pas touchee ;
+ * idempotent (une fiche migree n'est plus en 'heriter'). */
+static void migrate_tx_overrides(void) {
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t rp = 0, rm = 0;
+    nvs_get_u8(h, "tx_rpt", &rp); nvs_get_u8(h, "tx_rmt", &rm);
+    nvs_close(h);
+    bool changed = false;
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        if (!(v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX)) continue;
+        if (v->tx_rpt == TXOVR_INHERIT) { v->tx_rpt = rp ? TXOVR_ON : TXOVR_OFF; changed = true; }
+        if (v->tx_rmt == TXOVR_INHERIT) { v->tx_rmt = rm ? TXOVR_ON : TXOVR_OFF; changed = true; }
+    }
+    if (changed) { ESP_LOGW(TAG, "migration #111 : bit de repetition/RMT (ancien global %d/%d) grave par appareil", rp, rm); save_cfg(); }
+}
 static cfg_layout_t load_cfg(void) {
     cfg_layout_t lay = cfg_model_load(&s_model);
     for (int i = 0; i < s_nvolets; i++)   /* DIAGNOSTIC : verifie que la calibration est bien relue */
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
+    migrate_tx_overrides();
     return lay;
 }
 
 /* ── RF ── */
 #define PRESS_REPEATS 10   /* nb de trames par "appui" : le bit-bang peut etre preempte par le WiFi
                               (trame corrompue) ; plus de repetitions = plus de chances qu'une passe propre */
+/* Params d'emission RESOLUS depuis la fiche (defini plus bas) : porteuse/TE/rpt/rmt par appareil. */
+static tx_params_t tx_params_of(const volet_t *v);
+
 /* Emet une RAFALE = 1 appui de telecommande, en UNE session TX (trames dos-a-dos, une seule
- * calibration) via l'arbitre radio. Le moteur part ensuite tout seul jusqu'au STOP/butee. */
-static void emit_press(const char *bits) {
+ * calibration) via l'arbitre radio. Le moteur part ensuite tout seul jusqu'au STOP/butee.
+ * `v` (optionnel) porte la fiche : si present, emission PAR APPAREIL (porteuse/TE/rpt/rmt de la
+ * fiche, appliques puis restaures par radio_tx_device) -> une marque clonee garde SA frequence sur
+ * une radio partagee (bug terrain Eveno/Profalux). `v==NULL` = rejeu de trame RF brute sans volet. */
+static void emit_press(const volet_t *v, const char *bits) {
     if (!bits || !bits[0]) return;
     /* Log de CE QU'ON EMET (serial/bouton/hop decodes de la trame), symetrique du log RX.
      * Permet de verifier qu'on rejoue bien la trame captee (et de voir le hop emis). */
@@ -474,7 +502,82 @@ static void emit_press(const char *bits) {
         ESP_LOGW(TAG, "TX serial=0x%07X bouton=0x%X hop=0x%08X (%d bits, rafale x%d)",
                  (unsigned)ser, btn, (unsigned)hop, n, PRESS_REPEATS);
     }
-    radio_tx(bits, PRESS_REPEATS);
+    if (v) {
+        tx_params_t p = tx_params_of(v);
+        radio_tx_device(bits, PRESS_REPEATS, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
+    } else {
+        radio_tx(bits, PRESS_REPEATS);              /* trame brute sans volet (rejeu RF debug) */
+    }
+}
+
+/* ── Rejeu BRUT par commande (code fixe OOK, agnostique : CAME, 433 cheap...) ──
+ * Le cadre capte de chaque commande est range dans v->rejeu (JSON {f, up, stop, down} ;
+ * chaque valeur = impulsions signees +us haut / -us bas). On le rejoue a l'identique, suivi
+ * d'un silence inter-trame, repete. Ne touche ni au clone bit-string ni au virtuel. */
+#define REJEU_MAX_PULSES 512
+#define REJEU_GAP_US     12000   /* silence inter-trame, couvre le CAME (~11,5 ms) */
+#define REJEU_REPEATS    8
+
+/* Rejoue la commande `cmd` ("up"/"stop"/"down") d'un volet a rejeu brut. true si emis. */
+static bool rejeu_emit(volet_t *v, const char *cmd) {
+    if (!v->rejeu) return false;
+    cJSON *j = cJSON_Parse(v->rejeu);
+    if (!j) return false;
+    /* Frequence d'emission : la fiche (editable dans Modifier, par appareil) prime sur la frequence
+     * captee. Permet de faire cohabiter CAME, Profalux et Eveno sur des frequences differentes. */
+    uint32_t freq = v->freq_khz ? v->freq_khz : (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
+    const char *csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, cmd));
+    /* Portail a bouton UNIQUE (CAME & co) : la telecommande n'a qu'un bouton, le moteur enchaine
+     * la sequence lui-meme (ouvre -> stop -> ferme). On ne capture donc qu'une commande ; Ouvrir /
+     * Stop / Fermer du pave rejouent la meme trame. Repli : si la commande demandee n'a pas ete
+     * captee, on rejoue la premiere commande presente. */
+    if (!csv || !*csv)
+        for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
+            csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
+    bool ok = false;
+    if (csv && *csv && freq) {
+        static uint8_t  lvl[REJEU_MAX_PULSES + 1];
+        static uint32_t us[REJEU_MAX_PULSES + 1];
+        int n = 0;
+        for (const char *p = csv; *p && n < REJEU_MAX_PULSES; ) {
+            char *end; long d = strtol(p, &end, 10);
+            if (end == p) break;
+            lvl[n] = d >= 0 ? 1 : 0; us[n] = (uint32_t)(d >= 0 ? d : -d); n++;
+            p = end; if (*p == ',') p++;
+        }
+        if (n >= 2) {
+            lvl[n] = 0; us[n] = REJEU_GAP_US; n++;   /* silence inter-trame */
+            int r = 0;
+            for (int k = 0; k < REJEU_REPEATS && r == 0; k++)
+                r = radio_tx_ook_pulses(freq, lvl, us, n);
+            ESP_LOGW(TAG, "REJEU brut '%s' cmd=%s : %d impulsions a %u kHz, rc=%d",
+                     v->id, cmd, n - 1, (unsigned)freq, r);
+            ok = (r == 0);
+        }
+    }
+    cJSON_Delete(j);
+    return ok;
+}
+
+/* Range le cadre capte (lvl/us, n impulsions) comme commande `cmd` de v, a la frequence freq. */
+static int rejeu_store(volet_t *v, const char *cmd, uint32_t freq,
+                       const uint8_t *lvl, const uint16_t *us, int n) {
+    if (n < 2) return -1;
+    char *csv = malloc((size_t)n * 9 + 1);
+    if (!csv) return -1;
+    int p = 0;
+    for (int i = 0; i < n; i++)
+        p += snprintf(csv + p, (size_t)n * 9 + 1 - p, "%s%d", i ? "," : "",
+                      lvl[i] ? (int)us[i] : -(int)us[i]);
+    cJSON *j = v->rejeu ? cJSON_Parse(v->rejeu) : NULL;
+    if (!j) j = cJSON_CreateObject();
+    cJSON_DeleteItemFromObject(j, "f");   cJSON_AddNumberToObject(j, "f", freq);
+    cJSON_DeleteItemFromObject(j, cmd);   cJSON_AddStringToObject(j, cmd, csv);
+    char *out = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j); free(csv);
+    if (!out) return -1;
+    free(v->rejeu); v->rejeu = out;   /* out = heap cJSON, libere par cfg_volet_release */
+    return 0;
 }
 /* Rejoue TELLE QUELLE une trame captee (identifiee par serial+hop dans l'anneau RF).
  * Sert au bouton "rejouer" du debug RF : on renvoie la trame brute, sans passer par un volet. */
@@ -490,7 +593,7 @@ int shutters_replay_frame(const char *serial, uint32_t hop) {
     }
     UNLOCK();
     if (!bits[0]) return -2;   /* plus dans l'anneau (ecrasee) */
-    emit_press(bits);
+    emit_press(NULL, bits);    /* trame brute du debug RF : pas de volet, repli global */
     return 0;
 }
 /* Page de /api/rf, triee par date (recentes d'abord). Sous UN seul LOCK : on trie les
@@ -543,6 +646,22 @@ static inline bool is_pfx_virt(const volet_t *v) {
     return v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX;
 }
 
+/* Params d'emission RESOLUS depuis la fiche de l'appareil (etage 2, issue #111). On NE code PAS de
+ * defaut ici : la source unique des defauts est profiles.json, resolue par le navigateur, qui grave
+ * les valeurs concretes du profil dans la fiche a la creation (regle "une configuration, un seul
+ * fichier"). Le firmware lit donc des valeurs concretes. Pour une fiche heritee (0 / TXOVR_INHERIT,
+ * legacy pre-pyramide), les sentinelles (freq/te 0, rpt/rmt -1) disent a radio_tx_device de GARDER le
+ * reglage radio courant : un repli invisible, pas une definition de defaut dupliquee. */
+static tx_params_t tx_params_of(const volet_t *v) {
+    tx_params_t p = {
+        .freq_khz = v->freq_khz,
+        .te_us    = v->te_us,
+        .rpt = v->tx_rpt == TXOVR_ON ? 1 : v->tx_rpt == TXOVR_OFF ? 0 : -1,
+        .rmt = v->tx_rmt == TXOVR_ON ? 1 : v->tx_rmt == TXOVR_OFF ? 0 : -1,
+    };
+    return p;
+}
+
 static bool emit_virt_profalux(volet_t *v, uint8_t button) {
     char bits[68];
     uint16_t cnt = v->virt_counter;
@@ -551,7 +670,8 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
     v->virt_counter = cnt + 1;
     save_cfg();
-    radio_tx(bits, PRESS_REPEATS);
+    tx_params_t p = tx_params_of(v);
+    radio_tx_device(bits, PRESS_REPEATS, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
     return true;
@@ -569,13 +689,12 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
     save_cfg();
-    /* 56 bits, rafale COURTE, comme la vraie telecommande (#73). Sur un recepteur a lames
-     * orientables (BSO), c'est la DUREE de l'appui qui decide : bref (peu de trames) = course
-     * complete, long (beaucoup de trames) = orientation des lames. Une longue salve orientait
-     * les lames au lieu de faire la course (l'ancien SOMFY_RTS_TX_REPEATS_MAX = 8 trames en
-     * etait une). Le format 80 bits (somfy_tx_emit80) reste dans le codec mais n'a PAS ete le
-     * levier : c'est la rafale courte qui fait la course complete, pas le format. */
-    somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS);
+    /* Format de trame PAR VOLET (fiche, issue #73) : 56 bits par defaut (rafale COURTE, comme la vraie
+     * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
+     * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
+     * courte fait la course complete dans les deux cas. frame_bits 0 (defaut memset) = 56. */
+    if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS, v->freq_khz);
+    else                     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS, v->freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
 }
@@ -610,7 +729,8 @@ static void start_move(volet_t *v, int dir) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     bool sent;
     if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
-    else       { emit_press(dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise */
+    else if (v->rejeu) sent = rejeu_emit(v, dir > 0 ? "up" : "down");   /* rejeu brut par commande */
+    else       { emit_press(v, dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise, par appareil */
     if (!sent) {
         /* Rien n'est parti (protocole non cable) : ne pas enclencher le suivi, sinon la boucle de
          * tick ferait avancer et publier une position que le moteur n'a jamais recue. */
@@ -624,7 +744,8 @@ static void start_move(volet_t *v, int dir) {
 static void do_stop(volet_t *v) {
     v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
     if (v->virt) emit_virt(v, PFX_BTN_STOP);
-    else         emit_press(v->stop);    /* rafale STOP = fige le moteur a la position voulue */
+    else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
+    else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
     zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
 }
@@ -1043,6 +1164,62 @@ int shutters_create_virtual_somfy(const char *id, uint32_t address) {
     return 0;
 }
 
+/* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
+ * par commande arrivent ensuite par shutters_rejeu_capture. `type` = dev_type_t (portail/volet). */
+int shutters_create_rejeu(const char *id, uint8_t type) {
+    if (!id || !*id) return -1;
+    LOCK();
+    volet_t *v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = false;
+    v->type = type;
+    save_cfg();
+    announce_one(v);
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "appareil rejeu brut '%s' cree (type %u)", id, type);
+    return 0;
+}
+
+/* Corrige le type (dev_type_t) d'un appareil DEJA cree, sans reenroler ni recapturer : l'id,
+ * l'identite, le compteur et les captures restent. Sert a reparer un type mal attribue. */
+int shutters_set_type(const char *id, uint8_t type) {
+    if (!id || !*id || type > TYPE_PORTAIL) return -1;   /* borne sur dev_type_t declare */
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->type = type;
+    save_cfg();
+    announce_one(v);   /* republie l'entite (un libelle HA peut dependre du type) */
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "appareil '%s' : type change en %u", id, type);
+    return 0;
+}
+
+/* Capture le cadre OOK brut d'UNE commande (cmd = "up"/"stop"/"down") sur la radio `radio` et
+ * le range dans l'appareil. La capture (~15 s, mutex radio) se fait HORS du LOCK shutters ; le
+ * rangement + sauvegarde sous LOCK. Rend le nombre d'impulsions (>0), <=0 si rien / erreur. */
+int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz) {
+    if (!id || !*id || !cmd || !*cmd) return -1;
+    static uint8_t  lvl[REJEU_MAX_PULSES];
+    static uint16_t us[REJEU_MAX_PULSES];
+    int8_t rssi = 0;
+    int n = radio_capture_raw_on_freq(radio, freq_khz, 15000, lvl, us, REJEU_MAX_PULSES, &rssi);
+    if (n < 2) { ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : rien (rc=%d)", id, cmd, n); return n <= 0 ? n : -1; }
+    const char *band = NULL; uint32_t carrier = 0, cur = 0, low = 0, high = 0; uint8_t pn = 0, ver = 0;
+    cc1101_radio_info(radio, &band, &carrier, &cur, &low, &high, &pn, &ver);
+    uint32_t freq = freq_khz ? freq_khz : (cur ? cur : carrier);   /* freq du profil de marque si fournie, sinon porteuse de la radio */
+    LOCK();
+    volet_t *v = find_volet(id);
+    int rc = v ? rejeu_store(v, cmd, freq, lvl, us, n) : -1;
+    if (rc == 0) save_cfg();
+    UNLOCK();
+    if (rc != 0) return -1;
+    ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : %d impulsions a %u kHz, RSSI %d dBm", id, cmd, n, (unsigned)freq, rssi);
+    return n;
+}
+
 /* ZONE : fixe les suiveurs d'un volet appris (CSV d'ids, "" = plus aucun).
  * Suiveurs : des volets simples existants, ni la zone elle-meme, ni une centrale,
  * ni une autre zone. Une zone ne peut pas non plus etre elle-meme suiveuse.
@@ -1203,6 +1380,76 @@ int shutters_set_orientation(const char *id, int orientation) {
     v->orientation = (orientation < 0) ? -1 : (orientation % 360);   /* azimut facade (-1 = non defini) */
     save_cfg();
     UNLOCK();
+    return 0;
+}
+
+/* Ecrit les parametres d'emission PAR APPAREIL dans la fiche (etage 2, issue #111). Appele au save
+ * d'un enrolement (valeurs resolues depuis le profil) et a l'edition du panneau avance. Sentinelles :
+ * freq_khz/te_us a 0 = heriter du defaut ; tx_rpt/tx_rmt = tx_override_t (0 heriter, 1 off, 2 on).
+ * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
+int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
+                           int rpt, int rmt, int frame_bits, const char *marque) {
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->freq_khz = freq_khz;                                  /* 0 = heriter */
+    v->te_us    = (te_us && (te_us < 200 || te_us > 900)) ? v->te_us : te_us;   /* hors plage HCS300 : on garde */
+    if (rpt >= TXOVR_INHERIT && rpt <= TXOVR_ON) v->tx_rpt = (uint8_t)rpt;
+    if (rmt >= TXOVR_INHERIT && rmt <= TXOVR_ON) v->tx_rmt = (uint8_t)rmt;
+    if (frame_bits == 56 || frame_bits == 80) v->frame_bits = (uint8_t)frame_bits;   /* Somfy ; autre = inchange */
+    if (marque) strlcpy(v->marque, marque, SH_ID_LEN);
+    save_cfg();
+    UNLOCK();
+    return 0;
+}
+
+/* Renomme un volet : change son id ET met a jour toutes les references (membres de centrale, suiveurs
+ * de zone). L'id sert d'identifiant partout, dont le slug MQTT/Home Assistant : on retire l'ancienne
+ * entite HA (ancien slug) et on publie la nouvelle. Cote HA, une NOUVELLE entite apparait, l'ancienne
+ * devient indisponible : c'est inherent au renommage d'un nom qui sert d'identifiant. */
+int shutters_rename_volet(const char *old_id, const char *new_id) {
+    if (!old_id || !new_id || !new_id[0]) return -1;
+    if (strchr(new_id, ','))        return -2;   /* virgule = separateur de membres */
+    if (strlen(new_id) >= SH_ID_LEN) return -5;   /* refuse plutot que tronquer en silence */
+    LOCK();
+    volet_t *v = find_volet(old_id);
+    if (!v)                      { UNLOCK(); return -3; }
+    if (!strcmp(old_id, new_id)) { UNLOCK(); return 0; }   /* inchange */
+    if (find_volet(new_id))      { UNLOCK(); return -4; }   /* collision */
+    clear_one(v);   /* retire l'ancienne entite HA (ancien slug) AVANT de changer l'id */
+    /* Remplace old_id par new_id dans toutes les listes de membres (centrales ET zones). */
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *c = &s_volets[i];
+        if (!c->members || !in_members(c->members, old_id)) continue;
+        char buf[SH_MEMBERS_LEN]; int p = 0; char mid[SH_ID_LEN]; bool ok = true;
+        for (const char *q = cfg_members_next(c->members, mid); q; q = cfg_members_next(q, mid)) {
+            const char *use = strcmp(mid, old_id) ? mid : new_id;
+            int w = snprintf(buf + p, sizeof(buf) - (size_t)p, "%s%s", p ? "," : "", use);
+            if (w < 0 || p + w >= (int)sizeof(buf)) { ok = false; break; }
+            p += w;
+        }
+        if (ok) cfg_volet_set_members(c, buf);
+    }
+    strlcpy(v->id, new_id, SH_ID_LEN);
+    /* L'IDENTITE affichee = le nom du remote. Elle doit suivre le volet : on renomme le/les remotes
+     * qui portaient l'ancien nom (identite virtuelle, ou telecommandes clonees nommees comme lui).
+     * Un remote nomme autrement (choisi a la main) n'est PAS touche. */
+    char shex[SH_SERIAL_LEN];
+    if (v->virt) {
+        /* L'identite virtuelle EST le volet : son nom suit TOUJOURS (sans garde), meme s'il avait
+         * derive (ancien renommage sous un firmware qui ne la mettait pas a jour). */
+        snprintf(shex, sizeof(shex), "0x%07X", (unsigned)v->virt_serial);
+        remote_t *rm = remote_find(shex);
+        if (rm) { strlcpy(rm->name, new_id, SH_ID_LEN); announce_batt(rm); }
+    }
+    for (int si = 0; si < v->n_serials; si++) {
+        remote_t *rm = remote_find(v->serials[si]);
+        if (rm && !strcmp(rm->name, old_id)) { strlcpy(rm->name, new_id, SH_ID_LEN); announce_batt(rm); }
+    }
+    announce_one(v);   /* publie la nouvelle entite HA (nouveau slug) */
+    save_cfg();
+    UNLOCK();
+    pub_flush();       /* pousse retrait + annonce MQTT hors LOCK */
     return 0;
 }
 /* Applique un ordre d'affichage : ids_csv = liste d'ids separes par des virgules,
@@ -1470,6 +1717,7 @@ char *shutters_status_json(void) {
         volet_t *v = &s_volets[i];
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "id", v->id);
+        cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
         if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
             cJSON_AddBoolToObject(o, "virt", true);
             bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
@@ -1493,6 +1741,14 @@ char *shutters_status_json(void) {
         cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
         cJSON_AddNumberToObject(o, "orientation", v->orientation);       /* azimut facade (-1 = non defini) */
         cJSON_AddNumberToObject(o, "order", v->order);                   /* rang d'affichage UI (-1 = non range) */
+        /* Parametres d'emission PAR APPAREIL (etage 2, issue #111) : pour le panneau avance de l'UI
+         * (affichage + edition). tx_rpt/tx_rmt = tri-etat tx_override_t (0 heriter, 1 off, 2 on). */
+        if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
+        cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
+        cJSON_AddNumberToObject(o, "te_us",    v->te_us);
+        cJSON_AddNumberToObject(o, "tx_rpt",   v->tx_rpt);
+        cJSON_AddNumberToObject(o, "tx_rmt",   v->tx_rmt);
+        cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
         cJSON *sr = cJSON_AddArrayToObject(o, "serials");
         for (int j = 0; j < v->n_serials; j++) cJSON_AddItemToArray(sr, cJSON_CreateString(v->serials[j]));
         /* etat des 3 commandes : bouton appris (nibble) si le slot est rempli, absent sinon.
@@ -1501,6 +1757,22 @@ char *shutters_status_json(void) {
         add_cmd_json(cmd, "up",   v->up,   v->up_btn);
         add_cmd_json(cmd, "stop", v->stop, v->stop_btn);
         add_cmd_json(cmd, "down", v->down, v->down_btn);
+        /* Rejeu brut (CAME et code fixe) : l'ecran de capture unifie en a besoin pour distinguer
+         * le moteur (rejeu vs clone KeeLoq) et montrer quelles commandes sont deja captees. Le cadre
+         * brut est range dans v->rejeu (JSON {f, up, stop, down}) ; on expose juste les commandes
+         * presentes, pas les impulsions. */
+        if (v->rejeu) {
+            cJSON_AddBoolToObject(o, "rejeu", true);
+            cJSON *rc = cJSON_AddObjectToObject(o, "rejeu_cmds");
+            cJSON *rj = cJSON_Parse(v->rejeu);
+            if (rj) {
+                for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c; c++) {
+                    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, *c));
+                    if (s && *s) cJSON_AddBoolToObject(rc, *c, true);
+                }
+                cJSON_Delete(rj);
+            }
+        }
         cJSON_AddItemToArray(vols, o);
     }
     cJSON *rf = cJSON_AddArrayToObject(root, "rf");   /* recentes seulement ; les 300 via /api/rf */

@@ -25,6 +25,7 @@
 #include "soc/gpio_sig_map.h"  /* SIG_GPIO_OUT_IDX */
 #include <esp_heap_caps.h>   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
 #include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
+#include <math.h>            /* fabs/lround : mapping debit/bande passante -> registres */
 
 static const char *TAG = "cc1101";
 
@@ -283,6 +284,37 @@ uint8_t cc1101_read_reg(uint8_t addr) {
 static void strobe(uint8_t s) {
     uint8_t tx = s, rx;
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
+}
+
+/* ── Acces mode PAQUET (FIFO + strobes) pour les protocoles FSK comme io-homecontrol (#87).
+ * Transferts burst bornes a 31 octets utiles. Le chemin OOK n'en a pas besoin ; ces primitives
+ * ne sont utilisees que par le backend io (io/io_radio.c). ── */
+void cc1101_strobe_cmd(uint8_t s) { strobe(s); }
+
+void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 31) return;
+    uint8_t tx[32], rx[32];
+    tx[0] = addr | 0x40;   /* bit burst */
+    for (size_t i = 0; i < len; i++) tx[i + 1] = buf[i];
+    cs_low(); spi_xfer(tx, rx, len + 1); cs_high();
+}
+
+void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len) {
+    if (!buf || len == 0 || len > 31) return;
+    uint8_t tx[32] = {0}, rx[32];
+    tx[0] = addr | 0xC0;   /* bits burst + lecture */
+    cs_low(); spi_xfer(tx, rx, len + 1); cs_high();
+    for (size_t i = 0; i < len; i++) buf[i] = rx[i + 1];
+}
+
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
+void cc1101_apply_config_ook(void) {
+    strobe(CC_SIDLE);
+    for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++)
+        cc1101_write_reg(s_regs[i].reg, s_regs[i].val);
+    /* PATABLE OOK (burst) : index0=eteint 0x00, index1=puissance 0xC0 (comme l'init) */
+    uint8_t tx[3] = { CC_PATABLE | 0x40, 0x00, 0xC0 }, rx[3];
+    cs_low(); spi_xfer(tx, rx, 3); cs_high();
 }
 
 /* Configure la radio ACTIVE : GPIO (CS/GDO0), reset, registres, PATABLE, porteuse.
@@ -917,6 +949,116 @@ int cc1101_rx_listen_bits(uint32_t timeout_ms, char *out_bits, int max_bits) {
     strobe(CC_SIDLE);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* restaure pour le TX bit-bang */
     return r;
+}
+
+/* Profil RX de capture (one-shot) : le PROFIL (profiles.json) declare un debit et une bande
+ * passante en unites humaines ; on les pose ici juste avant la prochaine capture, qui les
+ * mappe en MDMCFG4/MDMCFG3 puis restaure. 0/0 = garder la config courante (cas agnostique).
+ * Aucun octet de registre fige dans le code : la valeur vit dans le profil. */
+static uint32_t s_cap_drate_baud = 0, s_cap_bw_khz = 0;
+void cc1101_set_capture_rx(uint32_t drate_baud, uint32_t bw_khz) {
+    s_cap_drate_baud = drate_baud; s_cap_bw_khz = bw_khz;
+}
+/* Mappe (debit baud, bande passante kHz) vers MDMCFG4/MDMCFG3, fosc 26 MHz (verifie : l'actuel
+ * 0xC6 rend 101,6 kHz). MDMCFG4 = CHANBW_E<<6 | CHANBW_M<<4 | DRATE_E ; MDMCFG3 = DRATE_M.
+ * BW = fosc/(8*(4+M)*2^E) ; DRATE = (256+M)*2^E/2^28*fosc. On cherche les (E,M) les plus proches. */
+static void cc1101_ook_rx_regs(uint32_t drate_baud, uint32_t bw_khz, uint8_t *mdmcfg4, uint8_t *mdmcfg3) {
+    const double fosc = 26000000.0;
+    int bw_e = 0, bw_m = 0; double bw_best = 1e18, bw_tgt = (double)bw_khz * 1000.0;
+    for (int e = 0; e < 4; e++) for (int m = 0; m < 4; m++) {
+        double bw = fosc / (8.0 * (4 + m) * (double)(1u << e));
+        if (fabs(bw - bw_tgt) < bw_best) { bw_best = fabs(bw - bw_tgt); bw_e = e; bw_m = m; }
+    }
+    int dr_e = 0, dr_m = 0; double dr_best = 1e18, dr_tgt = (double)drate_baud;
+    for (int e = 0; e < 16; e++) {
+        long mm = lround(dr_tgt * 268435456.0 / ((double)(1u << e) * fosc)) - 256;
+        if (mm < 0 || mm > 255) continue;
+        double rr = (256.0 + (double)mm) * (double)(1u << e) / 268435456.0 * fosc;
+        if (fabs(rr - dr_tgt) < dr_best) { dr_best = fabs(rr - dr_tgt); dr_e = e; dr_m = (int)mm; }
+    }
+    *mdmcfg4 = (uint8_t)(((bw_e & 3) << 6) | ((bw_m & 3) << 4) | (dr_e & 0x0F));
+    *mdmcfg3 = (uint8_t)dr_m;
+}
+
+/* Capture BRUTE OOK (issue #95) : ecoute idle-delimitee et rend les impulsions brutes
+ * (niveau + duree us) SANS decoder - pour rejouer n'importe quelle telecommande OOK a CODE FIXE
+ * (portail CAME, capteurs...) que le decodeur Profalux ne connait pas. L'appelant tient le radio
+ * (ecoute permanente en pause) et a selectionne la bonne puce (voir radio_capture_raw_on).
+ * levels[i]=0|1, us[i]=duree us (resolution RMT = 1 MHz). Rend le nb d'impulsions (>0), <0 si
+ * rien/erreur. Code FIXE uniquement : rejouer une trame a code tournant est rejete (il change a
+ * chaque appui), ca reste l'affaire des decodeurs dedies (Profalux, io). */
+int cc1101_rx_capture_pulses(uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+    if (!levels || !us || max < 2) return -1;
+    if (!s_cap && cc1101_capture_init() != 0) return -1;
+    /* Profil RX du protocole (depuis profiles.json, via cc1101_set_capture_rx) : regle le debit
+     * et la bande passante de demodulation pour CE protocole (CAME : 3800 baud / 135 kHz, contre
+     * ~2400 / 102 kHz herites du 868 qui lisaient une sequence fausse). 0/0 = garder la config
+     * courante (agnostique). PERSISTANT jusqu'au prochain cc1101_set_capture_rx (pose une fois
+     * par l'API, re-utilise a chaque capture suivante) ; restaure les registres a la sortie pour
+     * ne pas fuir sur le chemin Profalux. Commodite de TEST : le vrai chemin production passe le
+     * profil par capture (UI pyramide -> /api/rejeu/capture), pas par un reglage global. */
+    uint8_t mdm4_save = 0, mdm3_save = 0;
+    bool mdm_over = (s_cap_drate_baud != 0 && s_cap_bw_khz != 0);
+    if (mdm_over) {
+        mdm4_save = cc1101_read_reg(CC_MDMCFG4); mdm3_save = cc1101_read_reg(CC_MDMCFG3);
+        uint8_t m4 = 0, m3 = 0; cc1101_ook_rx_regs(s_cap_drate_baud, s_cap_bw_khz, &m4, &m3);
+        cc1101_write_reg(CC_MDMCFG4, m4); cc1101_write_reg(CC_MDMCFG3, m3);
+        ESP_LOGW(TAG, "capture : profil RX %u baud / %u kHz -> MDMCFG4=0x%02X MDMCFG3=0x%02X",
+                 (unsigned)s_cap_drate_baud, (unsigned)s_cap_bw_khz, m4, m3);
+    }
+    /* ⚠️ Armement RX OOK async, calque sur cc1101_rx_listen_bits (meme mode, meme gain
+     * s_rx_gain) SAUF AGCCTRL0 : la capture brute se rejoue A L'IDENTIQUE, son enveloppe doit
+     * donc etre PROPRE, la ou l'ecoute Profalux passe par un decodeur KeeLoq qui tolere le bave.
+     * A factoriser (arm_ook_rx) une fois valide sur une vraie Super. */
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT);
+    cc1101_write_reg(0x02, 0x0D); cc1101_write_reg(0x0B, 0x06); cc1101_write_reg(0x19, 0x14);
+    cc1101_write_reg(0x1B, s_rx_gain[s_active]); cc1101_write_reg(0x1C, 0x00);
+    /* AGCCTRL0 : decision ASK/OOK a 8 dB + hysteresis LARGE (0xD1), pas 8 dB simple (0x91)
+     * du chemin Profalux. Mesures Pascal 2026-10-31 (portail CAME 433, rfdecode) :
+     *  - 8 dB simple (0x91) : l'AGC remonte le gain dans les creux, le slicer bascule sur le
+     *    bruit -> parasites 52/55 us, trame illisible (0xc) ;
+     *  - 12 dB (0x92) : bruit tue (plus rien <120 us) MAIS le seuil haut RONGE les fronts
+     *    (640->555, 320->230, creux gonfles), la separation court/long s'ecrase -> 0xc930 ;
+     *  - 8 dB + grande hysteresis (0xD1) : garde les fronts du 8 dB, et la bande morte autour
+     *    du seuil tue les re-bascules de bruit dans les creux SANS deplacer le point de decision.
+     * But : restaurer le 320/640 propre (le registre n'offre que 8/12/16 dB, pas de 10). #102. */
+    cc1101_write_reg(0x1D, 0xD1);
+    strobe(CC_SIDLE); esp_rom_delay_us(200);
+    strobe(0x33); vTaskDelay(pdMS_TO_TICKS(3));
+    strobe(0x3A); strobe(0x34);
+    for (int i = 0; i < 50; i++) { if ((cc1101_read_reg(CC_MARCSTATE | 0x40) & 0x1F) == 0x0D) break; vTaskDelay(pdMS_TO_TICKS(1)); }
+    rmt_disable(s_cap); rmt_enable(s_cap); xQueueReset(s_capq);
+    /* Idle a 8 ms = fin de rafale (une trame, repetitions comprises si le gap inter-trame < 8 ms).
+     * min 3 us de-glitche le bruit. Un seul evenement a la fois (pas de partial_rx) : prouve OK
+     * sur le S3 par cc1101_rx_probe. */
+    rmt_receive_config_t rc = { .signal_range_min_ns = 3000, .signal_range_max_ns = 8000000 };
+    int64_t t_end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    int n = -3;
+    rmt_rx_done_event_data_t ev;
+    if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) == ESP_OK) {
+        while (esp_timer_get_time() < t_end) {
+            if (xQueueReceive(s_capq, &ev, pdMS_TO_TICKS(100)) != pdTRUE) continue;   /* tjrs en RX */
+            if (ev.num_symbols >= 8) {   /* rafale substantielle : filtre les blips de bruit */
+                int k = 0;
+                for (size_t i = 0; i < ev.num_symbols && k < max - 1; i++) {
+                    const rmt_symbol_word_t *s = &ev.received_symbols[i];
+                    if (s->duration0) { levels[k] = (uint8_t)s->level0; us[k] = (uint16_t)s->duration0; k++; }
+                    if (k >= max - 1) break;
+                    if (s->duration1) { levels[k] = (uint8_t)s->level1; us[k] = (uint16_t)s->duration1; k++; }
+                }
+                n = k;
+                { int8_t rssi = cc1101_get_rssi(); if (rssi_out) *rssi_out = rssi;
+                  ESP_LOGW(TAG, "CAPTURE brute : %u symboles -> %d impulsions, RSSI %d dBm",
+                           (unsigned)ev.num_symbols, n, rssi); }
+                break;
+            }
+            if (rmt_receive(s_cap, s_capbuf, s_capbuf_sz, &rc) != ESP_OK) break;   /* re-arme */
+        }
+    } else n = -2;
+    if (mdm_over) { cc1101_write_reg(CC_MDMCFG4, mdm4_save); cc1101_write_reg(CC_MDMCFG3, mdm3_save); }
+    strobe(CC_SIDLE);
+    gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);   /* restaure pour le TX bit-bang */
+    return n;
 }
 
 /* --- RX --- */

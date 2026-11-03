@@ -1,0 +1,79 @@
+{
+  "_contract": "Table de profils : SOURCE UNIQUE de l'ecran unifie 'Ajouter un appareil'. PYRAMIDE type -> marque -> profil. ALIGNE sur le schema DEPLOYE (box de Pascal, feat/came) : bloc 'rx' (reglage RX de capture), bloc 'tx' (encoder/short_us/long_us/repeats/gap_us pour le rejeu-encode CAME ; te_us/repeat_bit/rmt pour KeeLoq ; frame_bits pour Somfy). AJOUTS de la session connecteur (Noe) a integrer par Max : 'freq_khz' top-level par profil (la porteuse, deployee aujourd'hui dans tx.freq_khz -> a remonter), section 'params' par trait, profils Profalux/Somfy enrichis (freq + tx), profils Eveno et NeoSol (famille KeeLoq basse, 868330). Les constantes de protocole d'une marque (ex. timing sync Somfy) restent dans SON moteur (somfy_rts.h), pas ici.",
+  "params": {
+    "modulation":          { "statut": "certain" },
+    "band":                { "statut": "certain", "detecte": true },
+    "code":                { "statut": "certain" },
+    "mecanisme":           { "statut": "certain" },
+    "tx.encoder":          { "statut": "intention" },
+    "tx.short_us":         { "statut": "intention" },
+    "tx.long_us":          { "statut": "intention" },
+    "freq_khz":            { "statut": "valide" },
+    "rx.datarate_baud":    { "statut": "valide" },
+    "rx.bandwidth_khz":    { "statut": "valide" },
+    "tx.repeats":          { "statut": "valide" },
+    "tx.gap_us":           { "statut": "valide" },
+    "tx.te_us":            { "statut": "valide" },
+    "tx.repeat_bit":       { "statut": "valide" },
+    "tx.frame_bits":       { "statut": "valide" },
+    "tx.rmt":              { "statut": "implementation" },
+    "_note": "Structure PAR TRAIT (alignee sur pyramid-detect.js : params[k].statut, params[k].detecte). La detection ne filtre que statut=='certain'. certain = spec marque (modulation, band, code, mecanisme). valide = empirique grave en defaut profil (CAME 3800/135 n=1). releve = mesure sur trame reelle, vit dans la fiche appareil (ex. freq calee ; freq_khz est 'valide' en defaut ET surcharge 'releve' par appareil). implementation = choix firmware (RMT). intention = DECLARE mais PAS CABLE (le code ne lit rien : rx, encoder, short/long ; cible E4, et E6 pour batir vraiment l'encodeur). detecte = observable d'une capture. A reconcilier avec le params non committe de Max, sa version fait foi."
+  },
+  "types": {
+    "volet":   { "label": "Volet",   "code": 0, "icon": "🪟", "positional": true, "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
+                 "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
+    "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
+                 "capture": [ { "cmd": "up", "label": "Bouton du portail" } ] }
+  },
+  "profils": [
+    {
+      "type": "portail", "marque": "CAME", "nom": "Portail CAME (cloner la télécommande)",
+      "mecanisme": "rejeu", "modulation": "OOK", "code": "fixe", "band": "433",
+      "flow": "rejeu",
+      "freq_khz": 433920,
+      "rx": { "datarate_baud": 3800, "bandwidth_khz": 135 },
+      "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640, "repeats": 8, "gap_us": 11500 },
+      "note": "AUJOURD'HUI = rejeu BRUT de la capture (shutters.c:480), code fixe OOK. rx (3800/135), tx.encoder (came-top432), short_us/long_us (320/640) sont DECLARES mais CABLES NULLE PART (grep vide dans firmware/main) : le code ne les lit pas. Cabler rx dans la capture = E4. Batir VRAIMENT l'encodeur (decoder la capture en code puis re-synthetiser une trame propre 320/640) = E6, decision de fond (robuste, rend le datarate quasi caduc) vs rejeu brut (fragile, la regression de Pascal). repeats/gap_us = rejeu, cables. freq_khz top-level (le deploye le met dans tx, legacy)."
+    },
+    {
+      "type": "volet", "marque": "Profalux", "nom": "Cloner ma télécommande Profalux",
+      "mecanisme": "cloner", "modulation": "OOK", "code": "roulant", "band": "868",
+      "flow": "learn",
+      "freq_khz": 868425,
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "note": "Generation KeeLoq depuis l'identite APPRISE de la telecommande d'origine. Pas de rx (on ne capture pas pour piloter, code roulant)."
+    },
+    {
+      "type": "volet", "marque": "Profalux", "nom": "Nouvelle télécommande Profalux",
+      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
+      "flow": "enrol-pfx",
+      "freq_khz": 868425,
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "note": "Genere une identite virtuelle 0x067 neuve. te_us=400 nominal HCS300. repeat_bit=true = defaut famille KeeLoq (INVERSE l'usine, ne touche QUE les nouveaux enrolements). rmt=true = implementation."
+    },
+    {
+      "type": "volet", "marque": "Eveno", "nom": "Nouvelle télécommande Eveno",
+      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
+      "flow": "enrol-pfx",
+      "freq_khz": 868330,
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "note": "Famille KeeLoq basse, PHY commune Profalux, porteuse 868,330 (confirmee terrain par Olivier via 'Caler sur ma telecommande'). Coexiste avec Profalux (868,425) sur la radio 868 -> d'ou la freq PAR APPAREIL."
+    },
+    {
+      "type": "volet", "marque": "NeoSol", "nom": "Nouveau volet Profalux NeoSol (solaire)",
+      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
+      "flow": "enrol-pfx",
+      "freq_khz": 868330,
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "note": "Ligne Profalux solaire (famille KeeLoq). Porteuse 868,330 mesuree terrain par Olivier (= Eveno a n=1, deux marques distinctes, surchargeable par appareil). Guidage specifique a l'enrolement : position de reference AVANT, geste haut/bas/haut, delai (voir #35 compat). repeat_bit recommande."
+    },
+    {
+      "type": "volet", "marque": "Somfy RTS", "nom": "Nouveau volet Somfy",
+      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "433",
+      "flow": "create-somfy", "endpoint": "/api/somfy/create",
+      "freq_khz": 433420,
+      "tx": { "frame_bits": 56 },
+      "note": "Generation RTS (adresse 24 bits + code roulant). freq 433,42 DISTINCTE du CAME 433,92 (meme band 433, porteuse differente). frame_bits 56/80 PAR VOLET (semantique : le 80 ajoute une extension). Le timing sync Somfy (hw_sync 2560, sw_sync 4850, symbol 1280, first x2 / repeat x7) est une CONSTANTE de protocole, source unique dans somfy_rts.h, PAS dupliquee ici."
+    }
+  ]
+}

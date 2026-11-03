@@ -32,7 +32,7 @@ somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn) {
     }
 }
 
-int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats) {
+int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats, uint32_t freq_khz) {
     if (!frame) return -1;
     if (repeats < 0) repeats = 0;
     if (repeats > SOMFY_RTS_TX_REPEATS_MAX) repeats = SOMFY_RTS_TX_REPEATS_MAX;
@@ -51,13 +51,13 @@ int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats) {
             if ((n = push(n, p[i].level, p[i].us)) < 0) return -1;
     }
 
-    int r = radio_tx_ook_pulses(SOMFY_RTS_FREQ_KHZ, s_level, s_us, n);
+    int r = radio_tx_ook_pulses(freq_khz ? freq_khz : SOMFY_RTS_FREQ_KHZ, s_level, s_us, n);
     ESP_LOGW(TAG, "TX Somfy : %d trame(s), %d impulsions, %u kHz, r=%d",
              repeats + 1, n, (unsigned)SOMFY_RTS_FREQ_KHZ, r);
     return r;
 }
 
-int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd, int repeats) {
+int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t cmd, int repeats, uint32_t freq_khz) {
     if (!base56) return -1;
     if (repeats < 0) repeats = 0;
     if (repeats > SOMFY_RTS_TX_REPEATS_MAX) repeats = SOMFY_RTS_TX_REPEATS_MAX;
@@ -77,7 +77,7 @@ int somfy_tx_emit80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cmd_t
         for (int i = 0; i < np; i++)
             if ((n = push(n, p[i].level, p[i].us)) < 0) return -1;
     }
-    int r = radio_tx_ook_pulses(SOMFY_RTS_FREQ_KHZ, s_level, s_us, n);
+    int r = radio_tx_ook_pulses(freq_khz ? freq_khz : SOMFY_RTS_FREQ_KHZ, s_level, s_us, n);
     ESP_LOGW(TAG, "TX Somfy 80 bits : cmd=0x%X, %d trame(s), %d impulsions, r=%d",
              (unsigned)cmd, repeats + 1, n, r);
     return r;

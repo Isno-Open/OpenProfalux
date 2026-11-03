@@ -6,6 +6,10 @@
 #include "freq_sweep.h"
 #include "hardware_config.h"
 #include "rx_confirm.h"
+#include "io/io_radio.h"
+#include "io/io_send.h"
+#include "io/io_store.h"
+#include "io/io_pair.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,6 +26,7 @@ static radio_frame_cb_t  s_cb  = NULL;
 static volatile bool     s_run     = false;
 static volatile bool     s_paused  = false;  /* pause temporaire (pendant nos TX stream) */
 static volatile bool     s_listen  = false;  /* interrupteur maitre (case UI "capture toutes les trames") */
+static volatile bool     s_io_listen = false; /* ecoute permanente io (2-FSK) : exclusive de l'ecoute PFX (#87) */
 
 /* Lecture LSB-first d'un champ de la trame (ordre du fil). */
 static uint32_t lsb(const char *b, int from, int len) {
@@ -43,6 +48,26 @@ void radio_tx(const char *bits, int repeats) {
     if (!bits || !bits[0] || !s_mtx) return;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     cc1101_tx_raw_bits(bits, (int)strlen(bits), repeats);   /* rafale en UNE session TX */
+    xSemaphoreGive(s_mtx);
+}
+
+void radio_tx_device(const char *bits, int repeats, const tx_params_t *p) {
+    if (!bits || !bits[0] || !s_mtx) return;
+    if (!p) { radio_tx(bits, repeats); return; }
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    /* Sauve l'etat courant, applique les params de l'appareil, emet, restaure : une autre marque
+     * sur la meme radio ne doit jamais heriter de la porteuse ou des options de la precedente. */
+    uint32_t f0 = cc1101_get_freq_khz(), te0 = cc1101_get_tx_te();
+    bool rpt0 = cc1101_get_tx_repeat_bit(), rmt0 = cc1101_get_tx_rmt();
+    if (p->freq_khz) cc1101_set_freq_khz(p->freq_khz);
+    if (p->te_us)    cc1101_set_tx_te(p->te_us);
+    if (p->rpt >= 0) cc1101_set_tx_repeat_bit(p->rpt != 0);
+    if (p->rmt >= 0) cc1101_set_tx_rmt(p->rmt != 0);
+    cc1101_tx_raw_bits(bits, (int)strlen(bits), repeats);
+    if (p->freq_khz) cc1101_set_freq_khz(f0);
+    if (p->te_us)    cc1101_set_tx_te(te0);
+    if (p->rpt >= 0) cc1101_set_tx_repeat_bit(rpt0);
+    if (p->rmt >= 0) cc1101_set_tx_rmt(rmt0);
     xSemaphoreGive(s_mtx);
 }
 
@@ -103,18 +128,48 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
  * sous le mutex (le front-end de la 433 est adapte a 433, la ou la primaire 868 n'entend rien d'un
  * emetteur 433), on ecoute, puis on REND LA MAIN a la radio primaire. Sert au diagnostic de
  * reception par radio : verifier qu'une puce RECOIT, pas seulement qu'elle voit une porteuse. */
-int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full) {
+int radio_listen_confirmed_on_freq(int idx, uint32_t freq_khz, uint32_t timeout_ms, char *buf, int max, bool full) {
     if (idx < 0 || idx >= cc1101_radio_count()) return -1;
     if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     int prev = cc1101_active_radio();
     cc1101_select(idx);
+    uint32_t back = cc1101_get_freq_khz();
+    if (freq_khz) cc1101_set_freq_khz(freq_khz);   /* capturer a la frequence de l'APPAREIL (Eveno 868,330 vs Profalux 868,425), pas celle de la box */
     int r = listen_confirmed_locked(timeout_ms, buf, max, full);
+    if (freq_khz) cc1101_set_freq_khz(back);       /* restaurer la porteuse de idx : ne pas decaler l'ecoute permanente */
     cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
+}
+int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full) {
+    return radio_listen_confirmed_on_freq(idx, 0, timeout_ms, buf, max, full);
+}
+
+/* Capture BRUTE OOK sur la radio idx (issue #95) : selectionne la puce sous mutex (p.ex. la 433
+ * pour un portail CAME), capture les impulsions brutes via cc1101_rx_capture_pulses, puis rend la
+ * main a la primaire. Meme patron que radio_listen_confirmed_on. Rend le nb d'impulsions (>0),
+ * <0 si rien/erreur. Appele par le moteur de capture (rf_capture.c). */
+int radio_capture_raw_on_freq(int idx, uint32_t freq_khz, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+    if (idx < 0 || idx >= cc1101_radio_count()) return -1;
+    if (!s_mtx) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int prev = cc1101_active_radio();
+    cc1101_select(idx);
+    uint32_t back = cc1101_get_freq_khz();
+    if (freq_khz) cc1101_set_freq_khz(freq_khz);   /* capturer a la frequence du PROFIL de marque, pas celle de la box */
+    int r = cc1101_rx_capture_pulses(timeout_ms, levels, us, max, rssi_out);
+    if (freq_khz) cc1101_set_freq_khz(back);       /* restaurer la porteuse de idx */
+    cc1101_select(prev);         /* rend la main a la radio primaire (868) */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+int radio_capture_raw_on(int idx, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+    return radio_capture_raw_on_freq(idx, 0, timeout_ms, levels, us, max, rssi_out);
 }
 
 /* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Ecoute en pause + mutex, le
@@ -142,6 +197,59 @@ int radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t
 }
 
 void radio_pause_rx(bool pause) { s_paused = pause; }
+
+/* ── io-homecontrol (2-FSK 868, #87). Toutes ces primitives passent la radio en FSK io (config +
+ * canal CH2) sous mutex, ecoute permanente en pause, puis RESTAURENT la modulation OOK Profalux et
+ * la porteuse, meme sur echec. Le module io/ est autonome sur cc1101 (voir io/io_radio.c). ── */
+void radio_set_io_listening(bool on) {
+    s_io_listen = on;
+    ESP_LOGW(TAG, "ecoute io permanente %s (2-FSK Somfy io)", on ? "ON" : "OFF");
+}
+bool radio_is_io_listening(void) { return s_io_listen; }
+
+int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
+    if (!s_mtx || !buf || max <= 0) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();                         /* FSK io + canal CH2 */
+    int n = io_radio_rx_packet(buf, (size_t)max, timeout_ms);
+    cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
+    cc1101_set_freq_khz(back);                 /* restaure la porteuse */
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return n;
+}
+
+int radio_io_send(const uint8_t src[3], uint8_t button) {
+    if (!s_mtx || !src) return -1;
+    uint8_t key[16];
+    if (!io_store_get_key(src, key)) return -1;    /* ce volet n'a pas d'identite io appairee */
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();
+    int r = io_hc_send_shutter_1w(src, key, button);
+    cc1101_apply_config_ook();
+    cc1101_set_freq_khz(back);
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
+int radio_io_pair_1w(const io_profile_t *profile, const uint8_t *fixed_src, uint8_t out_src[3], uint32_t timeout_ms) {
+    if (!s_mtx || !out_src || !profile) return -2;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    uint32_t back = cc1101_get_freq_khz();
+    io_radio_config();
+    int r = io_hc_pair_1w(profile, fixed_src, out_src, timeout_ms);
+    cc1101_apply_config_ook();
+    cc1101_set_freq_khz(back);
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
 
 /* Relance le self-test TX a la demande (bouton UI), sous mutex/pause pour ne pas
  * entrer en collision avec l'ecoute. Retourne 0 si la puce passe en TX, -1 sinon. */
@@ -330,7 +438,36 @@ static void rx_task(void *arg) {
     char bits[80];
     static rx_confirm_t c;   /* serie en cours : une trame n'est transmise que confirmee (issue #39) */
     rx_confirm_reset(&c);
+    bool     io_posed = false;   /* la config io 2-FSK est-elle actuellement en place ? (#87) */
+    uint32_t ook_freq = 0;       /* porteuse OOK a restaurer en quittant le mode io */
     while (s_run) {
+        /* ── Ecoute io permanente (2-FSK) : branche isolee, exclusive de l'OOK. On pose la config io
+         * une fois (en memorisant la porteuse OOK), on boucle la reception io et on journalise chaque
+         * trame ; a l'arret on restaure l'OOK. Le chemin PFX ci-dessous n'est pas touche tant que
+         * s_io_listen est faux (io_posed reste faux). Voir #87. ── */
+        if (s_io_listen && !s_paused) {
+            xSemaphoreTake(s_mtx, portMAX_DELAY);
+            if (!io_posed) { ook_freq = cc1101_get_freq_khz(); io_radio_config(); io_posed = true; }
+            uint8_t iob[32];
+            int ni = io_radio_rx_packet(iob, sizeof iob, 300);
+            xSemaphoreGive(s_mtx);
+            if (ni > 0) {
+                char hex[2 * 32 + 1];
+                int m = ni > 32 ? 32 : ni;
+                for (int i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02X", iob[i]);
+                ESP_LOGW(TAG, "Trame io captee (%d octets) : %s", ni, hex);
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
+            continue;
+        }
+        if (io_posed) {   /* on quitte le mode io : restaure la modulation OOK et la porteuse */
+            xSemaphoreTake(s_mtx, portMAX_DELAY);
+            cc1101_apply_config_ook();
+            cc1101_set_freq_khz(ook_freq);
+            xSemaphoreGive(s_mtx);
+            io_posed = false;
+        }
         if (!s_listen || s_paused) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }  /* veille tant que capture OFF ou TX en cours */
         xSemaphoreTake(s_mtx, portMAX_DELAY);
         int n = (!s_listen || s_paused) ? -1 : cc1101_rx_listen_bits(RX_WINDOW_MS, bits, 79);

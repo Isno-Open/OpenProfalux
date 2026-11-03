@@ -37,6 +37,9 @@ int  shutters_learn_assign(const char *id, const char *action, const char *bits)
  * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
 int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
 int  shutters_create_virtual_somfy(const char *id, uint32_t address);   /* volet Somfy RTS (adresse 24 bits, pas de capture) */
+int  shutters_create_rejeu(const char *id, uint8_t type);                /* appareil a rejeu brut OOK (code fixe) */
+int  shutters_set_type(const char *id, uint8_t type);                    /* corrige le dev_type d'un appareil existant */
+int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);
@@ -51,6 +54,12 @@ int  shutters_reassign(const char *id, const char *from, const char *to);
 /* Calibration : temps de course. */
 int  shutters_calibrate(const char *id, uint32_t up_ms, uint32_t down_ms);
 int  shutters_set_orientation(const char *id, int orientation);   /* azimut facade (-1 = non defini) */
+/* Params d'emission PAR APPAREIL (etage 2, issue #111) : porteuse, TE, tri-etat bit de repetition/RMT
+ * (tx_override_t). freq_khz/te_us a 0 = heriter. marque=NULL = provenance inchangee. */
+int  shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
+                            int rpt, int rmt, int frame_bits, const char *marque);
+/* Renomme un volet (change son id + met a jour membres/suiveurs + entite HA). 0 ok ; -4 nom deja pris. */
+int  shutters_rename_volet(const char *old_id, const char *new_id);
 /* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE
  * l'affichage web (ni radio, ni pilotage, ni decouverte HA). */
 int  shutters_set_order(const char *ids_csv);

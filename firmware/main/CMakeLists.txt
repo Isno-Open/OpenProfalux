@@ -31,7 +31,10 @@ endif()
 set(WEB_SRCS "${CMAKE_CURRENT_LIST_DIR}/web/index.html"
              "${CMAKE_CURRENT_LIST_DIR}/web/style.css"
              "${CMAKE_CURRENT_LIST_DIR}/web/app.js"
-             "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest")
+             "${CMAKE_CURRENT_LIST_DIR}/web/app-capture.js"
+             "${CMAKE_CURRENT_LIST_DIR}/web/pyramid-detect.js"
+             "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest"
+             "${CMAKE_CURRENT_LIST_DIR}/web/profiles.json")
 set(WEB_GZ_DIR "${CMAKE_BINARY_DIR}/web")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gzip_web.py" "${WEB_GZ_DIR}" ${WEB_SRCS}
@@ -57,6 +60,7 @@ idf_component_register(
         "keeloq_decode.c"
         "somfy_rts.c"
         "somfy_tx.c"
+        "came_tx.c"
         "mdns_name.c"
         "captive_dns.c"
         "enrol_gate.c"
@@ -70,14 +74,26 @@ idf_component_register(
         "ota.c"
         "ota_rollback.c"
         "radio.c"
+        "rf_capture.c"
         "radio_profile.c"
         "log_ring.c"
-    INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
+        "io/iohome_frame.cpp"
+        "io/iohome_crypto.cpp"
+        "io/io_radio.c"
+        "io/io_unframer.c"
+        "io/io_framer.c"
+        "io/io_send.cpp"
+        "io/io_store.c"
+        "io/io_pair.cpp"
+    INCLUDE_DIRS "." "io" "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
         "${WEB_GZ_DIR}/style.css.gz"
         "${WEB_GZ_DIR}/app.js.gz"
+        "${WEB_GZ_DIR}/app-capture.js.gz"
+        "${WEB_GZ_DIR}/pyramid-detect.js.gz"
         "${WEB_GZ_DIR}/manifest.webmanifest.gz"
+        "${WEB_GZ_DIR}/profiles.json.gz"
         "web/icon-192.png"
     REQUIRES
         nvs_flash

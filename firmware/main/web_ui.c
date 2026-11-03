@@ -3,10 +3,12 @@
  */
 #include "web_ui.h"
 #include "shutters.h"
+#include "cfg_model.h"   /* tx_override_t (TXOVR_*) : tri-etat des options d'emission par appareil */
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "enrol_gate.h"
 #include "radio.h"
+#include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
 #include "wifi_bridge.h"
@@ -32,6 +34,9 @@
 #include "esp_spiffs.h"
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
+#include "esp_http_client.h" /* POST du rapport vers le relais www.isno.fr */
+#include "esp_crt_bundle.h"  /* verification TLS du relais */
+#include "esp_mac.h"         /* chip-id (MAC eFuse) : cle stable qui survit au flash */
 #include "cfg_store.h"       /* place des volets en NVS */
 #include "req_guard.h"       /* envois venus d'un autre site (CSRF) */
 #include <inttypes.h>
@@ -190,9 +195,15 @@ extern const uint8_t style_css_start[]  asm("_binary_style_css_gz_start");
 extern const uint8_t style_css_end[]    asm("_binary_style_css_gz_end");
 extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
 extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
+extern const uint8_t app_capture_js_start[] asm("_binary_app_capture_js_gz_start");   /* UI capture brute (issue #95) */
+extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end");
+extern const uint8_t pyramid_detect_js_start[] asm("_binary_pyramid_detect_js_gz_start");   /* detection de profil (pyramide, #111) */
+extern const uint8_t pyramid_detect_js_end[]   asm("_binary_pyramid_detect_js_gz_end");
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
+extern const uint8_t profiles_json_start[] asm("_binary_profiles_json_gz_start");   /* table de profils de l'ecran "Ajouter un appareil" */
+extern const uint8_t profiles_json_end[]   asm("_binary_profiles_json_gz_end");
 extern const uint8_t icon_png_start[]   asm("_binary_icon_192_png_start");
 extern const uint8_t icon_png_end[]     asm("_binary_icon_192_png_end");
 
@@ -217,6 +228,7 @@ static uint32_t bits_lsb(const char *b, int from, int len) {
 
 static int req_radio_idx(httpd_req_t *r);   /* ?radio=N (defini plus bas) */
 static int s_learn_radio = 0;               /* radio ciblee par /api/learn/start (issue #95) */
+static uint32_t s_learn_freq = 0;           /* frequence d'ecoute (0 = porteuse de la radio) : capture a la freq du profil de marque */
 
 static void learn_task(void *arg) {
     (void)arg;
@@ -227,7 +239,7 @@ static void learn_task(void *arg) {
      * ce qu'on supposait) : ca empechait d'apprendre stop et descente.
      * Confirmee par une 2e trame identique et complete (66 bits) : une trame isolee a bits
      * faux donnait un volet au serial ou a la commande corrompus (issue #39). */
-    int n = radio_listen_confirmed_on(s_learn_radio, 15000, bits, SH_BITS_LEN, true);
+    int n = radio_listen_confirmed_on_freq(s_learn_radio, s_learn_freq, 15000, bits, SH_BITS_LEN, true);
     if (n >= 66) {
         s_lrssi   = cc1101_get_rssi();
         strlcpy(s_lbits, bits, SH_BITS_LEN);
@@ -286,7 +298,10 @@ static const char *jstr(cJSON *o, const char *k) {
 static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end, true); }
 static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end,  true); }
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
+static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
+static esp_err_t h_js_detect(httpd_req_t *r) { return send_asset(r, "application/javascript", pyramid_detect_js_start, pyramid_detect_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
+static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
 /* ── /api/status ── */
@@ -325,10 +340,45 @@ static esp_err_t h_volet_delete(httpd_req_t *r) {
     return ESP_OK;
 }
 
+/* ── /api/volet/rename : {"id":"ancien","name":"nouveau"} -> change l'id + met a jour les references.
+ * -4 = nom deja pris (on le signale pour un message clair cote UI). ── */
+static esp_err_t h_volet_rename(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    int rc = shutters_rename_volet(jstr(j, "id"), jstr(j, "name"));
+    cJSON_Delete(j);
+    if (rc == -4) { httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"exists\"}"); return ESP_OK; }
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+
+/* ── /api/volet/type : {"id":"...","type":N} -> corrige le dev_type d'un appareil existant.
+ * Repare un type mal attribue (volet/portail) sans reenroler : identite, compteur, captures conserves. */
+static esp_err_t h_volet_type(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    cJSON *ty = cJSON_GetObjectItem(j, "type");
+    int rc = shutters_set_type(jstr(j, "id"), ty ? (uint8_t)cJSON_GetNumberValue(ty) : 0);
+    cJSON_Delete(j);
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+
 /* ── /api/learn/start + /poll ── */
 static esp_err_t h_learn_start(httpd_req_t *r) {
     char *body = read_body(r); if (body) free(body);   /* le corps {action} n'est plus utilise cote firmware */
-    if (!s_lactive) { s_learn_radio = req_radio_idx(r); s_lready = false; s_lactive = true; xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL); }   /* ?radio=N : ecoute cette radio (issue #95) */
+    if (!s_lactive) {
+        s_learn_radio = req_radio_idx(r);
+        s_learn_freq = 0;   /* ?freq_khz=N : ecouter a la frequence de l'appareil/profil (Eveno 868330 vs Profalux 868425) */
+        char q[96], v[12];
+        if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK &&
+            httpd_query_key_value(q, "freq_khz", v, sizeof v) == ESP_OK)
+            s_learn_freq = (uint32_t)strtoul(v, NULL, 10);
+        s_lready = false; s_lactive = true;
+        xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL);
+    }
     httpd_resp_sendstr(r, "{\"ok\":1}");
     return ESP_OK;
 }
@@ -401,6 +451,30 @@ static esp_err_t h_orientation(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *ori = cJSON_GetObjectItem(j, "orientation");
     int rc = shutters_set_orientation(jstr(j, "id"), ori ? (int)cJSON_GetNumberValue(ori) : -1);
+    cJSON_Delete(j);
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+/* /api/volet/txparams : edition PAR APPAREIL de la porteuse, du TE, du bit de repetition et du RMT
+ * (etage 2, issue #111 ; panneau avance). freq_khz/te_us a 0 = heriter du defaut ; tx_rpt/tx_rmt =
+ * tri-etat (0 heriter, 1 off, 2 on). Chaque appareil garde SES valeurs : en regler un ne touche aucun
+ * autre, meme sur la meme radio (c'est le correctif du bug "ajouter de l'Eveno casse le Profalux"). */
+static esp_err_t h_volet_txparams(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz");
+    cJSON *tu = cJSON_GetObjectItem(j, "te_us");
+    cJSON *xp = cJSON_GetObjectItem(j, "tx_rpt");
+    cJSON *xm = cJSON_GetObjectItem(j, "tx_rmt");
+    cJSON *fb = cJSON_GetObjectItem(j, "frame_bits");
+    int rc = shutters_set_tx_params(jstr(j, "id"),
+        cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0,
+        cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0,
+        cJSON_IsNumber(xp) ? (int)xp->valuedouble : -1,
+        cJSON_IsNumber(xm) ? (int)xm->valuedouble : -1,
+        cJSON_IsNumber(fb) ? (int)fb->valuedouble : 0,
+        jstr(j, "marque"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -532,11 +606,8 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         size_t k = strlen(out);
         if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
     }
-    {   /* bit de repetition et emission RMT (options) : ajoutes en fin d'objet */
-        size_t k = strlen(out);
-        if (k > 0 && k + 36 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"tx_repeat_bit\":%d,\"tx_rmt\":%d}",
-                                                     cc1101_get_tx_repeat_bit() ? 1 : 0, cc1101_get_tx_rmt() ? 1 : 0);
-    }
+    /* Bit de repetition et RMT ne sont plus des reglages GLOBAUX (issue #111) : ils vivent PAR
+     * APPAREIL (fiche du volet, panneau avance). Plus exposes ici. */
     httpd_resp_set_type(r, "application/json");
     httpd_resp_sendstr(r, out);
     return ESP_OK;
@@ -642,18 +713,11 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             nvs_set_u8(h, "upd_auto", on);
             shutters_set_update_auto(on);   /* prise en compte au prochain cycle */
         }
-        cJSON *rpj = cJSON_GetObjectItem(j, "tx_repeat_bit");
-        if (cJSON_IsBool(rpj) || cJSON_IsNumber(rpj)) {
-            uint8_t on = cJSON_IsTrue(rpj) || (cJSON_IsNumber(rpj) && rpj->valuedouble != 0);
-            nvs_set_u8(h, "tx_rpt", on);
-            cc1101_set_tx_repeat_bit(on);   /* prise en compte a la prochaine emission */
-        }
-        cJSON *rmj = cJSON_GetObjectItem(j, "tx_rmt");
-        if (cJSON_IsBool(rmj) || cJSON_IsNumber(rmj)) {
-            uint8_t on = cJSON_IsTrue(rmj) || (cJSON_IsNumber(rmj) && rmj->valuedouble != 0);
-            nvs_set_u8(h, "tx_rmt", on);
-            cc1101_set_tx_rmt(on);   /* prise en compte a la prochaine emission */
-        }
+        /* Bit de repetition et RMT : retires d'ici (issue #111). Ces options vivent PAR APPAREIL
+         * (fiche du volet), posees a l'enrolement depuis le profil et editables au panneau avance.
+         * L'ancien global NVS tx_rpt/tx_rmt n'est plus ecrit ici ; il reste lu une fois par la
+         * migration (shutters.c migrate_tx_overrides) pour que les appareils deja enroles gardent
+         * leur comportement, puis il n'a plus d'effet. */
         cJSON *rgj = cJSON_GetObjectItem(j, "rx_gain");
         if (cJSON_IsNumber(rgj)) {
             uint8_t rg = (uint8_t)rgj->valuedouble;   /* AGCCTRL2 : plafond de gain RX */
@@ -1013,6 +1077,48 @@ static esp_err_t h_rx_sweep_status(httpd_req_t *r) {
     return e;
 }
 
+/* ── /api/capture : capture OOK BRUTE + rejeu (issue #95) ──
+ * start (POST ?radio=N) : ecoute ~15 s, l'utilisateur presse sa telecommande (portail CAME,
+ * capteur...) ; aucun decodeur, on enregistre la forme du signal. last (GET) : derniere capture
+ * en JSON (impulsions [[lvl,us]]). replay (POST) : rejoue la derniere capture. Code FIXE : un code
+ * tournant (Somfy RTS, Profalux) ne se rejoue pas ainsi, c'est l'affaire des decodeurs dedies. */
+static esp_err_t h_capture_start(httpd_req_t *r) {
+    /* ?radio=N (quelle radio), + profil RX OPTIONNEL ?datarate_baud=&bandwidth_khz= : regle la
+     * demodulation pour le protocole capte (ces valeurs viennent du profil profiles.json, pas du
+     * code). Absents = config courante (capture agnostique de decouverte). Un seul parse (buffer
+     * assez grand), sinon req_radio_idx tronquerait la query et retomberait sur la 868. */
+    char q[112], v[12];
+    int radio = 0; uint32_t drate = 0, bw = 0; bool has_rx = false;
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK) {
+        if (httpd_query_key_value(q, "radio", v, sizeof v) == ESP_OK) { int i = atoi(v); if (i > 0) radio = i; }
+        if (httpd_query_key_value(q, "datarate_baud", v, sizeof v) == ESP_OK) { drate = (uint32_t)strtoul(v, NULL, 10); has_rx = true; }
+        if (httpd_query_key_value(q, "bandwidth_khz", v, sizeof v) == ESP_OK) { bw = (uint32_t)strtoul(v, NULL, 10); has_rx = true; }
+    }
+    /* Profil RX persistant : on ne le (re)pose QUE s'il est fourni. Un clic UI sans params
+     * (le "Capture brute" de Pascal) n'efface donc pas le reglage pose par l'API juste avant.
+     * Mettre datarate_baud=0 pour effacer (revenir a l'agnostique). */
+    if (has_rx) cc1101_set_capture_rx(drate, bw);
+    int n = rfcap_capture(radio, 15000);   /* bloquant : capture dediee, comme l'enrolement */
+    char out[48];
+    snprintf(out, sizeof(out), "{\"n\":%d}", n);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+static esp_err_t h_capture_last(httpd_req_t *r) {
+    char *buf = malloc(6144);
+    if (!buf) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
+    rfcap_last_json(buf, 6144);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, buf);
+    free(buf);
+    return e;
+}
+static esp_err_t h_capture_replay(httpd_req_t *r) {
+    int rc = rfcap_replay(5);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+}
+
 /* ── /api/diag : diagnostic radio (puce + self-test TX) pour l'UI ── */
 static esp_err_t h_diag(httpd_req_t *r) {
     int tx_ok = -1; uint8_t partnum = 0xFF, version = 0xFF;
@@ -1199,12 +1305,34 @@ static void pfx_capture_task(void *arg) {
     s_pcap_done = true; s_pcap_active = false;
     vTaskDelete(NULL);
 }
+/* Params d'emission resolus depuis le PROFIL choisi dans la pyramide (porteuse de la marque, TE, bit
+ * de repetition, RMT), recus a la capture d'enrolement, poses pour l'emission d'apprentissage, puis
+ * graves dans la fiche du volet au save (issue #111). Tri-etat tx_override_t pour rpt/rmt. */
+static uint32_t s_enrol_freq = 0, s_enrol_te = 0;
+static uint8_t  s_enrol_rpt = TXOVR_INHERIT, s_enrol_rmt = TXOVR_INHERIT;
+static char     s_enrol_marque[SH_ID_LEN] = "";
+/* cJSON bool/number -> tri-etat tx_override_t (absent = heriter). */
+static uint8_t txovr_of(cJSON *j, const char *key) {
+    cJSON *x = cJSON_GetObjectItem(j, key);
+    if (!cJSON_IsBool(x) && !cJSON_IsNumber(x)) return TXOVR_INHERIT;
+    return (cJSON_IsTrue(x) || (cJSON_IsNumber(x) && x->valuedouble != 0)) ? TXOVR_ON : TXOVR_OFF;
+}
 static esp_err_t h_pfx_capture(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *mo = cJSON_GetObjectItem(j, "model");
     s_pcap_model = cJSON_IsNumber(mo) ? (int)mo->valuedouble : -1;
+    /* Params du profil (facultatifs) : memorises pour la fiche, et poses pour l'apprentissage. */
+    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz"); s_enrol_freq = cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0;
+    cJSON *tu = cJSON_GetObjectItem(j, "te_us");     s_enrol_te   = cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0;
+    s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
+    s_enrol_rmt = txovr_of(j, "tx_rmt");
+    strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
+    tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
+                       .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
+                       .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
+    pfx_enrol_set_tx_params(&tp);
     cJSON_Delete(j);
     ESP_LOGW(TAG, "PFX CAPTURE: requete recue (model=%d, active=%d)", s_pcap_model, s_pcap_active);
     if (!s_pcap_active) {
@@ -1394,6 +1522,81 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
     free(js);
     return e;
 }
+static esp_err_t h_rejeu_create(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id");
+    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "type"));   /* dev_type_t */
+    const char *err = NULL;
+    if (!id || !*id) err = "nom manquant";
+    else if (strchr(id, ',')) err = "virgule dans le nom";
+    int rc = err ? -1 : shutters_create_rejeu(id, (uint8_t)type);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    if (err) cJSON_AddStringToObject(o, "err", err);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"ok\":0}");
+    free(js);
+    return e;
+}
+static esp_err_t h_rejeu_capture(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
+    int radio = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "radio"));
+    uint32_t freq_khz = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "freq_khz"));   /* freq du profil de marque (0 = porteuse de la radio) */
+    /* Profil RX du protocole (depuis profiles.json, porte par l'UI pyramide) : (re)pose debit et
+     * bande passante de demodulation AVANT la capture, exactement comme h_capture_start. Re-applique
+     * a CHAQUE capture de rejeu -> l'etat au boot (s_cap_drate_baud init 0) ne recasse plus le rejeu
+     * (E4). Absent = config courante (agnostique). */
+    cJSON *drj = cJSON_GetObjectItem(j, "datarate_baud");
+    cJSON *bwj = cJSON_GetObjectItem(j, "bandwidth_khz");
+    if (cJSON_IsNumber(drj) && cJSON_IsNumber(bwj))
+        cc1101_set_capture_rx((uint32_t)drj->valuedouble, (uint32_t)bwj->valuedouble);
+    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio, freq_khz) : -1;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "n", n);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o); cJSON_Delete(j);
+    httpd_resp_set_type(r, "application/json");
+    esp_err_t e = httpd_resp_sendstr(r, js ? js : "{\"n\":-1}");
+    free(js);
+    return e;
+}
+/* ── io-homecontrol (2-FSK 868, experimental #87) : capture/ecoute pour l'enrolement io.
+ * EXCLUSIF de l'ecoute PFX (un seul protocole radio a la fois). Pilotent le backend radio_io_*. ── */
+static esp_err_t h_io_sniff(httpd_req_t *r) {
+    uint8_t frame[32];
+    int n = radio_io_sniff(frame, sizeof frame, 8000);   /* 8 s d'ecoute d'UNE trame io */
+    httpd_resp_set_type(r, "application/json");
+    if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    char hex[2 * sizeof(frame) + 1];
+    for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
+    char out[128];
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
+    return httpd_resp_sendstr(r, out);
+}
+/* POST {"on":true|false} : met la radio en ecoute io 2-FSK continue ; chaque trame recue part au
+ * journal ("Trame io captee (N octets) : ..."). Un POST sans corps rend juste l'etat courant. */
+static esp_err_t h_io_listen(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (body) {
+        cJSON *j = cJSON_Parse(body); free(body);
+        if (j) {
+            cJSON *on = cJSON_GetObjectItem(j, "on");
+            if (cJSON_IsBool(on)) radio_set_io_listening(cJSON_IsTrue(on));
+            cJSON_Delete(j);
+        }
+    }
+    char out[32];
+    snprintf(out, sizeof out, "{\"ok\":1,\"on\":%d}", radio_is_io_listening() ? 1 : 0);
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1403,7 +1606,15 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     int rc = -1;
     if (active && name && *name)
         rc = shutters_create_virtual(name, id.serial, id.counter);
-    if (rc == 0) { pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate); }   /* moteur valide ; l'identite vit desormais dans le volet */
+    if (rc == 0) {
+        /* Grave dans la fiche les params d'emission resolus du profil (issue #111) : la porteuse de la
+         * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet
+         * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
+         * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
+        shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt, 0,
+                               s_enrol_marque[0] ? s_enrol_marque : NULL);   /* enrolement KeeLoq : pas de frame_bits */
+        pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
+    }
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -1498,6 +1709,79 @@ static void reg_open(httpd_handle_t s, const char *uri, httpd_method_t m, esp_er
     if (e != ESP_OK) ESP_LOGE(TAG, "route NON enregistree: %s (%s) -> augmenter max_uri_handlers", uri, esp_err_to_name(e));
 }
 
+#ifndef REPORT_RELAY_URL
+#define REPORT_RELAY_URL "https://www.isno.fr/support"   /* relais : ouvre l'issue + envoie l'email */
+#endif
+
+/* /api/report : l'utilisateur remplit {email, brand, model, note, purpose} dans l'UI ; on y joint
+ * chip-id (MAC eFuse, stable au flash) + version + carte + la DERNIERE CAPTURE BRUTE (rfcap, OOK,
+ * protocole-agnostique, aucun secret dedans) et on POST au relais www.isno.fr, qui ouvre l'issue
+ * OpenProfalux et renvoie l'email de suivi. L'email ne part PAS dans l'issue : le relais le garde prive. */
+static esp_err_t h_report(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (!body) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"body\"}");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"json\"}");
+    const char *email = jstr(j, "email");
+    if (!email || !email[0]) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"email\"}"); }
+    const char *brand = jstr(j, "brand"), *model = jstr(j, "model");
+    const char *note = jstr(j, "note"), *purpose = jstr(j, "purpose");
+
+    uint8_t mac[6] = {0}; esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char chip[13];
+    snprintf(chip, sizeof chip, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    char *cap = malloc(6144);
+    if (!cap) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"mem\"}"); }
+    rfcap_last_json(cap, 6144);
+
+    cJSON *rep = cJSON_CreateObject();
+    cJSON_AddStringToObject(rep, "chip_id", chip);
+    cJSON_AddStringToObject(rep, "version", esp_app_get_description()->version);
+    cJSON_AddStringToObject(rep, "board", TARGET_NAME);
+    cJSON_AddStringToObject(rep, "email", email);
+    cJSON_AddStringToObject(rep, "brand", brand ? brand : "");
+    cJSON_AddStringToObject(rep, "model", model ? model : "");
+    cJSON_AddStringToObject(rep, "note", note ? note : "");
+    cJSON_AddStringToObject(rep, "purpose", (purpose && purpose[0]) ? purpose : "debug");
+    cJSON_AddStringToObject(rep, "journal", cap);   /* capture brute (rfcap_last_json) jointe comme texte */
+    free(cap); cJSON_Delete(j);
+    char *payload = cJSON_PrintUnformatted(rep);
+    cJSON_Delete(rep);
+    if (!payload) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"mem\"}");
+
+    esp_http_client_config_t cfg = {
+        .url = REPORT_RELAY_URL,
+        .method = HTTP_METHOD_POST,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    int plen = (int)strlen(payload), status = 0;
+    esp_err_t err = ESP_FAIL;
+    if (c) {
+        esp_http_client_set_header(c, "Content-Type", "application/json");
+        err = esp_http_client_open(c, plen);
+        if (err == ESP_OK) {
+            if (esp_http_client_write(c, payload, plen) >= 0) {
+                esp_http_client_fetch_headers(c);
+                status = esp_http_client_get_status_code(c);
+            } else err = ESP_FAIL;
+        }
+        esp_http_client_close(c);
+        esp_http_client_cleanup(c);
+    }
+    free(payload);
+
+    char out[96];
+    if (err == ESP_OK && status >= 200 && status < 300)
+        snprintf(out, sizeof out, "{\"ok\":1,\"status\":%d}", status);
+    else
+        snprintf(out, sizeof out, "{\"ok\":0,\"status\":%d,\"err\":\"relais\"}", status);
+    return httpd_resp_sendstr(r, out);
+}
+
 /* Enregistre une route PROTEGEE (toutes les routes sous "/api/"). */
 static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
     if (s_nroutes >= MAX_ROUTES) { ESP_LOGE(TAG, "route NON enregistree: %s (table pleine)", uri); return; }
@@ -1553,6 +1837,9 @@ void web_ui_start(void) {
     reg_open(s, "/",          HTTP_GET, h_index);
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
+    reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
+    reg_open(s, "/pyramid-detect.js", HTTP_GET, h_js_detect);   /* detection de profil (pyramide, #111) */
+    reg(s, "/profiles.json", HTTP_GET, h_profiles);   /* table de profils (protegee, soulage la table ouverte ; l'UI la fetch apres login) */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
     reg_open(s, "/icon-192.png",         HTTP_GET, h_icon);
@@ -1563,6 +1850,8 @@ void web_ui_start(void) {
     reg(s, "/api/status",  HTTP_GET,  h_status);
     reg(s, "/api/shutter", HTTP_POST, h_shutter);
     reg(s, "/api/volet/delete", HTTP_POST, h_volet_delete);
+    reg(s, "/api/volet/rename", HTTP_POST, h_volet_rename);
+    reg(s, "/api/volet/type",   HTTP_POST, h_volet_type);
     reg(s, "/api/learn/start",  HTTP_POST, h_learn_start);
     reg(s, "/api/learn/poll",   HTTP_GET,  h_learn_poll);
     reg(s, "/api/learn/assign", HTTP_POST, h_learn_assign);
@@ -1571,6 +1860,7 @@ void web_ui_start(void) {
     reg(s, "/api/rf/replay", HTTP_POST, h_rf_replay);
     reg(s, "/api/calibrate", HTTP_POST, h_calibrate);
     reg(s, "/api/volet/orientation", HTTP_POST, h_orientation);
+    reg(s, "/api/volet/txparams", HTTP_POST, h_volet_txparams);
     reg(s, "/api/volet/followers", HTTP_POST, h_followers);
     reg(s, "/api/volet/order",       HTTP_POST, h_volet_order);
     reg(s, "/api/remote",    HTTP_POST, h_remote);
@@ -1591,6 +1881,10 @@ void web_ui_start(void) {
     reg(s, "/api/rx/calibrate", HTTP_GET,  h_rx_calibrate_status);
     reg(s, "/api/rx/sweep",     HTTP_POST, h_rx_sweep);
     reg(s, "/api/rx/sweep",     HTTP_GET,  h_rx_sweep_status);
+    reg(s, "/api/capture/start",  HTTP_POST, h_capture_start);   /* capture OOK brute (issue #95) */
+    reg(s, "/api/capture/last",   HTTP_GET,  h_capture_last);
+    reg(s, "/api/capture/replay", HTTP_POST, h_capture_replay);
+    reg(s, "/api/report", HTTP_POST, h_report);   /* rapport de capture radio : POST au relais www.isno.fr -> issue + email */
     reg(s, "/api/diag",         HTTP_GET,  h_diag);
     reg(s, "/api/radios",       HTTP_GET,  h_radios);
     reg(s, "/api/health",       HTTP_GET,  h_health);
@@ -1611,5 +1905,9 @@ void web_ui_start(void) {
     reg(s, "/api/pfx/save_volet", HTTP_POST, h_pfx_save_volet);
     reg(s, "/api/central", HTTP_POST, h_central);
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
+    reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
+    reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
+    reg(s, "/api/io/sniff",  HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
+    reg(s, "/api/io/listen", HTTP_POST, h_io_listen);  /* io-homecontrol : ecoute io permanente ON/OFF (#87) */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

@@ -58,7 +58,7 @@
 
   <nav class="tabs" id="tabs">
     <button class="tab active" data-t="control"><span>🪟</span>Volets</button>
-    <button class="tab" data-t="remotes"><span>📱</span>Télécommandes</button>
+    <button class="tab" data-t="remotes"><span>📱</span>Appareils</button>
     <button class="tab" data-t="wifi"><span>📶</span>Wi-Fi</button>
     <button class="tab" data-t="mqtt"><span>📡</span>MQTT</button>
     <button class="tab" data-t="ota"><span>⬆️</span>OTA<b class="tab-badge" id="ota-badge" title="Mise à jour disponible" aria-label="mise à jour disponible" hidden></b></button>
@@ -74,25 +74,46 @@
       </div>
       <p class="hint" id="reorder-hint" hidden><b>Glisse une carte</b> à l'endroit voulu, ou utilise les flèches ▲▼ (pratique au doigt). Le pilotage est désactivé le temps du rangement.</p>
       <div class="grid two" id="volets"></div>
-      <p class="hint" id="control-empty" hidden>Aucun volet. Va dans <b>Télécommandes → Cloner une télécommande</b> pour en ajouter un.</p>
+      <p class="hint" id="control-empty" hidden>Aucun appareil. Va dans <b>Appareils → Ajouter un appareil</b> pour en ajouter un.</p>
     </section>
 
     <!-- Télécommandes (sous-onglets) -->
     <section class="panel" data-p="remotes">
       <nav class="subtabs">
-        <button class="subtab active" data-s="learn">Cloner une télécommande</button>
-        <button class="subtab" data-s="enrol">Créer une télécommande</button>
+        <button class="subtab active" data-s="add">Ajouter un appareil</button>
+        <button class="subtab" data-s="devices">Mes appareils</button>
         <button class="subtab" data-s="central">Centrale</button>
-        <button class="subtab" data-s="somfy">Somfy</button>
         <button class="subtab" data-s="calib">Calibration</button>
-        <button class="subtab" data-s="list">Liste</button>
+        <button class="subtab" data-s="list">Captées</button>
       </nav>
 
-      <div class="subpanel active" data-sp="learn">
+      <div class="subpanel active" data-sp="add">
         <div class="card">
-          <h2>Cloner une télécommande</h2>
-          <p class="sub">Tu as ta télécommande Profalux d'origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus. Une capture par commande suffit.</p>
-          <p class="hint radio-reminder"></p>
+          <h2>Ajouter un appareil</h2>
+          <p class="sub">Choisis le type d'appareil, puis la marque, puis la méthode. On te guide étape par étape.</p>
+          <div id="add-pyramid"></div>
+        </div>
+      </div>
+
+      <!-- Mes appareils : liste des appareils enrôlés/clonés, chacun ouvre son écran Modifier
+           (nom, réglages d'émission par appareil, suppression). Séparé du pilotage (onglet Volets). -->
+      <div class="subpanel" data-sp="devices">
+        <div class="card">
+          <h2>Mes appareils</h2>
+          <p class="sub">Tes volets et télécommandes. Clique <b>Modifier</b> pour régler l'émission (fréquence, TE, bit de répétition, RMT) propre à un appareil, ou le supprimer.</p>
+          <div id="devices-filter" class="chips" style="margin:4px 0 12px"></div>
+          <div id="devices-list"></div>
+          <p class="hint" id="devices-empty" hidden>Aucun appareil de ce type. Va dans <b>Ajouter un appareil</b>.</p>
+          <div id="device-edit"></div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="learn">
+        <div class="card">
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
+          <h2 id="learn-title">Cloner une télécommande</h2>
+          <p class="sub" id="learn-sub">Tu as ta télécommande Profalux d'origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus. Une capture par commande suffit.</p>
+          <p class="hint" id="learn-radio-reminder"></p>
           <div class="field"><label>Volet</label><div id="volet-picker" class="chips"></div></div>
           <div class="field" id="new-volet-row" hidden><input id="new-volet" placeholder="Nom du nouveau volet"></div>
           <div class="field"><label>Nom de la télécommande</label>
@@ -115,7 +136,8 @@
           </div>
           <div class="row" id="del-volet-row" hidden><button id="del-volet" class="btn danger">🗑 Supprimer ce volet</button></div>
           <p class="hint" id="learn-hint">Choisis un volet ci-dessus pour activer la capture. Place-toi à moins d'un mètre du boîtier et appuie sur le bon bouton en le tenant une seconde.</p>
-          <div class="statline" style="margin-top:14px"><span class="dot"></span><b>Le clonage ne pilote pas ton moteur ?</b> Certains moteurs refusent le rejeu (rolling code strict). Dans ce cas, <a href="#" id="goto-enrol"><b>crée une télécommande virtuelle</b></a> - ça nécessite aussi ta télécommande d'origine.</div>
+          <div id="learn-advanced"></div>
+          <div class="statline" id="clone-fallback-note" style="margin-top:14px"><span class="dot"></span><b>Le clonage ne pilote pas ton moteur ?</b> Certains moteurs refusent le rejeu (rolling code strict). Dans ce cas, <a href="#" id="goto-enrol"><b>crée une télécommande virtuelle</b></a> - ça nécessite aussi ta télécommande d'origine.</div>
         </div>
       </div>
 
@@ -147,8 +169,9 @@
       <div class="subpanel" data-sp="somfy">
         <div class="card">
           <div class="statline"><span class="dot"></span><b>Volet Somfy RTS (433,42 MHz).</b> Pour un moteur Somfy, pas Profalux. Pas besoin de télécommande d'origine : on choisit une adresse et on la fait apprendre au moteur par le mode appairage.</div>
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2>Créer un volet Somfy</h2>
-          <p class="hint">Fonction expérimentale (issue #73), à valider sur un vrai moteur Somfy RTS.</p>
+          <p class="hint">Validé sur moteur Somfy RTS réel. Le format de trame se règle par volet (56 bits molette, 80 bits course).</p>
           <div class="field"><label>Nom du volet</label><input id="somfy-name" placeholder="ex : Volet salon Somfy"></div>
           <div class="field"><label>Adresse (24 bits)</label>
             <div class="row" style="flex-wrap:nowrap">
@@ -168,6 +191,25 @@
             <p class="sub">Monte, stop, descends : le moteur doit suivre.</p>
             <div class="dpad enrol-pad"><button id="somfy-up">▲</button><button id="somfy-stop">■</button><button id="somfy-down">▼</button></div>
             <p class="hint">Le volet est aussi dans l'onglet <b>Volets</b> et pilotable depuis Home Assistant.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="subpanel" data-sp="rejeu">
+        <div class="card">
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
+          <h2 id="rejeu-title">Ajouter un appareil</h2>
+          <p class="sub">On capture chaque commande depuis ta télécommande d'origine, puis le boîtier la rejoue à l'identique. Une capture par commande suffit.</p>
+          <div class="field"><label>Nom</label><input id="rejeu-name" placeholder="ex : Portail entrée"></div>
+          <div class="field" id="rejeu-radio-row" hidden><label>Radio</label><select id="rejeu-radio"></select></div>
+          <div class="row"><button id="rejeu-create" class="btn primary">Créer</button></div>
+          <div class="statline" id="rejeu-create-status" hidden><span class="dot"></span><b></b></div>
+          <div id="rejeu-capture" hidden>
+            <h3>Capturer les commandes</h3>
+            <p class="sub">Clique une commande, puis <b>appuie sur le bouton correspondant de ta télécommande</b> (à moins d'1 m, pendant les ~15 s).</p>
+            <div id="rejeu-cmds"></div>
+            <div class="statline" id="rejeu-cap-status" hidden><span class="dot"></span><b></b></div>
+            <p class="hint" id="rejeu-done" hidden>✅ Capturé. Teste depuis l'onglet <b>Volets</b> : le pavé rejoue tes trames.</p>
           </div>
         </div>
       </div>
@@ -193,11 +235,13 @@
 
       <div class="subpanel" data-sp="enrol">
         <div class="card">
-          <div class="statline"><span class="dot"></span><b>À utiliser si le clonage ne pilote pas ton moteur.</b> On crée une nouvelle télécommande virtuelle et on l'apprend au moteur. <b>Nécessite ta télécommande d'origine</b> (pour le geste de validation). Appuie dessus : le boîtier l'identifie et attribue une identité - <b>nouvelle</b> si le moteur est inconnu, <b>la même</b> s'il est déjà connu.</div>
+          <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2>Créer une télécommande virtuelle</h2>
+          <p class="sub">À utiliser si le clonage ne pilote pas ton moteur. On crée une nouvelle télécommande virtuelle et on l'apprend au moteur. <b>Nécessite ta télécommande d'origine</b> (pour le geste de validation). Appuie dessus : le boîtier l'identifie et attribue une identité, <b>nouvelle</b> si le moteur est inconnu, <b>la même</b> s'il est déjà connu.</p>
           <p class="hint radio-reminder"></p>
           <div class="field"><label>Modèle de moteur</label><select id="pfx-model"></select></div>
-          <div class="row"><button id="pfx-capture" class="btn primary">📡 Appuie sur ta télécommande d'origine</button></div>
+          <div id="pfx-advanced"></div>
+          <div class="row"><button id="pfx-capture" class="btn primary">📡 Capturer</button></div>
           <div class="statline" id="pfx-capture-status" hidden><span class="dot"></span><b></b><span class="more"></span></div>
           <div id="pfx-renew-row" hidden>
             <p class="hint">Tu réenrôles ce moteur : continue avec cette identité. Si elle a été apprise par <b>d'autres moteurs</b> (ils bougent ensemble), crée plutôt une identité neuve : elle ne servira qu'au moteur que tu enrôles maintenant.</p>
@@ -207,15 +251,16 @@
             <h3>1. Enrôler l'identité sur le moteur</h3>
             <div class="statline" id="pfx-pre" hidden><span class="dot"></span><b></b></div>
             <p class="sub">Clique ci-dessous : l'émission dure ~5 s. <b>Ne touche à rien</b> pendant. Les gestes à faire sur ta télécommande s'afficheront <b>à la fin</b> de l'émission.</p>
-            <div class="row"><button id="pfx-learn" class="btn primary">📡 Émettre la trame d'apprentissage (~5 s)</button></div>
+            <div class="row"><button id="pfx-learn" class="btn">📡 Émettre la trame d'apprentissage (~5 s)</button></div>
             <div class="statline" id="pfx-learn-status" hidden><span class="dot"></span><b></b></div>
             <div id="pfx-after-emit" hidden>
               <p class="sub"><b>✅ Émission finie. Fais MAINTENANT sur ta télécommande d'origine :</b></p>
               <ol class="steps" id="pfx-gestures"></ol>
               <p class="sub">Quand les gestes sont faits, clique ci-dessous. Beaucoup de moteurs font un petit va-et-vient pour confirmer : bon signe. Certains ne bougent pas du tout : c'est normal aussi.</p>
-              <div class="row"><button id="pfx-gestes-ok" class="btn primary">✅ J'ai fait les gestes</button></div>
+              <div class="row"><button id="pfx-gestes-ok" class="btn">✅ J'ai fait les gestes</button></div>
               <div class="statline" id="pfx-wait" hidden><span class="dot"></span><b></b></div>
             </div>
+            <div id="pfx-finish" hidden>
             <h3>2. Tester la nouvelle identité</h3>
             <p class="sub">Les boutons restent bloqués pendant le délai de confirmation du moteur (~10 s après les gestes), puis se débloquent. Si le moteur a bien appris, ils doivent le piloter. S'il ne répond pas tout de suite, réessaie : ne recommence pas l'enrôlement.</p>
             <div class="dpad enrol-pad"><button id="pfx-up" disabled>▲</button><button id="pfx-stop" disabled>■</button><button id="pfx-down" disabled>▼</button></div>
@@ -223,7 +268,8 @@
             <p class="sub">Pour le retrouver dans l'onglet <b>Volets</b> et le piloter depuis Home Assistant.</p>
             <div class="field"><div class="row" style="flex-wrap:nowrap">
               <input id="pfx-volet-name" placeholder="Nom du volet (ex : Salon)" style="flex:1;min-width:0">
-              <button id="pfx-save-volet" class="btn primary">💾 Enregistrer</button></div></div>
+              <button id="pfx-save-volet" class="btn">💾 Enregistrer</button></div></div>
+            </div>
             <div class="row" style="margin-top:12px"><button id="pfx-forget" class="btn">↩ Désélectionner (garde l'identité et son compteur)</button></div>
           </div>
         </div>
@@ -300,6 +346,7 @@
         <button class="subtab" data-s="backup">Sauvegarde</button>
         <button class="subtab" data-s="rf">RF (debug)</button>
         <button class="subtab" data-s="log">Journal</button>
+        <button class="subtab" data-s="report">Rapport</button>
       </nav>
 
       <div class="subpanel active" data-sp="device">
@@ -341,13 +388,7 @@
             <p class="hint" style="margin-top:8px"><button id="rxcal-btn" class="btn" type="button">Calibrer la réception (auto)</button>
               <span id="rxcal-status" style="margin-left:8px"></span></p>
             <p class="hint">Clique, puis <b>appuie en continu / répète les appuis</b> sur ta télécommande à moins d'1 m pendant tout le test (~25 s) : le boîtier teste chaque gain 6 s et verrouille le bon dès qu'il capte une trame valide. Presse à chaque changement de valeur affiché.</p></div>
-          <div class="field" style="margin-top:12px"><label>TE d'émission (µs) - timing radio des commandes</label>
-            <input id="sys-txte" type="number" min="200" max="900" step="1" placeholder="400">
-            <p class="hint"><b>400 µs par défaut</b>, la valeur nominale des télécommandes KeeLoq (HCS300 : 260 à 660 µs selon l'oscillateur). Les moteurs mesurent le TE de chaque trame et tolèrent toute cette plage : ne change cette valeur que si un moteur ignore les commandes du boîtier.</p></div>
-          <label class="switch"><input type="checkbox" id="sys-txrpt"><span class="track"></span>
-            <span class="lbl">Émettre comme la télécommande (bit de répétition)<small>Première trame d'un appui marquée « initiale », les suivantes « répétition », 18 ms entre trames, comme une télécommande KeeLoq. Sans cette option, le boîtier envoie des trames identiques. Les moteurs testés acceptent les deux : n'activer que si un moteur ignore les commandes du boîtier.</small></span></label>
-          <label class="switch"><input type="checkbox" id="sys-txrmt"><span class="track"></span>
-            <span class="lbl">Émission matérielle (RMT)<small>Le minutage de chaque trame est tenu par le périphérique RMT, et non plus par une boucle logicielle que le WiFi peut interrompre. À essayer si des commandes sont parfois ignorées. En cas d'échec, le boîtier repasse automatiquement en émission logicielle.</small></span></label>
+          <p class="hint" style="margin-top:12px">Le <b>TE d'émission</b>, le <b>bit de répétition</b> et l'<b>émission matérielle (RMT)</b> ne sont plus des réglages globaux : ils vivent désormais <b>par appareil</b>. On les règle dans le <b>panneau avancé</b>, à l'ajout d'un appareil et dans <b>Appareils → Mes appareils → Modifier</b>. Deux marques sur la même radio (Profalux, Eveno) gardent ainsi chacune ses réglages. Défaut KeeLoq : TE 400 µs (plage tolérée 260..660).</p>
           <div id="sys-radios-extra"></div>
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>
@@ -374,6 +415,20 @@
           <div class="row" id="diag-rx-tests"></div>
           <p class="hint" id="diag-rx-status" style="margin-top:8px"></p>
           <p class="hint">Ce test lit les télécommandes <b>Profalux / KeeLoq</b> (code tournant, identifiées par leur serial). Une <b>Somfy RTS</b> ou un <b>portail CAME</b> n'y apparaissent pas, même si la puce les reçoit : ces protocoles se traitent ailleurs. La puce est détectée mais une télécommande Profalux ne se capte pas ? Vérifie la <b>bande</b> (868), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>. La réception se teste <b>par radio</b> : chaque bouton écoute sa propre puce.</p>
+        </div>
+        <div class="card" id="capture-root"></div>
+        <div class="card">
+          <h2>io-homecontrol (Somfy io / Velux), expérimental</h2>
+          <p class="sub">Capture les trames io (2-FSK 868,95 MHz) pour l'enrôlement. On cherche la trame <b>0x30</b> (la clé) : elle ne sort que pendant la <b>mise en PROG</b> de la télécommande, pas sur un appui normal.</p>
+          <div class="row"><button id="io-listen-btn" class="btn" type="button">Écoute io permanente : OFF</button></div>
+          <p class="hint" id="io-listen-status"></p>
+          <ol class="steps">
+            <li>Clique <b>Écoute io permanente</b> (ON).</li>
+            <li>Mets ta télécommande io en <b>PROG</b>, près de l'antenne.</li>
+            <li>Regarde l'onglet <b>Journal</b> : chaque trame captée s'écrit « Trame io captée (N octets)... ». Une ligne <b>cmd=0x30</b> = la clé.</li>
+            <li>Coupe l'écoute (OFF) pour rendre la radio au reste.</li>
+          </ol>
+          <p class="hint">Expérimental (#87). L'écoute io est EXCLUSIVE de l'écoute Profalux : tant qu'elle est ON, le reste de la radio est suspendu.</p>
         </div>
       </div>
 
@@ -417,6 +472,26 @@
         </div>
       </div>
 
+      <div class="subpanel" data-sp="report">
+        <div class="card">
+          <h2>Rapport de capture radio</h2>
+          <p class="sub">Envoie-nous une capture : pour un <b>debug</b> (ça ne pilote pas), ou pour faire <b>ajouter une nouvelle marque</b>. La dernière capture brute est jointe automatiquement. Ton email sert au suivi, il <b>n'apparaît jamais</b> dans le rapport public.</p>
+          <div class="field"><label>Ton email (pour le suivi)</label><input id="rep-email" type="email" placeholder="toi@exemple.fr"></div>
+          <div class="field"><label>Marque / modèle de moteur</label><input id="rep-brand" type="text" placeholder="Somfy, CAME, Nice, Velux..."></div>
+          <div class="field"><label>Modèle de télécommande (optionnel)</label><input id="rep-model" type="text" placeholder=""></div>
+          <div class="field"><label>But</label>
+            <select id="rep-purpose">
+              <option value="debug">Debug (ça ne marche pas)</option>
+              <option value="new-brand">Nouvelle marque à ajouter</option>
+            </select></div>
+          <div class="field"><label>Ce que tu as fait, étape par étape</label><textarea id="rep-note" rows="4" placeholder="Ex. j'ai capturé en pressant le bouton montée de ma télécommande ; le portail a fait..."></textarea></div>
+          <p class="hint">La dernière capture brute (onglet RF) est jointe automatiquement. <a href="#" id="rep-jview">voir la capture jointe</a></p>
+          <div class="row"><button id="rep-send" class="btn primary" type="button">📨 Envoyer le rapport</button></div>
+          <div class="statline" id="rep-status" hidden><span class="dot"></span><b></b></div>
+          <pre id="rep-jpreview" class="log" hidden></pre>
+        </div>
+      </div>
+
     </section>
 
     <!-- À propos -->
@@ -437,6 +512,8 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<script src="/pyramid-detect.js"></script>
 <script src="/app.js"></script>
+<script src="/app-capture.js"></script>
 </body>
 </html>

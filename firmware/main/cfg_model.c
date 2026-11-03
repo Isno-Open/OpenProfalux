@@ -23,6 +23,8 @@ int cfg_volet_set_members(volet_t *v, const char *csv) {
 void cfg_volet_release(volet_t *v) {
     free(v->members);
     v->members = NULL;
+    free(v->rejeu);
+    v->rejeu = NULL;
 }
 void cfg_model_remove(const cfg_model_t *m, int idx) {
     int n = *m->nvolets;
@@ -72,10 +74,24 @@ static cJSON *volet_to_json(const volet_t *v) {
         if (v->proto != VOLET_PROTO_PROFALUX)
             cJSON_AddNumberToObject(o, "proto", v->proto);
     }
+    /* Type d'appareil (dev_type_t) : attribut GENERAL, pas reserve aux virtuels. Un rejeu (CAME)
+     * portail doit aussi persister son type, sinon il retombe en volet au reboot. Omis quand = volet (0). */
+    if (v->type != TYPE_VOLET)
+        cJSON_AddNumberToObject(o, "type", v->type);
     if (v->central) cJSON_AddBoolToObject(o, "central", true);
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
+    if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
+    /* Parametres d'emission par appareil (etage 2, issue #111). Omis quand ils valent le defaut
+     * (0 = heriter), pour garder les sauvegardes existantes a l'identique et rester compatible dans
+     * les deux sens : une version anterieure ignore ces cles, celle-ci les retrouve a 0 si absentes. */
+    if (v->freq_khz) cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
+    if (v->te_us)    cJSON_AddNumberToObject(o, "te_us", v->te_us);
+    if (v->tx_rpt)   cJSON_AddNumberToObject(o, "tx_rpt", v->tx_rpt);
+    if (v->tx_rmt)   cJSON_AddNumberToObject(o, "tx_rmt", v->tx_rmt);
+    if (v->frame_bits) cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
+    if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
     return o;
 }
 /* En-tete : tout ce qui n'est pas un volet. */
@@ -175,6 +191,10 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         cJSON *pr       = cJSON_GetObjectItem(o, "proto");   /* absent -> Profalux (0) */
         v->proto        = pr ? (uint8_t)cJSON_GetNumberValue(pr) : (uint8_t)VOLET_PROTO_PROFALUX;
     }
+    /* Type d'appareil : GENERAL (lu pour tout appareil, pas seulement les virtuels), sinon un rejeu
+     * portail repasse volet au reboot. Absent -> volet (0). */
+    cJSON *ty = cJSON_GetObjectItem(o, "type");
+    v->type   = ty ? (uint8_t)cJSON_GetNumberValue(ty) : (uint8_t)TYPE_VOLET;
     v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
     /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le
      * firmware tient toujours : seul un fichier modifie a la main peut depasser
@@ -183,6 +203,16 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     if (cfg_volet_set_members(v, mem) != 0)
         ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
                  v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
+    const char *rj = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu"));
+    v->rejeu = (rj && *rj) ? strdup(rj) : NULL;   /* rejeu brut par commande ; libere par cfg_volet_release */
+    /* Parametres d'emission par appareil (etage 2, issue #111). memset() a deja mis 0 = heriter : on
+     * ne surcharge que si la cle est presente. Compatible avec une config anterieure (cles absentes). */
+    cJSON *fk = cJSON_GetObjectItem(o, "freq_khz"); if (fk) v->freq_khz = (uint32_t)cJSON_GetNumberValue(fk);
+    cJSON *tu = cJSON_GetObjectItem(o, "te_us");    if (tu) v->te_us    = (uint16_t)cJSON_GetNumberValue(tu);
+    cJSON *xp = cJSON_GetObjectItem(o, "tx_rpt");   if (xp) v->tx_rpt   = (uint8_t)cJSON_GetNumberValue(xp);
+    cJSON *xm = cJSON_GetObjectItem(o, "tx_rmt");   if (xm) v->tx_rmt   = (uint8_t)cJSON_GetNumberValue(xm);
+    cJSON *fb = cJSON_GetObjectItem(o, "frame_bits"); if (fb) v->frame_bits = (uint8_t)cJSON_GetNumberValue(fb);
+    strlcpy(v->marque, cJSON_GetStringValue(cJSON_GetObjectItem(o, "marque")) ?: "", SH_ID_LEN);
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);

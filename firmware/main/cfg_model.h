@@ -29,6 +29,26 @@ typedef enum {
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
 } volet_proto_t;
 
+/* Type d'appareil : ce qu'on PILOTE, orthogonal au protocole d'emission. Il decide le vocabulaire
+ * de commande et les libelles de l'UI (un volet monte/descend, un portail ouvre/ferme), pas la
+ * facon d'emettre. 0 = volet par defaut : les appareils deja persistes, sans ce champ, restent des
+ * volets. On ne declare QUE les types qu'on pilote : l'eclairage s'ajoutera le jour ou on commande
+ * une lumiere (ajout seul, sans casser le NVS). */
+typedef enum {
+    TYPE_VOLET   = 0,
+    TYPE_PORTAIL = 1,
+} dev_type_t;
+
+/* Tri-etat d'une option d'emission PAR APPAREIL (bit de repetition, RMT). 0 = heriter du defaut
+ * (profil, puis firmware) ; on force explicitement ensuite. La valeur 0 est la sentinelle "heriter"
+ * pour qu'un volet fraichement memset() herite naturellement, et pour que la cle soit OMISE du JSON
+ * quand on herite (sauvegardes existantes inchangees, issue #111). */
+typedef enum {
+    TXOVR_INHERIT = 0,   /* heriter du defaut du profil */
+    TXOVR_OFF     = 1,   /* forcer desactive pour cet appareil */
+    TXOVR_ON      = 2,   /* forcer active pour cet appareil */
+} tx_override_t;
+
 typedef struct {
     char id[SH_ID_LEN];
     char serials[SH_MAX_SERIALS][SH_SERIAL_LEN];
@@ -41,6 +61,19 @@ typedef struct {
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
     uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
+    uint8_t  type;           /* dev_type_t : ce qu'on pilote (0 = volet, defaut). Oriente l'UI, pas l'emission. */
+    /* ── Parametres d'emission RESOLUS PAR APPAREIL (etage 2 de la pyramide, issue #111). ──
+     * Chaque marque peut coexister sur une meme radio (Profalux 868425, Eveno/NeoSol 868330) : un
+     * reglage global en casse une en reglant l'autre (bugs CAME datarate et Profalux/Eveno rmt/rpt
+     * du 2026-11-01, plus l'incident client "ajouter de l'Eveno casse le Profalux enrole"). D'ou PAR
+     * APPAREIL, avec sentinelle = heriter du defaut. Ne concernent que la generation KeeLoq
+     * (clone/enrolement) ; le rejeu brut passe par radio_tx_ook_pulses et ne les lit pas. */
+    uint32_t freq_khz;       /* porteuse de CET appareil (0 = heriter du defaut radio/profil) */
+    uint16_t te_us;          /* TE d'emission KeeLoq (0 = heriter du defaut firmware, 400 us) */
+    uint8_t  tx_rpt;         /* tx_override_t : bit de repetition pour cet appareil */
+    uint8_t  tx_rmt;         /* tx_override_t : emission materielle RMT pour cet appareil */
+    uint8_t  frame_bits;     /* Somfy RTS : format de trame (0 = defaut 56 ; 56 ou 80, le 80 ajoute une extension) */
+    char     marque[SH_ID_LEN];  /* provenance : marque du profil choisi a l'ajout (affichage + resolution des defauts) */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.
@@ -48,6 +81,10 @@ typedef struct {
                               * Centrale : les volets a qui la commande est diffusee.
                               * Volet appris (ZONE) : ses SUIVEURS. Sa propre trame les fait
                               * bouger tous ; ils suivent ses mouvements sans rien emettre. */
+    /* Rejeu BRUT par commande (code fixe OOK, agnostique) : JSON
+     * {"f":freq_khz,"up":"<csv>","stop":"<csv>","down":"<csv>"} ; chaque csv = impulsions signees
+     * (+us haut / -us bas). NULL = pas de rejeu brut. Heap, libere par cfg_volet_release. */
+    char    *rejeu;
     uint32_t travel_up_ms, travel_down_ms;
     int   orientation;       /* azimut de la facade (0..359, -1 = non defini) : automatisations soleil HA */
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
