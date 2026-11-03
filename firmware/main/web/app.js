@@ -417,23 +417,18 @@ function captureFreqFor(prof) {
 /* Panneau avancé de l'écran de capture : MÊME composant que l'enrôlement (txAdvanced dérivé du schéma
    du profil). Donne la fréquence (et, pour un clone KeeLoq, TE/répétition/RMT) par appareil. Sans profil
    porté (gestion d'un appareil existant), rien : on ne règle pas à l'ajout. */
-function mountCaptureAdvanced() {
-  const host = $('#learn-advanced'); if (!host) return;
-  host.innerHTML = ''; CAP_ADV = null;
-  if (!CAPTURE_PROFILE) return;
-  const comp = txAdvanced({ values: {}, profile: CAPTURE_PROFILE, marque: CAPTURE_PROFILE.marque });
-  /* « Caler sur ma télécommande » VIT sur cet écran : balaie la bonne radio (par bande) et écrit la
-     porteuse trouvée dans le champ Fréquence du panneau avancé, par appareil. Plus besoin d'aller dans
-     Système régler la box. */
+/* Bouton « Caler sur ma télécommande » PARTAGÉ (enrôlement + clonage + rejeu) : balaie la bonne radio
+   (par bande du profil) et reporte la porteuse trouvée dans le champ Fréquence du panneau avancé, par
+   appareil. Même composant sur tous les écrans de capture, plus besoin d'aller régler la box. */
+function mountSweepButton(host, comp, profile) {
+  if (!host || !comp || !profile) return;
   const cal = document.createElement('div');
   cal.innerHTML = `<div class="row" style="margin-top:6px"><button class="btn cap-sweep" type="button">📡 Caler sur ma télécommande</button></div>`
     + `<div class="statline cap-sweep-res" hidden><span class="dot"></span><b></b></div>`;
   host.appendChild(cal);
-  host.appendChild(comp.el);
-  CAP_ADV = comp.read;
   const btn = cal.querySelector('.cap-sweep'), res = cal.querySelector('.cap-sweep-res');
   btn.onclick = async () => {
-    const radio = await captureRadioFor(CAPTURE_PROFILE);
+    const radio = await captureRadioFor(profile);
     btn.disabled = true; res.hidden = false; res.className = 'statline';
     res.querySelector('b').textContent = '📡 Appuie et tiens un bouton de ta télécommande, à 1-2 m du boîtier…';
     await api(`/api/rx/sweep?radio=${radio}`, { method: 'POST' }).catch(() => {});
@@ -451,6 +446,15 @@ function mountCaptureAdvanced() {
       res.querySelector('b').textContent = 'Rien trouvé. Rapproche la télécommande, tiens le bouton appuyé, recommence.';
     }
   };
+}
+function mountCaptureAdvanced() {
+  const host = $('#learn-advanced'); if (!host) return;
+  host.innerHTML = ''; CAP_ADV = null;
+  if (!CAPTURE_PROFILE) return;
+  const comp = txAdvanced({ values: {}, profile: CAPTURE_PROFILE, marque: CAPTURE_PROFILE.marque });
+  mountSweepButton(host, comp, CAPTURE_PROFILE);   // « Caler » inline, même composant qu'à l'enrôlement
+  host.appendChild(comp.el);
+  CAP_ADV = comp.read;
 }
 /* Après une capture, applique à l'appareil les réglages du panneau avancé (fréquence, TE, répétition,
    RMT, marque), par /api/volet/txparams. Rend l'émission du clone/rejeu cohérente avec la capture. */
@@ -546,8 +550,7 @@ function radioProfileNow() {
   const khz = cfgCache.freq_khz || (p === 'eveno' ? 868330 : 868425);
   return { p, name: PROFILE_NAMES[p] || p, mhz: (khz / 1000).toFixed(3).replace('.', ',') + ' MHz' };
 }
-const RADIO_LINKS = '<a href="#sys/device" data-goto="sys-radioprof">Vérifier</a> · '
-                  + '<a href="#sys/device" data-goto="sys-sweep">Caler sur ma télécommande</a>';
+const RADIO_LINKS = '<a href="#sys/device" data-goto="sys-radioprof">Vérifier</a>';   // « Caler » vit en bouton inline dans le panneau avancé (même composant partout)
 function refreshRadioReminder() {
   const r = radioProfileNow();
   $$('.radio-reminder').forEach(el => el.innerHTML = `📻 Profil radio : <b>${esc(r.name)} (${r.mhz})</b> · ${RADIO_LINKS}`);
@@ -625,11 +628,9 @@ function renderLearnSlots() {
   box.innerHTML = virtNote;
   const ACTS = captureActions();      // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique)
   const rejeu = isRejeuContext();     // rejeu brut (CAME, code fixe) vs clone KeeLoq décodé
-  let capPrimaryGiven = false;   // un seul bouton primary a l'ecran : la PROCHAINE commande a capturer
   for (const A of ACTS) {
     const c = rejeu ? null : cmd[A.a];
     const learned = rejeu ? !!(v && v.rejeu_cmds && v.rejeu_cmds[A.a]) : (c != null);
-    const isNextCap = !learned && !capPrimaryGiven; if (isNextCap) capPrimaryGiven = true;   // mise en avant guidee
     const row = document.createElement('div');
     row.className = 'slot' + (learned ? ' done' : '');
     /* Réassignation par glisser-déposer : propre au clone KeeLoq (une trame décodée par commande).
@@ -642,7 +643,7 @@ function renderLearnSlots() {
       : (learned ? `✓ appris <code>0x${(c.b).toString(16).toUpperCase()}</code> <code>${esc(c.s)}</code>` : 'à capturer');
     row.innerHTML = `<span class="slot-ico">${A.ico}</span><span class="slot-lbl">${A.lbl}</span>
       <span class="slot-state">${state}</span>
-      ${moveSel}<button class="btn slot-btn${isNextCap ? ' primary' : ''}" data-a="${A.a}">${learned ? 'Recapturer' : 'Capturer'}</button>`;
+      ${moveSel}<button class="btn slot-btn" data-a="${A.a}">${learned ? 'Recapturer' : 'Capturer'}</button>`;
     const act = A.a;
     if (!rejeu && learned) {
       row.draggable = true;
@@ -2336,6 +2337,7 @@ function mountEnrolAdvanced() {
   host.innerHTML = ''; ENROL_ADV = null;
   if (!ENROL_PROFILE) return;
   const comp = txAdvanced({ values: {}, profile: ENROL_PROFILE, marque: ENROL_PROFILE.marque });
+  mountSweepButton(host, comp, ENROL_PROFILE);   // même « Caler » inline qu'au clonage/rejeu
   host.appendChild(comp.el);
   ENROL_ADV = comp.read;
 }
