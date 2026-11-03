@@ -228,6 +228,7 @@ static uint32_t bits_lsb(const char *b, int from, int len) {
 
 static int req_radio_idx(httpd_req_t *r);   /* ?radio=N (defini plus bas) */
 static int s_learn_radio = 0;               /* radio ciblee par /api/learn/start (issue #95) */
+static uint32_t s_learn_freq = 0;           /* frequence d'ecoute (0 = porteuse de la radio) : capture a la freq du profil de marque */
 
 static void learn_task(void *arg) {
     (void)arg;
@@ -238,7 +239,7 @@ static void learn_task(void *arg) {
      * ce qu'on supposait) : ca empechait d'apprendre stop et descente.
      * Confirmee par une 2e trame identique et complete (66 bits) : une trame isolee a bits
      * faux donnait un volet au serial ou a la commande corrompus (issue #39). */
-    int n = radio_listen_confirmed_on(s_learn_radio, 15000, bits, SH_BITS_LEN, true);
+    int n = radio_listen_confirmed_on_freq(s_learn_radio, s_learn_freq, 15000, bits, SH_BITS_LEN, true);
     if (n >= 66) {
         s_lrssi   = cc1101_get_rssi();
         strlcpy(s_lbits, bits, SH_BITS_LEN);
@@ -368,7 +369,16 @@ static esp_err_t h_volet_type(httpd_req_t *r) {
 /* ── /api/learn/start + /poll ── */
 static esp_err_t h_learn_start(httpd_req_t *r) {
     char *body = read_body(r); if (body) free(body);   /* le corps {action} n'est plus utilise cote firmware */
-    if (!s_lactive) { s_learn_radio = req_radio_idx(r); s_lready = false; s_lactive = true; xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL); }   /* ?radio=N : ecoute cette radio (issue #95) */
+    if (!s_lactive) {
+        s_learn_radio = req_radio_idx(r);
+        s_learn_freq = 0;   /* ?freq_khz=N : ecouter a la frequence de l'appareil/profil (Eveno 868330 vs Profalux 868425) */
+        char q[96], v[12];
+        if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK &&
+            httpd_query_key_value(q, "freq_khz", v, sizeof v) == ESP_OK)
+            s_learn_freq = (uint32_t)strtoul(v, NULL, 10);
+        s_lready = false; s_lactive = true;
+        xTaskCreate(learn_task, "learn", 4096, NULL, 6, NULL);
+    }
     httpd_resp_sendstr(r, "{\"ok\":1}");
     return ESP_OK;
 }
@@ -1538,6 +1548,7 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
     int radio = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "radio"));
+    uint32_t freq_khz = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "freq_khz"));   /* freq du profil de marque (0 = porteuse de la radio) */
     /* Profil RX du protocole (depuis profiles.json, porte par l'UI pyramide) : (re)pose debit et
      * bande passante de demodulation AVANT la capture, exactement comme h_capture_start. Re-applique
      * a CHAQUE capture de rejeu -> l'etat au boot (s_cap_drate_baud init 0) ne recasse plus le rejeu
@@ -1546,7 +1557,7 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     cJSON *bwj = cJSON_GetObjectItem(j, "bandwidth_khz");
     if (cJSON_IsNumber(drj) && cJSON_IsNumber(bwj))
         cc1101_set_capture_rx((uint32_t)drj->valuedouble, (uint32_t)bwj->valuedouble);
-    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio) : -1;
+    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio, freq_khz) : -1;
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "n", n);
     char *js = cJSON_PrintUnformatted(o);

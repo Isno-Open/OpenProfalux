@@ -39,7 +39,7 @@ int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
 int  shutters_create_virtual_somfy(const char *id, uint32_t address);   /* volet Somfy RTS (adresse 24 bits, pas de capture) */
 int  shutters_create_rejeu(const char *id, uint8_t type);                /* appareil a rejeu brut OOK (code fixe) */
 int  shutters_set_type(const char *id, uint8_t type);                    /* corrige le dev_type d'un appareil existant */
-int  shutters_rejeu_capture(const char *id, const char *cmd, int radio); /* capture le cadre brut d'une commande */
+int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);

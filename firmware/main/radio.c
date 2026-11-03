@@ -128,36 +128,48 @@ int radio_listen_confirmed(uint32_t timeout_ms, char *buf, int max, bool full) {
  * sous le mutex (le front-end de la 433 est adapte a 433, la ou la primaire 868 n'entend rien d'un
  * emetteur 433), on ecoute, puis on REND LA MAIN a la radio primaire. Sert au diagnostic de
  * reception par radio : verifier qu'une puce RECOIT, pas seulement qu'elle voit une porteuse. */
-int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full) {
+int radio_listen_confirmed_on_freq(int idx, uint32_t freq_khz, uint32_t timeout_ms, char *buf, int max, bool full) {
     if (idx < 0 || idx >= cc1101_radio_count()) return -1;
     if (!s_mtx || max < RXC_FULL_BITS + 1) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     int prev = cc1101_active_radio();
     cc1101_select(idx);
+    uint32_t back = cc1101_get_freq_khz();
+    if (freq_khz) cc1101_set_freq_khz(freq_khz);   /* capturer a la frequence de l'APPAREIL (Eveno 868,330 vs Profalux 868,425), pas celle de la box */
     int r = listen_confirmed_locked(timeout_ms, buf, max, full);
+    if (freq_khz) cc1101_set_freq_khz(back);       /* restaurer la porteuse de idx : ne pas decaler l'ecoute permanente */
     cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
+}
+int radio_listen_confirmed_on(int idx, uint32_t timeout_ms, char *buf, int max, bool full) {
+    return radio_listen_confirmed_on_freq(idx, 0, timeout_ms, buf, max, full);
 }
 
 /* Capture BRUTE OOK sur la radio idx (issue #95) : selectionne la puce sous mutex (p.ex. la 433
  * pour un portail CAME), capture les impulsions brutes via cc1101_rx_capture_pulses, puis rend la
  * main a la primaire. Meme patron que radio_listen_confirmed_on. Rend le nb d'impulsions (>0),
  * <0 si rien/erreur. Appele par le moteur de capture (rf_capture.c). */
-int radio_capture_raw_on(int idx, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+int radio_capture_raw_on_freq(int idx, uint32_t freq_khz, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
     if (idx < 0 || idx >= cc1101_radio_count()) return -1;
     if (!s_mtx) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     int prev = cc1101_active_radio();
     cc1101_select(idx);
+    uint32_t back = cc1101_get_freq_khz();
+    if (freq_khz) cc1101_set_freq_khz(freq_khz);   /* capturer a la frequence du PROFIL de marque, pas celle de la box */
     int r = cc1101_rx_capture_pulses(timeout_ms, levels, us, max, rssi_out);
+    if (freq_khz) cc1101_set_freq_khz(back);       /* restaurer la porteuse de idx */
     cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
     return r;
+}
+int radio_capture_raw_on(int idx, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out) {
+    return radio_capture_raw_on_freq(idx, 0, timeout_ms, levels, us, max, rssi_out);
 }
 
 /* Train d'impulsions OOK sur une autre porteuse (voir radio.h). Ecoute en pause + mutex, le

@@ -1198,16 +1198,16 @@ int shutters_set_type(const char *id, uint8_t type) {
 /* Capture le cadre OOK brut d'UNE commande (cmd = "up"/"stop"/"down") sur la radio `radio` et
  * le range dans l'appareil. La capture (~15 s, mutex radio) se fait HORS du LOCK shutters ; le
  * rangement + sauvegarde sous LOCK. Rend le nombre d'impulsions (>0), <=0 si rien / erreur. */
-int shutters_rejeu_capture(const char *id, const char *cmd, int radio) {
+int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz) {
     if (!id || !*id || !cmd || !*cmd) return -1;
     static uint8_t  lvl[REJEU_MAX_PULSES];
     static uint16_t us[REJEU_MAX_PULSES];
     int8_t rssi = 0;
-    int n = radio_capture_raw_on(radio, 15000, lvl, us, REJEU_MAX_PULSES, &rssi);
+    int n = radio_capture_raw_on_freq(radio, freq_khz, 15000, lvl, us, REJEU_MAX_PULSES, &rssi);
     if (n < 2) { ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : rien (rc=%d)", id, cmd, n); return n <= 0 ? n : -1; }
     const char *band = NULL; uint32_t carrier = 0, cur = 0, low = 0, high = 0; uint8_t pn = 0, ver = 0;
     cc1101_radio_info(radio, &band, &carrier, &cur, &low, &high, &pn, &ver);
-    uint32_t freq = cur ? cur : carrier;
+    uint32_t freq = freq_khz ? freq_khz : (cur ? cur : carrier);   /* freq du profil de marque si fournie, sinon porteuse de la radio */
     LOCK();
     volet_t *v = find_volet(id);
     int rc = v ? rejeu_store(v, cmd, freq, lvl, us, n) : -1;

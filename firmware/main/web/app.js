@@ -394,6 +394,14 @@ async function captureRadioFor(prof) {
   const m = CAP_RADIOS.find(r => String(r.band) === String(prof && prof.band));
   return m ? m.idx : 0;
 }
+/* Fréquence à laquelle CAPTURER : celle du profil de marque (Profalux 868425, Eveno 868330, CAME 433920)
+   quand on ajoute un appareil, sinon celle de la fiche d'un appareil existant. 0 = garder la porteuse de
+   la radio. C'est ce qui permet de faire cohabiter Profalux et Eveno sur la même box. */
+function captureFreqFor(prof) {
+  if (prof && typeof prof.freq_khz === 'number') return prof.freq_khz;
+  const v = (statusCache.volets || []).find(x => x.id === activeVolet);
+  return (v && v.freq_khz) || 0;
+}
 let learning = false;   // capture en cours
 let activeVolet = '';   // volet selectionne pour l'apprentissage
 
@@ -602,9 +610,25 @@ function renderLearnSlots() {
       : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
   const fbNote = $('#clone-fallback-note');   /* note "crée une télécommande virtuelle" : seulement si l'enrôlement est une alternative */
   if (fbNote) fbNote.hidden = !enrolAvailableForCapture();
-  /* Bandeau profil radio 868 : sans objet pour un rejeu code fixe (CAME = 433), on le cache alors. */
+  /* Bandeau de fréquence de l'écran de capture : on affiche la fréquence que CETTE capture va utiliser,
+     celle du profil de marque (Profalux 868,425 / Eveno 868,330 / ...) ou de la fiche, pas celle de la box.
+     Caché en rejeu code fixe (la fréquence 433 vient de la radio). */
   const radioRem = $('#learn-radio-reminder');
-  if (radioRem) radioRem.hidden = isRejeuContext();
+  if (radioRem) {
+    if (isRejeuContext()) {
+      radioRem.hidden = true;
+    } else {
+      radioRem.hidden = false;
+      const f = captureFreqFor(CAPTURE_PROFILE);
+      if (f) {
+        const src = CAPTURE_PROFILE ? (CAPTURE_PROFILE.marque || CAPTURE_PROFILE.nom) : (activeVolet || 'cet appareil');
+        radioRem.innerHTML = `📻 Capture sur la fréquence de <b>${esc(src)}</b> : <b>${(f / 1000).toFixed(3).replace('.', ',')} MHz</b> · ${RADIO_LINKS}`;
+      } else {
+        const rp = radioProfileNow();
+        radioRem.innerHTML = `📻 Profil radio : <b>${esc(rp.name)} (${rp.mhz})</b> · ${RADIO_LINKS}`;
+      }
+    }
+  }
   updateRemoteNameField();
 }
 
@@ -692,7 +716,8 @@ async function captureAction(action, btn) {
   learnFail(false);
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
   const radio = await captureRadioFor(CAPTURE_PROFILE);   // MÊME choix de radio par bande que le rejeu : explicite, pas la primaire par défaut
-  await api(`/api/learn/start?radio=${radio}`, { method: 'POST', body: JSON.stringify({ action }) });
+  const freq = captureFreqFor(CAPTURE_PROFILE);           // ... et MÊME fréquence par profil : écouter l'Eveno sur 868330, pas sur la box
+  await api(`/api/learn/start?radio=${radio}${freq ? `&freq_khz=${freq}` : ''}`, { method: 'POST', body: JSON.stringify({ action }) });
   const t0 = Date.now();
   const poll = setInterval(async () => {
     const r = await api('/api/learn/poll').catch(() => null);
@@ -738,6 +763,8 @@ async function rejeuCaptureUnified(action, btn) {
   const label = (captureActions().find(x => x.a === action) || {}).lbl || action;
   const radio = await captureRadioFor(prof);
   const body = { id, cmd: action, radio };
+  const freq = captureFreqFor(prof);   // fréquence du profil de marque (CAME 433920, etc.)
+  if (freq) body.freq_khz = freq;
   const rx = prof && prof.rx;   // E4 : la capture lit le RX du protocole (datarate/BW) depuis le profil
   if (rx && typeof rx.datarate_baud === 'number' && typeof rx.bandwidth_khz === 'number') {
     body.datarate_baud = rx.datarate_baud; body.bandwidth_khz = rx.bandwidth_khz;
@@ -2296,8 +2323,8 @@ async function renderDevices() {
   const list = filterByType(all, devFilter);
   const empty = $('#devices-empty'); if (empty) empty.hidden = list.length > 0;
   box.innerHTML = list.map(v => {
-    const k = deviceKind(v);
-    return `<div class="radio-row"><span>${k.ico}</span>`
+    const rowIco = v.central ? '🎛' : v.zone ? '🔗' : deviceTypeIcon(v);   /* MÊME icône de type que le filtre et l'écran Volets (🪟/🚪), pas l'icône de mécanisme */
+    return `<div class="radio-row"><span>${rowIco}</span>`
       + `<div style="display:flex;flex-direction:column;gap:2px;min-width:0"><b class="rr-name">${esc(v.id)}</b>`
       + `<span class="rr-meta" style="margin-left:0">${esc(deviceProfileLabel(v))}</span></div>`
       + `<button class="btn dev-edit" data-id="${esc(v.id)}" style="margin-left:auto">Modifier</button></div>`;
