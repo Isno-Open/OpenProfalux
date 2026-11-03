@@ -418,6 +418,12 @@ function deviceTypeIcon(v) {
 function filterByType(list, typeKey) {
   return typeKey ? list.filter(v => deviceTypeKey(v) === typeKey) : list;
 }
+/* Un type est "positionnel" (a une position de façade et peut être une zone de suiveurs) si la config
+   le déclare. Un volet l'est, un portail non : on masque alors Orientation + Zone. Déclaré dans profiles.json. */
+function typeIsPositional(v) {
+  const t = typeByCode(typeof (v && v.type) === 'number' ? v.type : 0);
+  return t ? !!t.positional : true;   // défaut (volet) = positionnel
+}
 
 function renderVoletPicker() {
   const box = $('#volet-picker'); if (!box) return;
@@ -581,7 +587,7 @@ function renderLearnSlots() {
         : sers.length ? `Télécommande : <code>${esc(sers[0])}</code>` : '';
   }
   const orientRow = $('#orient-row');
-  if (orientRow) orientRow.hidden = !v;
+  if (orientRow) orientRow.hidden = !v || !typeIsPositional(v);   /* un portail n'a pas d'orientation de façade */
   const orientInp = $('#orient-input');
   if (orientInp && v && document.activeElement !== orientInp)
     orientInp.value = (v.orientation != null && v.orientation >= 0) ? v.orientation : '';
@@ -630,7 +636,7 @@ if (renameBtn) renameBtn.onclick = async () => {
 let zoneFor = null;
 function renderZoneMembers(v) {
   const row = $('#zone-row'), box = $('#zone-members'), save = $('#zone-save'); if (!row || !box) return;
-  row.hidden = !v || !!v.central;
+  row.hidden = !v || !!v.central || !typeIsPositional(v);   /* un portail n'a pas de zone de suiveurs */
   if (row.hidden) { zoneFor = null; return; }
   const follows = v.follows || [];
   if (follows.length) {
@@ -2285,14 +2291,15 @@ async function renderDevices() {
     const chip = (t, label) => `<button class="chip${devFilter === t ? ' on' : ''}" data-t="${t}">${label}</button>`;
     fbar.innerHTML = chip('', 'Tous')
       + Object.keys(types).map(k => chip(k, `${types[k].icon || ''} ${esc(types[k].label || k)}`)).join('');
-    fbar.querySelectorAll('.chip').forEach(c => c.onclick = () => { devFilter = c.dataset.t; renderDevices(); });
+    fbar.querySelectorAll('.chip').forEach(c => c.onclick = () => { devFilter = c.dataset.t; const de = $('#device-edit'); if (de) de.innerHTML = ''; renderDevices(); });
   }
   const list = filterByType(all, devFilter);
   const empty = $('#devices-empty'); if (empty) empty.hidden = list.length > 0;
   box.innerHTML = list.map(v => {
     const k = deviceKind(v);
-    return `<div class="radio-row"><span>${k.ico}</span><b class="rr-name">${esc(v.id)}</b>`
-      + `<span class="rr-meta">${esc(deviceProfileLabel(v))}</span>`
+    return `<div class="radio-row"><span>${k.ico}</span>`
+      + `<div style="display:flex;flex-direction:column;gap:2px;min-width:0"><b class="rr-name">${esc(v.id)}</b>`
+      + `<span class="rr-meta" style="margin-left:0">${esc(deviceProfileLabel(v))}</span></div>`
       + `<button class="btn dev-edit" data-id="${esc(v.id)}" style="margin-left:auto">Modifier</button></div>`;
   }).join('');
   box.querySelectorAll('.dev-edit').forEach(b => b.onclick = () => {

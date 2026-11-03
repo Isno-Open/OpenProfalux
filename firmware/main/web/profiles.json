@@ -20,7 +20,7 @@
     "_note": "Structure PAR TRAIT (alignee sur pyramid-detect.js : params[k].statut, params[k].detecte). La detection ne filtre que statut=='certain'. certain = spec marque (modulation, band, code, mecanisme). valide = empirique grave en defaut profil (CAME 3800/135 n=1). releve = mesure sur trame reelle, vit dans la fiche appareil (ex. freq calee ; freq_khz est 'valide' en defaut ET surcharge 'releve' par appareil). implementation = choix firmware (RMT). intention = DECLARE mais PAS CABLE (le code ne lit rien : rx, encoder, short/long ; cible E4, et E6 pour batir vraiment l'encodeur). detecte = observable d'une capture. A reconcilier avec le params non committe de Max, sa version fait foi."
   },
   "types": {
-    "volet":   { "label": "Volet",   "code": 0, "icon": "🪟", "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
+    "volet":   { "label": "Volet",   "code": 0, "icon": "🪟", "positional": true, "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
                  "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
     "portail": { "label": "Portail", "code": 1, "icon": "🚪", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
                  "capture": [ { "cmd": "up", "label": "Bouton du portail" } ] }
