@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Arduino Nano ESP32 (module u-blox NORA-W106, ESP32-S3) + module CC1101 868 en breakout.",
+    "Le brochage de la carte external (18/19/23/5/4) ne vaut pas ici : GPIO23 n'existe pas",
+    "sur le S3, et GPIO19/20 portent l'USB natif de la Nano (flash et console). Le CC1101",
+    "est sur le SPI serigraphie de la Nano : D13/SCK = GPIO48, D12/CIPO = GPIO47,",
+    "D11/COPI = GPIO38, D10/CS = GPIO21 ; GDO0 sur D2 = GPIO5. Numeros GPIO, pas Dx.",
+    "LED : la LED_BUILTIN (D13 = GPIO48) est aussi SCK, donc -1.",
+    "Une carte nommee, pas lue : aucun strap d'identification."
+  ],
+  "id": "arduino-nano-esp32",
+  "name": "Arduino Nano ESP32 + CC1101 externe",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32s3",
+  "spi_freq_hz": 6000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "E07-900M10S",
+      "pins": { "sck": 48, "miso": 47, "mosi": 38, "cs": 21, "gdo0": 5, "gdo2": -1 } }
+  ],
+  "ui": { "button": -1, "led": -1, "led_active_high": true },
+  "region": "eu",
+  "bands_allowed_khz": [
+    { "radio": "868", "low": 863000, "high": 870000, "carrier_khz": 868350, "max_dbm": 10 }
+  ]
+}

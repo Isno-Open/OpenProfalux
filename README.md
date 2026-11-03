@@ -139,6 +139,7 @@ broches, il n'en connaît aucune. Ajouter une carte, c'est ajouter un
 | `d1-mini` | D1 mini ESP32 + CC1101 externe (GDO0 sur IO26, SPI 1 MHz) | `esp32` |
 | `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
 | `esp32-poe` | Olimex ESP32-POE + CC1101 externe (Ethernet LAN8720 en plus du Wi-Fi) | `esp32` |
+| `arduino-nano-esp32` | Arduino Nano ESP32 + CC1101 externe (SPI sur D10-D13, GDO0 sur D2) | `esp32s3` |
 
 ```bash
 cd firmware

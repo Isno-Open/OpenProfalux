@@ -60,6 +60,25 @@ pas câblé. SPI à 1 MHz (voir `boards/d1-mini.json`).
 | CSN | ⚪ Blanc | IO5 |
 | GDO0 | 🟠 Orange | IO26 |
 
+## Table complète : Arduino Nano ESP32 (`-DBOARD=arduino-nano-esp32`)
+
+La Nano ESP32 est un **ESP32-S3** : le brochage DevKit ne s'applique pas (GPIO23 n'existe pas,
+GPIO19/20 portent l'USB). Le CC1101 va sur le SPI sérigraphié de la Nano ; on câble les broches
+**Dx** de la sérigraphie, le GPIO est donné pour référence (voir `boards/arduino-nano-esp32.json`).
+
+| Signal | Couleur | Broche Nano ESP32 | GPIO |
+|--------|---------|-------------------|------|
+| VCC | 🔴 Rouge | 3V3 | |
+| GND | ⚫ Noir | GND | |
+| MOSI | 🟡 Jaune | D11 (COPI) | 38 |
+| MISO | 🟢 Vert | D12 (CIPO) | 47 |
+| SCK | 🔵 Bleu | D13 (SCK) | 48 |
+| CSN | ⚪ Blanc | D10 | 21 |
+| GDO0 | 🟠 Orange | D2 | 5 |
+
+Premier flash : la Nano sort d'usine avec le chargeur Arduino. Relier les pastilles **B1** et
+**GND** (à côté de la LED RGB), appuyer sur **RST**, puis flasher avec `idf.py flash`.
+
 **Compile flag** :
 - `CONFIG_OPENPROFALUX_TARGET_M5STACK=y` → M5Stack ATOM Lite
 - `CONFIG_OPENPROFALUX_TARGET_EXTERNAL=y` → ESP32 DevKit
