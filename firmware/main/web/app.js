@@ -1099,6 +1099,7 @@ function pfxResetSteps() {   // nouvelle identité -> on recache les gestes jusq
   const st = $('#pfx-learn-status'); if (st) st.hidden = true;
   const w = $('#pfx-wait'); if (w) w.hidden = true;
   const go = $('#pfx-gestes-ok'); if (go) { go.hidden = false; go.disabled = false; }
+  const fin = $('#pfx-finish'); if (fin) fin.hidden = true;   // on recache test + enregistrement jusqu'aux prochains gestes
   pfxLockTest(true);
 }
 /* Verrouille/déverrouille le dpad de test (▲ ■ ▼) pendant le délai de confirmation du moteur. */
@@ -1123,6 +1124,7 @@ if ($('#pfx-capture')) $('#pfx-capture').onclick = async () => {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   b.disabled = true; setRadioBusy(true);
   if ($('#pfx-renew-row')) $('#pfx-renew-row').hidden = true;
+  { const fin = $('#pfx-finish'); if (fin) fin.hidden = true; }   // test + enregistrement : masques jusqu'aux gestes confirmes
   /* On envoie les params du profil (porteuse de la marque, TE, bit de répétition, RMT) : le boîtier
      émet l'apprentissage sur SA fréquence (Eveno/NeoSol 868330, Profalux 868425) et les grave dans la
      fiche au save. Le panneau avancé permet de surcharger avant la capture. */
@@ -1209,6 +1211,7 @@ if ($('#pfx-gestes-ok')) $('#pfx-gestes-ok').onclick = () => {
     n = Math.max(0, n - 1);
     if (n > 0) { pfxWait('⏳ Le moteur confirme, patiente… ' + n + ' s'); return; }
     clearInterval(t); pfxLockTest(false);
+    const fin = $('#pfx-finish'); if (fin) fin.hidden = false;   // gestes confirmes -> on revele test (2) + enregistrement (3)
     pfxWait('✅ Tu peux tester maintenant avec ▲ ■ ▼.', 'ok');
   }, 1000);
 };
