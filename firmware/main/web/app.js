@@ -441,6 +441,13 @@ function typeIsPositional(v) {
   const t = typeByCode(typeof (v && v.type) === 'number' ? v.type : 0);
   return t ? !!t.positional : true;   // défaut (volet) = positionnel
 }
+/* Mécanisme d'un appareil : enrôlé (virtuel), rejeu brut, ou cloné (KeeLoq capturé). Sert à filtrer
+   l'écran de capture : on ne clone PAS un volet enrôlé (piloté par génération), et inversement. */
+function deviceMech(v) {
+  if (v && v.virt) return 'enrolement';
+  if (v && v.rejeu) return 'rejeu';
+  return 'cloner';
+}
 
 function renderVoletPicker() {
   const box = $('#volet-picker'); if (!box) return;
@@ -448,7 +455,12 @@ function renderVoletPicker() {
      profil portail ne liste pas les volets, et inversement). Sans profil, on montre tout. Le type et
      son icône viennent de la config via les helpers ci-dessus. */
   const wantType = CAPTURE_PROFILE ? CAPTURE_PROFILE.type : null;
-  const vols = filterByType((statusCache.volets || []).filter(v => !v.central), wantType);   /* pas d'apprentissage pour une centrale */
+  /* Avec un profil porté, filtrer AUSSI par mécanisme : un écran de clone ne liste que les appareils
+     clonés, un écran de rejeu que les rejeu, jamais les enrôlés (qu'on ne clone pas). Sans profil
+     (gestion d'un appareil existant), on ne filtre pas sur le mécanisme. */
+  const wantMech = CAPTURE_PROFILE ? (CAPTURE_PROFILE.mecanisme || '') : null;
+  let vols = filterByType((statusCache.volets || []).filter(v => !v.central), wantType);   /* pas d'apprentissage pour une centrale */
+  if (wantMech) vols = vols.filter(v => deviceMech(v) === wantMech);
   const ids = vols.map(v => v.id);
   const nr = $('#new-volet-row');
   const newOpen = nr && !nr.hidden;
