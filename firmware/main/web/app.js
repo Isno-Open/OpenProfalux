@@ -422,8 +422,35 @@ function mountCaptureAdvanced() {
   host.innerHTML = ''; CAP_ADV = null;
   if (!CAPTURE_PROFILE) return;
   const comp = txAdvanced({ values: {}, profile: CAPTURE_PROFILE, marque: CAPTURE_PROFILE.marque });
+  /* « Caler sur ma télécommande » VIT sur cet écran : balaie la bonne radio (par bande) et écrit la
+     porteuse trouvée dans le champ Fréquence du panneau avancé, par appareil. Plus besoin d'aller dans
+     Système régler la box. */
+  const cal = document.createElement('div');
+  cal.innerHTML = `<div class="row" style="margin-top:6px"><button class="btn cap-sweep" type="button">📡 Caler sur ma télécommande</button></div>`
+    + `<div class="statline cap-sweep-res" hidden><span class="dot"></span><b></b></div>`;
+  host.appendChild(cal);
   host.appendChild(comp.el);
   CAP_ADV = comp.read;
+  const btn = cal.querySelector('.cap-sweep'), res = cal.querySelector('.cap-sweep-res');
+  btn.onclick = async () => {
+    const radio = await captureRadioFor(CAPTURE_PROFILE);
+    btn.disabled = true; res.hidden = false; res.className = 'statline';
+    res.querySelector('b').textContent = '📡 Appuie et tiens un bouton de ta télécommande, à 1-2 m du boîtier…';
+    await api(`/api/rx/sweep?radio=${radio}`, { method: 'POST' }).catch(() => {});
+    let d = null;
+    for (let i = 0; i < 20; i++) { await new Promise(r => setTimeout(r, 1000)); d = await api(`/api/rx/sweep?radio=${radio}`).catch(() => null); if (d && d.state === 2) break; }
+    btn.disabled = false;
+    if (d && d.state === 2 && d.status === 0 && d.center_khz) {
+      const inp = comp.el.querySelector('.advf[data-name="freq_khz"]');
+      if (inp) inp.value = d.center_khz;
+      comp.el.open = true;   // ouvre le panneau pour montrer la fréquence remplie
+      res.className = 'statline ok';
+      res.querySelector('b').textContent = `Porteuse trouvée : ${(d.center_khz / 1000).toFixed(3)} MHz, reportée dans les réglages avancés.`;
+    } else {
+      res.className = 'statline bad';
+      res.querySelector('b').textContent = 'Rien trouvé. Rapproche la télécommande, tiens le bouton appuyé, recommence.';
+    }
+  };
 }
 /* Après une capture, applique à l'appareil les réglages du panneau avancé (fréquence, TE, répétition,
    RMT, marque), par /api/volet/txparams. Rend l'émission du clone/rejeu cohérente avec la capture. */
@@ -672,7 +699,7 @@ function renderLearnSlots() {
       const f = captureFreqFor(CAPTURE_PROFILE);
       if (f) {
         const src = CAPTURE_PROFILE ? (CAPTURE_PROFILE.marque || CAPTURE_PROFILE.nom) : (activeVolet || 'cet appareil');
-        radioRem.innerHTML = `📻 Capture sur la fréquence de <b>${esc(src)}</b> : <b>${(f / 1000).toFixed(3).replace('.', ',')} MHz</b> · ${RADIO_LINKS}`;
+        radioRem.innerHTML = `📻 Capture sur la fréquence de <b>${esc(src)}</b> : <b>${(f / 1000).toFixed(3).replace('.', ',')} MHz</b>. Ajuste-la en bas (Réglages avancés, ou « Caler sur ma télécommande »).`;
       } else {
         const rp = radioProfileNow();
         radioRem.innerHTML = `📻 Profil radio : <b>${esc(rp.name)} (${rp.mhz})</b> · ${RADIO_LINKS}`;
