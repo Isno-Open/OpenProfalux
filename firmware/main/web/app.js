@@ -57,7 +57,7 @@ async function sendCmd(body, activeBtn) {
   if (radioBusy) return;                       // radio occupee : on ignore le clic en trop
   setRadioBusy(true);
   if (activeBtn) activeBtn.classList.add('sending');
-  try { await api('/api/shutter', { method: 'POST', body: JSON.stringify(body) }); }
+  try { const r = await api('/api/shutter', { method: 'POST', body: JSON.stringify(body) }); if (r && r.busy) toast('Émission déjà en cours sur une autre carte, réessaie'); }
   catch (e) { toast('Radio occupée, réessaie dans un instant'); }
   finally { if (activeBtn) activeBtn.classList.remove('sending'); setRadioBusy(false); }
 }

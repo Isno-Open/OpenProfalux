@@ -1017,6 +1017,61 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
     return 0;
 }
 
+/* ── Synchro inter-cartes : compteur roulant PARTAGE + verrou d'emission, par MQTT.
+ * Deux cartes qui portent la MEME identite virtuelle (meme serial) doivent avancer le MEME compteur,
+ * que l'ordre vienne de HA ou de l'UI de l'une d'elles, et ne jamais emettre en meme temps.
+ *   openprofalux/counter/<serial>  retained : le compteur ; a la reception on garde le MAX (vc_keep).
+ *   openprofalux/busy/<serial>     1/0      : verrou ; un busy recu arme un refus local ~3 s (auto-
+ *                                             expire si la carte emettrice plante : jamais de blocage).
+ * Les publications se font HORS LOCK (mqtt_pub_raw direct, JAMAIS sous le LOCK, voir pub_defer). ── */
+#define SYNC_LOCK_MS   1500u   /* duree max d'une emission : verrou local tenu au plus ce temps */
+#define SYNC_STALE_MS  3000u   /* un busy recu plus vieux que ca est ignore (carte emettrice plantee) */
+static uint32_t s_busy_until[SH_MAX_VOLETS];   /* ms (esp_timer) jusqu'a laquelle le serial est verrouille ; 0 = libre */
+static bool     s_self_emit[SH_MAX_VOLETS];    /* on emet soi-meme ce serial -> ignorer l'echo de notre busy */
+static inline uint32_t sync_now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static void sync_topic(char *out, size_t cap, const char *kind, uint32_t serial) {
+    snprintf(out, cap, "openprofalux/%s/%07lX", kind, (unsigned long)serial);
+}
+static void sync_pub_counter(uint32_t serial, uint16_t cnt) {
+    char t[48], p[8]; sync_topic(t, sizeof t, "counter", serial);
+    snprintf(p, sizeof p, "%u", cnt);
+    mqtt_pub_raw(t, p, 0, 1);              /* retained : une carte au boot reprend le niveau */
+}
+static void sync_pub_busy(uint32_t serial, bool on) {
+    char t[48]; sync_topic(t, sizeof t, "busy", serial);
+    mqtt_pub_raw(t, on ? "1" : "0", 0, 0);
+}
+/* Index du volet VIRTUEL de ce serial, ou -1. Lecture sous LOCK (tableau partage). */
+static int sync_idx_by_serial(uint32_t serial) {
+    int idx = -1; LOCK();
+    for (int i = 0; i < s_nvolets; i++)
+        if (s_volets[i].virt && s_volets[i].virt_serial == serial) { idx = i; break; }
+    UNLOCK(); return idx;
+}
+
+/* Pilotage AVEC synchro : a appeler a la place de shutters_cmd pour un ordre HA ou UI. Pose le
+ * verrou (busy=1) AVANT d'emettre, puis publie le compteur et leve le verrou APRES. Refuse
+ * (SH_CMD_BUSY) si une emission du meme serial est deja en cours ici ou sur l'autre carte. */
+int shutters_cmd_synced(const char *id, const char *cmd, int value) {
+    uint32_t serial = 0; int idx = -1;
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (v && v->virt) { serial = v->virt_serial; idx = (int)(v - s_volets); }
+    UNLOCK();
+    if (idx >= 0 && !s_self_emit[idx] && s_busy_until[idx] && sync_now_ms() < s_busy_until[idx])
+        return SH_CMD_BUSY;                              /* une emission de ce serial est deja en cours */
+    if (idx >= 0) { s_self_emit[idx] = true; s_busy_until[idx] = sync_now_ms() + SYNC_LOCK_MS; sync_pub_busy(serial, true); }
+    int rc = shutters_cmd(id, cmd, value);               /* prend le LOCK, emet, avance virt_counter */
+    if (idx >= 0) {
+        uint16_t cnt = 0;
+        LOCK(); if (idx < s_nvolets && s_volets[idx].virt) cnt = s_volets[idx].virt_counter; UNLOCK();
+        sync_pub_counter(serial, cnt);
+        sync_pub_busy(serial, false);
+        s_busy_until[idx] = 0; s_self_emit[idx] = false;
+    }
+    return rc;
+}
+
 /* ── Tache : suivi position + streaming du maintien ── */
 static void tick_task(void *arg) {
     (void)arg;
@@ -2002,6 +2057,29 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         }
         return;
     }
+    /* Synchro compteur : une autre carte (ou nous) a emis ce serial -> on garde le MAX (ne recule jamais). */
+    if (!strncmp(topic, "openprofalux/counter/", 21)) {
+        uint32_t serial = strtoul(topic + 21, NULL, 16);
+        char nb[8]; int k = len < 7 ? len : 7; memcpy(nb, data, k); nb[k] = 0;
+        uint16_t rx = (uint16_t)atoi(nb);
+        LOCK();
+        for (int i = 0; i < s_nvolets; i++)
+            if (s_volets[i].virt && s_volets[i].virt_serial == serial) {
+                uint16_t keep = vc_keep(rx, s_volets[i].virt_counter);
+                if (keep != s_volets[i].virt_counter) { s_volets[i].virt_counter = keep; save_cfg(); }
+                break;
+            }
+        UNLOCK();
+        return;
+    }
+    /* Verrou d'emission : une AUTRE carte emet ce serial -> on se refuse ~3 s (auto-expire). */
+    if (!strncmp(topic, "openprofalux/busy/", 18)) {
+        uint32_t serial = strtoul(topic + 18, NULL, 16);
+        int idx = sync_idx_by_serial(serial);
+        if (idx >= 0 && !s_self_emit[idx])   /* pas notre propre echo */
+            s_busy_until[idx] = (len >= 1 && data[0] == '1') ? (sync_now_ms() + SYNC_STALE_MS) : 0;
+        return;
+    }
     static const char P[] = "openprofalux/cover/";
     if (strncmp(topic, P, sizeof(P) - 1)) return;
     const char *after = topic + sizeof(P) - 1;
@@ -2017,11 +2095,11 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     char payload[16]; int m = len < 15 ? len : 15; memcpy(payload, data, m); payload[m] = 0;
     if (!s_mqtt_obey) { ESP_LOGW(TAG, "MQTT cmd ignoree (obey=OFF) pour '%s'", id); return; }   /* carte secondaire : une seule carte emet un volet partage */
     if (!strcmp(sub, "set")) {
-        if      (!strcasecmp(payload, "OPEN"))  shutters_cmd(id, "up", 0);
-        else if (!strcasecmp(payload, "CLOSE")) shutters_cmd(id, "down", 0);
-        else if (!strcasecmp(payload, "STOP"))  shutters_cmd(id, "stop", 0);
+        if      (!strcasecmp(payload, "OPEN"))  shutters_cmd_synced(id, "up", 0);
+        else if (!strcasecmp(payload, "CLOSE")) shutters_cmd_synced(id, "down", 0);
+        else if (!strcasecmp(payload, "STOP"))  shutters_cmd_synced(id, "stop", 0);
     } else if (!strcmp(sub, "set_position")) {
-        shutters_cmd(id, "pos", 100 - atoi(payload));   /* HA envoie le % d'ouverture -> on convertit en fermeture */
+        shutters_cmd_synced(id, "pos", 100 - atoi(payload));   /* HA envoie le % d'ouverture -> on convertit en fermeture */
     }
 }
 

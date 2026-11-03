@@ -321,10 +321,10 @@ static esp_err_t h_shutter(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id"), *cmd = jstr(j, "cmd");
     cJSON *val = cJSON_GetObjectItem(j, "value");
-    int rc = (id && cmd) ? shutters_cmd(id, cmd, val ? (int)val->valuedouble : 0) : -1;
+    int rc = (id && cmd) ? shutters_cmd_synced(id, cmd, val ? (int)val->valuedouble : 0) : -1;
     cJSON_Delete(j);
-    char resp[48];
-    snprintf(resp, sizeof(resp), "{\"ok\":%d,\"tx_marc\":%d}", rc == 0 ? 1 : 0, g_tx_marc);
+    char resp[56];
+    snprintf(resp, sizeof(resp), "{\"ok\":%d,\"busy\":%d,\"tx_marc\":%d}", rc == 0 ? 1 : 0, rc == SH_CMD_BUSY ? 1 : 0, g_tx_marc);
     httpd_resp_sendstr(r, resp);
     return ESP_OK;
 }
