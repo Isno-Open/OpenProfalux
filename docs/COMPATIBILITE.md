@@ -19,6 +19,7 @@ Sur isno.fr, chaque article n'affiche que sa langue ; ici sur GitHub, les deux s
 | Profalux | NeoSol S300 Stella AT | ![Profalux NeoSol MAI-SOLTS, photo @eleroy](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/neosol-mai-solts.webp) | ~868,383 MHz (personnalisée, à confirmer) ; bit de répétition // ~868.383 MHz (custom, to confirm); repeat bit | NA | oui | #1 |
 | Profalux | MOT-PX3R10 (moteur solaire) // MOT-PX3R10 (solar motor) |  | 868 MHz, bit de répétition // 868 MHz, repeat bit | NA | oui | #59 |
 | Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) // JX02XE 10R-56 (Stella NeoSol, solar) |  | 868 MHz, bit de répétition // 868 MHz, repeat bit | NA | oui | #59 |
+| Profalux | NeoSol, télécommande murale NeoSol One (3 volets) // NeoSol, NeoSol One wall remote (3 shutters) |  | 868 MHz (profil NeoSol R8), bit de répétition // 868 MHz (NeoSol R8 profile), repeat bit | non | oui | XIAO ESP32C3 + CC1101 M115 |
 | Profalux | VISIO Monobloc (MAI-EMPX-B1) | ![Profalux MAI-EMPX-B1, photo @MaxFrakass](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empx-b1.webp) | 868,350 MHz, profil R6 // 868.350 MHz, R6 profile | non | oui | #35 |
 | Eveno | Zuni-R |  | 868,33 MHz (profil Eveno) // 868.33 MHz (Eveno profile) | oui | NA | #3 |
 | FranciaFlex | M4G | ![FranciaFlex M4g, photo @lecanard38](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/m4g.webp) | 868 MHz | NA | oui | forum HACF // HACF forum |
@@ -51,9 +52,10 @@ joha38 sur moteur solaire (issue #59). Le délai est encore plus marqué sur les
 solaires, qui n'écoutent la radio que par intermittence pour économiser leur batterie.
 
 **NeoSol et moteurs solaires, bit de répétition** : sur NeoSol S300 et sur les moteurs
-solaires Profalux, l'enrôlement et le pilotage sont plus fiables en cochant **« Émettre
-comme la télécommande (bit de répétition) »** (Système > Appareil), fréquence Profalux par
-défaut. Retours concordants : eleroy sur NeoSol 300 (issue #1), joha38 sur MOT-PX3R10
+solaires Profalux, l'enrôlement et le pilotage sont plus fiables avec le **bit de répétition** (« émettre
+comme la télécommande ») activé. Ce réglage n'est plus global (issue #111) : il se règle par
+appareil, dans le panneau avancé de l'assistant d'ajout (déjà sur ON avec le profil NeoSol), ou
+dans Appareils → Mes appareils → Modifier. Retours concordants : eleroy sur NeoSol 300 (issue #1), joha38 sur MOT-PX3R10
 solaire de 2020 (issue #59, confirmé sur deux modules radio) et, chez le même testeur, sur
 un moteur solaire récent **JX02XE 10R-56 (Stella NeoSol) de 2026**. La même méthode, preset
 NeoSol et bit de répétition, pilote les quatre volets, anciens et récents mélangés.

@@ -60,6 +60,33 @@ pas câblé. SPI à 1 MHz (voir `boards/d1-mini.json`).
 | CSN | ⚪ Blanc | IO5 |
 | GDO0 | 🟠 Orange | IO26 |
 
+## Table complète : Seeed XIAO ESP32C3 (`-DBOARD=xiao-esp32c3`)
+
+Module CC1101 868 « M115 » (17 × 18,9 mm) : demi-trous au **pas de 2 mm**, ni breadboard ni
+Dupont, les fils se soudent. Broches de gauche à droite, composants face à soi et antenne en
+haut : 1 VCC, 2 GND, 3 SI, 4 SCLK, 5 SO, 6 GDO2, 7 GDO0, 8 CSN (vérifier : la 2 sonne avec les
+pastilles GND du haut). En haut : 9 GND, 10 ANT (milieu, antenne ressort ou quart d'onde de
+8,6 cm), 11 GND.
+
+| Signal | Couleur | Pin M115 | Pastille XIAO | GPIO |
+|--------|---------|----------|---------------|------|
+| VCC | 🔴 Rouge | 1 | 3V3 | – |
+| GND | ⚫ Noir | 2 | GND | – |
+| MOSI | 🟡 Jaune | 3 (SI) | D10 | GPIO10 |
+| MISO | 🟢 Vert | 5 (SO) | **D1** | GPIO3 |
+| SCK | 🔵 Bleu | 4 (SCLK) | D8 | GPIO8 |
+| CSN | ⚪ Blanc | 8 | D2 | GPIO4 |
+| GDO0 | 🟠 Orange | 7 | D3 | GPIO5 |
+| GDO2 | 🟣 Violet | 6 | non câblé | – |
+
+- **MISO n'est pas sur D9**, le « MISO » sérigraphié : GPIO9 est le strap BOOT. Un CC1101
+  dont le CSN flotte au reset peut tirer SO à l'état bas et faire démarrer la puce en mode
+  téléchargement. Le SPI passe par la matrice GPIO, n'importe quelle broche convient.
+- D0 (GPIO2) est un strap, D6/D7 (GPIO21/20) portent l'UART0 du bootloader : laissés libres.
+- Au dos du XIAO, **VUSB (5 V) est juste sous GND** : le VCC du module va sur 3V3.
+- Flash par l'USB-C natif (`idf.py -p /dev/ttyACM0 flash`, ou l'image `-full.bin` à 0x0
+  avec web.esphome.io). Port absent : maintenir BOOT en branchant l'USB.
+
 **Compile flag** :
 - `CONFIG_OPENPROFALUX_TARGET_M5STACK=y` → M5Stack ATOM Lite
 - `CONFIG_OPENPROFALUX_TARGET_EXTERNAL=y` → ESP32 DevKit
