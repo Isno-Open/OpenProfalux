@@ -525,6 +525,13 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
     if (!j) return false;
     uint32_t freq = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
     const char *csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, cmd));
+    /* Portail a bouton UNIQUE (CAME & co) : la telecommande n'a qu'un bouton, le moteur enchaine
+     * la sequence lui-meme (ouvre -> stop -> ferme). On ne capture donc qu'une commande ; Ouvrir /
+     * Stop / Fermer du pave rejouent la meme trame. Repli : si la commande demandee n'a pas ete
+     * captee, on rejoue la premiere commande presente. */
+    if (!csv || !*csv)
+        for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
+            csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
     bool ok = false;
     if (csv && *csv && freq) {
         static uint8_t  lvl[REJEU_MAX_PULSES + 1];
@@ -1732,6 +1739,22 @@ char *shutters_status_json(void) {
         add_cmd_json(cmd, "up",   v->up,   v->up_btn);
         add_cmd_json(cmd, "stop", v->stop, v->stop_btn);
         add_cmd_json(cmd, "down", v->down, v->down_btn);
+        /* Rejeu brut (CAME et code fixe) : l'ecran de capture unifie en a besoin pour distinguer
+         * le moteur (rejeu vs clone KeeLoq) et montrer quelles commandes sont deja captees. Le cadre
+         * brut est range dans v->rejeu (JSON {f, up, stop, down}) ; on expose juste les commandes
+         * presentes, pas les impulsions. */
+        if (v->rejeu) {
+            cJSON_AddBoolToObject(o, "rejeu", true);
+            cJSON *rc = cJSON_AddObjectToObject(o, "rejeu_cmds");
+            cJSON *rj = cJSON_Parse(v->rejeu);
+            if (rj) {
+                for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c; c++) {
+                    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, *c));
+                    if (s && *s) cJSON_AddBoolToObject(rc, *c, true);
+                }
+                cJSON_Delete(rj);
+            }
+        }
         cJSON_AddItemToArray(vols, o);
     }
     cJSON *rf = cJSON_AddArrayToObject(root, "rf");   /* recentes seulement ; les 300 via /api/rf */

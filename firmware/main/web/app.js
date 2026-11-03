@@ -89,6 +89,7 @@ function applyRoute() {
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
   if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
   if (main === 'remotes' && sub === 'devices' && typeof renderDevices === 'function') renderDevices();
+  if (main === 'remotes' && sub === 'learn' && typeof setupCaptureScreen === 'function') setupCaptureScreen();
   if (sub === 'rejeu' && typeof loadRejeuPanel === 'function') loadRejeuPanel();
   if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
@@ -349,6 +350,37 @@ const LEARN_ACTIONS = [
   { a: 'stop', ico: '■', lbl: 'Stop' },
   { a: 'down', ico: '▼', lbl: 'Descente' },
 ];
+
+/* ── Écran de capture UNIFIÉ (issue #111) : un seul écran (celui du clone Profalux) pour toutes les
+   captures. Le profil choisi dans la pyramide est porté ici (CAPTURE_PROFILE) comme l'enrôlement, et
+   décide le MOTEUR sous le capot : clone KeeLoq décodé (Profalux) ou rejeu brut (CAME, code fixe). Les
+   commandes à capturer viennent du TYPE (profiles.json types[t].capture) : volet = Montée/Stop/Descente,
+   portail = un bouton unique (le moteur du portail enchaîne la séquence lui-même). ── */
+let CAPTURE_PROFILE = null;   // profil porté dans l'écran de capture (pyramide) ; null = gestion d'un volet existant
+let CAP_RADIOS = null;        // radios de la carte, pour router une capture rejeu sur la bonne bande
+
+/* Commandes à capturer, PAR TYPE. Priorité : profil porté, sinon type du volet actif, sinon volet. */
+function captureActions() {
+  const prof = CAPTURE_PROFILE;
+  const v = (statusCache.volets || []).find(x => x.id === activeVolet);
+  const typeKey = prof ? prof.type : (v && v.type === 1 ? 'portail' : 'volet');
+  const t = (window.PROFILES && PROFILES.types && PROFILES.types[typeKey]) || null;
+  const icoOf = c => c === 'up' ? '▲' : c === 'down' ? '▼' : '■';
+  if (t && Array.isArray(t.capture)) return t.capture.map(x => ({ a: x.cmd, lbl: x.label, ico: icoOf(x.cmd) }));
+  return LEARN_ACTIONS;
+}
+/* Rejeu brut (CAME, code fixe) vs clone KeeLoq décodé : le profil porté tranche, sinon la fiche du volet. */
+function isRejeuContext() {
+  const prof = CAPTURE_PROFILE;
+  const v = (statusCache.volets || []).find(x => x.id === activeVolet);
+  return !!((prof && prof.flow === 'rejeu') || (v && v.rejeu));
+}
+/* Radio (index) pour une capture rejeu : celle dont la bande déclarée contient le profil (CAME = 433). */
+async function rejeuRadioFor(prof) {
+  if (!CAP_RADIOS) CAP_RADIOS = await fetch('/api/radios').then(r => r.json()).then(d => d.radios || []).catch(() => []);
+  const m = CAP_RADIOS.find(r => String(r.band) === String(prof && prof.band));
+  return m ? m.idx : 0;
+}
 let learning = false;   // capture en cours
 let activeVolet = '';   // volet selectionne pour l'apprentissage
 
@@ -414,6 +446,34 @@ document.addEventListener('click', e => {
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   }, 150);
 });
+/* Entrée dans l'écran de capture depuis la pyramide (#remotes/learn/<index de profil>) ou pour gérer
+   un volet existant (#remotes/learn). Porte le profil choisi, survit à un F5 via l'index du hash. */
+async function setupCaptureScreen() {
+  const idx = parseInt((location.hash || '').split('/')[2] || '', 10);
+  if (!Number.isNaN(idx)) {
+    if (!window.PROFILES) { try { PROFILES = await fetch('/profiles.json').then(r => r.json()); } catch (e) { /* UI dégradée */ } }
+    CAPTURE_PROFILE = (window.PROFILES && PROFILES.profils && PROFILES.profils[idx]) || null;
+    if (CAPTURE_PROFILE) {
+      activeVolet = '';                       // ajout d'un NOUVEL appareil : on part d'un nom vierge
+      const nr = $('#new-volet-row');         // et on ouvre tout de suite le champ nom
+      if (nr) { nr.hidden = false; const inp = $('#new-volet'); if (inp) inp.value = ''; }
+    }
+  } else {
+    CAPTURE_PROFILE = null;                   // écran atteint pour gérer un volet déjà présent
+  }
+  setCaptureTitle();
+  if (!learning) { if (typeof renderVoletPicker === 'function') renderVoletPicker(); renderLearnSlots(); }
+}
+/* Titre + sous-titre de l'écran : nom du profil porté, sinon le libellé générique du clone. */
+function setCaptureTitle() {
+  const h = $('#learn-title'), s = $('#learn-sub'); const p = CAPTURE_PROFILE;
+  if (h) h.textContent = p ? (p.nom || ('Ajouter : ' + (p.marque || 'appareil'))) : 'Cloner une télécommande';
+  if (s) s.textContent = p
+    ? (p.flow === 'rejeu'
+        ? 'Donne un nom, puis capture en appuyant sur ta télécommande. Pour un portail, un seul bouton suffit (le moteur enchaîne la séquence).'
+        : 'Donne un nom, puis capture chaque commande en appuyant sur ta télécommande. Une capture par commande suffit.')
+    : 'Tu as ta télécommande d’origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus.';
+}
 function renderLearnSlots() {
   const box = $('#learn-slots'); if (!box) return;
   const id = activeVolet;
@@ -431,31 +491,39 @@ function renderLearnSlots() {
     ? `<div class="statline ok"><span class="dot"></span><b>Volet enrôlé (télécommande virtuelle).</b> Il est piloté par génération, pas besoin de cloner. En option, apprends ci-dessous sa <b>télécommande d'origine</b> : le boîtier suivra alors la position quand tu l'utilises.</div>`
     : '';
   box.innerHTML = virtNote;
-  for (const A of LEARN_ACTIONS) {
-    const c = cmd[A.a];
-    const learned = c != null;
+  const ACTS = captureActions();      // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique)
+  const rejeu = isRejeuContext();     // rejeu brut (CAME, code fixe) vs clone KeeLoq décodé
+  for (const A of ACTS) {
+    const c = rejeu ? null : cmd[A.a];
+    const learned = rejeu ? !!(v && v.rejeu_cmds && v.rejeu_cmds[A.a]) : (c != null);
     const row = document.createElement('div');
     row.className = 'slot' + (learned ? ' done' : '');
-    const moveSel = learned
-      ? `<select class="slot-move" data-from="${A.a}" title="Déplacer cette trame vers une autre action"><option value="">déplacer…</option>${LEARN_ACTIONS.filter(x => x.a !== A.a).map(x => `<option value="${x.a}">→ ${x.lbl}</option>`).join('')}</select>`
+    /* Réassignation par glisser-déposer : propre au clone KeeLoq (une trame décodée par commande).
+       En rejeu brut on ne décode rien, donc pas de déplacement entre slots. */
+    const moveSel = (!rejeu && learned)
+      ? `<select class="slot-move" data-from="${A.a}" title="Déplacer cette trame vers une autre action"><option value="">déplacer…</option>${ACTS.filter(x => x.a !== A.a).map(x => `<option value="${x.a}">→ ${x.lbl}</option>`).join('')}</select>`
       : '';
+    const state = rejeu
+      ? (learned ? '✓ captée' : 'à capturer')
+      : (learned ? `✓ appris <code>0x${(c.b).toString(16).toUpperCase()}</code> <code>${esc(c.s)}</code>` : 'à capturer');
     row.innerHTML = `<span class="slot-ico">${A.ico}</span><span class="slot-lbl">${A.lbl}</span>
-      <span class="slot-state">${learned ? `✓ appris <code>0x${(c.b).toString(16).toUpperCase()}</code> <code>${esc(c.s)}</code>` : 'à capturer'}</span>
+      <span class="slot-state">${state}</span>
       ${moveSel}<button class="btn slot-btn" data-a="${A.a}">${learned ? 'Recapturer' : 'Capturer'}</button>`;
-    /* drag-and-drop : glisser une commande apprise sur un autre slot -> reassignation */
     const act = A.a;
-    if (learned) {
+    if (!rejeu && learned) {
       row.draggable = true;
       row.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', act); e.dataTransfer.effectAllowed = 'move'; row.classList.add('dragging'); });
       row.addEventListener('dragend', () => row.classList.remove('dragging'));
     }
-    row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; row.classList.add('dragover'); });
-    row.addEventListener('dragleave', () => row.classList.remove('dragover'));
-    row.addEventListener('drop', e => {
-      e.preventDefault(); row.classList.remove('dragover');
-      const from = e.dataTransfer.getData('text/plain');
-      if (from && from !== act && activeVolet && !learning) reassign(from, act);
-    });
+    if (!rejeu) {
+      row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; row.classList.add('dragover'); });
+      row.addEventListener('dragleave', () => row.classList.remove('dragover'));
+      row.addEventListener('drop', e => {
+        e.preventDefault(); row.classList.remove('dragover');
+        const from = e.dataTransfer.getData('text/plain');
+        if (from && from !== act && activeVolet && !learning) reassign(from, act);
+      });
+    }
     box.appendChild(row);
   }
   const enabled = !!id && !learning;
@@ -566,7 +634,8 @@ async function captureAction(action, btn) {
   const id = activeVolet;
   if (!id) { toast('Choisis d’abord un volet'); return; }
   if (isNewNameWithComma(id)) { toast(COMMA_MSG); return; }
-  const label = LEARN_ACTIONS.find(x => x.a === action).lbl;
+  if (isRejeuContext()) return rejeuCaptureUnified(action, btn);   // CAME & code fixe : rejeu brut
+  const label = (captureActions().find(x => x.a === action) || {}).lbl || action;
   learning = true; renderLearnSlots();
   learnFail(false);
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
@@ -598,6 +667,34 @@ async function captureAction(action, btn) {
       renderLearnSlots();
     }
   }, 400);
+}
+
+/* Capture REJEU brut (CAME, code fixe) depuis l'écran unifié : crée le volet rejeu s'il n'existe pas
+   encore, puis capture la commande. Le profil porté donne la bande (→ radio) et le profil RX. Pour un
+   portail, une seule commande est capturée et suffit (le moteur enchaîne la séquence au rejeu). */
+async function rejeuCaptureUnified(action, btn) {
+  const id = activeVolet;
+  const prof = CAPTURE_PROFILE;
+  let v = (statusCache.volets || []).find(x => x.id === id);
+  if (!v) {   // 1er appui : on matérialise le volet rejeu (type porté par le profil)
+    const type = prof && prof.type === 'portail' ? 1 : 0;
+    const cr = await api('/api/rejeu/create', { method: 'POST', body: JSON.stringify({ id, type }) }).catch(() => null);
+    if (!cr || !cr.ok) { learnFail(true, action); return; }
+    await loadStatus();
+  }
+  const label = (captureActions().find(x => x.a === action) || {}).lbl || action;
+  const radio = await rejeuRadioFor(prof);
+  const body = { id, cmd: action, radio };
+  const rx = prof && prof.rx;   // E4 : la capture lit le RX du protocole (datarate/BW) depuis le profil
+  if (rx && typeof rx.datarate_baud === 'number' && typeof rx.bandwidth_khz === 'number') {
+    body.datarate_baud = rx.datarate_baud; body.bandwidth_khz = rx.bandwidth_khz;
+  }
+  learning = true; learnFail(false); renderLearnSlots();
+  btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
+  const d = await api('/api/rejeu/capture', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+  learning = false;
+  if (d && d.n > 0) { toast(`✓ ${label} captée (${d.n} impulsions)`); await loadStatus(); }
+  else { learnFail(true, label); renderLearnSlots(); }
 }
 
 const newVoletInput = $('#new-volet');
@@ -1938,9 +2035,12 @@ function renderAddStep(host, type, marque) {
 /* Route une feuille (profil) de la pyramide vers le flux existant via le hash. Partage entre le
    choix manuel (etape 3) et la proposition de la detection : meme carte, meme routage. */
 function routeLeaf(prof) {
-  if (prof.flow === 'rejeu') {   // on met l'INDEX du profil dans le hash : il survit a un F5
-    REJEU_PROFILE = prof;
-    location.hash = `remotes/rejeu/${PROFILES.profils.indexOf(prof)}`;
+  // Écran de CAPTURE unifié : clone Profalux (flow 'learn') ET rejeu CAME (flow 'rejeu') passent par
+  // le MÊME écran (celui du clone). Le profil porté (CAPTURE_PROFILE) décide le moteur sous le capot
+  // et le type décide les commandes à capturer. L'index dans le hash survit à un F5.
+  if (prof.flow === 'learn' || prof.flow === 'rejeu') {
+    CAPTURE_PROFILE = prof;
+    location.hash = `remotes/learn/${PROFILES.profils.indexOf(prof)}`;
     return;
   }
   /* Enrôlement : on PORTE le profil choisi jusqu'au panneau d'enrôlement (issue #111). Sa fréquence,
