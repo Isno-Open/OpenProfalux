@@ -364,7 +364,7 @@ function captureActions() {
   const prof = CAPTURE_PROFILE;
   const v = (statusCache.volets || []).find(x => x.id === activeVolet);
   const typeKey = prof ? prof.type : (v && v.type === 1 ? 'portail' : 'volet');
-  const t = (window.PROFILES && PROFILES.types && PROFILES.types[typeKey]) || null;
+  const t = (PROFILES && PROFILES.types && PROFILES.types[typeKey]) || null;
   const icoOf = c => c === 'up' ? '▲' : c === 'down' ? '▼' : '■';
   if (t && Array.isArray(t.capture)) return t.capture.map(x => ({ a: x.cmd, lbl: x.label, ico: icoOf(x.cmd) }));
   return LEARN_ACTIONS;
@@ -375,8 +375,21 @@ function isRejeuContext() {
   const v = (statusCache.volets || []).find(x => x.id === activeVolet);
   return !!((prof && prof.flow === 'rejeu') || (v && v.rejeu));
 }
-/* Radio (index) pour une capture rejeu : celle dont la bande déclarée contient le profil (CAME = 433). */
-async function rejeuRadioFor(prof) {
+/* L'enrôlement (créer une télécommande virtuelle) n'est proposé comme alternative au clone que si la
+   MARQUE le déclare dans profiles.json (un profil d'enrôlement pour cette marque). Profalux et consorts
+   en ont un -> note affichée ; CAME n'a que du rejeu -> pas de profil d'enrôlement -> note masquée.
+   La décision vient du fichier de config, pas d'une règle écrite ici. */
+function enrolAvailableForCapture() {
+  const p = CAPTURE_PROFILE;
+  if (!p) return true;                     // écran générique de clone : l'enrôlement reste une alternative
+  const list = (PROFILES && PROFILES.profils) || [];
+  return list.some(x => x.marque === p.marque && (x.mecanisme === 'enrolement' || x.flow === 'enrol-pfx'));
+}
+/* Radio (index) pour une capture, choisie par la BANDE du profil : CAME 433 -> radio 433, Profalux 868
+   -> radio 868. Les DEUX chemins de capture (rejeu brut ET clone KeeLoq) l'appellent, pour que chacun
+   nomme explicitement sa radio au lieu de subir la primaire. Sans profil (gestion d'un volet existant),
+   on reste sur la primaire (idx 0), comportement historique. */
+async function captureRadioFor(prof) {
   if (!CAP_RADIOS) CAP_RADIOS = await fetch('/api/radios').then(r => r.json()).then(d => d.radios || []).catch(() => []);
   const m = CAP_RADIOS.find(r => String(r.band) === String(prof && prof.band));
   return m ? m.idx : 0;
@@ -386,15 +399,22 @@ let activeVolet = '';   // volet selectionne pour l'apprentissage
 
 function renderVoletPicker() {
   const box = $('#volet-picker'); if (!box) return;
-  const ids = (statusCache.volets || []).filter(v => !v.central).map(v => v.id);   /* pas d'apprentissage pour une centrale */
+  /* Quand un profil est porté (ajout depuis la pyramide), ne montrer que les appareils du MÊME type :
+     un profil portail ne liste pas les volets, et inversement. Sans profil (gestion d'un appareil
+     existant), on montre tout. type 1 = portail, sinon volet. */
+  const typeOf = v => (v.type === 1 ? 'portail' : 'volet');
+  const wantType = CAPTURE_PROFILE ? CAPTURE_PROFILE.type : null;
+  const vols = (statusCache.volets || []).filter(v => !v.central && (!wantType || typeOf(v) === wantType));   /* pas d'apprentissage pour une centrale */
+  const ids = vols.map(v => v.id);
   const nr = $('#new-volet-row');
   const newOpen = nr && !nr.hidden;
   if (activeVolet && !ids.includes(activeVolet) && !newOpen) activeVolet = '';
   box.innerHTML = '';
-  for (const id of ids) {
+  for (const v of vols) {
+    const id = v.id;
     const c = document.createElement('button');
     c.className = 'chip' + (id === activeVolet ? ' on' : '');
-    c.textContent = '🪟 ' + id;
+    c.textContent = (typeOf(v) === 'portail' ? '🚪 ' : '🪟 ') + id;
     c.onclick = () => { activeVolet = id; if (nr) { nr.hidden = true; $('#new-volet').value = ''; } renderVoletPicker(); renderLearnSlots(); };
     box.appendChild(c);
   }
@@ -451,8 +471,8 @@ document.addEventListener('click', e => {
 async function setupCaptureScreen() {
   const idx = parseInt((location.hash || '').split('/')[2] || '', 10);
   if (!Number.isNaN(idx)) {
-    if (!window.PROFILES) { try { PROFILES = await fetch('/profiles.json').then(r => r.json()); } catch (e) { /* UI dégradée */ } }
-    CAPTURE_PROFILE = (window.PROFILES && PROFILES.profils && PROFILES.profils[idx]) || null;
+    if (!PROFILES) { try { PROFILES = await fetch('/profiles.json').then(r => r.json()); } catch (e) { /* UI dégradée */ } }
+    CAPTURE_PROFILE = (PROFILES && PROFILES.profils && PROFILES.profils[idx]) || null;
     if (CAPTURE_PROFILE) {
       activeVolet = '';                       // ajout d'un NOUVEL appareil : on part d'un nom vierge
       const nr = $('#new-volet-row');         // et on ouvre tout de suite le champ nom
@@ -553,6 +573,11 @@ function renderLearnSlots() {
     : (v && v.virt)
       ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie sur sa télécommande d'origine en tenant le bouton une seconde (< 1 m du boîtier). Facultatif.`
       : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
+  const fbNote = $('#clone-fallback-note');   /* note "crée une télécommande virtuelle" : seulement si l'enrôlement est une alternative */
+  if (fbNote) fbNote.hidden = !enrolAvailableForCapture();
+  /* Bandeau profil radio 868 : sans objet pour un rejeu code fixe (CAME = 433), on le cache alors. */
+  const radioRem = $('#learn-radio-reminder');
+  if (radioRem) radioRem.hidden = isRejeuContext();
   updateRemoteNameField();
 }
 
@@ -639,7 +664,8 @@ async function captureAction(action, btn) {
   learning = true; renderLearnSlots();
   learnFail(false);
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
-  await api('/api/learn/start', { method: 'POST', body: JSON.stringify({ action }) });
+  const radio = await captureRadioFor(CAPTURE_PROFILE);   // MÊME choix de radio par bande que le rejeu : explicite, pas la primaire par défaut
+  await api(`/api/learn/start?radio=${radio}`, { method: 'POST', body: JSON.stringify({ action }) });
   const t0 = Date.now();
   const poll = setInterval(async () => {
     const r = await api('/api/learn/poll').catch(() => null);
@@ -683,7 +709,7 @@ async function rejeuCaptureUnified(action, btn) {
     await loadStatus();
   }
   const label = (captureActions().find(x => x.a === action) || {}).lbl || action;
-  const radio = await rejeuRadioFor(prof);
+  const radio = await captureRadioFor(prof);
   const body = { id, cmd: action, radio };
   const rx = prof && prof.rx;   // E4 : la capture lit le RX du protocole (datarate/BW) depuis le profil
   if (rx && typeof rx.datarate_baud === 'number' && typeof rx.bandwidth_khz === 'number') {
@@ -2258,7 +2284,7 @@ async function openDeviceEdit(v) {
     ? `<div class="field"><label>Profil (marque)</label><select class="dev-prof">${compat.map(p =>
         `<option value="${esc(p.marque)}"${curProf && p.marque === curProf.marque ? ' selected' : ''}>${esc(p.nom || p.marque)}</option>`).join('')}</select>
         <p class="hint">Change la marque/profil de cet appareil : la fréquence et les défauts suivent. L'identité et le compteur sont conservés.</p></div>`
-    : (k.tx ? `<div class="field"><label>Profil</label><p class="hint" style="margin:2px 0 0"><b>${esc((curProf && curProf.nom) || origMarque || '—')}</b></p></div>` : '');
+    : (k.tx ? `<div class="field"><label>Profil</label><p class="hint" style="margin:2px 0 0"><b>${esc((curProf && curProf.nom) || origMarque || '(non défini)')}</b></p></div>` : '');
   host.innerHTML = `<div class="card" style="margin-top:12px">
     <h3>Modifier : ${esc(v.id)} <span class="badge">${esc(k.lbl)}</span></h3>
     <div class="field"><label>Nom de l'appareil</label>
