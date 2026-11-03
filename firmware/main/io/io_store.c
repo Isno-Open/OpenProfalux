@@ -74,3 +74,19 @@ bool io_store_get_profile(const uint8_t src[3], io_profile_t *p) {
     nvs_close(h);
     return ok;
 }
+
+/* Vide TOUT le namespace io (cle + compteur + profil de chaque source). Chaque tentative
+ * d'enrolement 1W tire une identite aleatoire et la persiste (io_hc_pair_1w) : les essais
+ * repetes laissent des identites orphelines qui saturent le NVS (releve chez Pascal : iohc =
+ * 141 entrees sur 504). Purge de recuperation : l'identite io reelle se re-enrole depuis le 0x30
+ * de l'origine, qui lui vit hors NVS. Rend le nombre d'entrees liberees, <0 si echec. */
+int io_store_erase_all(void) {
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return -1;
+    size_t used = 0;
+    nvs_get_used_entry_count(h, &used);   /* avant purge, pour le compte rendu */
+    esp_err_t e = nvs_erase_all(h);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    return e == ESP_OK ? (int)used : -1;
+}

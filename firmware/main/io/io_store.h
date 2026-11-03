@@ -37,6 +37,10 @@ void io_store_set_profile(const uint8_t src[3], const io_profile_t *p);
 /* Rend true et remplit p si un profil est enregistre pour cette source. */
 bool io_store_get_profile(const uint8_t src[3], io_profile_t *p);
 
+/* Vide tout le namespace io (identites orphelines des essais d'enrolement comprises). Rend le
+ * nombre d'entrees liberees, <0 si echec. L'identite io reelle se re-enrole depuis le 0x30 capte. */
+int io_store_erase_all(void);
+
 #ifdef __cplusplus
 }
 #endif
