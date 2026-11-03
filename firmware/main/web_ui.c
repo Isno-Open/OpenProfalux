@@ -1714,7 +1714,7 @@ static esp_err_t h_session(httpd_req_t *r) {
  * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
-#define MAX_ROUTES      64
+#define MAX_ROUTES      72
 #define MAX_OPEN_ROUTES 12
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
