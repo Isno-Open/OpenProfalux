@@ -22,7 +22,7 @@
   "types": {
     "volet":   { "label": "Volet",   "code": 0, "icon": "🪟", "positional": true, "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
                  "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
-    "portail": { "label": "Portail", "code": 1, "icon": "🚪", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
+    "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
                  "capture": [ { "cmd": "up", "label": "Bouton du portail" } ] }
   },
   "profils": [

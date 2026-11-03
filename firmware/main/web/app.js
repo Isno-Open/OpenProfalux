@@ -203,7 +203,16 @@ const DEV = {
   0: { ico: '🪟', up: 'Montée', stop: 'Stop', down: 'Descente' },
   1: { ico: '🚪', up: 'Ouvrir', stop: 'Stop', down: 'Fermer' },
 };
-const devOf = v => DEV[(v && v.type) || 0] || DEV[0];
+/* Icône + libellés du d-pad d'un type : lus dans profiles.json (SOURCE UNIQUE, via typeByCode).
+   La table DEV ci-dessus n'est qu'un REPLI tant que profiles.json n'est pas chargé. */
+function devOf(v) {
+  const code = (v && v.type) || 0;
+  const fb = DEV[code] || DEV[0];
+  const t = typeByCode(code);
+  if (!t) return fb;
+  const d = t.dpad || {};
+  return { ico: t.icon || fb.ico, up: d.up || fb.up, stop: d.stop || fb.stop, down: d.down || fb.down };
+}
 function labelSymbols() {
   const set = (b, l) => { if (b && !b.hasAttribute('aria-label')) { b.setAttribute('aria-label', l); if (!b.title) b.title = l; } };
   $$('.dpad button[data-cmd]').forEach(b => set(b, SYM[b.dataset.cmd]));
@@ -449,7 +458,7 @@ function renderVoletPicker() {
     const id = v.id;
     const c = document.createElement('button');
     c.className = 'chip' + (id === activeVolet ? ' on' : '');
-    c.textContent = deviceTypeIcon(v) + ' ' + id;
+    c.innerHTML = deviceTypeIcon(v) + ' ' + esc(id);   /* innerHTML : l'icône de type peut être un SVG (profiles.json) */
     c.onclick = () => { activeVolet = id; if (nr) { nr.hidden = true; $('#new-volet').value = ''; } renderVoletPicker(); renderLearnSlots(); };
     box.appendChild(c);
   }
@@ -2358,7 +2367,7 @@ async function openDeviceEdit(v) {
   const curTypeKey = deviceTypeKey(v);
   const typeSelect = Object.keys(allTypes).length > 1
     ? `<div class="field"><label>Type d'appareil</label><select class="dev-type">${Object.keys(allTypes).map(tk =>
-        `<option value="${tk}"${tk === curTypeKey ? ' selected' : ''}>${allTypes[tk].icon || ''} ${esc(allTypes[tk].label || tk)}</option>`).join('')}</select>
+        `<option value="${tk}"${tk === curTypeKey ? ' selected' : ''}>${esc(allTypes[tk].label || tk)}</option>`).join('')}</select>
         <p class="hint">Corrige le type si l'appareil a été rangé au mauvais endroit. L'identité, le compteur et les captures sont conservés.</p></div>`
     : '';
   host.innerHTML = `<div class="card" style="margin-top:12px">
