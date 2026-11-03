@@ -286,8 +286,9 @@ static void strobe(uint8_t s) {
     cs_low(); spi_xfer(&tx, &rx, 1); cs_high();
 }
 
-/* ── Acces mode PAQUET (FIFO + strobes), pour un backend FSK. Transferts burst bornes a 31 octets
- * utiles. Le chemin OOK n'en a pas besoin. ── */
+/* ── Acces mode PAQUET (FIFO + strobes) pour les protocoles FSK comme io-homecontrol (#87).
+ * Transferts burst bornes a 31 octets utiles. Le chemin OOK n'en a pas besoin ; ces primitives
+ * ne sont utilisees que par le backend io (io/io_radio.c). ── */
 void cc1101_strobe_cmd(uint8_t s) { strobe(s); }
 
 void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len) {
@@ -306,7 +307,7 @@ void cc1101_read_burst(uint8_t addr, uint8_t *buf, size_t len) {
     for (size_t i = 0; i < len; i++) buf[i] = rx[i + 1];
 }
 
-/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK). */
+/* Reapplique la config OOK/Profalux (restaure la modulation apres un passage FSK io). */
 void cc1101_apply_config_ook(void) {
     strobe(CC_SIDLE);
     for (size_t i = 0; i < sizeof(s_regs) / sizeof(s_regs[0]); i++)

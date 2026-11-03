@@ -13,6 +13,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "io/io_store.h"   /* io_profile_t (appairage 1W io, #87) */
 
 /* Callback appele (hors mutex) pour chaque trame recue. bits = chaine '0'/'1' ordre du fil. */
 typedef void (*radio_frame_cb_t)(const char *bits, uint32_t serial, uint8_t button,
@@ -44,6 +45,15 @@ int  radio_capture_raw_on(int idx, uint32_t timeout_ms, uint8_t *levels, uint16_
 int  radio_capture_raw_on_freq(int idx, uint32_t freq_khz, uint32_t timeout_ms, uint8_t *levels, uint16_t *us, int max, int8_t *rssi_out); /* idem, cale idx sur freq_khz (0 = garder) */
 void radio_pause_rx(bool pause);       /* pause TEMPORAIRE pendant nos TX (stream maintien) */
 void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permanente (case UI "capture") */
+
+/* ── io-homecontrol (2-FSK 868, experimental #87). EXCLUSIF de l'ecoute PFX : tant que l'ecoute io
+ * est ON, le chemin OOK/PFX est suspendu ; a l'arret l'OOK est restaure. Captures/emissions dediees
+ * passent la radio en FSK io sous mutex, puis restaurent l'OOK et la porteuse. ── */
+void radio_set_io_listening(bool on);  /* ecoute permanente io : journalise chaque trame captee */
+bool radio_is_io_listening(void);
+int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms);  /* ecoute UNE trame io (FSK) */
+int  radio_io_send(const uint8_t src[3], uint8_t button);         /* emet UN appui bouton io 1W depuis src */
+int  radio_io_pair_1w(const io_profile_t *profile, const uint8_t *fixed_src, uint8_t out_src[3], uint32_t timeout_ms); /* appairage 1W io ; fixed_src = identite choisie ou NULL */
 
 /* Auto-calibration du gain RX : balaie les gains, verrouille le 1er qui capte une trame
  * valide pendant que l'utilisateur appuie sur sa telecommande. Non bloquant (tache de fond). */
