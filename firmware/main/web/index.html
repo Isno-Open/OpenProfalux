@@ -417,19 +417,6 @@
           <p class="hint">Ce test lit les télécommandes <b>Profalux / KeeLoq</b> (code tournant, identifiées par leur serial). Une <b>Somfy RTS</b> ou un <b>portail CAME</b> n'y apparaissent pas, même si la puce les reçoit : ces protocoles se traitent ailleurs. La puce est détectée mais une télécommande Profalux ne se capte pas ? Vérifie la <b>bande</b> (868), l'antenne, et ajuste le <b>gain RX</b> / la calibration dans <b>Système -> Appareil</b>. La réception se teste <b>par radio</b> : chaque bouton écoute sa propre puce.</p>
         </div>
         <div class="card" id="capture-root"></div>
-        <div class="card">
-          <h2>io-homecontrol (Somfy io / Velux), expérimental</h2>
-          <p class="sub">Capture les trames io (2-FSK 868,95 MHz) pour l'enrôlement. On cherche la trame <b>0x30</b> (la clé) : elle ne sort que pendant la <b>mise en PROG</b> de la télécommande, pas sur un appui normal.</p>
-          <div class="row"><button id="io-listen-btn" class="btn" type="button">Écoute io permanente : OFF</button></div>
-          <p class="hint" id="io-listen-status"></p>
-          <ol class="steps">
-            <li>Clique <b>Écoute io permanente</b> (ON).</li>
-            <li>Mets ta télécommande io en <b>PROG</b>, près de l'antenne.</li>
-            <li>Regarde l'onglet <b>Journal</b> : chaque trame captée s'écrit « Trame io captée (N octets)... ». Une ligne <b>cmd=0x30</b> = la clé.</li>
-            <li>Coupe l'écoute (OFF) pour rendre la radio au reste.</li>
-          </ol>
-          <p class="hint">Expérimental (#87). L'écoute io est EXCLUSIVE de l'écoute Profalux : tant qu'elle est ON, le reste de la radio est suspendu.</p>
-        </div>
       </div>
 
       <div class="subpanel" data-sp="backup">
