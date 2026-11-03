@@ -2318,11 +2318,21 @@ async function openDeviceEdit(v) {
         `<option value="${esc(p.marque)}"${curProf && p.marque === curProf.marque ? ' selected' : ''}>${esc(p.nom || p.marque)}</option>`).join('')}</select>
         <p class="hint">Change la marque/profil de cet appareil : la fréquence et les défauts suivent. L'identité et le compteur sont conservés.</p></div>`
     : (k.tx ? `<div class="field"><label>Profil</label><p class="hint" style="margin:2px 0 0"><b>${esc((curProf && curProf.nom) || origMarque || '(non défini)')}</b></p></div>` : '');
+  /* Sélecteur de TYPE : corrige un appareil rangé au mauvais endroit (volet/portail). Options,
+     libellés, icônes et codes viennent de profiles.json (deviceTypeKey + types[].code), rien en dur. */
+  const allTypes = (PROFILES && PROFILES.types) || {};
+  const curTypeKey = deviceTypeKey(v);
+  const typeSelect = Object.keys(allTypes).length > 1
+    ? `<div class="field"><label>Type d'appareil</label><select class="dev-type">${Object.keys(allTypes).map(tk =>
+        `<option value="${tk}"${tk === curTypeKey ? ' selected' : ''}>${allTypes[tk].icon || ''} ${esc(allTypes[tk].label || tk)}</option>`).join('')}</select>
+        <p class="hint">Corrige le type si l'appareil a été rangé au mauvais endroit. L'identité, le compteur et les captures sont conservés.</p></div>`
+    : '';
   host.innerHTML = `<div class="card" style="margin-top:12px">
     <h3>Modifier : ${esc(v.id)} <span class="badge">${esc(k.lbl)}</span></h3>
     <div class="field"><label>Nom de l'appareil</label>
       <div class="row" style="flex-wrap:nowrap"><input class="dev-name" value="${esc(v.id)}" style="flex:1;min-width:0" maxlength="23"><button class="btn dev-rename" type="button">Renommer</button></div>
       <p class="hint">Le nom sert d'identifiant (zones, centrales, entité Home Assistant) : le renommer met à jour ces références. Côté Home Assistant, une nouvelle entité apparaît et l'ancienne devient indisponible. Pas de virgule.</p></div>
+    ${typeSelect}
     ${profSelect}
     <div id="device-adv"></div>
     <div class="row end" style="margin-top:12px"><button class="btn danger dev-del">🗑 Supprimer cet appareil</button></div>
@@ -2359,6 +2369,15 @@ async function openDeviceEdit(v) {
       toast('Renommé'); await loadStatus(); renderDevices();
       const nv = (statusCache.volets || []).find(x => x.id === nn); if (nv) openDeviceEdit(nv); else host.innerHTML = '';
     } else toast(resp && resp.err === 'exists' ? 'Ce nom existe déjà' : 'Échec du renommage');
+  };
+  const ts = host.querySelector('.dev-type');
+  if (ts) ts.onchange = async () => {
+    const code = (allTypes[ts.value] || {}).code || 0;
+    const resp = await api('/api/volet/type', { method: 'POST', body: JSON.stringify({ id: v.id, type: code }) }).catch(() => null);
+    if (resp && resp.ok) {
+      toast('Type changé'); await loadStatus(); renderDevices();
+      const nv = (statusCache.volets || []).find(x => x.id === v.id); if (nv) openDeviceEdit(nv);
+    } else { toast('Échec du changement de type'); ts.value = curTypeKey; }
   };
   host.querySelector('.dev-del').onclick = async () => {
     const ok = await api('/api/volet/delete', { method: 'POST', body: JSON.stringify({ id: v.id }) }).then(r => r && r.ok).catch(() => false);

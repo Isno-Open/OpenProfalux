@@ -1179,6 +1179,22 @@ int shutters_create_rejeu(const char *id, uint8_t type) {
     return 0;
 }
 
+/* Corrige le type (dev_type_t) d'un appareil DEJA cree, sans reenroler ni recapturer : l'id,
+ * l'identite, le compteur et les captures restent. Sert a reparer un type mal attribue. */
+int shutters_set_type(const char *id, uint8_t type) {
+    if (!id || !*id || type > TYPE_PORTAIL) return -1;   /* borne sur dev_type_t declare */
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->type = type;
+    save_cfg();
+    announce_one(v);   /* republie l'entite (un libelle HA peut dependre du type) */
+    UNLOCK();
+    pub_flush();
+    ESP_LOGW(TAG, "appareil '%s' : type change en %u", id, type);
+    return 0;
+}
+
 /* Capture le cadre OOK brut d'UNE commande (cmd = "up"/"stop"/"down") sur la radio `radio` et
  * le range dans l'appareil. La capture (~15 s, mutex radio) se fait HORS du LOCK shutters ; le
  * rangement + sauvegarde sous LOCK. Rend le nombre d'impulsions (>0), <=0 si rien / erreur. */

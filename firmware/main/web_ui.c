@@ -352,6 +352,19 @@ static esp_err_t h_volet_rename(httpd_req_t *r) {
     return ESP_OK;
 }
 
+/* ── /api/volet/type : {"id":"...","type":N} -> corrige le dev_type d'un appareil existant.
+ * Repare un type mal attribue (volet/portail) sans reenroler : identite, compteur, captures conserves. */
+static esp_err_t h_volet_type(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    cJSON *ty = cJSON_GetObjectItem(j, "type");
+    int rc = shutters_set_type(jstr(j, "id"), ty ? (uint8_t)cJSON_GetNumberValue(ty) : 0);
+    cJSON_Delete(j);
+    httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
+    return ESP_OK;
+}
+
 /* ── /api/learn/start + /poll ── */
 static esp_err_t h_learn_start(httpd_req_t *r) {
     char *body = read_body(r); if (body) free(body);   /* le corps {action} n'est plus utilise cote firmware */
@@ -1827,6 +1840,7 @@ void web_ui_start(void) {
     reg(s, "/api/shutter", HTTP_POST, h_shutter);
     reg(s, "/api/volet/delete", HTTP_POST, h_volet_delete);
     reg(s, "/api/volet/rename", HTTP_POST, h_volet_rename);
+    reg(s, "/api/volet/type",   HTTP_POST, h_volet_type);
     reg(s, "/api/learn/start",  HTTP_POST, h_learn_start);
     reg(s, "/api/learn/poll",   HTTP_GET,  h_learn_poll);
     reg(s, "/api/learn/assign", HTTP_POST, h_learn_assign);
