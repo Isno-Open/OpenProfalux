@@ -360,6 +360,8 @@
             <p class="hint">Protège cette interface et l'API contre les autres appareils du réseau, dont l'envoi de firmware. <b>Sans effet sur Home Assistant</b>, qui pilote le boîtier par MQTT.</p></div>
           <label class="switch"><input type="checkbox" id="sys-logframes"><span class="track"></span>
             <span class="lbl">Écoute RF permanente<small>Active le RF debug en direct, le suivi de position via la vraie télécommande et le dataset MQTT. Désactivée = radio libre (moins de bruit).</small></span></label>
+          <label class="switch"><input type="checkbox" id="sys-mqtt-obey"><span class="track"></span>
+            <span class="lbl">Obéir aux ordres MQTT<small>Cette carte émet-elle quand Home Assistant commande un volet ? Coupe-la sur une carte secondaire quand deux cartes partagent les mêmes volets : une seule émet, pas de double émission ni de dérive de compteur. ON par défaut.</small></span></label>
           <label class="switch"><input type="checkbox" id="sys-debug"><span class="track"></span>
             <span class="lbl">Debug console<small>Logge chaque capture RX dans la console série (symboles, RSSI, bits, KeeLoq ou non). Pour diagnostiquer « ça ne capte pas ». À laisser OFF en usage normal (verbeux).</small></span></label>
           <div id="sys-radios" class="radio-list"></div>

@@ -564,7 +564,7 @@ static void cfg_get(nvs_handle_t h, const char *k, char *out, size_t cap) {
 }
 static esp_err_t h_config_get(httpd_req_t *r) {
     char dev[32] = "", ssid[33] = "", uri[160] = "", user[128] = "", pass[256] = "";
-    uint8_t logf = 0, dbg = 0, rg = 0x27;
+    uint8_t logf = 0, dbg = 0, rg = 0x27, obey = 1;
     uint32_t txte = TX_TE_DEFAULT_US;
     uint8_t rprof = RADIO_PROFILE_DEFAULT;
     uint32_t fcustom = 0;
@@ -574,6 +574,7 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         cfg_get(h, "mqtt_uri", uri, sizeof(uri)); cfg_get(h, "mqtt_user", user, sizeof(user));
         cfg_get(h, "mqtt_pass", pass, sizeof(pass));   /* longueur seulement, JAMAIS renvoye en clair */
         nvs_get_u8(h, "log_frames", &logf);
+        nvs_get_u8(h, "mqtt_obey", &obey);
         nvs_get_u8(h, "debug", &dbg);
         uint8_t tmp; if (nvs_get_u8(h, "rx_gain", &tmp) == ESP_OK && tmp) rg = tmp;
         uint32_t t; if (nvs_get_u32(h, "te_tx", &t) == ESP_OK && t) txte = t;
@@ -586,10 +587,10 @@ static esp_err_t h_config_get(httpd_req_t *r) {
      * Certificats TLS : on ne renvoie que leur longueur, jamais le contenu (surtout la cle). */
     snprintf(out, sizeof(out),
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
-             "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
+             "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"mqtt_obey\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
              "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d,"
              "\"radio_profile\":\"%s\",\"freq_custom_khz\":%u,\"freq_khz\":%u,\"band_low_khz\":%u,\"band_high_khz\":%u}",
-             dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
+             dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, obey ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
              (unsigned)mqtt_cert_len("ca"), (unsigned)mqtt_cert_len("cert"), (unsigned)mqtt_cert_len("key"),
              s_ui_pass[0] ? 1 : 0,
              radio_profile_name((radio_profile_t)rprof), (unsigned)fcustom, (unsigned)cc1101_get_freq_khz(),
@@ -700,6 +701,12 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             uint8_t on = cJSON_IsTrue(lf) || (cJSON_IsNumber(lf) && lf->valuedouble != 0);
             nvs_set_u8(h, "log_frames", on);
             shutters_set_log_frames(on);   /* prise en compte immediate (le RX permanent s'active au reboot) */
+        }
+        cJSON *mo = cJSON_GetObjectItem(j, "mqtt_obey");
+        if (cJSON_IsBool(mo) || cJSON_IsNumber(mo)) {
+            uint8_t on = cJSON_IsTrue(mo) || (cJSON_IsNumber(mo) && mo->valuedouble != 0);
+            nvs_set_u8(h, "mqtt_obey", on);
+            shutters_set_mqtt_obey(on);   /* prise en compte immediate */
         }
         cJSON *dbg = cJSON_GetObjectItem(j, "debug");
         if (cJSON_IsBool(dbg) || cJSON_IsNumber(dbg)) {

@@ -37,6 +37,7 @@
 
 static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
+static bool s_mqtt_obey  = true;    /* obeir aux ordres cover MQTT (namespace cfg) ; defaut oui */
 static bool s_debug      = false;   /* switch UI "debug console" : logge chaque capture RX */
 static bool s_upd_auto   = true;    /* verification de mise a jour automatique (toutes les 6 h) */
 static bool s_tx_rpt     = false;   /* option UI : bit de repetition comme la telecommande */
@@ -66,6 +67,7 @@ static void load_config(void) {
     sz = sizeof(s_mqtt_user);   nvs_get_str(h, "mqtt_user", s_mqtt_user, &sz);
     sz = sizeof(s_mqtt_pass);   nvs_get_str(h, "mqtt_pass", s_mqtt_pass, &sz);
     uint8_t lf = 0; nvs_get_u8(h, "log_frames", &lf); s_log_frames = lf;
+    uint8_t mo = 1; nvs_get_u8(h, "mqtt_obey", &mo); s_mqtt_obey = mo;   /* absent = oui */
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
     uint8_t ua = 1; nvs_get_u8(h, "upd_auto", &ua); s_upd_auto = ua;   /* absent = active */
     uint8_t rp = 0; nvs_get_u8(h, "tx_rpt", &rp); s_tx_rpt = rp;
@@ -222,6 +224,7 @@ void app_main(void) {
     shutters_init();
     pfx_enrol_init();   /* identite virtuelle 0x067 (apprentissage sans telecommande, experimental) */
     if (s_log_frames) shutters_set_log_frames(true);
+    shutters_set_mqtt_obey(s_mqtt_obey);   /* obeir aux ordres MQTT (defaut oui ; coupe = carte secondaire) */
     cc1101_set_rx_debug(s_debug);   /* switch DEBUG console restaure au boot */
     cc1101_set_rx_gain(s_rx_gain);  /* plafond de gain RX restaure au boot */
     cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */

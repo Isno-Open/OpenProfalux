@@ -1291,6 +1291,7 @@ async function loadConfig() {
   certPh('#mqtt-cert', c.mqtt_cert_len, '-----BEGIN CERTIFICATE-----');
   certPh('#mqtt-key', c.mqtt_key_len, '-----BEGIN PRIVATE KEY-----');
   $('#sys-device').value = c.device || ''; $('#sys-logframes').checked = !!c.log_frames;
+  if ($('#sys-mqtt-obey')) $('#sys-mqtt-obey').checked = c.mqtt_obey !== false;   /* defaut ON si absent */
   const uph = $('#sys-uipass-hint'), upi = $('#sys-uipass'), upc = $('#sys-uipass-clear');
   if (uph) uph.innerHTML = c.ui_auth
     ? '🔒 <b>Protection active.</b> Le champ ci-dessous reste vide : le mot de passe enregistré n\'est jamais réaffiché. Saisis-en un nouveau pour le remplacer.'
@@ -1371,7 +1372,7 @@ $('#mqtt-save').onclick = async () => {
 };
 if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
-  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), reboot: $('#sys-reboot').checked };
+  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, mqtt_obey: $('#sys-mqtt-obey').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), reboot: $('#sys-reboot').checked };
   /* TE d'émission, bit de répétition et RMT retirés d'ici : réglés par appareil (panneau avancé), issue #111. */
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
      desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche

@@ -102,6 +102,11 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len);
 /* Active/desactive la publication MQTT de TOUTES les trames captees (dedup par serial). */
 void shutters_set_log_frames(bool on);
 
+/* Par carte : obeir aux ordres cover MQTT (emettre quand HA commande) ? Defaut oui. Couper sur une
+   carte secondaire quand deux cartes partagent un volet : une seule emet (pas de double emission). */
+void shutters_set_mqtt_obey(bool on);
+bool shutters_mqtt_obey(void);
+
 /* ── Verification de mise a jour (GitHub) ── */
 /* Verification automatique toutes les 6 h (defaut : oui). Desactivee, seule une demande
  * explicite (shutters_update_check_now) interroge GitHub. */

@@ -57,6 +57,7 @@ static SemaphoreHandle_t s_lock;
 static char     s_device[32] = "op";   /* nom appareil (prefixe topics HA) */
 static bool     s_mqtt_ready = false;   /* true apres shutters_mqtt_announce() */
 static bool     s_log_frames = false;   /* publie toutes les trames captees en MQTT */
+static bool     s_mqtt_obey  = true;    /* la carte obeit-elle aux ordres cover MQTT (emission) ? defaut oui */
 /* La config persistante, telle que cfg_model.c la lit et l'ecrit. */
 static const cfg_model_t s_model = { &s_log_frames, s_remotes, &s_nremotes, s_volets, &s_nvolets };
 static bool     s_frames_dirty = false; /* dataset modifie -> a resauvegarder (SPIFFS) */
@@ -2014,6 +2015,7 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     if (!v) { ESP_LOGW(TAG, "MQTT cmd : volet slug '%s' inconnu", slug); return; }
     char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof(id));
     char payload[16]; int m = len < 15 ? len : 15; memcpy(payload, data, m); payload[m] = 0;
+    if (!s_mqtt_obey) { ESP_LOGW(TAG, "MQTT cmd ignoree (obey=OFF) pour '%s'", id); return; }   /* carte secondaire : une seule carte emet un volet partage */
     if (!strcmp(sub, "set")) {
         if      (!strcasecmp(payload, "OPEN"))  shutters_cmd(id, "up", 0);
         else if (!strcasecmp(payload, "CLOSE")) shutters_cmd(id, "down", 0);
@@ -2046,6 +2048,8 @@ void shutters_set_log_frames(bool on) {
     pub_flush();
     ESP_LOGI(TAG, "log_frames=%d", on);
 }
+void shutters_set_mqtt_obey(bool on) { s_mqtt_obey = on; ESP_LOGI(TAG, "mqtt_obey=%d", on); }
+bool shutters_mqtt_obey(void) { return s_mqtt_obey; }
 
 /* Dispatch d'une trame recue par la tache radio -> sync position + frame-log. */
 static void on_air(const char *bits, uint32_t serial, uint8_t button, uint32_t hop, int8_t rssi) {
