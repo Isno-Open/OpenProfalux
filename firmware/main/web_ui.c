@@ -1604,6 +1604,24 @@ static esp_err_t h_io_listen(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"on\":%d}", radio_is_io_listening() ? 1 : 0);
     return httpd_resp_sendstr(r, out);
 }
+/* Repere de phase dans le journal io : Pascal clique AVANT un geste (PROG, Devmel...), on ecrit une
+ * banniere dans /api/log pour segmenter la capture qu'on tire ensuite a distance. ?label=... */
+static esp_err_t h_io_banner(httpd_req_t *r) {
+    char label[48] = "repere", q[96];
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK)
+        httpd_query_key_value(q, "label", label, sizeof label);
+    ESP_LOGW(TAG, "===== REPERE : %s =====", label);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, "{\"ok\":1}");
+}
+/* Vide les identites io stockees (NVS namespace iohc) pour repartir propre avant un test d'enrolement. */
+static esp_err_t h_io_erase(httpd_req_t *r) {
+    int n = io_store_erase_all();
+    ESP_LOGW(TAG, "===== IO STORE VIDE (%d identites) =====", n);
+    char out[48]; snprintf(out, sizeof out, "{\"ok\":1,\"erased\":%d}", n);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1916,5 +1934,7 @@ void web_ui_start(void) {
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
     reg(s, "/api/io/sniff",  HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
     reg(s, "/api/io/listen", HTTP_POST, h_io_listen);  /* io-homecontrol : ecoute io permanente ON/OFF (#87) */
+    reg(s, "/api/io/banner", HTTP_POST, h_io_banner);  /* repere de phase dans le journal (capture segmentee) */
+    reg(s, "/api/io/erase",  HTTP_POST, h_io_erase);   /* vide les identites io stockees */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

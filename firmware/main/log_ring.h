@@ -9,7 +9,7 @@
  */
 #include <stddef.h>
 
-#define LOG_RING_SIZE 8192
+#define LOG_RING_SIZE 16384   /* assez grand pour tenir une ceremonie io complete (~70 trames) sans tronquer */
 
 /* Branche le journal sur ESP_LOGx (le port serie continue de tout recevoir). */
 void   log_ring_init(void);

@@ -423,6 +423,12 @@
           <p class="sub">Capture les trames io (2-FSK 868,95 MHz) pour l'enrôlement. On cherche la trame <b>0x30</b> (la clé) : elle ne sort que pendant la <b>mise en PROG</b> de la télécommande, pas sur un appui normal.</p>
           <div class="row"><button id="io-listen-btn" class="btn" type="button">Écoute io permanente : OFF</button></div>
           <p class="hint" id="io-listen-status"></p>
+          <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
+            <button id="io-erase-btn" class="btn danger" type="button">🗑 Vider les identités io</button>
+            <button id="io-banner-prog" class="btn" type="button">① Repère : PROG télécommande</button>
+            <button id="io-banner-devmel" class="btn" type="button">② Repère : Devmel</button>
+          </div>
+          <p class="hint" id="io-test-status">Pose un repère AVANT chaque geste : la capture (tirée depuis le Journal) sera segmentée par phase.</p>
           <ol class="steps">
             <li>Clique <b>Écoute io permanente</b> (ON).</li>
             <li>Mets ta télécommande io en <b>PROG</b>, près de l'antenne.</li>

@@ -1617,6 +1617,20 @@ if ($('#io-listen-btn')) {
     } else { st.textContent = '❌ Impossible de changer l\'écoute io.'; }
   };
 }
+/* Outils de capture d'enrôlement io : vider les identités stockées + poser des repères de phase dans
+   le Journal (on tire ensuite /api/log à distance, segmenté par ces repères). */
+if ($('#io-erase-btn')) $('#io-erase-btn').onclick = async () => {
+  const st = $('#io-test-status');
+  const d = await api('/api/io/erase', { method: 'POST' }).catch(() => null);
+  if (st) st.textContent = d && d.ok ? `🗑 Identités io vidées (${d.erased}). Repère posé dans le Journal.` : '❌ Échec du vidage.';
+};
+const ioBanner = async (label) => {
+  const st = $('#io-test-status');
+  const d = await api('/api/io/banner?label=' + encodeURIComponent(label), { method: 'POST' }).catch(() => null);
+  if (st) st.textContent = d && d.ok ? `📍 Repère « ${label} » posé dans le Journal. Fais le geste maintenant.` : '❌ Échec du repère.';
+};
+if ($('#io-banner-prog')) $('#io-banner-prog').onclick = () => ioBanner('PROG telecommande');
+if ($('#io-banner-devmel')) $('#io-banner-devmel').onclick = () => ioBanner('Devmel');
 if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   const btn = $('#diag-tx-btn'); btn.disabled = true;
   const vd = $('#diag-verdict'); if (vd) vd.querySelector('b').textContent = 'Test d\'émission en cours...';
