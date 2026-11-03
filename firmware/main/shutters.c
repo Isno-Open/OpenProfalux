@@ -523,7 +523,9 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
     if (!v->rejeu) return false;
     cJSON *j = cJSON_Parse(v->rejeu);
     if (!j) return false;
-    uint32_t freq = (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
+    /* Frequence d'emission : la fiche (editable dans Modifier, par appareil) prime sur la frequence
+     * captee. Permet de faire cohabiter CAME, Profalux et Eveno sur des frequences differentes. */
+    uint32_t freq = v->freq_khz ? v->freq_khz : (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
     const char *csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, cmd));
     /* Portail a bouton UNIQUE (CAME & co) : la telecommande n'a qu'un bouton, le moteur enchaine
      * la sequence lui-meme (ouvre -> stop -> ferme). On ne capture donc qu'une commande ; Ouvrir /

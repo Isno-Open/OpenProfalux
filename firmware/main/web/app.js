@@ -2377,7 +2377,27 @@ async function openDeviceEdit(v) {
      des défauts du nouveau profil (on n'héberge plus l'ancienne surcharge) ; sinon on montre la fiche. */
   const mountAdv = () => {
     adv.innerHTML = '';
-    if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`; return; }
+    if (!k.tx) {
+      /* Rejeu (CAME, code fixe) : pas de panneau d'émission complet, mais la FRÉQUENCE est par appareil
+         (écoute à la capture + émission). C'est elle qui fait cohabiter CAME / Profalux / Eveno. */
+      if (v.rejeu) {
+        const prof0 = profileForDevice(v);
+        const f = v.freq_khz || (prof0 && prof0.freq_khz) || '';
+        adv.innerHTML = `<div class="field"><label>Fréquence (kHz)</label>
+          <div class="row" style="flex-wrap:nowrap"><input class="rejeu-freq" type="number" value="${f}" style="flex:1;min-width:0"><button class="btn rejeu-freq-save" type="button">Enregistrer</button></div>
+          <p class="hint">Fréquence d'écoute (capture) et d'émission de ce rejeu, propre à l'appareil : c'est elle qui permet un CAME, un Profalux et un Eveno sur des fréquences différentes sur la même box.</p></div>`;
+        const fi = adv.querySelector('.rejeu-freq');
+        adv.querySelector('.rejeu-freq-save').onclick = async () => {
+          const val = parseInt(fi.value, 10) || 0;
+          const resp = await api('/api/volet/txparams', { method: 'POST', body: JSON.stringify({ id: v.id, freq_khz: val }) }).catch(() => null);
+          if (resp && resp.ok) { toast('Fréquence enregistrée'); await loadStatus(); renderDevices(); }
+          else toast("Échec de l'enregistrement");
+        };
+      } else {
+        adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`;
+      }
+      return;
+    }
     const switched = curProf && curProf.marque !== origMarque;
     const comp = txAdvanced({
       values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0 },
