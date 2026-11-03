@@ -397,14 +397,35 @@ async function captureRadioFor(prof) {
 let learning = false;   // capture en cours
 let activeVolet = '';   // volet selectionne pour l'apprentissage
 
+/* ── Type d'un appareil, PILOTÉ PAR LA CONFIG (profiles.json types[].code), aucun 0/1 écrit ici ──
+   Le firmware expose v.type = code dev_type (0 volet, 1 portail) ; la CLÉ de type et ses attributs
+   (libellé, icône) se lisent dans profiles.json. Un seul endroit déclare ce vocabulaire : la config.
+   C'est la même logique partout (écran de capture ET Mes appareils), pas une règle recopiée. */
+function typeByCode(code) {
+  const types = (PROFILES && PROFILES.types) || {};
+  const k = Object.keys(types).find(key => types[key].code === code);
+  return k ? Object.assign({ key: k }, types[k]) : null;
+}
+function deviceTypeKey(v) {
+  const t = typeByCode(typeof (v && v.type) === 'number' ? v.type : 0);
+  return t ? t.key : 'volet';
+}
+function deviceTypeIcon(v) {
+  const t = typeByCode(typeof (v && v.type) === 'number' ? v.type : 0);
+  return (t && t.icon) || '🪟';
+}
+/* Filtre une liste d'appareils par clé de type (null/'' = tous). Partagé capture + Mes appareils. */
+function filterByType(list, typeKey) {
+  return typeKey ? list.filter(v => deviceTypeKey(v) === typeKey) : list;
+}
+
 function renderVoletPicker() {
   const box = $('#volet-picker'); if (!box) return;
-  /* Quand un profil est porté (ajout depuis la pyramide), ne montrer que les appareils du MÊME type :
-     un profil portail ne liste pas les volets, et inversement. Sans profil (gestion d'un appareil
-     existant), on montre tout. type 1 = portail, sinon volet. */
-  const typeOf = v => (v.type === 1 ? 'portail' : 'volet');
+  /* Avec un profil porté (ajout depuis la pyramide), ne montrer que les appareils du MÊME type (un
+     profil portail ne liste pas les volets, et inversement). Sans profil, on montre tout. Le type et
+     son icône viennent de la config via les helpers ci-dessus. */
   const wantType = CAPTURE_PROFILE ? CAPTURE_PROFILE.type : null;
-  const vols = (statusCache.volets || []).filter(v => !v.central && (!wantType || typeOf(v) === wantType));   /* pas d'apprentissage pour une centrale */
+  const vols = filterByType((statusCache.volets || []).filter(v => !v.central), wantType);   /* pas d'apprentissage pour une centrale */
   const ids = vols.map(v => v.id);
   const nr = $('#new-volet-row');
   const newOpen = nr && !nr.hidden;
@@ -414,7 +435,7 @@ function renderVoletPicker() {
     const id = v.id;
     const c = document.createElement('button');
     c.className = 'chip' + (id === activeVolet ? ' on' : '');
-    c.textContent = (typeOf(v) === 'portail' ? '🚪 ' : '🪟 ') + id;
+    c.textContent = deviceTypeIcon(v) + ' ' + id;
     c.onclick = () => { activeVolet = id; if (nr) { nr.hidden = true; $('#new-volet').value = ''; } renderVoletPicker(); renderLearnSlots(); };
     box.appendChild(c);
   }
@@ -703,7 +724,7 @@ async function rejeuCaptureUnified(action, btn) {
   const prof = CAPTURE_PROFILE;
   let v = (statusCache.volets || []).find(x => x.id === id);
   if (!v) {   // 1er appui : on matérialise le volet rejeu (type porté par le profil)
-    const type = prof && prof.type === 'portail' ? 1 : 0;
+    const type = (((PROFILES && PROFILES.types && prof) ? PROFILES.types[prof.type] : null) || {}).code || 0;   // code dev_type depuis la config, pas 0/1 en dur
     const cr = await api('/api/rejeu/create', { method: 'POST', body: JSON.stringify({ id, type }) }).catch(() => null);
     if (!cr || !cr.ok) { learnFail(true, action); return; }
     await loadStatus();
@@ -2251,10 +2272,22 @@ function deviceProfileLabel(v) {
 }
 
 /* Rebuild de la LISTE seulement : ne touche pas #device-edit (l'écran ouvert survit aux refresh 3 s). */
+let devFilter = '';   // '' = tous ; sinon clé de type (piloté par profiles.json)
 async function renderDevices() {
   const box = $('#devices-list'); if (!box) return;
-  if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);   /* pour nommer le profil */
-  const list = (statusCache.volets || []);
+  if (!PROFILES) PROFILES = await fetch('/profiles.json').then(r => r.json()).catch(() => null);   /* pour nommer le profil + les types */
+  const all = (statusCache.volets || []);
+  /* Barre de filtre par type : une puce par type DÉCLARÉ dans profiles.json (plus "Tous"). Même notion
+     de type que l'écran de capture (filterByType/deviceTypeKey/deviceTypeIcon), aucune liste en dur. */
+  const types = (PROFILES && PROFILES.types) || {};
+  const fbar = $('#devices-filter');
+  if (fbar) {
+    const chip = (t, label) => `<button class="chip${devFilter === t ? ' on' : ''}" data-t="${t}">${label}</button>`;
+    fbar.innerHTML = chip('', 'Tous')
+      + Object.keys(types).map(k => chip(k, `${types[k].icon || ''} ${esc(types[k].label || k)}`)).join('');
+    fbar.querySelectorAll('.chip').forEach(c => c.onclick = () => { devFilter = c.dataset.t; renderDevices(); });
+  }
+  const list = filterByType(all, devFilter);
   const empty = $('#devices-empty'); if (empty) empty.hidden = list.length > 0;
   box.innerHTML = list.map(v => {
     const k = deviceKind(v);
