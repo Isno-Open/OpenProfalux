@@ -60,6 +60,8 @@ void radio_tx_device(const char *bits, int repeats, const tx_params_t *p) {
     uint32_t f0 = cc1101_get_freq_khz(), te0 = cc1101_get_tx_te();
     bool rpt0 = cc1101_get_tx_repeat_bit(), rmt0 = cc1101_get_tx_rmt();
     if (p->freq_khz) cc1101_set_freq_khz(p->freq_khz);
+    ESP_LOGW(TAG, "TX device : %u kHz (appareil=%u, globale=%u), te=%u",   /* trace diag : sur quelle freq on emet reellement */
+             (unsigned)(p->freq_khz ? p->freq_khz : f0), (unsigned)p->freq_khz, (unsigned)f0, (unsigned)(p->te_us ? p->te_us : te0));
     if (p->te_us)    cc1101_set_tx_te(p->te_us);
     if (p->rpt >= 0) cc1101_set_tx_repeat_bit(p->rpt != 0);
     if (p->rmt >= 0) cc1101_set_tx_rmt(p->rmt != 0);
