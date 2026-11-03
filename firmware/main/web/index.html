@@ -366,7 +366,7 @@
             <span class="lbl">Debug console<small>Logge chaque capture RX dans la console série (symboles, RSSI, bits, KeeLoq ou non). Pour diagnostiquer « ça ne capte pas ». À laisser OFF en usage normal (verbeux).</small></span></label>
           <div id="sys-radios" class="radio-list"></div>
           <h3 id="sys-primary-title" hidden></h3>
-          <div class="field" style="margin-top:12px"><label>Profil radio - marque des volets</label>
+          <div class="field" style="margin-top:12px"><label>Réception - fréquence d'écoute (marque écoutée)</label>
             <select id="sys-radioprof">
               <option value="profalux">Profalux (868,425 MHz)</option>
               <option value="eveno">Eveno (868,330 MHz)</option>
@@ -374,7 +374,7 @@
             </select>
             <input id="sys-freq" type="number" step="1" placeholder="868330" hidden style="margin-top:8px">
             <p class="hint" id="sys-freq-hint"></p>
-            <p class="hint">Fréquence d'émission et d'écoute du boîtier. Appliquée tout de suite, sans redémarrage. Si ta télécommande n'est pas captée même collée à l'antenne, essaie l'autre profil : Eveno émet ~100 kHz plus bas que Profalux.</p>
+            <p class="hint">Fréquence sur laquelle le boîtier <b>écoute en permanence</b> : suivi de position via ta télécommande, capture, dataset. L'<b>émission</b>, elle, utilise la fréquence <b>propre à chaque appareil</b> (panneau avancé). Sert aussi de fréquence par défaut pour un appareil qui n'aurait pas la sienne. Appliquée tout de suite, sans redémarrage. Si ta télécommande n'est pas captée même collée à l'antenne, essaie l'autre profil : Eveno écoute ~100 kHz plus bas que Profalux.</p>
             <div class="row" style="margin-top:8px"><button id="sys-sweep" class="btn">📡 Caler sur ma télécommande</button></div>
             <p class="hint">Trouve la fréquence exacte de ta télécommande, telle que ce boîtier la reçoit. Place-la à 1-2 m du boîtier, passe son commutateur sur <b>P</b> (sans appuyer sur STOP : ce n'est pas un apprentissage, le volet ne bouge pas), clique, et laisse-le sur P jusqu'à la fin (~5 s). Remets-le ensuite sur N.</p>
             <div class="statline" id="sys-sweep-res" hidden><span class="dot"></span><b></b></div>
@@ -390,7 +390,6 @@
             <p class="hint" style="margin-top:8px"><button id="rxcal-btn" class="btn" type="button">Calibrer la réception (auto)</button>
               <span id="rxcal-status" style="margin-left:8px"></span></p>
             <p class="hint">Clique, puis <b>appuie en continu / répète les appuis</b> sur ta télécommande à moins d'1 m pendant tout le test (~25 s) : le boîtier teste chaque gain 6 s et verrouille le bon dès qu'il capte une trame valide. Presse à chaque changement de valeur affiché.</p></div>
-          <p class="hint" style="margin-top:12px">Le <b>TE d'émission</b>, le <b>bit de répétition</b> et l'<b>émission matérielle (RMT)</b> ne sont plus des réglages globaux : ils vivent désormais <b>par appareil</b>. On les règle dans le <b>panneau avancé</b>, à l'ajout d'un appareil et dans <b>Appareils → Mes appareils → Modifier</b>. Deux marques sur la même radio (Profalux, Eveno) gardent ainsi chacune ses réglages. Défaut KeeLoq : TE 400 µs (plage tolérée 260..660).</p>
           <div id="sys-radios-extra"></div>
           <label class="switch"><input type="checkbox" id="sys-reboot"><span class="track"></span>
             <span class="lbl">Redémarrer après enregistrement</span></label>
