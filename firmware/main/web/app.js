@@ -625,9 +625,11 @@ function renderLearnSlots() {
   box.innerHTML = virtNote;
   const ACTS = captureActions();      // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique)
   const rejeu = isRejeuContext();     // rejeu brut (CAME, code fixe) vs clone KeeLoq décodé
+  let capPrimaryGiven = false;   // un seul bouton primary a l'ecran : la PROCHAINE commande a capturer
   for (const A of ACTS) {
     const c = rejeu ? null : cmd[A.a];
     const learned = rejeu ? !!(v && v.rejeu_cmds && v.rejeu_cmds[A.a]) : (c != null);
+    const isNextCap = !learned && !capPrimaryGiven; if (isNextCap) capPrimaryGiven = true;   // mise en avant guidee
     const row = document.createElement('div');
     row.className = 'slot' + (learned ? ' done' : '');
     /* Réassignation par glisser-déposer : propre au clone KeeLoq (une trame décodée par commande).
@@ -640,7 +642,7 @@ function renderLearnSlots() {
       : (learned ? `✓ appris <code>0x${(c.b).toString(16).toUpperCase()}</code> <code>${esc(c.s)}</code>` : 'à capturer');
     row.innerHTML = `<span class="slot-ico">${A.ico}</span><span class="slot-lbl">${A.lbl}</span>
       <span class="slot-state">${state}</span>
-      ${moveSel}<button class="btn slot-btn" data-a="${A.a}">${learned ? 'Recapturer' : 'Capturer'}</button>`;
+      ${moveSel}<button class="btn slot-btn${isNextCap ? ' primary' : ''}" data-a="${A.a}">${isNextCap ? '📡 Appuie sur ta télécommande' : (learned ? 'Recapturer' : 'Capturer')}</button>`;
     const act = A.a;
     if (!rejeu && learned) {
       row.draggable = true;
