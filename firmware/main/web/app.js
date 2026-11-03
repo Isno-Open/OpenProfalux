@@ -367,6 +367,7 @@ const LEARN_ACTIONS = [
    portail = un bouton unique (le moteur du portail enchaîne la séquence lui-même). ── */
 let CAPTURE_PROFILE = null;   // profil porté dans l'écran de capture (pyramide) ; null = gestion d'un volet existant
 let CAP_RADIOS = null;        // radios de la carte, pour router une capture rejeu sur la bonne bande
+let CAP_ADV = null;           // lecture du panneau avancé de l'écran de capture (comme ENROL_ADV à l'enrôlement)
 
 /* Commandes à capturer, PAR TYPE. Priorité : profil porté, sinon type du volet actif, sinon volet. */
 function captureActions() {
@@ -403,13 +404,40 @@ async function captureRadioFor(prof) {
   const m = CAP_RADIOS.find(r => String(r.band) === String(prof && prof.band));
   return m ? m.idx : 0;
 }
-/* Fréquence à laquelle CAPTURER : celle du profil de marque (Profalux 868425, Eveno 868330, CAME 433920)
-   quand on ajoute un appareil, sinon celle de la fiche d'un appareil existant. 0 = garder la porteuse de
+/* Fréquence à laquelle CAPTURER, PAR APPAREIL : priorité au panneau avancé de l'écran de capture (que
+   l'utilisateur peut régler, comme à l'enrôlement), sinon la fréquence du profil de marque (Profalux
+   868425, Eveno 868330, CAME 433920), sinon la fiche d'un appareil existant. 0 = garder la porteuse de
    la radio. C'est ce qui permet de faire cohabiter Profalux et Eveno sur la même box. */
 function captureFreqFor(prof) {
+  if (CAP_ADV) { const a = CAP_ADV(); if (a.freq_khz) return a.freq_khz; }
   if (prof && typeof prof.freq_khz === 'number') return prof.freq_khz;
   const v = (statusCache.volets || []).find(x => x.id === activeVolet);
   return (v && v.freq_khz) || 0;
+}
+/* Panneau avancé de l'écran de capture : MÊME composant que l'enrôlement (txAdvanced dérivé du schéma
+   du profil). Donne la fréquence (et, pour un clone KeeLoq, TE/répétition/RMT) par appareil. Sans profil
+   porté (gestion d'un appareil existant), rien : on ne règle pas à l'ajout. */
+function mountCaptureAdvanced() {
+  const host = $('#learn-advanced'); if (!host) return;
+  host.innerHTML = ''; CAP_ADV = null;
+  if (!CAPTURE_PROFILE) return;
+  const comp = txAdvanced({ values: {}, profile: CAPTURE_PROFILE, marque: CAPTURE_PROFILE.marque });
+  host.appendChild(comp.el);
+  CAP_ADV = comp.read;
+}
+/* Après une capture, applique à l'appareil les réglages du panneau avancé (fréquence, TE, répétition,
+   RMT, marque), par /api/volet/txparams. Rend l'émission du clone/rejeu cohérente avec la capture. */
+async function applyCaptureAdvanced(id) {
+  if (!CAP_ADV || !id) return;
+  const a = CAP_ADV();
+  const body = { id };
+  if (a.freq_khz)   body.freq_khz = a.freq_khz;
+  if (a.te_us)      body.te_us = a.te_us;
+  if (a.tx_rpt)     body.tx_rpt = a.tx_rpt;     // tri-état 1 (off) / 2 (on)
+  if (a.tx_rmt)     body.tx_rmt = a.tx_rmt;
+  if (a.frame_bits) body.frame_bits = a.frame_bits;
+  if (CAPTURE_PROFILE && CAPTURE_PROFILE.marque) body.marque = CAPTURE_PROFILE.marque;
+  if (Object.keys(body).length > 1) await api('/api/volet/txparams', { method: 'POST', body: JSON.stringify(body) }).catch(() => {});
 }
 let learning = false;   // capture en cours
 let activeVolet = '';   // volet selectionne pour l'apprentissage
@@ -538,6 +566,7 @@ async function setupCaptureScreen() {
     CAPTURE_PROFILE = null;                   // écran atteint pour gérer un volet déjà présent
   }
   setCaptureTitle();
+  mountCaptureAdvanced();   // panneau avancé (fréquence par appareil, comme à l'enrôlement)
   if (!learning) { if (typeof renderVoletPicker === 'function') renderVoletPicker(); renderLearnSlots(); }
 }
 /* Titre + sous-titre de l'écran : nom du profil porté, sinon le libellé générique du clone. */
@@ -758,6 +787,7 @@ async function captureAction(action, btn) {
       const name = $('#cap-name').value.trim();
       if (name) await api('/api/remote', { method: 'POST', body: JSON.stringify({ serial: r.serial, name }) });
       await api('/api/learn/assign', { method: 'POST', body: JSON.stringify({ id, action, bits: r.bits }) });
+      await applyCaptureAdvanced(id);   // réglages avancés (fréquence par appareil, etc.) appliqués à l'appareil cloné
       toast(`✓ ${label} apprise (0x${r.button}, ${r.rssi} dBm)`);
       await loadStatus();     // rafraîchit -> le slot passe en ✓
     } else if (Date.now() - t0 > 16000) {
@@ -794,7 +824,7 @@ async function rejeuCaptureUnified(action, btn) {
   btn.disabled = true; btn.textContent = `⏳ Appuie sur ${label}…`;
   const d = await api('/api/rejeu/capture', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
   learning = false;
-  if (d && d.n > 0) { toast(`✓ ${label} captée (${d.n} impulsions)`); await loadStatus(); }
+  if (d && d.n > 0) { await applyCaptureAdvanced(id); toast(`✓ ${label} captée (${d.n} impulsions)`); await loadStatus(); }
   else { learnFail(true, label); renderLearnSlots(); }
 }
 
@@ -2310,7 +2340,7 @@ function renderLeafChoices(host, feuilles, headerHtml) {
 function deviceKind(v) {   // tx = porte des réglages d'émission (le panneau avancé générique s'affiche)
   if (v.central) return { ico: '🎛', lbl: 'centrale', tx: false };
   if (v.zone) return { ico: '🔗', lbl: 'zone', tx: false };
-  if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: false };   // CAME : params de CAPTURE, pas d'émission
+  if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: true };    // CAME : fréquence PAR APPAREIL (capture + émission), via le panneau avancé
   if (v.virt) return v.proto === 'profalux'
     ? { ico: '🪟', lbl: 'virtuelle Profalux', tx: true }
     : { ico: '🪟', lbl: 'Somfy RTS', tx: true };                            // freq fixe (lecture seule) + format 56/80
@@ -2398,27 +2428,7 @@ async function openDeviceEdit(v) {
      des défauts du nouveau profil (on n'héberge plus l'ancienne surcharge) ; sinon on montre la fiche. */
   const mountAdv = () => {
     adv.innerHTML = '';
-    if (!k.tx) {
-      /* Rejeu (CAME, code fixe) : pas de panneau d'émission complet, mais la FRÉQUENCE est par appareil
-         (écoute à la capture + émission). C'est elle qui fait cohabiter CAME / Profalux / Eveno. */
-      if (v.rejeu) {
-        const prof0 = profileForDevice(v);
-        const f = v.freq_khz || (prof0 && prof0.freq_khz) || '';
-        adv.innerHTML = `<div class="field"><label>Fréquence (kHz)</label>
-          <div class="row" style="flex-wrap:nowrap"><input class="rejeu-freq" type="number" value="${f}" style="flex:1;min-width:0"><button class="btn rejeu-freq-save" type="button">Enregistrer</button></div>
-          <p class="hint">Fréquence d'écoute (capture) et d'émission de ce rejeu, propre à l'appareil : c'est elle qui permet un CAME, un Profalux et un Eveno sur des fréquences différentes sur la même box.</p></div>`;
-        const fi = adv.querySelector('.rejeu-freq');
-        adv.querySelector('.rejeu-freq-save').onclick = async () => {
-          const val = parseInt(fi.value, 10) || 0;
-          const resp = await api('/api/volet/txparams', { method: 'POST', body: JSON.stringify({ id: v.id, freq_khz: val }) }).catch(() => null);
-          if (resp && resp.ok) { toast('Fréquence enregistrée'); await loadStatus(); renderDevices(); }
-          else toast("Échec de l'enregistrement");
-        };
-      } else {
-        adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`;
-      }
-      return;
-    }
+    if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`; return; }
     const switched = curProf && curProf.marque !== origMarque;
     const comp = txAdvanced({
       values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0 },
