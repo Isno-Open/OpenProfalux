@@ -102,10 +102,15 @@ static inline bool map_is_ok(uint8_t slot)   { return map_slot_ok(slot) && (s_ma
  * (protège une identité pas encore dans la table). 0 si tous pris. */
 static uint8_t map_free_slot(void) {
     for (uint8_t slot = 1; slot <= PFX_KEY_COUNT; slot++) {
+        uint32_t serial = ((uint32_t)slot << 12) | PFX_FAMILY_MARKER;
         bool taken = (s_id.active && (uint8_t)(s_id.idx + 1) == slot);
         for (int i = 0; i < s_map_n && !taken; i++) if (s_map[i].slot == slot) taken = true;
-        /* exclut aussi les slots déjà utilisés par un volet virtuel (pas de conflit) */
-        if (!taken && shutters_virt_serial_used(((uint32_t)slot << 12) | PFX_FAMILY_MARKER)) taken = true;
+        /* exclut aussi les slots déjà utilisés par un volet virtuel à nous (pas de conflit) */
+        if (!taken && shutters_virt_serial_used(serial)) taken = true;
+        /* ...et ceux d'une télécommande tierce entendue sur l'air (dont Devmel, qui enrôle dans la
+         * même famille 0x067) : ne jamais proposer une identité déjà occupée, sinon le moteur suit
+         * le code roulant du tiers et finit par rejeter le nôtre (cas du volet Bureau Isa-O). */
+        if (!taken && shutters_heard_serial_used(serial)) taken = true;
         if (!taken) return slot;
     }
     return 0;
