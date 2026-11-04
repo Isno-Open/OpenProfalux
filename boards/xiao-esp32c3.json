@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Seeed XIAO ESP32C3 + CC1101 868 externe (module M115, pas 2 mm, fils soudes).",
+    "Broches evitees : GPIO2/8/9 sont des straps (GPIO9 = bouton BOOT, bas au reset =",
+    "mode telechargement) ; le MISO n'y va donc PAS (SO d'un CC1101 a CSN flottant peut",
+    "tirer la ligne au reset). GPIO8 porte SCK : entree cote CC1101, il ne la tire jamais.",
+    "GPIO20/21 = UART0 (logs du bootloader). Pas de LED utilisateur sur le XIAO C3."
+  ],
+  "id": "xiao-esp32c3",
+  "name": "Seeed XIAO ESP32C3 + CC1101 externe",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32c3",
+  "spi_freq_hz": 6000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "M115",
+      "pins": { "sck": 8, "miso": 3, "mosi": 10, "cs": 4, "gdo0": 5, "gdo2": -1 } }
+  ],
+  "ui": { "button": 9, "led": -1, "led_active_high": true },
+  "region": "eu",
+  "bands_allowed_khz": [
+    { "radio": "868", "low": 863000, "high": 870000, "carrier_khz": 868350, "max_dbm": 10 }
+  ]
+}

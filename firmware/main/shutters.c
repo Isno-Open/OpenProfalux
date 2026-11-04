@@ -1149,6 +1149,16 @@ bool shutters_virt_serial_used(uint32_t serial) {
         if (is_pfx_virt(&s_volets[i]) && s_volets[i].virt_serial == serial) return true;
     return false;
 }
+/* true si une télécommande ENTENDUE sur l'air (registre des captées, dont celles de Devmel) porte
+ * déjà ce serial. L'allocateur d'identité virtuelle l'exclut : il ne propose jamais une identité
+ * déjà occupée par un tiers, sinon deux moteurs suivraient le même code roulant (collision KeeLoq)
+ * et le moteur finirait par refuser nos émissions restées en arrière du compteur. Comparaison
+ * numérique pour rester indépendant du format de la chaîne stockée. */
+bool shutters_heard_serial_used(uint32_t serial) {
+    for (int i = 0; i < s_nremotes; i++)
+        if ((uint32_t)strtoul(s_remotes[i].serial, NULL, 16) == serial) return true;
+    return false;
+}
 bool shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap) {
     if (cap) out[0] = 0;
     for (int i = 0; i < s_nvolets; i++)

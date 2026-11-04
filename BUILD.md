@@ -13,6 +13,7 @@ inconnue fait échouer la configuration, elle ne compile pas avec de mauvaises b
 | `m5-atom-lite` | M5Stack ATOM Lite + CC1101 en Dupont | `esp32` |
 | `esp32-poe` | Olimex ESP32-POE + CC1101 externe (Ethernet LAN8720 en plus du Wi-Fi) | `esp32` |
 | `arduino-nano-esp32` | Arduino Nano ESP32 + CC1101 externe (SPI sur D10-D13, GDO0 sur D2) | `esp32s3` |
+| `xiao-esp32c3` | Seeed XIAO ESP32C3 + CC1101 868 externe (module M115 soudé) | `esp32c3` |
 
 ## Compiler
 
