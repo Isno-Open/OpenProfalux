@@ -1630,24 +1630,33 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(man, 0, 255) &&
                  json_integer(mode, 1, 1) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
     bool tx = !txj || txj->valuedouble == 1;
+    uint8_t man_id = man ? (uint8_t)man->valuedouble : 2;
     const char *hex = jstr(j, "frame");
     size_t len = hex ? strlen(hex) : 0;
     uint8_t frame[32];
-    valid = valid && len >= 44 && len <= 2 * sizeof frame && len % 2 == 0 && (tx || roll);
-    for (size_t i = 0; valid && i < len; i++) valid = isxdigit((unsigned char)hex[i]) != 0;
-    for (size_t i = 0; valid && i < len / 2; i++) {
-        unsigned b;
-        if (sscanf(hex + 2 * i, "%2x", &b) != 1) valid = false;
-        else frame[i] = (uint8_t)b;
-    }
     io_profile_t profile;
-    if (!valid || io_profile_from_capture(frame, (int)(len / 2), &profile) != 0) {
+    bool profok;
+    if (len == 0) {
+        /* Pyramide : pas de trame fournie -> on SYNTHETISE le profil de commande du volet depuis la
+         * marque (man_id -> fabricant). Appairage io en 2 temps, SANS capture utilisateur. */
+        profok = valid && (tx || roll) && io_profile_synth(man_id, &profile) == 0;
+    } else {
+        /* Chemin capture (compat, robuste) : trame 0x00 reelle de la telecommande d'origine. */
+        valid = valid && len >= 44 && len <= 2 * sizeof frame && len % 2 == 0 && (tx || roll);
+        for (size_t i = 0; valid && i < len; i++) valid = isxdigit((unsigned char)hex[i]) != 0;
+        for (size_t i = 0; valid && i < len / 2; i++) {
+            unsigned b;
+            if (sscanf(hex + 2 * i, "%2x", &b) != 1) valid = false;
+            else frame[i] = (uint8_t)b;
+        }
+        profok = valid && io_profile_from_capture(frame, (int)(len / 2), &profile) == 0;
+    }
+    if (!profok) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "trame 0x00 ou champs invalides (tx=0 exige rolling)");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "marque io inconnue, trame 0x00 invalide, ou champs (tx=0 exige rolling)");
     }
     uint8_t src[3], key[16];
     bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
-    uint8_t man_id = man ? (uint8_t)man->valuedouble : 2;
     int rolling = roll ? (int)roll->valuedouble : -1;
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");

@@ -40,6 +40,27 @@ extern "C" int io_profile_from_capture(const uint8_t *frame, int n, io_profile_t
     return 0;
 }
 
+/* Profil de commande d'un volet io SYNTHETISE depuis la marque, SANS capture. Meme contenu que
+ * io_profile_from_capture sur une vraie trame de volet, mais fabrique depuis les constantes : seul le
+ * fabricant change avec la marque (0x43 Somfy / 0x61 Velux) ; le reste (origin, broadcast volet
+ * 00 00 3F, code bouton) est le protocole io PARTAGE (samr037, valide sur Velux ET Somfy). Prouve au
+ * banc : io_profile_synth(Velux) == io_profile_from_capture(vraie trame Velux). Le bouton est un
+ * placeholder, io_hc_send_shutter_1w reecrit cet octet a chaque commande. -1 si marque io inconnue. */
+extern "C" int io_profile_synth(uint8_t man_id, io_profile_t *out) {
+    if (!out) return -1;
+    uint8_t fab;
+    if (man_id == MANUFACTURER_SOMFY_PAIR)      fab = MANUFACTURER_SOMFY;   /* 0x02 -> 0x43 */
+    else if (man_id == MANUFACTURER_VELUX_PAIR) fab = MANUFACTURER_VELUX;   /* 0x01 -> 0x61 */
+    else return -1;                                                        /* marque io inconnue */
+    memset(out, 0, sizeof *out);
+    memcpy(out->target, SOMFY_BROADCAST_ADDR, NODE_ID_SIZE);  /* 00 00 3F : broadcast volet io (Velux idem, mesure banc) */
+    out->payload[0] = BUTTON_ORIGIN;   /* 0x01 */
+    out->payload[1] = fab;             /* 0x43 Somfy / 0x61 Velux */
+    out->payload[2] = BTN_UP;          /* placeholder : io_hc_send_shutter_1w reecrit le bouton par commande */
+    out->payload_len = 6;              /* [origin, fabricant, bouton, 0, 0, 0] */
+    return 0;
+}
+
 static uint64_t splitmix64(uint64_t *s) {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;

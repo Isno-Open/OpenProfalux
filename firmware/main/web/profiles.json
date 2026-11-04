@@ -68,12 +68,28 @@
       "note": "Ligne Profalux solaire (famille KeeLoq). Porteuse 868,330 mesuree terrain par Olivier (= Eveno a n=1, deux marques distinctes, surchargeable par appareil). Guidage specifique a l'enrolement : position de reference AVANT, geste haut/bas/haut, delai (voir #35 compat). repeat_bit recommande."
     },
     {
-      "type": "volet", "marque": "Somfy RTS", "nom": "Nouveau volet Somfy",
+      "type": "volet", "marque": "Somfy", "nom": "Volet Somfy RTS (433 MHz)",
       "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "433",
       "flow": "create-somfy", "endpoint": "/api/somfy/create",
       "freq_khz": 433420,
       "tx": { "frame_bits": 56 },
       "note": "Generation RTS (adresse 24 bits + code roulant). freq 433,42 DISTINCTE du CAME 433,92 (meme band 433, porteuse differente). frame_bits 56/80 PAR VOLET (semantique : le 80 ajoute une extension). Le timing sync Somfy (hw_sync 2560, sw_sync 4850, symbol 1280, first x2 / repeat x7) est une CONSTANTE de protocole, source unique dans somfy_rts.h, PAS dupliquee ici."
+    },
+    {
+      "type": "volet", "marque": "Somfy", "nom": "Volet Somfy io (868 MHz)",
+      "mecanisme": "enrolement", "modulation": "2-FSK", "code": "roulant", "band": "868",
+      "flow": "pair-io", "endpoint": "/api/io/pair/1w",
+      "freq_khz": 868950,
+      "io": { "man_id": 2, "learn": "Sur une Somfy io : appui long sur le bouton PROG au dos, jusqu'au mouvement du volet." },
+      "note": "io-homecontrol 1W, ENROLEMENT (pas de clone de touches : les commandes io sont standard). man_id 0x02 (Somfy). La carte s'insere via 0x30 pendant la fenetre d'apprentissage. 2-temps SANS capture : io_profile_synth(Somfy) fabrique la trame de commande du volet depuis les constantes io (prouve au banc : synth(Velux)==capture(Velux) byte a byte). Somfy io PAS encore valide bout-en-bout sur moteur reel (Velux oui, @vodhash PR #118)."
+    },
+    {
+      "type": "volet", "marque": "Velux", "nom": "Volet Velux io (868 MHz)",
+      "mecanisme": "enrolement", "modulation": "2-FSK", "code": "roulant", "band": "868",
+      "flow": "pair-io", "endpoint": "/api/io/pair/1w",
+      "freq_khz": 868950,
+      "io": { "man_id": 1, "learn": "Sur une Velux io : appui long (~10 s) sur RESET, jusqu'au va-et-vient du volet." },
+      "note": "io-homecontrol 1W, ENROLEMENT. man_id 0x01 (Velux, seul accepte par un Velux). 2-temps SANS capture : io_profile_synth(Velux) == io_profile_from_capture(vraie trame Velux) prouve au banc. Valide sur Velux io solaire par @vodhash (PR #118)."
     }
   ]
 }

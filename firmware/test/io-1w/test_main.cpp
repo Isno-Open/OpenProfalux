@@ -91,6 +91,18 @@ int main() {
     capture[9] ^= 1;
     assert(io_profile_from_capture(capture, sizeof capture, &profile) == 0);
 
+    /* PREUVE : la SYNTHESE (sans capture) d'un volet Velux == le profil tire de sa VRAIE trame captee.
+     * Byte a byte : on peut donc appairer sans faire capturer l'utilisateur, l'io etant un protocole
+     * partage (seul le fabricant change). Le bouton capte ici est 0x00 (BTN_UP), notre placeholder aussi. */
+    io_profile_t synth;
+    assert(io_profile_synth(0x01 /* Velux */, &synth) == 0);
+    assert(memcmp(&synth, &profile, sizeof synth) == 0);
+    io_profile_t synth_somfy;
+    assert(io_profile_synth(0x02 /* Somfy */, &synth_somfy) == 0);
+    assert(synth_somfy.payload_len == 6 && synth_somfy.payload[0] == 0x01 &&
+           synth_somfy.payload[1] == 0x43 && synth_somfy.target[2] == 0x3F);
+    assert(io_profile_synth(0x05 /* marque io inconnue */, &synth) == -1);
+
     uint8_t src[3], key[16], src2[3], key2[16];
     assert(io_derive_identity(0, src, key) && io_derive_identity(0, src2, key2));
     const uint8_t expected_src[] = {0xAC, 0xC1, 0x84};

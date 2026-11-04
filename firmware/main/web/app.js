@@ -90,6 +90,7 @@ function applyRoute() {
   if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
   if (main === 'remotes' && sub === 'devices' && typeof renderDevices === 'function') renderDevices();
   if (main === 'remotes' && sub === 'learn' && typeof setupCaptureScreen === 'function') setupCaptureScreen();
+  if (main === 'remotes' && sub === 'io' && typeof loadIoAdd === 'function') loadIoAdd();
   if (sub === 'rejeu' && typeof loadRejeuPanel === 'function') loadRejeuPanel();
   if (sub === 'backup' && typeof loadPrevCfg === 'function') loadPrevCfg();
   if (sub === 'health' && typeof loadHealth === 'function') loadHealth();
@@ -2170,7 +2171,7 @@ fetch('/api/session')
    profiles.json (source unique). La pyramide ne fait que ROUTER vers les flux existants
    (Cloner/Créer/Somfy) via le hash ; elle ne réécrit aucun de leurs panneaux ni handlers. ── */
 let PROFILES = null;
-const ADD_FLOW_PANEL = { 'learn': 'learn', 'enrol-pfx': 'enrol', 'create-somfy': 'somfy', 'rejeu': 'rejeu' };
+const ADD_FLOW_PANEL = { 'learn': 'learn', 'enrol-pfx': 'enrol', 'create-somfy': 'somfy', 'rejeu': 'rejeu', 'pair-io': 'io' };
 let PYRAMID_BANDS = null;   // bandes (433/868) réellement présentes sur la carte, pour filtrer les profils
 
 async function loadAddPyramid() {
@@ -2244,8 +2245,34 @@ function routeLeaf(prof) {
      fiche de l'appareil. Sans ça, Profalux/Eveno/NeoSol atterrissaient sur le même panneau générique et
      la marque était perdue (d'où l'Eveno qui émettait à la fréquence du Profalux). */
   if (prof.flow === 'enrol-pfx') ENROL_PROFILE = prof;
+  if (prof.flow === 'pair-io') IO_ADD_PROFILE = prof;
   const panel = ADD_FLOW_PANEL[prof.flow];
   if (panel) location.hash = `remotes/${panel}`;
+}
+
+/* ── Sous-panneau guide d'ajout d'un volet io (enrolement 1W, SANS capture) : porte le profil io
+   choisi dans la pyramide (marque -> man_id + texte d'apprentissage par marque). L'appairage POST
+   /api/io/pair/1w SANS trame -> le firmware synthetise le profil de commande depuis la marque. ── */
+let IO_ADD_PROFILE = null;
+function loadIoAdd() {
+  const p = IO_ADD_PROFILE;
+  const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status'), btn = $('#io-add-pair');
+  if (title) title.textContent = p ? ('Ajouter : ' + (p.nom || 'volet io')) : 'Ajouter un volet io';
+  if (learn) learn.textContent = (p && p.io && p.io.learn) || "Mets ta télécommande d'origine en apprentissage.";
+  if (st) { st.hidden = true; st.textContent = ''; }
+  if (!btn) return;
+  btn.onclick = async () => {
+    if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
+    const man = (p && p.io && typeof p.io.man_id === 'number') ? p.io.man_id : 2;
+    setRadioBusy(true); btn.disabled = true;
+    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage en cours, la carte s'insère…"; }
+    try {
+      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ man_id: man, index: 0, profile: 1, tx: 1 }) });
+      if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Le moteur confirme par un va-et-vient ; pilote-le depuis Mes appareils.`; }
+    } catch (e) {
+      if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Remets la télécommande en apprentissage (va-et-vient) et réessaie.`; }
+    } finally { btn.disabled = false; setRadioBusy(false); }
+  };
 }
 
 /* ── Panneau avancé des paramètres d'émission PAR APPAREIL (issue #111) : porteuse, TE, bit de
@@ -2287,19 +2314,24 @@ function fieldDefaultText(f) {
 
 /* Profil d'un appareil, pour résoudre ses défauts/son schéma à l'édition. Le navigateur lit
    profiles.json (le firmware ne peut pas). On matche sur la marque gravée dans la fiche, sinon on la
-   déduit du protocole : somfy -> Somfy RTS, rejeu -> CAME, sinon Profalux (seule marque KeeLoq
+   déduit du protocole : somfy -> Somfy, rejeu -> CAME, sinon Profalux (seule marque KeeLoq
    historique sur 868 ; un cloné sans marque en est). */
 function profileForDevice(v) {
   const profs = (PROFILES && PROFILES.profils) || [];
   let marque = v.marque;
   if (!marque) {
-    if (v.proto === 'somfy') marque = 'Somfy RTS';
+    if (v.proto === 'somfy') marque = 'Somfy';
     else if (v.rejeu)        marque = 'CAME';
     else if (v.proto === 'profalux' || (!v.virt && !v.rejeu)) marque = 'Profalux';
   }
   if (!marque) return null;
   const mec = v.rejeu ? 'rejeu' : v.virt ? 'enrolement' : 'cloner';
-  return profs.find(p => p.marque === marque && p.mecanisme === mec) || profs.find(p => p.marque === marque) || null;
+  const cands = profs.filter(p => p.marque === marque);
+  // Une marque peut porter plusieurs protocoles (Somfy : RTS 433 et io 868) : on lève
+  // l'ambiguïté par le protocole gravé dans la fiche avant de retomber sur le mécanisme.
+  const protoFlow = { somfy: 'create-somfy', io: 'pair-io' };
+  const byProto = cands.find(p => p.flow === protoFlow[v.proto]);
+  return byProto || cands.find(p => p.mecanisme === mec) || cands[0] || null;
 }
 
 /* Panneau avancé GÉNÉRIQUE (E7) : les champs viennent du SCHÉMA du profil (profileFields), pas codés
