@@ -8,6 +8,9 @@
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "enrol_gate.h"
 #include "radio.h"
+#include "io/io_pair.h"
+#include "io/io_radio.h"   /* io_radio_set_freq_offset */
+#include <ctype.h>
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
@@ -562,12 +565,18 @@ static esp_err_t h_remote_delete(httpd_req_t *r) {
 static void cfg_get(nvs_handle_t h, const char *k, char *out, size_t cap) {
     size_t sz = cap; out[0] = 0; nvs_get_str(h, k, out, &sz);
 }
+/* Champ absent accepte ; les valeurs presentes doivent etre des entiers bornes. */
+static bool json_integer(const cJSON *v, double low, double high) {
+    return !v || (cJSON_IsNumber(v) && v->valuedouble >= low && v->valuedouble <= high &&
+                  v->valuedouble == (int64_t)v->valuedouble);
+}
 static esp_err_t h_config_get(httpd_req_t *r) {
     char dev[32] = "", ssid[33] = "", uri[160] = "", user[128] = "", pass[256] = "";
     uint8_t logf = 0, dbg = 0, rg = 0x27, obey = 1;
     uint32_t txte = TX_TE_DEFAULT_US;
     uint8_t rprof = RADIO_PROFILE_DEFAULT;
     uint32_t fcustom = 0;
+    int32_t io_offset = 0;
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
         cfg_get(h, "device", dev, sizeof(dev)); cfg_get(h, "wifi_ssid", ssid, sizeof(ssid));
@@ -580,6 +589,7 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         uint32_t t; if (nvs_get_u32(h, "te_tx", &t) == ESP_OK && t) txte = t;
         nvs_get_u8(h, "radio_prof", &rprof);
         nvs_get_u32(h, "freq_khz", &fcustom);
+        nvs_get_i32(h, "io_offset", &io_offset);
         nvs_close(h);
     }
     char out[900];
@@ -589,12 +599,12 @@ static esp_err_t h_config_get(httpd_req_t *r) {
              "{\"device\":\"%s\",\"wifi_ssid\":\"%s\",\"mqtt_uri\":\"%s\",\"mqtt_user\":\"%s\","
              "\"mqtt_user_len\":%d,\"mqtt_pass_len\":%d,\"log_frames\":%d,\"mqtt_obey\":%d,\"debug\":%d,\"rx_gain\":%d,\"tx_te\":%u,"
              "\"mqtt_ca_len\":%u,\"mqtt_cert_len\":%u,\"mqtt_key_len\":%u,\"ui_auth\":%d,"
-             "\"radio_profile\":\"%s\",\"freq_custom_khz\":%u,\"freq_khz\":%u,\"band_low_khz\":%u,\"band_high_khz\":%u}",
+             "\"radio_profile\":\"%s\",\"freq_custom_khz\":%u,\"freq_khz\":%u,\"band_low_khz\":%u,\"band_high_khz\":%u,\"io_freq_offset_khz\":%ld}",
              dev, ssid, uri, user, (int)strlen(user), (int)strlen(pass), logf ? 1 : 0, obey ? 1 : 0, dbg ? 1 : 0, rg, (unsigned)txte,
              (unsigned)mqtt_cert_len("ca"), (unsigned)mqtt_cert_len("cert"), (unsigned)mqtt_cert_len("key"),
              s_ui_pass[0] ? 1 : 0,
              radio_profile_name((radio_profile_t)rprof), (unsigned)fcustom, (unsigned)cc1101_get_freq_khz(),
-             (unsigned)CC1101_BAND_LOW_KHZ, (unsigned)CC1101_BAND_HIGH_KHZ);
+             (unsigned)CC1101_BAND_LOW_KHZ, (unsigned)CC1101_BAND_HIGH_KHZ, (long)io_offset);
     memset(pass, 0, sizeof(pass));   /* on n'oublie pas d'effacer le mdp de la pile */
     {   /* nom mDNS du boitier (<nom>.local) : affiche avant le redemarrage sur le reseau domestique */
         size_t k = strlen(out);
@@ -625,12 +635,21 @@ static esp_err_t h_config_post(httpd_req_t *r) {
     char *body = read_body_max(r, CONFIG_MAX_BODY); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    cJSON *io_offset = cJSON_GetObjectItem(j, "io_freq_offset_khz");
+    if (!json_integer(io_offset, -100, 100)) {
+        cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "io_freq_offset_khz : entier de -100 a 100");
+    }
     /* Reglages d'une radio SECONDAIRE (issue #95) : champ "radio" >= 1. Chemin dedie, cles NVS
      * indexees (rprofN, rfreqN, rxgN, rteN, rrptN, rrmtN), applique a CETTE puce. La radio 0 garde
      * le chemin historique (cles plates) ci-dessous. Chaque frequence est bornee par la bande de SA
      * radio. */
     cJSON *radj = cJSON_GetObjectItem(j, "radio");
     if (cJSON_IsNumber(radj) && radj->valuedouble >= 1) {
+        if (io_offset) {
+            cJSON_Delete(j);
+            return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "io_freq_offset_khz est un reglage systeme : sans champ radio");
+        }
         int idx = (int)radj->valuedouble;
         if (idx >= cc1101_radio_count()) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "radio inconnue"); }
         uint32_t low = 0, high = 0; cc1101_radio_info(idx, NULL, NULL, NULL, &low, &high, NULL, NULL);
@@ -686,6 +705,15 @@ static esp_err_t h_config_post(httpd_req_t *r) {
     }
     int radio_ok = -2;   /* -2 = profil non demande, 0 = applique, -1 = non pris par la radio */
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        if (io_offset) {
+            esp_err_t e = nvs_set_i32(h, "io_offset", (int32_t)io_offset->valuedouble);
+            if (e == ESP_OK) e = nvs_commit(h);
+            if (e == ESP_OK) io_radio_set_freq_offset((int32_t)io_offset->valuedouble);
+            if (e != ESP_OK) {
+                nvs_close(h); cJSON_Delete(j);
+                return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "io_freq_offset_khz non enregistre (NVS)");
+            }
+        }
         cfg_set_if(h, j, "device", "device");
         cfg_set_if(h, j, "wifi_ssid", "wifi_ssid"); cfg_set_if(h, j, "wifi_pass", "wifi_pass");
         cfg_set_if(h, j, "mqtt_uri", "mqtt_uri"); cfg_set_if(h, j, "mqtt_user", "mqtt_user");
@@ -766,6 +794,9 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             ui_sess_drop_all();
         }
         nvs_commit(h); nvs_close(h);
+    } else if (io_offset) {
+        cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs");
     }
     bool reboot = cJSON_IsTrue(cJSON_GetObjectItem(j, "reboot"));
     cJSON_Delete(j);
@@ -1587,6 +1618,54 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
     return httpd_resp_sendstr(r, out);
 }
+/* profile=1 uniquement : 0x30 simple. tx=0 adopte sans emission, rolling obligatoire. */
+static esp_err_t h_io_pair_1w(httpd_req_t *r) {
+    char *body = read_body(r);
+    if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!cJSON_IsObject(j)) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "objet json attendu"); }
+    cJSON *idx = cJSON_GetObjectItem(j, "index"), *man = cJSON_GetObjectItem(j, "man_id");
+    cJSON *mode = cJSON_GetObjectItem(j, "profile"), *txj = cJSON_GetObjectItem(j, "tx");
+    cJSON *roll = cJSON_GetObjectItem(j, "rolling");
+    bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(man, 0, 255) &&
+                 json_integer(mode, 1, 1) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
+    bool tx = !txj || txj->valuedouble == 1;
+    const char *hex = jstr(j, "frame");
+    size_t len = hex ? strlen(hex) : 0;
+    uint8_t frame[32];
+    valid = valid && len >= 44 && len <= 2 * sizeof frame && len % 2 == 0 && (tx || roll);
+    for (size_t i = 0; valid && i < len; i++) valid = isxdigit((unsigned char)hex[i]) != 0;
+    for (size_t i = 0; valid && i < len / 2; i++) {
+        unsigned b;
+        if (sscanf(hex + 2 * i, "%2x", &b) != 1) valid = false;
+        else frame[i] = (uint8_t)b;
+    }
+    io_profile_t profile;
+    if (!valid || io_profile_from_capture(frame, (int)(len / 2), &profile) != 0) {
+        cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "trame 0x00 ou champs invalides (tx=0 exige rolling)");
+    }
+    uint8_t src[3], key[16];
+    bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
+    uint8_t man_id = man ? (uint8_t)man->valuedouble : 2;
+    int rolling = roll ? (int)roll->valuedouble : -1;
+    cJSON_Delete(j);
+    if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
+    int rc = radio_io_enroll(&profile, src, key, man_id, tx, rolling);
+    memset(key, 0, sizeof key);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
+    char id[SH_ID_LEN];
+    snprintf(id, sizeof id, "io-%02X%02X%02X", src[0], src[1], src[2]);
+    uint32_t serial = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
+    if (shutters_create_io_volet(id, serial) != 0)
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite enregistree mais volet non cree");
+    ESP_LOGW(TAG, "io : identite %s %s (man_id 0x%02X)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", man_id);
+    char out[80];
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d}", id, tx ? 1 : 0);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+
 /* POST {"on":true|false} : met la radio en ecoute io 2-FSK continue ; chaque trame recue part au
  * journal ("Trame io captee (N octets) : ..."). Un POST sans corps rend juste l'etat courant. */
 static esp_err_t h_io_listen(httpd_req_t *r) {
@@ -1616,7 +1695,8 @@ static esp_err_t h_io_banner(httpd_req_t *r) {
 }
 /* Vide les identites io stockees (NVS namespace iohc) pour repartir propre avant un test d'enrolement. */
 static esp_err_t h_io_erase(httpd_req_t *r) {
-    int n = io_store_erase_all();
+    int n = radio_io_erase();
+    if (n < 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "effacement io impossible");
     ESP_LOGW(TAG, "===== IO STORE VIDE (%d identites) =====", n);
     char out[48]; snprintf(out, sizeof out, "{\"ok\":1,\"erased\":%d}", n);
     httpd_resp_set_type(r, "application/json");
@@ -1932,6 +2012,7 @@ void web_ui_start(void) {
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
     reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
+    reg(s, "/api/io/pair/1w", HTTP_POST, h_io_pair_1w);
     reg(s, "/api/io/sniff",  HTTP_POST, h_io_sniff);   /* io-homecontrol : capture d'une trame (experimental, #87) */
     reg(s, "/api/io/listen", HTTP_POST, h_io_listen);  /* io-homecontrol : ecoute io permanente ON/OFF (#87) */
     reg(s, "/api/io/banner", HTTP_POST, h_io_banner);  /* repere de phase dans le journal (capture segmentee) */

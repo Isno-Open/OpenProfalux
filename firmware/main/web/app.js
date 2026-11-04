@@ -309,7 +309,7 @@ function renderVolets(list, rf) {
     el.className = 'card volet' + (reorderMode ? ' draggable' : '');
     const isC = !!v.central;
     const isZ = !isC && !!v.zone;   /* zone : comme une centrale, pas de position */
-    const showP = showPos && !isC && !isZ;
+    const showP = (showPos || v.proto === 'io') && !isC && !isZ;
     if (reorderMode) { el.draggable = true; el.dataset.id = v.id; }
     el.innerHTML = `
       <div class="top"><span class="name">${reorderMode ? '<span class="grip" title="Glisser pour déplacer">⠿</span> ' : ''}${isC ? '🎛' : devOf(v).ico} ${esc(v.id)}${isC ? ' <span class="badge">centrale</span>' : isZ ? ' <span class="badge">zone</span>' : ''}</span>${
@@ -1290,6 +1290,7 @@ async function loadConfig() {
   certPh('#mqtt-ca', c.mqtt_ca_len, '-----BEGIN CERTIFICATE-----');
   certPh('#mqtt-cert', c.mqtt_cert_len, '-----BEGIN CERTIFICATE-----');
   certPh('#mqtt-key', c.mqtt_key_len, '-----BEGIN PRIVATE KEY-----');
+  $('#sys-io-offset').value = c.io_freq_offset_khz ?? 0;
   $('#sys-device').value = c.device || ''; $('#sys-logframes').checked = !!c.log_frames;
   if ($('#sys-mqtt-obey')) $('#sys-mqtt-obey').checked = c.mqtt_obey !== false;   /* defaut ON si absent */
   const uph = $('#sys-uipass-hint'), upi = $('#sys-uipass'), upc = $('#sys-uipass-clear');
@@ -1372,7 +1373,7 @@ $('#mqtt-save').onclick = async () => {
 };
 if ($('#sys-radioprof')) $('#sys-radioprof').onchange = () => { $('#sys-freq').hidden = $('#sys-radioprof').value !== 'custom'; };
 $('#sys-save').onclick = async () => {
-  const b = { device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, mqtt_obey: $('#sys-mqtt-obey').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), reboot: $('#sys-reboot').checked };
+  const b = { io_freq_offset_khz: Number($('#sys-io-offset').value), device: $('#sys-device').value.trim(), log_frames: $('#sys-logframes').checked, mqtt_obey: $('#sys-mqtt-obey').checked, debug: $('#sys-debug').checked, rx_gain: Number($('#sys-rxgain').value), reboot: $('#sys-reboot').checked };
   /* TE d'émission, bit de répétition et RMT retirés d'ici : réglés par appareil (panneau avancé), issue #111. */
   /* ui_pass n'est envoye QUE si le champ est REELLEMENT rempli. Un champ vide ne
      desactive rien (ce serait ambigu : il est vide par defaut, puisqu'on ne reaffiche
@@ -1598,9 +1599,25 @@ async function loadDiag() {
              : d.gdo0 === 0 ? ` · GDO0 tenu par un autre composant (bloqué à ${d.gdo0_lvl}) ✗` : '';
   if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}${gdo0}${spi}. Réception : bouton ci-dessous.`;
 }
-/* io-homecontrol : ecoute io permanente (toggle). Capture la trame 0x30 pendant la PROG (#87).
-   Separe de la pyramide (section Diagnostic radio), experimental. Pas de bouton "appui normal" :
-   le 0x30 ne sort qu'en PROG, pas sur un appui normal. */
+/* Un seul POST par geste, aucun nouvel essai automatique. */
+if ($('#io-pair-form')) $('#io-pair-form').onsubmit = async e => {
+  e.preventDefault();
+  if (radioBusy) return;
+  const st = $('#io-pair-status'), btn = e.target.querySelector('button[type="submit"]');
+  const body = { frame: $('#io-pair-frame').value.trim(), index: Number($('#io-pair-index').value),
+    man_id: Number($('#io-pair-man').value), profile: 1, tx: Number($('#io-pair-mode').value) };
+  const rolling = $('#io-pair-rolling').value;
+  if (!body.tx && rolling === '') { st.textContent = 'Indique le prochain compteur non utilisé.'; return; }
+  if (rolling !== '') body.rolling = Number(rolling);
+  setRadioBusy(true); btn.disabled = true; st.textContent = 'Application de l\'identité…';
+  try {
+    const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify(body) });
+    st.textContent = body.tx ? `${d.id} : rafale d'appairage envoyée. Vérifie la réaction du moteur.` : `${d.id} : identité reprise, sans émission.`;
+  } catch (err) { st.textContent = `Échec (${err}). Vérifie la trame, le compteur et le stockage avant de réessayer.`; }
+  finally { btn.disabled = false; setRadioBusy(false); }
+};
+
+/* Ecoute io pour capturer le profil de commande ou observer l'appairage. */
 if ($('#io-listen-btn')) {
   let ioOn = false;
   $('#io-listen-btn').onclick = async () => {
@@ -1612,7 +1629,7 @@ if ($('#io-listen-btn')) {
       ioOn = !!d.on;
       btn.textContent = 'Écoute io permanente : ' + (ioOn ? 'ON' : 'OFF');
       st.textContent = ioOn
-        ? '📡 Écoute io active. Mets ta télécommande en PROG, puis regarde le Journal (une ligne cmd=0x30 = la clé). L\'écoute Profalux est suspendue pendant ce temps.'
+        ? '📡 Écoute io active. Appuie sur monter, descendre ou stop de la télécommande io, puis copie sa trame 0x00 complète depuis le Journal. L\'écoute Profalux est suspendue pendant ce temps.'
         : 'Écoute io arrêtée.';
     } else { st.textContent = '❌ Impossible de changer l\'écoute io.'; }
   };
@@ -2390,6 +2407,7 @@ function deviceKind(v) {   // tx = porte des réglages d'émission (le panneau a
   if (v.central) return { ico: '🎛', lbl: 'centrale', tx: false };
   if (v.zone) return { ico: '🔗', lbl: 'zone', tx: false };
   if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: true };    // CAME : fréquence PAR APPAREIL (capture + émission), via le panneau avancé
+  if (v.proto === 'io') return { ico: '🪟', lbl: 'io-homecontrol 1W', tx: false };
   if (v.virt) return v.proto === 'profalux'
     ? { ico: '🪟', lbl: 'virtuelle Profalux', tx: true }
     : { ico: '🪟', lbl: 'Somfy RTS', tx: true };                            // freq fixe (lecture seule) + format 56/80

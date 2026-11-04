@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdio.h>
 #include "nvs.h"
-#include "esp_random.h"
 
 #define NS "iohc"
 
@@ -24,44 +23,47 @@ bool io_store_get_key(const uint8_t src[3], uint8_t key[16]) {
     return ok;
 }
 
-void io_store_set(const uint8_t src[3], const uint8_t key[16]) {
-    if (!src || !key) return;
+/* Reserve avant TX : une erreur NVS interdit l'emission, jamais de retour a zero. */
+bool io_store_next_rolling(const uint8_t src[3], uint16_t *out) {
+    if (!src || !out) return false;
     nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    char nk[8], nr[8];
-    key_name(src, 'k', nk);
-    key_name(src, 'r', nr);
-    nvs_set_blob(h, nk, key, 16);
-    /* Compteur roulant : depart aleatoire la premiere fois, pour ne pas rejouer un vieux code. */
-    uint32_t roll;
-    if (nvs_get_u32(h, nr, &roll) != ESP_OK) {
-        nvs_set_u32(h, nr, esp_random() & 0xFFFF);
-    }
-    nvs_commit(h);
-    nvs_close(h);
-}
-
-uint16_t io_store_next_rolling(const uint8_t src[3]) {
-    if (!src) return 0;
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return 0;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
     char nr[8]; key_name(src, 'r', nr);
-    uint32_t roll = 1;
-    nvs_get_u32(h, nr, &roll);
-    nvs_set_u32(h, nr, (roll + 1) & 0xFFFF);
-    nvs_commit(h);
+    uint32_t roll;
+    esp_err_t e = nvs_get_u32(h, nr, &roll);
+    if (e == ESP_OK && roll > UINT16_MAX) e = ESP_ERR_INVALID_STATE;
+    if (e == ESP_OK) e = nvs_set_u32(h, nr, roll + 1);
+    if (e == ESP_OK) e = nvs_commit(h);
     nvs_close(h);
-    return (uint16_t)roll;
+    if (e != ESP_OK) return false;
+    *out = (uint16_t)roll;
+    return true;
 }
 
-void io_store_set_profile(const uint8_t src[3], const io_profile_t *p) {
-    if (!src || !p) return;
+/* rolling = prochain compteur emis ; -1 conserve l'existant, ou initialise a 1. */
+bool io_store_set(const uint8_t src[3], const uint8_t key[16],
+                  const io_profile_t *p, int rolling) {
+    if (!src || !key || !p || p->payload_len < 3 || p->payload_len > 13 ||   /* 32 octets moins en-tete, compteur, MAC et CRC */
+        rolling < -1 || rolling > UINT16_MAX) return false;
     nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
-    char np[8]; key_name(src, 'p', np);   /* "p<6 hexa>" : le profil de cette source */
-    nvs_set_blob(h, np, p, sizeof *p);
-    nvs_commit(h);
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    char nk[8], nr[8], np[8];
+    key_name(src, 'k', nk); key_name(src, 'r', nr); key_name(src, 'p', np);
+    uint32_t roll = 1;
+    esp_err_t e = nvs_get_u32(h, nr, &roll);
+    bool found = e == ESP_OK;
+    if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+    if (rolling >= 0) {
+        /* Une adoption ne peut pas reculer un compteur deja reserve localement. */
+        if (e == ESP_OK && found && (uint32_t)rolling < roll) e = ESP_ERR_INVALID_STATE;
+        roll = (uint32_t)rolling;
+    }
+    if (e == ESP_OK) e = nvs_set_blob(h, nk, key, 16);
+    if (e == ESP_OK) e = nvs_set_blob(h, np, p, sizeof *p);
+    if (e == ESP_OK) e = nvs_set_u32(h, nr, roll);
+    if (e == ESP_OK) e = nvs_commit(h);
     nvs_close(h);
+    return e == ESP_OK;
 }
 
 bool io_store_get_profile(const uint8_t src[3], io_profile_t *p) {
@@ -75,11 +77,7 @@ bool io_store_get_profile(const uint8_t src[3], io_profile_t *p) {
     return ok;
 }
 
-/* Vide TOUT le namespace io (cle + compteur + profil de chaque source). Chaque tentative
- * d'enrolement 1W tire une identite aleatoire et la persiste (io_hc_pair_1w) : les essais
- * repetes laissent des identites orphelines qui saturent le NVS (releve chez Pascal : iohc =
- * 141 entrees sur 504). Purge de recuperation : l'identite io reelle se re-enrole depuis le 0x30
- * de l'origine, qui lui vit hors NVS. Rend le nombre d'entrees liberees, <0 si echec. */
+/* Purge explicite des identites, profils et compteurs io. */
 int io_store_erase_all(void) {
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return -1;

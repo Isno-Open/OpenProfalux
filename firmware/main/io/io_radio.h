@@ -20,12 +20,13 @@ typedef enum { IO_CH1 = 0, IO_CH2 = 1, IO_CH3 = 2 } io_channel_t;
  * la porteuse/config Profalux (meme patron que le retune Somfy RTS). */
 void io_radio_config(void);
 
-/* Pose la frequence du canal io (CH1 868,25 / CH2 868,95 / CH3 869,85 MHz). */
+/* Pose le canal io et la correction NVS cfg/io_offset (kHz, defaut 0). */
 void io_radio_set_channel(io_channel_t ch);
 
-/* Emission / reception d'un paquet io par la FIFO CC1101. PAS ENCORE CABLE : demande des
- * primitives FIFO/strobe a exposer dans cc1101.c (le chemin OOK actuel passe par le RMT, pas
- * la FIFO). Reference d'implementation : iohc-flipper radio_cc1101.c / phy_rx.c (MIT). */
+/* Applique une nouvelle correction de quartz io (kHz, -100..100) sans relire la NVS. */
+void io_radio_set_freq_offset(int32_t khz);
+
+/* Premiere trame : preambule 500 ms ; suivantes : 10 ms. Une config ouvre une rafale. */
 int io_radio_tx_packet(const uint8_t *buf, size_t len);
 
 /* Encapsule `n` octets io (UART 8N1) et les emet. CHEMIN D'EMISSION UNIQUE : tout ce qui part

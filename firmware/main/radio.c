@@ -226,12 +226,11 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
 int radio_io_send(const uint8_t src[3], uint8_t button) {
     if (!s_mtx || !src) return -1;
     uint8_t key[16];
-    if (!io_store_get_key(src, key)) return -1;    /* ce volet n'a pas d'identite io appairee */
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();
-    int r = io_hc_send_shutter_1w(src, key, button);
+    int r = io_store_get_key(src, key) ? io_hc_send_shutter_1w(src, key, button) : -1;
     cc1101_apply_config_ook();
     cc1101_set_freq_khz(back);
     xSemaphoreGive(s_mtx);
@@ -239,17 +238,29 @@ int radio_io_send(const uint8_t src[3], uint8_t button) {
     return r;
 }
 
-int radio_io_pair_1w(const io_profile_t *profile, const uint8_t *fixed_src, uint8_t out_src[3], uint32_t timeout_ms) {
-    if (!s_mtx || !out_src || !profile) return -2;
-    bool was = s_paused; s_paused = true;
+int radio_io_erase(void) {
+    if (!s_mtx) return -1;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
-    uint32_t back = cc1101_get_freq_khz();
-    io_radio_config();
-    int r = io_hc_pair_1w(profile, fixed_src, out_src, timeout_ms);
-    cc1101_apply_config_ook();
-    cc1101_set_freq_khz(back);
+    int r = io_store_erase_all();
     xSemaphoreGive(s_mtx);
-    s_paused = was;
+    return r;
+}
+
+int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
+                    uint8_t man_id, bool tx, int rolling) {
+    if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int r = io_store_set(src, key, profile, rolling) ? 0 : -1;
+    if (r == 0 && tx) {
+        bool was = s_paused; s_paused = true;
+        uint32_t back = cc1101_get_freq_khz();
+        io_radio_config();
+        r = io_hc_pair_1w(profile, src, key, man_id);
+        cc1101_apply_config_ook();
+        cc1101_set_freq_khz(back);
+        s_paused = was;
+    }
+    xSemaphoreGive(s_mtx);
     return r;
 }
 
@@ -440,18 +451,16 @@ static void rx_task(void *arg) {
     char bits[80];
     static rx_confirm_t c;   /* serie en cours : une trame n'est transmise que confirmee (issue #39) */
     rx_confirm_reset(&c);
-    bool     io_posed = false;   /* la config io 2-FSK est-elle actuellement en place ? (#87) */
-    uint32_t ook_freq = 0;       /* porteuse OOK a restaurer en quittant le mode io */
     while (s_run) {
-        /* ── Ecoute io permanente (2-FSK) : branche isolee, exclusive de l'OOK. On pose la config io
-         * une fois (en memorisant la porteuse OOK), on boucle la reception io et on journalise chaque
-         * trame ; a l'arret on restaure l'OOK. Le chemin PFX ci-dessous n'est pas touche tant que
-         * s_io_listen est faux (io_posed reste faux). Voir #87. ── */
+        /* Une fenetre io complete sous mutex, restauration OOK avant de le rendre. */
         if (s_io_listen && !s_paused) {
             xSemaphoreTake(s_mtx, portMAX_DELAY);
-            if (!io_posed) { ook_freq = cc1101_get_freq_khz(); io_radio_config(); io_posed = true; }
+            uint32_t ook_freq = cc1101_get_freq_khz();
+            io_radio_config();
             uint8_t iob[32];
             int ni = io_radio_rx_packet(iob, sizeof iob, 300);
+            cc1101_apply_config_ook();
+            cc1101_set_freq_khz(ook_freq);
             xSemaphoreGive(s_mtx);
             if (ni > 0) {
                 char hex[2 * 32 + 1];
@@ -462,13 +471,6 @@ static void rx_task(void *arg) {
                 vTaskDelay(pdMS_TO_TICKS(5));
             }
             continue;
-        }
-        if (io_posed) {   /* on quitte le mode io : restaure la modulation OOK et la porteuse */
-            xSemaphoreTake(s_mtx, portMAX_DELAY);
-            cc1101_apply_config_ook();
-            cc1101_set_freq_khz(ook_freq);
-            xSemaphoreGive(s_mtx);
-            io_posed = false;
         }
         if (!s_listen || s_paused) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }  /* veille tant que capture OFF ou TX en cours */
         xSemaphoreTake(s_mtx, portMAX_DELAY);

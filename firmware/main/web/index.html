@@ -379,6 +379,10 @@
             <p class="hint">Trouve la fréquence exacte de ta télécommande, telle que ce boîtier la reçoit. Place-la à 1-2 m du boîtier, passe son commutateur sur <b>P</b> (sans appuyer sur STOP : ce n'est pas un apprentissage, le volet ne bouge pas), clique, et laisse-le sur P jusqu'à la fin (~5 s). Remets-le ensuite sur N.</p>
             <div class="statline" id="sys-sweep-res" hidden><span class="dot"></span><b></b></div>
             <div class="row" id="sys-sweep-apply-row" hidden><button id="sys-sweep-apply" class="btn primary">Appliquer cette fréquence</button></div></div>
+          <div class="field"><label for="sys-io-offset">Correction de fréquence io (kHz)</label>
+            <input id="sys-io-offset" type="number" min="-100" max="100" step="1" value="0">
+            <p class="hint">Correction du quartz, pour l'io seulement. 0 par défaut ; mets l'écart mesuré sur cette carte (même écart que la porteuse Profalux trouvée par le balayage, par exemple -58 sur un module M5Stack).</p>
+          </div>
           <div class="field" style="margin-top:12px"><label>Gain RX (AGCCTRL2) - réglage de diagnostic réception</label>
             <select id="sys-rxgain">
               <option value="7">0x07 - gain max (le plus sensible, mais capte le bruit)</option>
@@ -420,7 +424,17 @@
         <div class="card" id="capture-root"></div>
         <div class="card">
           <h2>io-homecontrol (Somfy io / Velux), expérimental</h2>
-          <p class="sub">Capture les trames io (2-FSK 868,95 MHz) pour l'enrôlement. On cherche la trame <b>0x30</b> (la clé) : elle ne sort que pendant la <b>mise en PROG</b> de la télécommande, pas sur un appui normal.</p>
+          <p class="sub">Capture une commande normale (0x00) de la télécommande io pour apprendre sa cible et sa charge utile, puis appaire la carte ou reprends son identité. La position est estimée par les temps de course ; les appuis sur la télécommande io d'origine ne sont pas suivis.</p>
+          <form id="io-pair-form">
+            <div class="field"><label for="io-pair-frame">Trame de commande captée (hexa, CRC compris)</label><input id="io-pair-frame" required pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
+            <div class="field"><label for="io-pair-index">Index d'identité</label><input id="io-pair-index" type="number" min="0" max="4294967295" step="1" value="0" required></div>
+            <div class="field"><label for="io-pair-man">Code fabricant (1 pour Velux, 2 pour Somfy)</label><input id="io-pair-man" type="number" min="0" max="255" step="1" value="1" required></div>
+            <div class="field"><label for="io-pair-mode">Action</label><select id="io-pair-mode"><option value="1">Appairer une nouvelle identité</option><option value="0">Reprendre une identité déjà appairée, sans émettre</option></select></div>
+            <div class="field"><label for="io-pair-rolling">Prochain compteur (obligatoire pour la reprise)</label><input id="io-pair-rolling" type="number" min="0" max="65535" step="1"></div>
+            <p class="hint">Pour le profil, prends une capture de montée, descente ou stop. L'appairage envoie une seule rafale de transfert de clé : mets d'abord le moteur en apprentissage (Velux : appui long sur RESET de la télécommande d'origine, jusqu'au va-et-vient). La reprise demande la même carte et le même index, avec un compteur supérieur au dernier utilisé.</p>
+            <button class="btn primary" type="submit">Appliquer l'identité io</button>
+            <p id="io-pair-status" class="hint" role="status"></p>
+          </form>
           <div class="row"><button id="io-listen-btn" class="btn" type="button">Écoute io permanente : OFF</button></div>
           <p class="hint" id="io-listen-status"></p>
           <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
@@ -431,8 +445,8 @@
           <p class="hint" id="io-test-status">Pose un repère AVANT chaque geste : la capture (tirée depuis le Journal) sera segmentée par phase.</p>
           <ol class="steps">
             <li>Clique <b>Écoute io permanente</b> (ON).</li>
-            <li>Mets ta télécommande io en <b>PROG</b>, près de l'antenne.</li>
-            <li>Regarde l'onglet <b>Journal</b> : chaque trame captée s'écrit « Trame io captée (N octets)... ». Une ligne <b>cmd=0x30</b> = la clé.</li>
+            <li>Appuie sur monter, descendre ou stop de la télécommande io d'origine, près de l'antenne.</li>
+            <li>Regarde l'onglet <b>Journal</b> : chaque trame captée s'écrit « Trame io captée (N octets)... ». Prends une trame de commande 0x00 complète pour le profil ci-dessus.</li>
             <li>Coupe l'écoute (OFF) pour rendre la radio au reste.</li>
           </ol>
           <p class="hint">Expérimental (#87). L'écoute io est EXCLUSIVE de l'écoute Profalux : tant qu'elle est ON, le reste de la radio est suspendu.</p>

@@ -127,21 +127,13 @@ constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x02;
 constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
 constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01
 
-// Rythme d'emission de la ceremonie d'appairage, RELEVE sur l'enrolement Devmel reel du
-// 2026-10-24 (issue #87, journal 6, 48 emissions chronometrees) :
-//   - chaque trame est emise 4 FOIS, octet pour octet IDENTIQUES, CRC compris, et le code
-//     roulant NE BOUGE PAS entre les repetitions ;
-//   - repetitions espacees de 25 ms (min 23, median 25) ;
-//   - trames successives de la rafale espacees de 250 ms de DEBUT a DEBUT (7 mesures a 250 ou
-//     251 ms), soit environ 175 ms apres la derniere repetition.
-// Notre version emettait UNE fois avec 14 ms entre trames : la ceremonie entiere tenait en
-// ~130 ms la ou Devmel prend 2,5 s. Une seule emission se perd sans rien dire, et le moteur
-// n'avait probablement pas le temps d'ecrire chaque parametre.
-// ⚠️ Repeter = reemettre LES MEMES OCTETS. Rappeler le constructeur incrementerait le code
-// roulant et produirait des trames differentes, ce que Devmel ne fait pas.
+// Rythme d'emission de l'appairage, RELEVE sur l'enrolement Devmel reel du 2026-10-24 (issue #87,
+// journal 6, 48 emissions chronometrees) : chaque trame est emise 4 FOIS, octet pour octet
+// IDENTIQUES, CRC compris, et le code roulant NE BOUGE PAS entre les repetitions ; repetitions
+// espacees de 25 ms (min 23, median 25).
+// Les commandes gardent l'espacement de 40 ms valide sur un Velux (io_send.cpp).
 constexpr uint8_t  IO_TX_REPEATS          = 4;
 constexpr uint16_t IO_TX_REPEAT_GAP_MS    = 25;
-constexpr uint16_t IO_PAIR_FRAME_PERIOD_MS = 250;
 
 // NOTE 2026-10-28 : les adresses d'ecriture de la rafale 0x20 (0x0C00, 0x05XX) ont ete
 // RETIREES. C'etait du REGLAGE DE FINS DE COURSE (doc io : enter_settings_mode,

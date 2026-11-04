@@ -27,6 +27,7 @@
 typedef enum {
     VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
+    VOLET_PROTO_IO        = 2,   /* io 1W : identite et compteur dans io_store */
 } volet_proto_t;
 
 /* Type d'appareil : ce qu'on PILOTE, orthogonal au protocole d'emission. Il decide le vocabulaire

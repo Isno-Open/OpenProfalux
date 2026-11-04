@@ -13,11 +13,6 @@ extern "C" {
 
 /* Rend true et remplit key si une cle est enregistree pour cette source. */
 bool io_store_get_key(const uint8_t src[3], uint8_t key[16]);
-/* Enregistre (ou remplace) la cle de cette source et initialise son compteur roulant. */
-void io_store_set(const uint8_t src[3], const uint8_t key[16]);
-/* Rend le compteur roulant courant de cette source puis l'incremente et le persiste. */
-uint16_t io_store_next_rolling(const uint8_t src[3]);
-
 /* Profil d'emission d'un volet io, appris d'une trame captee de sa VRAIE telecommande. La charge
  * utile d'une commande io (origin, fabricant, bouton, puis une signature propre au type d'appareil)
  * et sa cible (broadcast encodant le type) dependent de l'appareil. On capture la charge utile
@@ -32,13 +27,15 @@ typedef struct {
     uint8_t payload_len;                      /* longueur reelle de la charge utile */
 } io_profile_t;
 
-/* Enregistre (ou remplace) le profil d'emission de cette source. */
-void io_store_set_profile(const uint8_t src[3], const io_profile_t *p);
+/* Ecrit cle, profil et prochain compteur. -1 conserve le compteur (defaut 1).
+ * Refuse un compteur explicite inferieur a celui deja stocke. Sous mutex radio. */
+bool io_store_set(const uint8_t src[3], const uint8_t key[16], const io_profile_t *p, int rolling);
+/* Reserve et persiste le prochain compteur avant TX. Refuse erreurs et debordement. */
+bool io_store_next_rolling(const uint8_t src[3], uint16_t *out);
 /* Rend true et remplit p si un profil est enregistre pour cette source. */
 bool io_store_get_profile(const uint8_t src[3], io_profile_t *p);
 
-/* Vide tout le namespace io (identites orphelines des essais d'enrolement comprises). Rend le
- * nombre d'entrees liberees, <0 si echec. L'identite io reelle se re-enrole depuis le 0x30 capte. */
+/* Vide le namespace io. Les volets restent ; adopter de nouveau avant de les commander. */
 int io_store_erase_all(void);
 
 #ifdef __cplusplus

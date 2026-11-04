@@ -4,8 +4,10 @@
 #include "io_framer.h"
 #include "io_store.h"
 #include "iohome_frame.h"
+#include "iohome_crypto.h"
 #include "iohome_constants.h"
-#include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <cstring>
 
 using namespace iohome;
@@ -18,17 +20,32 @@ static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const ui
                            uint8_t cmd, const uint8_t *payload, size_t n) {
     IoFrame f;
     init_frame(&f);
+    f.ctrl_byte_1 = CTRL1_LOW_POWER;   /* 1re trame avec le bit basse conso, comme la vraie telecommande */
     set_source(&f, src);
     set_destination(&f, dst);
     if (!set_command(&f, cmd, payload, n)) return false;
-    set_rolling_code(&f, io_store_next_rolling(src));
+    uint16_t seq;
+    if (!io_store_next_rolling(src, &seq)) return false;
+    set_rolling_code(&f, seq);
     if (!finalize_frame(&f, key)) return false;   /* ajoute HMAC + CRC */
 
     uint8_t io_bytes[32];
     size_t nb = serialize_frame(&f, io_bytes, sizeof io_bytes);
     if (nb == 0 || nb > sizeof io_bytes) return false;
 
-    return io_radio_tx_frame(io_bytes, (uint8_t)nb) == 0;
+    bool ok = false;
+    /* Un appui = une seule rafale, meme compteur ; seuls le bit LPM et le CRC changent apres la 1re. */
+    for (uint8_t i = 0; i < IO_TX_REPEATS; i++) {
+        if (i == 1) {
+            io_bytes[1] &= (uint8_t)~CTRL1_LOW_POWER;
+            const uint16_t crc = crypto::compute_crc16(io_bytes, nb - CRC_SIZE);
+            io_bytes[nb - 2] = (uint8_t)crc;
+            io_bytes[nb - 1] = (uint8_t)(crc >> 8);
+        }
+        if (io_radio_tx_frame(io_bytes, (uint8_t)nb) == 0) ok = true;
+        if (i + 1 < IO_TX_REPEATS) vTaskDelay(pdMS_TO_TICKS(40));
+    }
+    return ok;
 }
 
 /* Emet un appui bouton de volet Somfy io en 1W, calque sur une VRAIE trame de la telecommande du
@@ -49,12 +66,7 @@ extern "C" int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16]
     memcpy(payload, p.payload, p.payload_len);
     payload[2] = button;             /* seul l'octet du bouton change ; le reste = signature rejouee */
 
-    int ok = -1;
-    for (int i = 0; i < 4; i++) {    /* repetitions, comme la vraie telecommande */
-        if (send_signed_1w(src, key, p.target, CMD_EXECUTE, payload, p.payload_len)) ok = 0;
-        esp_rom_delay_us(40000);     /* ~40 ms entre trames */
-    }
-    return ok;
+    return send_signed_1w(src, key, p.target, CMD_EXECUTE, payload, p.payload_len) ? 0 : -1;
 }
 
 extern "C" int io_button_for_action(const char *action) {

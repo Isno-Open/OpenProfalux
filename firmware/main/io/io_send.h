@@ -10,9 +10,9 @@ extern "C" {
 
 /* Emet un appui bouton de volet Somfy io en 1W : source du volet (3 o), cle AES de cette
  * source (16 o), et code bouton (sens : voir iohome_constants.h : BTN_UP/BTN_DOWN/BTN_STOP).
- * Emet DEUX trames comme une vraie telecommande (primaire 0x00 + compagnon 0x20) ; les codes
- * roulants viennent de io_store (par-source). Diffuse vers le broadcast Somfy (le moteur filtre
- * par la source). Rend 0 si la trame primaire est emise, -1 sinon. */
+ * Une rafale de quatre trames au meme compteur (bit LPM sur la 1re seulement), compteur reserve dans io_store.
+ * Cible et charge utile viennent du profil capte. Aucun nouvel essai automatique.
+ * Rend 0 si au moins une trame est emise, -1 sinon. */
 int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16], uint8_t button);
 
 /* Traduit une action de volet ("up" | "down" | "stop") en code bouton io (BTN_*, declare

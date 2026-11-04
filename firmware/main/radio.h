@@ -53,7 +53,10 @@ void radio_set_io_listening(bool on);  /* ecoute permanente io : journalise chaq
 bool radio_is_io_listening(void);
 int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms);  /* ecoute UNE trame io (FSK) */
 int  radio_io_send(const uint8_t src[3], uint8_t button);         /* emet UN appui bouton io 1W depuis src */
-int  radio_io_pair_1w(const io_profile_t *profile, const uint8_t *fixed_src, uint8_t out_src[3], uint32_t timeout_ms); /* appairage 1W io ; fixed_src = identite choisie ou NULL */
+int  radio_io_erase(void);   /* purge sous le meme mutex que les compteurs TX */
+/* tx=false : adoption persistante, aucun acces radio, rolling obligatoire. */
+int  radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
+                     uint8_t man_id, bool tx, int rolling);
 
 /* Auto-calibration du gain RX : balaie les gains, verrouille le 1er qui capte une trame
  * valide pendant que l'utilisateur appuie sur sa telecommande. Non bloquant (tache de fond). */

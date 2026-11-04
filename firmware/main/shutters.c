@@ -27,6 +27,7 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
+#include "io/io_send.h"
 #include "somfy_tx.h"
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
@@ -715,6 +716,11 @@ static bool emit_virt(volet_t *v, uint8_t button) {
         return emit_virt_profalux(v, button);
     case VOLET_PROTO_SOMFY_RTS:
         return emit_virt_somfy(v, button);
+    case VOLET_PROTO_IO: {
+        const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
+        const char *action = button == PFX_BTN_UP ? "up" : button == PFX_BTN_DOWN ? "down" : "stop";
+        return radio_io_send(src, (uint8_t)io_button_for_action(action)) == 0;
+    }
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
                  v->id, (unsigned)v->proto);
@@ -726,7 +732,7 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
 
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
  * On integre juste la position ensuite ; l'arret se fait par do_stop (rafale STOP) au bon moment. */
-static void start_move(volet_t *v, int dir) {
+static bool start_move(volet_t *v, int dir) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     bool sent;
     if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
@@ -736,19 +742,23 @@ static void start_move(volet_t *v, int dir) {
         /* Rien n'est parti (protocole non cable) : ne pas enclencher le suivi, sinon la boucle de
          * tick ferait avancer et publier une position que le moteur n'a jamais recue. */
         radio_pause_rx(false);
-        return;
+        return false;
     }
     v->dir = dir; v->own_move = true;
     v->last_tick_us = esp_timer_get_time();
     zone_follow(v, dir);
+    if (v->proto == VOLET_PROTO_IO) radio_pause_rx(false);   /* le moteur avance seul, rendre l'ecoute PFX */
+    return true;
 }
-static void do_stop(volet_t *v) {
+static bool do_stop(volet_t *v) {
     v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
-    if (v->virt) emit_virt(v, PFX_BTN_STOP);
-    else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
+    bool sent = true;
+    if (v->virt) sent = emit_virt(v, PFX_BTN_STOP);
+    else if (v->rejeu) sent = rejeu_emit(v, "stop");   /* rejeu brut par commande */
     else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
     zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
+    return sent;
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
  * Le moteur part vers la butee (target) ; l'arret intermediaire vient du STOP (freeze). */
@@ -771,7 +781,7 @@ static void publish_volet_state(volet_t *v) {
     if (!s_mqtt_ready) return;
     char topic[96], pl[16], st[10], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
-    if (s_log_frames) {   /* position publiee seulement si suivi actif (coherent avec la decouverte + l'UI) */
+    if (s_log_frames || v->proto == VOLET_PROTO_IO) {   /* io : estimation de nos commandes sans ecoute PFX */
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
         snprintf(pl, sizeof(pl), "%d", 100 - (int)(v->position + 0.5f));   /* HA = % d'OUVERTURE (100=ouvert) ; interne = fermeture */
         pub_defer(topic, pl, 0, 1);
@@ -871,7 +881,7 @@ static void announce_one(volet_t *v) {
     char pos[240] = "";
     /* Ni centrale ni zone n'ont de position (juste ouvrir/fermer/stop) : la leur ne
      * serait celle d'aucun volet, et un seul STOP arrete des volets de vitesses differentes. */
-    if (s_log_frames && !v->central && !is_zone(v))
+    if ((s_log_frames || v->proto == VOLET_PROTO_IO) && !v->central && !is_zone(v))
         snprintf(pos, sizeof(pos),
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
@@ -999,22 +1009,24 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
+    bool sent = true;
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
-    if (!strcmp(cmd, "up"))        { v->target = 0;   start_move(v, +1); }   /* ouvrir : monter vers 0 */
-    else if (!strcmp(cmd, "down")) { v->target = 100; start_move(v, -1); }   /* fermer : descendre vers 100 */
-    else if (!strcmp(cmd, "stop")) { do_stop(v); }
+    if (!strcmp(cmd, "up"))        { v->target = 0;   sent = start_move(v, +1); }   /* ouvrir : monter vers 0 */
+    else if (!strcmp(cmd, "down")) { v->target = 100; sent = start_move(v, -1); }   /* fermer : descendre vers 100 */
+    else if (!strcmp(cmd, "stop")) { sent = do_stop(v); }
     else if (!strcmp(cmd, "pos"))  {   /* value = % de fermeture voulu */
         if (value < 0) value = 0;
         if (value > 100) value = 100;
         v->target = value;
-        if (value > v->position + 1)      start_move(v, -1);   /* plus ferme -> descendre */
-        else if (value < v->position - 1) start_move(v, +1);   /* plus ouvert -> monter */
+        if (value > v->position + 1)      sent = start_move(v, -1);   /* plus ferme -> descendre */
+        else if (value < v->position - 1) sent = start_move(v, +1);   /* plus ouvert -> monter */
         else v->dir = 0;
     }
+    int rc = (v->proto == VOLET_PROTO_IO && !sent) ? -1 : 0;
     publish_volet_state(v);
     UNLOCK();
     pub_flush();
-    return 0;
+    return rc;
 }
 
 /* ── Synchro inter-cartes : compteur roulant PARTAGE + verrou d'emission, par MQTT.
@@ -1045,7 +1057,7 @@ static void sync_pub_busy(uint32_t serial, bool on) {
 static int sync_idx_by_serial(uint32_t serial) {
     int idx = -1; LOCK();
     for (int i = 0; i < s_nvolets; i++)
-        if (s_volets[i].virt && s_volets[i].virt_serial == serial) { idx = i; break; }
+        if (s_volets[i].virt && s_volets[i].proto != VOLET_PROTO_IO && s_volets[i].virt_serial == serial) { idx = i; break; }
     UNLOCK(); return idx;
 }
 
@@ -1056,7 +1068,7 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
     uint32_t serial = 0; int idx = -1;
     LOCK();
     volet_t *v = find_volet(id);
-    if (v && v->virt) { serial = v->virt_serial; idx = (int)(v - s_volets); }
+    if (v && v->virt && v->proto != VOLET_PROTO_IO) { serial = v->virt_serial; idx = (int)(v - s_volets); }
     UNLOCK();
     if (idx >= 0 && !s_self_emit[idx] && s_busy_until[idx] && sync_now_ms() < s_busy_until[idx])
         return SH_CMD_BUSY;                              /* une emission de ce serial est deja en cours */
@@ -1228,6 +1240,29 @@ int shutters_create_virtual_somfy(const char *id, uint32_t address) {
     pub_flush();
     ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)(address & 0xFFFFFF));
     return 0;
+}
+
+/* Ne convertit jamais un appareil existant d'un autre protocole. */
+int shutters_create_io_volet(const char *id, uint32_t src) {
+    if (!id || !*id || strlen(id) >= SH_ID_LEN || src > 0xFFFFFF || !(src >> 16)) return -1;
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (v && (!v->virt || v->proto != VOLET_PROTO_IO || v->virt_serial != src)) {
+        UNLOCK(); return -1;
+    }
+    bool created = v == NULL;
+    if (!v) v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = true;
+    v->proto = VOLET_PROTO_IO;
+    v->virt_serial = src;
+    v->virt_counter = 0;   /* io_store est l'unique proprietaire du compteur io. */
+    esp_err_t e = save_cfg();
+    if (e == ESP_OK) announce_one(v);
+    else if (created) cfg_model_remove(&s_model, (int)(v - s_volets));
+    UNLOCK();
+    pub_flush();
+    return e == ESP_OK ? 0 : -1;
 }
 
 /* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
@@ -1787,10 +1822,10 @@ char *shutters_status_json(void) {
         if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
             cJSON_AddBoolToObject(o, "virt", true);
             bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
-            cJSON_AddStringToObject(o, "proto", somfy ? "somfy" : "profalux");
+            cJSON_AddStringToObject(o, "proto", v->proto == VOLET_PROTO_IO ? "io" : somfy ? "somfy" : "profalux");
             char vhex[SH_SERIAL_LEN];
             /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
-            snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
+            snprintf(vhex, sizeof(vhex), (somfy || v->proto == VOLET_PROTO_IO) ? "0x%06X" : "0x%07X",
                      (unsigned)(somfy ? (v->virt_serial & 0xFFFFFF) : v->virt_serial));
             cJSON_AddStringToObject(o, "virt_serial", vhex);
         }
@@ -2074,7 +2109,7 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         uint16_t rx = (uint16_t)atoi(nb);
         LOCK();
         for (int i = 0; i < s_nvolets; i++)
-            if (s_volets[i].virt && s_volets[i].virt_serial == serial) {
+            if (s_volets[i].virt && s_volets[i].proto != VOLET_PROTO_IO && s_volets[i].virt_serial == serial) {
                 uint16_t keep = vc_keep(rx, s_volets[i].virt_counter);
                 if (keep != s_volets[i].virt_counter) { s_volets[i].virt_counter = keep; save_cfg(); }
                 break;

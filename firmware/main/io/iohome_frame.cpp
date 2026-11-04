@@ -65,8 +65,8 @@ bool set_command(IoFrame* frame, uint8_t cmd_id, const uint8_t* params, size_t p
 }
 
 void set_rolling_code(IoFrame* frame, uint16_t code) {
-  frame->rolling_code[0] = code & 0xFF;         // LSB first
-  frame->rolling_code[1] = (code >> 8) & 0xFF;
+  frame->rolling_code[0] = (code >> 8) & 0xFF;  // MSB en tete, comme les vraies telecommandes 1W
+  frame->rolling_code[1] = code & 0xFF;
 }
 
 bool finalize_frame(IoFrame* frame, const uint8_t system_key[AES_KEY_SIZE]) {

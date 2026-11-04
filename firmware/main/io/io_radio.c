@@ -6,8 +6,14 @@
 #include "esp_timer.h"
 #include "io_unframer.h"
 #include "io_framer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "nvs.h"
+#include <stdbool.h>
+#include <stdio.h>
 
 static const char *TAG = "io_radio";
+static bool first_tx = true;
 
 /* Strobes et registres CC1101 en mode paquet (adresses standard). Les registres d'etat se
  * lisent avec le bit burst (via cc1101_read_reg(addr | 0x40)). */
@@ -68,17 +74,36 @@ static const io_reg_t IO_REGS[] = {
 
 static const uint32_t IO_CH_KHZ[3] = { 868250u, 868950u, 869850u };
 
+/* Correction de quartz des canaux io (NVS cfg/io_offset), lue une fois puis tenue a jour par
+ * io_radio_set_freq_offset : la config io est reposee a chaque fenetre d'ecoute. */
+static int32_t s_offset_khz;
+static bool s_offset_loaded;
+
+void io_radio_set_freq_offset(int32_t khz) {
+    s_offset_khz = (khz < -100 || khz > 100) ? 0 : khz;
+    s_offset_loaded = true;
+}
+
 void io_radio_set_channel(io_channel_t ch) {
     if (ch < IO_CH1 || ch > IO_CH3) ch = IO_CH2;
-    cc1101_set_freq_khz(IO_CH_KHZ[ch]);
+    if (!s_offset_loaded) {
+        int32_t offset = 0;
+        nvs_handle_t h;
+        if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+            nvs_get_i32(h, "io_offset", &offset);
+            nvs_close(h);
+        }
+        io_radio_set_freq_offset(offset);
+    }
+    cc1101_set_freq_khz((uint32_t)((int32_t)IO_CH_KHZ[ch] + s_offset_khz));
 }
 
 void io_radio_config(void) {
+    first_tx = true;
     for (size_t i = 0; i < sizeof(IO_REGS) / sizeof(IO_REGS[0]); i++)
         cc1101_write_reg(IO_REGS[i].addr, IO_REGS[i].val);
     cc1101_write_reg(0x3E, 0xC0);   /* PATABLE[0] : ~+10 dBm, puissance d'emission (TX) */
     io_radio_set_channel(IO_CH2);
-    ESP_LOGW(TAG, "config CC1101 io posee (2-FSK 868 MHz, sync 0x57FD, CH2)");
 }
 
 int io_radio_tx_packet(const uint8_t *buf, size_t len) {
@@ -86,14 +111,31 @@ int io_radio_tx_packet(const uint8_t *buf, size_t len) {
     cc1101_strobe_cmd(CC_SIDLE);
     cc1101_strobe_cmd(CC_SFTX);                       /* vide la TXFIFO */
     cc1101_write_reg(CC_REG_PKTLEN, (uint8_t)len);    /* longueur fixe = ce paquet */
-    for (size_t i = 0; i < len; i++)                  /* FIFO un octet a la fois : fiable au-dela du burst */
-        cc1101_write_reg(CC_TXFIFO, buf[i]);
+    /* FIFO vide au demarrage TX : le CC1101 prolonge le preambule (fiche technique 15.2). */
     cc1101_strobe_cmd(CC_STX);
-    for (int i = 0; i < 200; i++) {                   /* MCSM1 TXOFF=IDLE : retour IDLE = paquet parti */
-        if ((cc1101_read_reg(CC_STAT_MARC | 0x40) & 0x1F) == MARC_IDLE) return 0;
+    int tries = 20;
+    while ((cc1101_read_reg(CC_STAT_MARC | 0x40) & 0x1F) != 0x13) {
+        if (--tries == 0) goto failed;
         esp_rom_delay_us(500);
     }
+    /* Reveil fixe de 500 ms (suffit a un Velux solaire), a affiner en mesurant la fenetre RX du moteur. */
+    if (first_tx) vTaskDelay(pdMS_TO_TICKS(500));
+    else esp_rom_delay_us(10000);
+    /* Alimenter la FIFO par blocs SPI supportes avant qu'elle se vide. */
+    for (size_t i = 0; i < len; i += 31) {
+        size_t chunk = len - i;
+        if (chunk > 31) chunk = 31;
+        cc1101_write_burst(CC_TXFIFO, buf + i, chunk);
+    }
+    for (int i = 0; i < 200; i++) {
+        const uint8_t state = cc1101_read_reg(CC_STAT_MARC | 0x40) & 0x1F;
+        if (state == MARC_IDLE) { first_tx = false; return 0; }
+        if (state == 0x16) goto failed;  /* FIFO TX vide. */
+        esp_rom_delay_us(500);
+    }
+failed:
     cc1101_strobe_cmd(CC_SIDLE);
+    cc1101_strobe_cmd(CC_SFTX);
     return -1;
 }
 
