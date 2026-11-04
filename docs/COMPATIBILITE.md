@@ -21,7 +21,7 @@ Sur isno.fr, chaque article n'affiche que sa langue ; ici sur GitHub, les deux s
 | Profalux | JX02XE 10R-56 (Stella NeoSol, solaire) // JX02XE 10R-56 (Stella NeoSol, solar) |  | 868 MHz, bit de répétition // 868 MHz, repeat bit | NA | oui | #59 |
 | Profalux | NeoSol, télécommande murale NeoSol One (3 volets) // NeoSol, NeoSol One wall remote (3 shutters) |  | 868 MHz (profil NeoSol R8), bit de répétition // 868 MHz (NeoSol R8 profile), repeat bit | non | oui | XIAO ESP32C3 + CC1101 M115 |
 | Profalux | VISIO Monobloc (MAI-EMPX-B1) | ![Profalux MAI-EMPX-B1, photo @MaxFrakass](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/mai-empx-b1.webp) | 868,350 MHz, profil R6 // 868.350 MHz, R6 profile | non | oui | #35 |
-| Eveno | Zuni-R |  | 868,33 MHz (profil Eveno) // 868.33 MHz (Eveno profile) | oui | NA | #3 |
+| Eveno | Zuni-R (OPY Zuni R) | ![Eveno Zuni-R, photo @azriek](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/eveno-zuni-r.webp) | 868,33 MHz (profil Eveno), à trouver au calage // 868.33 MHz (Eveno profile), found by auto-tuning | oui | NA | #3, #100 |
 | FranciaFlex | M4G | ![FranciaFlex M4g, photo @lecanard38](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/m4g.webp) | 868 MHz | NA | oui | forum HACF // HACF forum |
 | Somfy | récepteur Soliris RTS + moteur J4 WT (appairage PROG) // Soliris RTS receiver + J4 WT motor (PROG pairing) |  | 433,42 MHz (Somfy RTS) // 433.42 MHz (Somfy RTS) | NA | oui | #73 |
 
