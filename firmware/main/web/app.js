@@ -2261,9 +2261,24 @@ function loadIoAdd() {
   const btn = $('#io-add-pair'), fin = $('#io-add-finish');
   if (title) title.textContent = p ? ('Ajouter : ' + (p.nom || 'volet io')) : 'Ajouter un volet io';
   if (learn) learn.textContent = (p && p.io && p.io.learn) || "Mets ta télécommande d'origine en apprentissage.";
+  const anote = $('#io-add-appaire-note'); if (anote) anote.textContent = (p && p.io && p.io.appaire_note) || '';
   if (st) { st.hidden = true; st.textContent = ''; }
-  if (fin) fin.hidden = true;        // on repart de l'etape 1 (enrolement) a chaque entree
+  const fst = $('#io-freq-stat'); if (fst) { fst.hidden = true; fst.textContent = ''; }
+  if (fin) fin.hidden = true;        // on repart de l'etape 1 (frequence) a chaque entree
   ioPairedId = null;
+  // Etape 1 : TEST DE FREQUENCE (commun) -> sniff io ; rien capte = le calage de frequence du module est faux.
+  const ftb = $('#io-freq-test');
+  if (ftb) ftb.onclick = async () => {
+    if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
+    setRadioBusy(true); ftb.disabled = true;
+    if (fst) { fst.hidden = false; fst.className = 'statline'; fst.textContent = "Écoute 8 s… appuie une fois sur ta télécommande d'origine."; }
+    try {
+      const d = await api('/api/io/sniff', { method: 'POST' });
+      if (d && d.ok) { if (fst) { fst.className = 'statline ok'; fst.textContent = '✅ Trame captée : la fréquence est bonne.'; } }
+      else if (fst) { fst.className = 'statline bad'; fst.textContent = '❌ Rien capté. Cale la fréquence io dans Système, puis réessaie.'; }
+    } catch (e) { if (fst) { fst.className = 'statline bad'; fst.textContent = `❌ Échec (${e}).`; } }
+    finally { ftb.disabled = false; setRadioBusy(false); }
+  };
   // Etape 1 : ENROLEMENT (seule partie specifique io). POST sans trame -> le firmware synthetise la commande.
   if (btn) btn.onclick = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }

@@ -238,18 +238,22 @@
           <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2 id="io-add-title">Ajouter un volet io</h2>
           <p class="sub">Enrôlement io 1W : c'est <b>ta télécommande d'origine</b> qui autorise, le boîtier s'insère. Ta télécommande continue de fonctionner après.</p>
-          <h3>1. Enrôler le boîtier</h3>
+          <h3>1. Vérifier la fréquence</h3>
+          <p class="sub">L'io dépend du calage de fréquence de ton module. Clique, puis appuie une fois sur ta télécommande d'origine (écoute 8 s). Une trame captée = fréquence bonne. Sinon, cale-la dans <a href="#sys/device">Système</a> (« Caler sur ma télécommande » / décalage io) et recommence.</p>
+          <div class="row"><button id="io-freq-test" class="btn">📡 Écouter une trame (test)</button></div>
+          <p class="statline" id="io-freq-stat" hidden></p>
+          <h3>2. Enrôler le boîtier</h3>
           <ol class="sub" style="padding-left:1.2em">
             <li><b>Mets ta télécommande d'origine en apprentissage.</b> <span id="io-add-learn"></span></li>
-            <li>Dès que le volet fait son va-et-vient, clique <b>Appairer</b> : le boîtier envoie son identité dans cette fenêtre.</li>
+            <li>Dès que le volet fait son va-et-vient, clique <b>Appairer</b> : le boîtier envoie son identité dans cette fenêtre. <span id="io-add-appaire-note"></span></li>
           </ol>
           <div class="row"><button id="io-add-pair" class="btn primary">Appairer</button></div>
           <p class="statline" id="io-add-status" hidden></p>
           <div id="io-add-finish" hidden>
-            <h3>2. Tester</h3>
+            <h3>3. Tester</h3>
             <p class="sub">Le moteur peut mettre un instant à répondre. Ces boutons pilotent le volet que tu viens d'appairer.</p>
             <div class="dpad enrol-pad"><button id="io-up">▲</button><button id="io-stop">■</button><button id="io-down">▼</button></div>
-            <h3>3. Nommer le volet</h3>
+            <h3>4. Nommer le volet</h3>
             <p class="sub">Il est déjà dans l'onglet <b>Volets</b>. Donne-lui un nom pour le retrouver (Home Assistant inclus).</p>
             <div class="field"><div class="row" style="flex-wrap:nowrap">
               <input id="io-volet-name" placeholder="Nom du volet (ex : Chambre)" style="flex:1;min-width:0" maxlength="23">
