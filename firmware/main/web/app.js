@@ -2254,24 +2254,48 @@ function routeLeaf(prof) {
    choisi dans la pyramide (marque -> man_id + texte d'apprentissage par marque). L'appairage POST
    /api/io/pair/1w SANS trame -> le firmware synthetise le profil de commande depuis la marque. ── */
 let IO_ADD_PROFILE = null;
+let ioPairedId = null;   // id du volet io cree par l'appairage, cible du test (2) et du renommage (3)
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
-  const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status'), btn = $('#io-add-pair');
+  const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status');
+  const btn = $('#io-add-pair'), fin = $('#io-add-finish');
   if (title) title.textContent = p ? ('Ajouter : ' + (p.nom || 'volet io')) : 'Ajouter un volet io';
   if (learn) learn.textContent = (p && p.io && p.io.learn) || "Mets ta télécommande d'origine en apprentissage.";
   if (st) { st.hidden = true; st.textContent = ''; }
-  if (!btn) return;
-  btn.onclick = async () => {
+  if (fin) fin.hidden = true;        // on repart de l'etape 1 (enrolement) a chaque entree
+  ioPairedId = null;
+  // Etape 1 : ENROLEMENT (seule partie specifique io). POST sans trame -> le firmware synthetise la commande.
+  if (btn) btn.onclick = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
     const man = (p && p.io && typeof p.io.man_id === 'number') ? p.io.man_id : 2;
     setRadioBusy(true); btn.disabled = true;
-    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage en cours, la carte s'insère…"; }
+    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage en cours, le boîtier s'insère…"; }
     try {
       const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ man_id: man, index: 0, profile: 1, tx: 1 }) });
-      if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Le moteur confirme par un va-et-vient ; pilote-le depuis Mes appareils.`; }
+      ioPairedId = d.id;
+      if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Teste-le, puis donne-lui un nom.`; }
+      if (fin) fin.hidden = false;
+      const nameInp = $('#io-volet-name'); if (nameInp) nameInp.value = d.id;
     } catch (e) {
       if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Remets la télécommande en apprentissage (va-et-vient) et réessaie.`; }
     } finally { btn.disabled = false; setRadioBusy(false); }
+  };
+  // Etape 2 : TEST (partage) -> pilotage commun a tous les volets (sendCmd -> /api/shutter -> io par proto).
+  const bindCmd = (sel, cmd) => { const b = $(sel); if (b) b.onclick = () => { if (ioPairedId) sendCmd({ id: ioPairedId, cmd }, b); }; };
+  bindCmd('#io-up', 'up'); bindCmd('#io-stop', 'stop'); bindCmd('#io-down', 'down');
+  // Etape 3 : NOMMER (partage) -> renommage commun a tous les volets (/api/volet/rename).
+  const rb = $('#io-rename'), stn = $('#io-rename-stat');
+  if (rb) rb.onclick = async () => {
+    if (!ioPairedId) return;
+    const name = ($('#io-volet-name').value || '').trim();
+    if (!name) { toast('Donne un nom au volet'); return; }
+    if (typeof isNewNameWithComma === 'function' && isNewNameWithComma(name)) { toast(COMMA_MSG); return; }
+    const r = await api('/api/volet/rename', { method: 'POST', body: JSON.stringify({ id: ioPairedId, name }) }).catch(() => null);
+    if (r && r.ok) {
+      ioPairedId = name;   // l'id a change : le test (2) continue de viser le bon volet
+      if (stn) { stn.hidden = false; stn.className = 'statline ok'; stn.textContent = `✅ Renommé « ${name} ». Retrouve-le dans l'onglet Volets.`; }
+      if (typeof loadStatus === 'function') loadStatus();
+    } else if (stn) { stn.hidden = false; stn.className = 'statline bad'; stn.textContent = '❌ Renommage impossible (nom déjà pris ?).'; }
   };
 }
 
