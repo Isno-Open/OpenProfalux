@@ -37,7 +37,7 @@ int io_radio_tx_packet(const uint8_t *buf, size_t len);
  * forme que la ligne de reception de radio.c. Rend 0 si l'emission a eu lieu.
  *
  * ⚠️ Avant le 2026-10-28, chaque appelant encapsulait de son cote et n'ecrivait rien : de test1
- * a test8 (issue #87) on a compare notre INTENTION au trafic de Devmel, jamais nos octets aux
+ * a test8 (issue #87) on a compare notre INTENTION au trafic d'une passerelle tierce, jamais nos octets aux
  * siens. Un defaut d'assemblage ne pouvait se voir nulle part. */
 int io_radio_tx_frame(const uint8_t *io_bytes, uint8_t n);
 int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms);

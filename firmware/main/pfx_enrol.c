@@ -107,7 +107,7 @@ static uint8_t map_free_slot(void) {
         for (int i = 0; i < s_map_n && !taken; i++) if (s_map[i].slot == slot) taken = true;
         /* exclut aussi les slots déjà utilisés par un volet virtuel à nous (pas de conflit) */
         if (!taken && shutters_virt_serial_used(serial)) taken = true;
-        /* ...et ceux d'une télécommande tierce entendue sur l'air (dont Devmel, qui enrôle dans la
+        /* ...et ceux d'une télécommande tierce entendue sur l'air (dont une passerelle tierce, qui enrôle dans la
          * même famille 0x067) : ne jamais proposer une identité déjà occupée, sinon le moteur suit
          * le code roulant du tiers et finit par rejeter le nôtre (cas du volet Bureau Isa-O). */
         if (!taken && shutters_heard_serial_used(serial)) taken = true;

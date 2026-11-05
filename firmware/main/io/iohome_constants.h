@@ -18,7 +18,7 @@ namespace iohome {
 // ============================================================================
 
 // Porteuse. ⚠️ UNE SEULE : le 2W est retire, et les canaux 868,25 / 869,85 avec lui.
-// Mesure du 2026-10-28 : le binaire DEVMEL ne contient QUE 868,95 (6 occurrences), zero
+// Mesure du 2026-10-28 : le binaire d'une passerelle tierce ne contient QUE 868,95 (6 occurrences), zero
 // occurrence de 868,25 et de 869,85. Un produit du commerce qui marche sur le terrain ne
 // saute donc pas de frequence.
 constexpr float FREQUENCY_CHANNEL_2 = 868.95f;  // MHz, canal 1W
@@ -129,7 +129,7 @@ constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x02;
 constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
 constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01
 
-// Rythme d'emission de l'appairage, RELEVE sur l'enrolement Devmel reel du 2026-10-24 (issue #87,
+// Rythme d'emission de l'appairage, RELEVE sur l'enrolement reel d'une passerelle tierce du 2026-10-24 (issue #87,
 // journal 6, 48 emissions chronometrees) : chaque trame est emise 4 FOIS, octet pour octet
 // IDENTIQUES, CRC compris, et le code roulant NE BOUGE PAS entre les repetitions ; repetitions
 // espacees de 25 ms (min 23, median 25).

@@ -1788,7 +1788,7 @@ static esp_err_t h_io_listen(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"on\":%d}", radio_is_io_listening() ? 1 : 0);
     return httpd_resp_sendstr(r, out);
 }
-/* Repere de phase dans le journal io : Pascal clique AVANT un geste (PROG, Devmel...), on ecrit une
+/* Repere de phase dans le journal io : Pascal clique AVANT un geste (PROG, passerelle...), on ecrit une
  * banniere dans /api/log pour segmenter la capture qu'on tire ensuite a distance. ?label=... */
 static esp_err_t h_io_banner(httpd_req_t *r) {
     char label[48] = "repere", q[96];

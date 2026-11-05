@@ -1633,7 +1633,7 @@ const ioBanner = async (label) => {
   if (st) st.textContent = d && d.ok ? `📍 Repère « ${label} » posé dans le Journal. Fais le geste maintenant.` : '❌ Échec du repère.';
 };
 if ($('#io-banner-prog')) $('#io-banner-prog').onclick = () => ioBanner('PROG telecommande');
-if ($('#io-banner-devmel')) $('#io-banner-devmel').onclick = () => ioBanner('Devmel');
+if ($('#io-banner-gw')) $('#io-banner-gw').onclick = () => ioBanner('passerelle');
 if ($('#diag-tx-btn')) $('#diag-tx-btn').onclick = async () => {
   const btn = $('#diag-tx-btn'); btn.disabled = true;
   const vd = $('#diag-verdict'); if (vd) vd.querySelector('b').textContent = 'Test d\'émission en cours...';
