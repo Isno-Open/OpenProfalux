@@ -25,6 +25,9 @@ void io_radio_set_channel(io_channel_t ch);
 
 /* Applique une nouvelle correction de quartz io (kHz, -100..100) sans relire la NVS. */
 void io_radio_set_freq_offset(int32_t khz);
+/* Pose la porteuse io a une valeur absolue (surcharge PAR APPAREIL) ; l'offset carte s'ajoute encore.
+ * A appeler APRES io_radio_config (qui a charge l'offset). Sans appel = CH2 868950 par defaut. */
+void io_radio_set_carrier_khz(uint32_t khz);
 
 /* Premiere trame : preambule 500 ms ; suivantes : 10 ms. Une config ouvre une rafale. */
 int io_radio_tx_packet(const uint8_t *buf, size_t len);

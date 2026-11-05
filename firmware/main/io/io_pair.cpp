@@ -61,6 +61,12 @@ extern "C" int io_profile_synth(uint8_t man_id, io_profile_t *out) {
     return 0;
 }
 
+extern "C" const char *io_marque_name(uint8_t fabricant) {
+    if (fabricant == MANUFACTURER_SOMFY) return "Somfy";   /* 0x43 */
+    if (fabricant == MANUFACTURER_VELUX) return "Velux";   /* 0x61 */
+    return nullptr;
+}
+
 static uint64_t splitmix64(uint64_t *s) {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;

@@ -52,7 +52,7 @@ void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permane
 void radio_set_io_listening(bool on);  /* ecoute permanente io : journalise chaque trame captee */
 bool radio_is_io_listening(void);
 int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms);  /* ecoute UNE trame io (FSK) */
-int  radio_io_send(const uint8_t src[3], uint8_t button);         /* emet UN appui bouton io 1W depuis src */
+int  radio_io_send(const uint8_t src[3], uint8_t button, uint32_t freq_khz);  /* emet UN appui bouton io 1W ; freq_khz != 0 = porteuse PAR APPAREIL (offset carte en plus) */
 int  radio_io_erase(void);   /* purge sous le meme mutex que les compteurs TX */
 /* tx=false : adoption persistante, aucun acces radio, rolling obligatoire. */
 int  radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],

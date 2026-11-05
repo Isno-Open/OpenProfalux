@@ -10,6 +10,8 @@
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
+#include "io/io_store.h"   /* io_store_get_profile : destination + charge utile captees, pour la fiche d'un appareil io */
+#include "io/io_pair.h"    /* io_marque_name : marque (Somfy/Velux) d'un volet io depuis l'octet fabricant capte */
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -719,7 +721,7 @@ static bool emit_virt(volet_t *v, uint8_t button) {
     case VOLET_PROTO_IO: {
         const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
         const char *action = button == PFX_BTN_UP ? "up" : button == PFX_BTN_DOWN ? "down" : "stop";
-        return radio_io_send(src, (uint8_t)io_button_for_action(action)) == 0;
+        return radio_io_send(src, (uint8_t)io_button_for_action(action), v->freq_khz) == 0;
     }
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
@@ -1828,6 +1830,23 @@ char *shutters_status_json(void) {
             snprintf(vhex, sizeof(vhex), (somfy || v->proto == VOLET_PROTO_IO) ? "0x%06X" : "0x%07X",
                      (unsigned)(somfy ? (v->virt_serial & 0xFFFFFF) : v->virt_serial));
             cJSON_AddStringToObject(o, "virt_serial", vhex);
+            if (v->proto == VOLET_PROTO_IO) {   /* relevé de capture, pour le panneau avancé (destination + charge utile reelles) */
+                io_profile_t iop;
+                uint8_t src3[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
+                if (io_store_get_profile(src3, &iop)) {
+                    char th[12]; snprintf(th, sizeof th, "%02X %02X %02X", iop.target[0], iop.target[1], iop.target[2]);
+                    cJSON_AddStringToObject(o, "io_target", th);
+                    char ph[3 * IO_PROFILE_PAYLOAD_MAX + 1]; int pp = 0;
+                    for (int b = 0; b < iop.payload_len && pp < (int)sizeof(ph) - 3; b++)
+                        pp += snprintf(ph + pp, sizeof(ph) - pp, "%s%02X", b ? " " : "", iop.payload[b]);
+                    cJSON_AddStringToObject(o, "io_payload", ph);
+                    /* Marque io DEDUITE du fabricant capte, seulement si aucune n'est stockee (sinon
+                     * l'emission v->marque ci-dessous ferait une 2e cle "marque"). Robuste : marche
+                     * sur un appareil enrole avant ce correctif, sans re-enrolement. */
+                    const char *mq = (!v->marque[0] && iop.payload_len > 1) ? io_marque_name(iop.payload[1]) : NULL;
+                    if (mq) cJSON_AddStringToObject(o, "marque", mq);   /* resout le profil io (Somfy/Velux) a l'edition */
+                }
+            }
         }
         if (v->central) cJSON_AddBoolToObject(o, "central", true);
         if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");   /* centrale : membres ; zone : suiveurs */

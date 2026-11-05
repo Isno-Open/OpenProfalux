@@ -84,6 +84,12 @@ void io_radio_set_freq_offset(int32_t khz) {
     s_offset_loaded = true;
 }
 
+void io_radio_set_carrier_khz(uint32_t khz) {
+    /* Surcharge de porteuse PAR APPAREIL : l'offset quartz de la carte s'applique encore par-dessus.
+     * Appelee apres io_radio_config, donc s_offset_khz est deja charge. */
+    cc1101_set_freq_khz((uint32_t)((int32_t)khz + s_offset_khz));
+}
+
 void io_radio_set_channel(io_channel_t ch) {
     if (ch < IO_CH1 || ch > IO_CH3) ch = IO_CH2;
     if (!s_offset_loaded) {

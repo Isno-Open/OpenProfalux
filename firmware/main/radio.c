@@ -215,7 +215,20 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
-    int n = io_radio_rx_packet(buf, (size_t)max, timeout_ms);
+    /* On ecoute jusqu'a une VRAIE commande 0x00 a CRC valide, pas la premiere trame venue : les
+     * moteurs et telecommandes io crachent des balises 0x20 en continu, qui noieraient l'appui bouton
+     * de l'utilisateur. La validite est jugee par io_profile_from_capture (CRC + get_frame_length +
+     * cmd==0x00), SOURCE UNIQUE du controle, exactement celui de l'enrolement. */
+    int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    int n = 0;
+    io_profile_t probe;
+    while (esp_timer_get_time() < end) {
+        int64_t left_us = end - esp_timer_get_time();
+        if (left_us <= 0) break;
+        int k = io_radio_rx_packet(buf, (size_t)max, (uint32_t)(left_us / 1000));
+        if (k > 0 && io_profile_from_capture(buf, k, &probe) == 0) { n = k; break; }  /* commande 0x00 valide */
+        /* balise 0x20, CRC KO ou trame tronquee : on continue d'ecouter dans le temps restant */
+    }
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
     xSemaphoreGive(s_mtx);
@@ -223,13 +236,14 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
     return n;
 }
 
-int radio_io_send(const uint8_t src[3], uint8_t button) {
+int radio_io_send(const uint8_t src[3], uint8_t button, uint32_t freq_khz) {
     if (!s_mtx || !src) return -1;
     uint8_t key[16];
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();
+    if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* porteuse par appareil ; 0 = CH2 868950 par defaut */
     int r = io_store_get_key(src, key) ? io_hc_send_shutter_1w(src, key, button) : -1;
     cc1101_apply_config_ook();
     cc1101_set_freq_khz(back);

@@ -2255,6 +2255,7 @@ function routeLeaf(prof) {
    /api/io/pair/1w SANS trame -> le firmware synthetise le profil de commande depuis la marque. ── */
 let IO_ADD_PROFILE = null;
 let ioPairedId = null;   // id du volet io cree par l'appairage, cible du test (2) et du renommage (3)
+let ioCapturedFrame = null;   // trame 0x00 captee a l'etape 1 : destination + charge utile reelles, passee a l'enrolement (agnostique marque)
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
   const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status');
@@ -2264,8 +2265,9 @@ function loadIoAdd() {
   const anote = $('#io-add-appaire-note'); if (anote) anote.textContent = (p && p.io && p.io.appaire_note) || '';
   if (st) { st.hidden = true; st.textContent = ''; }
   const fst = $('#io-freq-stat'); if (fst) { fst.hidden = true; fst.textContent = ''; }
-  if (fin) fin.hidden = true;        // on repart de l'etape 1 (frequence) a chaque entree
+  if (fin) fin.hidden = true;        // on repart de l'etape 1 (capture) a chaque entree
   ioPairedId = null;
+  ioCapturedFrame = null; if (btn) btn.disabled = true;   // Appairer verrouille tant qu'une commande 0x00 n'est pas captee
   // Etape 1 : TEST DE FREQUENCE (commun) -> sniff io ; rien capte = le calage de frequence du module est faux.
   const ftb = $('#io-freq-test');
   if (ftb) ftb.onclick = async () => {
@@ -2274,19 +2276,24 @@ function loadIoAdd() {
     if (fst) { fst.hidden = false; fst.className = 'statline'; fst.textContent = "Écoute 8 s… appuie une fois sur ta télécommande d'origine."; }
     try {
       const d = await api('/api/io/sniff', { method: 'POST' });
-      if (d && d.ok) { if (fst) { fst.className = 'statline ok'; fst.textContent = '✅ Trame captée : la fréquence est bonne.'; } }
-      else if (fst) { fst.className = 'statline bad'; fst.textContent = '❌ Rien capté. Cale la fréquence io dans Système, puis réessaie.'; }
+      if (d && d.ok && d.frame) {
+        ioCapturedFrame = d.frame;        // le firmware ne rend qu'une commande 0x00 a CRC valide : destination + charge utile reelles (agnostique marque)
+        if (btn) btn.disabled = false;    // enrolement deverrouille
+        if (fst) { fst.className = 'statline ok'; fst.textContent = "✅ Commande captée (fréquence bonne). Passe à l'enrôlement."; }
+      } else { ioCapturedFrame = null; if (btn) btn.disabled = true;
+        if (fst) { fst.className = 'statline bad'; fst.textContent = "❌ Rien capté. Appuie bien sur un bouton (montée/stop/descente) pendant l'écoute ; si toujours rien, cale la fréquence io dans Système."; } }
     } catch (e) { if (fst) { fst.className = 'statline bad'; fst.textContent = `❌ Échec (${e}).`; } }
     finally { ftb.disabled = false; setRadioBusy(false); }
   };
   // Etape 1 : ENROLEMENT (seule partie specifique io). POST sans trame -> le firmware synthetise la commande.
   if (btn) btn.onclick = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
+    if (!ioCapturedFrame) { toast("Capture d'abord une commande (étape 1)"); return; }
     const man = (p && p.io && typeof p.io.man_id === 'number') ? p.io.man_id : 2;
     setRadioBusy(true); btn.disabled = true;
     if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage en cours, le boîtier s'insère…"; }
     try {
-      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ man_id: man, index: 0, profile: 1, tx: 1 }) });
+      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ frame: ioCapturedFrame, man_id: man, index: 0, profile: 1, tx: 1 }) });
       ioPairedId = d.id;
       if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Teste-le, puis donne-lui un nom.`; }
       if (fin) fin.hidden = false;
@@ -2332,6 +2339,10 @@ function profileFields(prof) {
   if (!prof) return [];
   const tx = prof.tx || {}, F = [];
   if (prof.freq_khz) F.push({ name: 'freq_khz', label: 'Fréquence porteuse (kHz)', widget: 'number', def: prof.freq_khz });
+  if (prof.io) {   /* io : relevés de la capture, affichés en lecture seule dans le MÊME composant (pas de tx à régler) */
+    F.push({ name: 'io_target',  label: 'Destination captée', readonly: true, def: '—', ronote: '(relevé de ta télécommande)' });
+    F.push({ name: 'io_payload', label: 'Charge utile captée', readonly: true, def: '—', ronote: '(relevé de ta télécommande)' });
+  }
   if ('te_us' in tx)      F.push({ name: 'te_us',  label: "TE d'émission (µs)", widget: 'number', def: tx.te_us });
   if ('repeat_bit' in tx) F.push({ name: 'tx_rpt', label: 'Bit de répétition (émettre comme la télécommande)', widget: 'onoff', def: tx.repeat_bit });
   if ('rmt' in tx)        F.push({ name: 'tx_rmt', label: 'Émission matérielle (RMT)', widget: 'onoff', def: tx.rmt });
@@ -2381,7 +2392,7 @@ function profileForDevice(v) {
 function txAdvanced(opts) {
   const v = opts.values || {}, fields = profileFields(opts.profile);
   const renderField = (f) => {
-    if (f.readonly) return `<div class="field"><label>${esc(f.label)}</label><p class="hint" style="margin:2px 0 0"><b>${esc(String(f.def))}</b> (fixe pour cette marque)</p></div>`;
+    if (f.readonly) return `<div class="field"><label>${esc(f.label)}</label><p class="hint" style="margin:2px 0 0"><b>${esc(String(v[f.name] || f.def))}</b> ${esc(f.ronote || '(fixe pour cette marque)')}</p></div>`;
     if (f.widget === 'number') {
       const val = v[f.name] || f.def || '';
       return `<div class="field"><label>${esc(f.label)}</label><input class="advf" data-name="${f.name}" type="number" step="1" value="${val}"></div>`;
@@ -2478,7 +2489,7 @@ function deviceKind(v) {   // tx = porte des réglages d'émission (le panneau a
   if (v.central) return { ico: '🎛', lbl: 'centrale', tx: false };
   if (v.zone) return { ico: '🔗', lbl: 'zone', tx: false };
   if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: true };    // CAME : fréquence PAR APPAREIL (capture + émission), via le panneau avancé
-  if (v.proto === 'io') return { ico: '🪟', lbl: 'io-homecontrol 1W', tx: false };
+  if (v.proto === 'io') return { ico: '🪟', lbl: 'io-homecontrol 1W', tx: true };   // panneau avancé io : porteuse (lecture seule) + destination/charge utile captées
   if (v.virt) return v.proto === 'profalux'
     ? { ico: '🪟', lbl: 'virtuelle Profalux', tx: true }
     : { ico: '🪟', lbl: 'Somfy RTS', tx: true };                            // freq fixe (lecture seule) + format 56/80
@@ -2535,7 +2546,9 @@ async function openDeviceEdit(v) {
   /* Profils INTERCHANGEABLES : meme mecanisme ET meme bande (on ne transforme pas un enrole 868 en 433,
      ni un enrole en rejeu). Ex. enrole Profalux 868 -> Eveno/NeoSol : seule la porteuse et les defauts
      changent, l'identite et le compteur restent. Somfy 433 -> seulement Somfy. */
-  const compat = ((PROFILES && PROFILES.profils) || []).filter(p => p.mecanisme === mec && curProf && p.band === curProf.band);
+  // Profils interchangeables = MÊME flow (donc même protocole) : Profalux/Eveno/NeoSol (enrol-pfx)
+  // entre eux, Somfy io/Velux io (pair-io) entre eux. Le flow évite de proposer de l'io sur un KeeLoq.
+  const compat = ((PROFILES && PROFILES.profils) || []).filter(p => curProf && p.flow === curProf.flow);
   const profSelect = (k.tx && compat.length > 1)
     ? `<div class="field"><label>Profil (marque)</label><select class="dev-prof">${compat.map(p =>
         `<option value="${esc(p.marque)}"${curProf && p.marque === curProf.marque ? ' selected' : ''}>${esc(p.nom || p.marque)}</option>`).join('')}</select>
@@ -2569,10 +2582,10 @@ async function openDeviceEdit(v) {
     if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`; return; }
     const switched = curProf && curProf.marque !== origMarque;
     const comp = txAdvanced({
-      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0 },
+      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0, io_target: v.io_target || '', io_payload: v.io_payload || '' },
       profile: curProf, marque: (curProf && curProf.marque) || origMarque,
       open: true, saveLabel: 'Enregistrer les réglages',
-      onSave: async (vals) => {   /* vals = champs du schéma (générique) : on les envoie tels quels */
+      onSave: async (vals) => {   /* vals = champs du schéma (générique), envoyés tels quels ; pour l'io, la porteuse par appareil part aussi */
         const resp = await api('/api/volet/txparams', { method: 'POST',
           body: JSON.stringify({ id: v.id, marque: (curProf && curProf.marque) || origMarque, ...vals }) }).catch(() => null);
         if (resp && resp.ok) { await loadStatus(); renderDevices(); }
