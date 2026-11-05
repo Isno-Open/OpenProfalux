@@ -24,9 +24,10 @@ typedef enum { IO_ACTION_UP = 0, IO_ACTION_STOP = 1, IO_ACTION_DOWN = 2, IO_ACTI
  *                    appris une fois, sert a l'enrolement ET aux commandes ;
  *  - man_id        : fabricant capte du 0x30 (seule valeur de marque ; 0x02 Somfy, 0x01 Velux) ;
  *  - pair_status   : octet de statut capte du 0x30.
- * La porteuse n'est PAS ici : elle vit par appareil (volet_t.freq_khz), mesuree a la capture et
- * ajustable, comme la porteuse Profalux (une config, un seul endroit). Un ancien profil (struct plus
- * petit) est rejete par io_store_get_profile (taille differente) et traite comme a re-appairer. */
+ * La porteuse n'est PAS ici : elle vit par appareil (volet_t.freq_khz), MESUREE a la 1re capture
+ * (FREQEST du CC1101) puis ajustable comme la porteuse Profalux (meme parametre, pas de code double).
+ * Un ancien profil (struct plus petit) est rejete par io_store_get_profile (taille differente) et
+ * traite comme a re-appairer. */
 #define IO_PROFILE_PAYLOAD_MAX 21   /* = iohome::FRAME_MAX_DATA_SIZE, repris ici pour rester en C */
 typedef struct {
     uint8_t cmd_target[3];                                     /* dest commande, captee du 0x00 */

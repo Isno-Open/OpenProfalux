@@ -209,12 +209,15 @@ void radio_set_io_listening(bool on) {
 }
 bool radio_is_io_listening(void) { return s_io_listen; }
 
-int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms, io_sniff_kind_t kind) {
+int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms, io_sniff_kind_t kind, uint32_t freq_khz) {
     if (!s_mtx || !buf || max <= 0) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
+    /* geste 2 (ecoute du PROG) : on ecoute a la porteuse APPRISE au geste 1 (freq_khz), via le meme
+     * parametre par appareil que Profalux. geste 1 (freq_khz=0) ecoute au canal par defaut et MESURE. */
+    if (freq_khz) io_radio_set_carrier_khz(freq_khz);
     /* On ecoute jusqu'a une VRAIE trame du type attendu a CRC valide, pas la premiere venue : les
      * moteurs et telecommandes io crachent des balises 0x20 en continu, qui noieraient l'appui bouton
      * (geste 1) ou le 0x30 d'enrolement (geste 2). La validite est jugee par la MEME fonction que
@@ -265,7 +268,7 @@ int radio_io_erase(void) {
 }
 
 int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
-                    bool tx, int rolling) {
+                    bool tx, int rolling, uint32_t freq_khz) {
     if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     int r = io_store_set(src, key, profile, rolling) ? 0 : -1;
@@ -273,6 +276,7 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         bool was = s_paused; s_paused = true;
         uint32_t back = cc1101_get_freq_khz();
         io_radio_config();
+        if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* notre 0x30 part a la porteuse apprise de l'appareil (geste 1) */
         r = io_hc_pair_1w(profile, src, key);
         cc1101_apply_config_ook();
         cc1101_set_freq_khz(back);

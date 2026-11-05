@@ -27,6 +27,7 @@ static bool first_tx = true;
 #define CC_REG_PKTLEN   0x06
 #define CC_STAT_MARC    0x35   /* MARCSTATE */
 #define CC_STAT_RXBYTES 0x3B   /* RXBYTES (7 bits bas = octets en FIFO) */
+#define CC_STAT_FREQEST 0x32   /* FREQEST : offset de frequence estime du dernier paquet recu (signed) */
 #define MARC_IDLE       0x01
 
 /* Table de registres CC1101 pour io-homecontrol, d'apres iohc-flipper radio_cc1101_regs.h (MIT) :
@@ -78,11 +79,18 @@ static const uint32_t IO_CH_KHZ[3] = { 868250u, 868950u, 869850u };
  * io_radio_set_freq_offset : la config io est reposee a chaque fenetre d'ecoute. */
 static int32_t s_offset_khz;
 static bool s_offset_loaded;
+/* Porteuse reelle MESUREE sur la DERNIERE trame captee : canal io + FREQEST (offset estime du signal
+ * recu), en kHz ABSOLUS, hors offset quartz de la carte (celui-ci est rajoute au TX par
+ * io_radio_set_carrier_khz). Sert a apprendre la frequence reelle de l'appareil a la 1re capture
+ * (geste 1), rangee dans le parametre frequence par appareil existant (volet_t.freq_khz). 0 = pas encore mesure. */
+static uint32_t s_last_rx_carrier_khz;
 
 void io_radio_set_freq_offset(int32_t khz) {
     s_offset_khz = (khz < -100 || khz > 100) ? 0 : khz;
     s_offset_loaded = true;
 }
+
+uint32_t io_radio_last_carrier_khz(void) { return s_last_rx_carrier_khz; }
 
 void io_radio_set_carrier_khz(uint32_t khz) {
     /* Surcharge de porteuse PAR APPAREIL : l'offset quartz de la carte s'applique encore par-dessus.
@@ -167,6 +175,12 @@ int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms) {
         for (uint8_t i = 0; i < n; i++) {
             IohcUnframerResult r = iohc_unframer_feed_byte(&u, fifo[i]);
             if (r == IohcUnframerFrameDone) {
+                /* Porteuse reelle de CET appareil : canal io + FREQEST (offset estime du signal recu,
+                 * signed, 1 LSB ~= 1,587 kHz). FREQEST est mesure par rapport a notre porteuse courante
+                 * (canal + offset carte) ; on range donc canal + FREQEST, SANS l'offset carte, qui sera
+                 * rajoute au TX par io_radio_set_carrier_khz. Lu AVANT SIDLE, etat RX encore frais. */
+                int8_t fq = (int8_t)cc1101_read_reg(CC_STAT_FREQEST | 0x40);
+                s_last_rx_carrier_khz = (uint32_t)((int32_t)IO_CH_KHZ[IO_CH2] + ((int32_t)fq * 1587 / 1000));
                 size_t len = u.frame_pos < max ? u.frame_pos : max;
                 for (size_t k = 0; k < len; k++) buf[k] = u.frame[k];
                 cc1101_strobe_cmd(CC_SIDLE);

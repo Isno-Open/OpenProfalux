@@ -2243,7 +2243,8 @@ function routeLeaf(prof) {
      la pyramide. Le profil de la pyramide ne sert qu'aux textes d'aide (learn / appaire_note). ── */
 let IO_ADD_PROFILE = null;
 let ioPairedId = null;   // id du volet io cree par l'appairage, cible du test (2) et du renommage (3)
-let ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso + freq)
+let ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso)
+let ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1 (canal + FREQEST), reutilisee aux gestes 2 et 3
 let ioEnrollFrame = null;   // trame 0x30 captee au geste 2 (PROG), tenue jusqu'a l'appairage (geste 3)
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
@@ -2256,7 +2257,8 @@ function loadIoAdd() {
   if (cst) { cst.hidden = true; cst.textContent = ''; }
   if (fin) fin.hidden = true;        // on repart des captures a chaque entree
   ioPairedId = null;
-  ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso + freq)
+  ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso)
+  ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1, portee aux gestes 2 et 3
   ioEnrollFrame = null;   // trame 0x30 captee au geste 2 (PROG), tenue cote navigateur jusqu'au geste 3
   const cmdBtn = $('#io-cap-cmd');
   const progBtn = $('#io-cap-prog'), pst = $('#io-cap-prog-stat');
@@ -2275,6 +2277,7 @@ function loadIoAdd() {
       const d = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'cmd' }) });
       if (d && d.ok && d.frame) {
         ioCmdFrame = d.frame;
+        ioCmdFreq = d.freq_khz || 0;   // porteuse reelle mesuree (canal + FREQEST) : reutilisee aux gestes 2 et 3, puis rangee dans la freq du volet
         if (cst) { cst.className = 'statline ok'; cst.textContent = "✅ Commande captée (fréquence bonne). Passe à l'enrôlement (geste 2)."; }
       } else { ioCmdFrame = null;
         if (cst) { cst.className = 'statline bad'; cst.textContent = "❌ Rien capté. Appuie bien pendant l'écoute ; si toujours rien, cale la fréquence io dans Système."; } }
@@ -2289,7 +2292,7 @@ function loadIoAdd() {
     setRadioBusy(true); progBtn.disabled = true;
     if (pst) { pst.hidden = false; pst.className = 'statline'; pst.textContent = "Écoute… MAINTENANT mets ta télécommande en apprentissage (PROG). Le boîtier capte le 0x30."; }
     try {
-      const cap = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'enroll' }) });
+      const cap = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'enroll', freq_khz: ioCmdFreq }) });
       if (cap && cap.ok && cap.frame) {
         ioEnrollFrame = cap.frame;
         if (pst) { pst.className = 'statline ok'; pst.textContent = "✅ Enrôlement (0x30) capté. Passe à Appairer (geste 3)."; }
@@ -2309,7 +2312,7 @@ function loadIoAdd() {
     setRadioBusy(true); btn.disabled = true;
     if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage, le boîtier insère son identité…"; }
     try {
-      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ cmd: ioCmdFrame, overlay, enroll: ioEnrollFrame, index: 0, tx: 1 }) });
+      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ cmd: ioCmdFrame, overlay, enroll: ioEnrollFrame, freq_khz: ioCmdFreq, index: 0, tx: 1 }) });
       ioPairedId = d.id;
       if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Teste-le, puis donne-lui un nom.`; }
       if (fin) fin.hidden = false;

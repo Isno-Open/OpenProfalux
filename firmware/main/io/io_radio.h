@@ -25,6 +25,10 @@ void io_radio_set_channel(io_channel_t ch);
 
 /* Applique une nouvelle correction de quartz io (kHz, -100..100) sans relire la NVS. */
 void io_radio_set_freq_offset(int32_t khz);
+/* Porteuse reelle (kHz absolus, hors offset carte) mesuree sur la DERNIERE trame io captee :
+ * canal io + FREQEST. Apprise a la capture (geste 1) pour alimenter le parametre frequence par
+ * appareil existant (volet_t.freq_khz). 0 = pas encore mesure. */
+uint32_t io_radio_last_carrier_khz(void);
 /* Pose la porteuse io a une valeur absolue (surcharge PAR APPAREIL) ; l'offset carte s'ajoute encore.
  * A appeler APRES io_radio_config (qui a charge l'offset). Sans appel = CH2 868950 par defaut. */
 void io_radio_set_carrier_khz(uint32_t khz);

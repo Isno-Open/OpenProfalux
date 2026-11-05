@@ -1650,25 +1650,31 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
 /* ── io-homecontrol (2-FSK 868, experimental #87) : capture/ecoute pour l'enrolement io.
  * EXCLUSIF de l'ecoute PFX (un seul protocole radio a la fois). Pilotent le backend radio_io_*. ── */
 static esp_err_t h_io_sniff(httpd_req_t *r) {
-    /* Corps optionnel {"kind":"cmd"|"enroll"} : geste 1 ecoute une commande 0x00, geste 2 ecoute
-     * le 0x30 d'enrolement pendant le PROG. Defaut cmd (retrocompatible). */
+    /* Corps optionnel {"kind":"cmd"|"enroll","freq_khz":N} : geste 1 ecoute une commande 0x00 au canal
+     * par defaut (freq_khz absent/0) et MESURE la porteuse reelle (renvoyee en "freq_khz") ; geste 2
+     * ecoute le 0x30 a cette porteuse apprise (freq_khz fourni). Defaut cmd (retrocompatible). */
     io_sniff_kind_t kind = IO_SNIFF_CMD;
+    uint32_t freq_khz = 0;
     char *body = read_body(r);
     if (body) {
         cJSON *j = cJSON_Parse(body);
         const char *k = jstr(j, "kind");
         if (k && strcmp(k, "enroll") == 0) kind = IO_SNIFF_ENROLL;
+        cJSON *fq = cJSON_GetObjectItem(j, "freq_khz");
+        if (cJSON_IsNumber(fq) && fq->valuedouble > 800000 && fq->valuedouble < 1000000) freq_khz = (uint32_t)fq->valuedouble;
         cJSON_Delete(j);
     }
     free(body);
     uint8_t frame[32];
-    int n = radio_io_sniff(frame, sizeof frame, 8000, kind);   /* 8 s d'ecoute d'UNE trame io du type demande */
+    int n = radio_io_sniff(frame, sizeof frame, 8000, kind, freq_khz);   /* 8 s d'ecoute d'UNE trame io du type demande */
     httpd_resp_set_type(r, "application/json");
     if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
     char hex[2 * sizeof(frame) + 1];
     for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
-    char out[128];
-    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
+    char out[160];
+    /* freq_khz : porteuse reelle mesuree de l'appareil (canal + FREQEST), a ranger dans le parametre
+     * frequence par appareil au geste 3. Le navigateur ne s'en sert qu'apres une capture de commande. */
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\",\"freq_khz\":%u}", n, hex, (unsigned)io_radio_last_carrier_khz());
     return httpd_resp_sendstr(r, out);
 }
 /* Appairage io 1W, 3 gestes. UNE capture commande + l'overlay DECLARE de la marque + le 0x30 du PROG ;
@@ -1751,12 +1757,18 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         cJSON_Delete(j);
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "il faut la trame 0x00 (commande) + l'overlay de la marque + le 0x30 d'enrolement valides ; tx=0 exige rolling");
     }
+    /* Porteuse APPRISE au geste 1 (canal + FREQEST), rangee dans le parametre frequence par appareil
+     * existant (comme Profalux) : elle sert a emettre notre 0x30 a la bonne frequence, puis les commandes
+     * l'utilisent via volet_t.freq_khz. 0 = canal par defaut. */
+    cJSON *fqj = cJSON_GetObjectItem(j, "freq_khz");
+    uint32_t freq_khz = (cJSON_IsNumber(fqj) && fqj->valuedouble > 800000 && fqj->valuedouble < 1000000)
+                            ? (uint32_t)fqj->valuedouble : 0;
     uint8_t src[3], key[16];
     bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
     int rolling = roll ? (int)roll->valuedouble : -1;
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
-    int rc = radio_io_enroll(&profile, src, key, tx, rolling);
+    int rc = radio_io_enroll(&profile, src, key, tx, rolling, freq_khz);
     memset(key, 0, sizeof key);
     if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
     char id[SH_ID_LEN];
@@ -1764,6 +1776,9 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     uint32_t serial = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
     if (shutters_create_io_volet(id, serial) != 0)
         return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite enregistree mais volet non cree");
+    /* Range la porteuse apprise dans le parametre frequence par appareil (meme champ que Profalux) :
+     * les commandes io (radio_io_send(v->freq_khz)) l'utiliseront, et elle est editable dans l'avance. */
+    if (freq_khz) shutters_set_tx_params(id, freq_khz, 0, -1, -1, 0, NULL);
     ESP_LOGW(TAG, "io : identite %s %s (man_id 0x%02X)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
     char out[80];
     snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d}", id, tx ? 1 : 0);
