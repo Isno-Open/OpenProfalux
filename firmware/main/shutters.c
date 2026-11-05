@@ -1149,7 +1149,7 @@ bool shutters_virt_serial_used(uint32_t serial) {
         if (is_pfx_virt(&s_volets[i]) && s_volets[i].virt_serial == serial) return true;
     return false;
 }
-/* true si une télécommande ENTENDUE sur l'air (registre des captées, dont celles de Devmel) porte
+/* true si une télécommande ENTENDUE sur l'air (registre des captées, dont celles d'une passerelle tierce) porte
  * déjà ce serial. L'allocateur d'identité virtuelle l'exclut : il ne propose jamais une identité
  * déjà occupée par un tiers, sinon deux moteurs suivraient le même code roulant (collision KeeLoq)
  * et le moteur finirait par refuser nos émissions restées en arrière du compteur. Comparaison
