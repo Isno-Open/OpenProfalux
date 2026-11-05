@@ -1293,7 +1293,7 @@ async function loadConfig() {
   certPh('#mqtt-key', c.mqtt_key_len, '-----BEGIN PRIVATE KEY-----');
   $('#sys-io-offset').value = c.io_freq_offset_khz ?? 0;
   $('#sys-device').value = c.device || ''; $('#sys-logframes').checked = !!c.log_frames;
-  if ($('#sys-mqtt-obey')) $('#sys-mqtt-obey').checked = c.mqtt_obey !== false;   /* defaut ON si absent */
+  if ($('#sys-mqtt-obey')) $('#sys-mqtt-obey').checked = !(c.mqtt_obey === 0 || c.mqtt_obey === false);   /* defaut ON si absent ; /api/config renvoie un NOMBRE 0/1, donc 0 = OFF (0 !== false valait true a tort) */
   const uph = $('#sys-uipass-hint'), upi = $('#sys-uipass'), upc = $('#sys-uipass-clear');
   if (uph) uph.innerHTML = c.ui_auth
     ? '🔒 <b>Protection active.</b> Le champ ci-dessous reste vide : le mot de passe enregistré n\'est jamais réaffiché. Saisis-en un nouveau pour le remplacer.'
