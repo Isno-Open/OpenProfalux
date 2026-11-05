@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
+#include "io/io_store.h"   /* io_profile_t : edition PAR APPAREIL du profil io capte (panneau avance) */
 
 #define SH_MAX_VOLETS   24
 /* Longueur maximale (NUL compris) de la liste des membres d'une centrale, CSV
@@ -64,6 +65,10 @@ int  shutters_set_orientation(const char *id, int orientation);   /* azimut faca
  * (tx_override_t). freq_khz/te_us a 0 = heriter. marque=NULL = provenance inchangee. */
 int  shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
                             int rpt, int rmt, int frame_bits, const char *marque);
+/* Remplace le profil io capte d'un volet (cibles, charges utiles, basse conso, man_id, statut) par les
+ * valeurs editees dans le panneau avance. Cle et compteur conserves. 0 ok ; -1 introuvable/non io ; -2 pas
+ * de cle (pas encore appaire). */
+int  shutters_set_io_profile(const char *id, const io_profile_t *p);
 /* Renomme un volet (change son id + met a jour membres/suiveurs + entite HA). 0 ok ; -4 nom deja pris. */
 int  shutters_rename_volet(const char *old_id, const char *new_id);
 /* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE

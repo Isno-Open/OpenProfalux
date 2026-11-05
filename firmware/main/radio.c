@@ -209,16 +209,17 @@ void radio_set_io_listening(bool on) {
 }
 bool radio_is_io_listening(void) { return s_io_listen; }
 
-int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
+int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms, io_sniff_kind_t kind) {
     if (!s_mtx || !buf || max <= 0) return -1;
     bool was = s_paused; s_paused = true;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();                         /* FSK io + canal CH2 */
-    /* On ecoute jusqu'a une VRAIE commande 0x00 a CRC valide, pas la premiere trame venue : les
+    /* On ecoute jusqu'a une VRAIE trame du type attendu a CRC valide, pas la premiere venue : les
      * moteurs et telecommandes io crachent des balises 0x20 en continu, qui noieraient l'appui bouton
-     * de l'utilisateur. La validite est jugee par io_profile_from_capture (CRC + get_frame_length +
-     * cmd==0x00), SOURCE UNIQUE du controle, exactement celui de l'enrolement. */
+     * (geste 1) ou le 0x30 d'enrolement (geste 2). La validite est jugee par la MEME fonction que
+     * l'enrolement : io_profile_from_capture (cmd==0x00) pour une commande, io_enroll_from_capture
+     * (cmd==0x30) pour l'enrolement. Source unique du controle, aucune valeur en dur. */
     int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     int n = 0;
     io_profile_t probe;
@@ -226,8 +227,11 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
         int64_t left_us = end - esp_timer_get_time();
         if (left_us <= 0) break;
         int k = io_radio_rx_packet(buf, (size_t)max, (uint32_t)(left_us / 1000));
-        if (k > 0 && io_profile_from_capture(buf, k, &probe, IO_ACTION_UP) == 0) { n = k; break; }  /* 0x00 valide ; probe jete, l'action ne sert qu'a remplir un slot ici inutilise */
-        /* balise 0x20, CRC KO ou trame tronquee : on continue d'ecouter dans le temps restant */
+        if (k <= 0) continue;                   /* balise 0x20, CRC KO ou trame tronquee : on continue */
+        int ok = (kind == IO_SNIFF_ENROLL)
+                     ? io_enroll_from_capture(buf, k, &probe)                 /* 0x30 valide */
+                     : io_profile_from_capture(buf, k, &probe, IO_ACTION_UP); /* 0x00 valide ; probe jete, l'action ne sert qu'a remplir un slot ici inutilise */
+        if (ok == 0) { n = k; break; }
     }
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */

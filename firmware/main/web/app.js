@@ -1600,24 +1600,8 @@ async function loadDiag() {
              : d.gdo0 === 0 ? ` · GDO0 tenu par un autre composant (bloqué à ${d.gdo0_lvl}) ✗` : '';
   if (el) el.innerHTML = `PARTNUM ${ph} · VERSION ${vh} · TX ${txOk ? 'OK ✓' : (d.tx_ok === 0 ? 'HS ✗' : 'non testé')}${gdo0}${spi}. Réception : bouton ci-dessous.`;
 }
-/* Un seul POST par geste, aucun nouvel essai automatique. */
-if ($('#io-pair-form')) $('#io-pair-form').onsubmit = async e => {
-  e.preventDefault();
-  if (radioBusy) return;
-  const st = $('#io-pair-status'), btn = e.target.querySelector('button[type="submit"]');
-  const body = { up: $('#io-pair-up').value.trim(), stop: $('#io-pair-stop').value.trim(),
-    down: $('#io-pair-down').value.trim(), enroll: $('#io-pair-enroll').value.trim(),
-    index: Number($('#io-pair-index').value), tx: Number($('#io-pair-mode').value) };
-  const rolling = $('#io-pair-rolling').value;
-  if (!body.tx && rolling === '') { st.textContent = 'Indique le prochain compteur non utilisé.'; return; }
-  if (rolling !== '') body.rolling = Number(rolling);
-  setRadioBusy(true); btn.disabled = true; st.textContent = 'Application de l\'identité…';
-  try {
-    const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify(body) });
-    st.textContent = body.tx ? `${d.id} : rafale d'appairage envoyée. Vérifie la réaction du moteur.` : `${d.id} : identité reprise, sans émission.`;
-  } catch (err) { st.textContent = `Échec (${err}). Vérifie la trame, le compteur et le stockage avant de réessayer.`; }
-  finally { btn.disabled = false; setRadioBusy(false); }
-};
+/* L'appairage io se fait par l'ecran guide (loadIoAdd) : capture des 3 commandes + 0x30 d'enrolement,
+   tout capte, rien en dur. Le formulaire manuel a trames a ete retire. */
 
 /* Ecoute io pour capturer le profil de commande ou observer l'appairage. */
 if ($('#io-listen-btn')) {
@@ -2251,57 +2235,68 @@ function routeLeaf(prof) {
   if (panel) location.hash = `remotes/${panel}`;
 }
 
-/* ── Sous-panneau guide d'ajout d'un volet io (enrolement 1W, SANS capture) : porte le profil io
-   choisi dans la pyramide (marque -> man_id + texte d'apprentissage par marque). L'appairage POST
-   /api/io/pair/1w SANS trame -> le firmware synthetise le profil de commande depuis la marque. ── */
+/* ── Sous-panneau guide d'ajout d'un volet io (enrolement 1W). TOUT vient de captures, rien en dur :
+   - Geste 1 : capturer les 3 commandes (montee/stop/descente), un sniff 0x00 par appui ; on en tire
+     la destination et la charge utile reelles de chaque action (rejouees verbatim avec NOTRE identite).
+   - Geste 2 : pendant le PROG de la vraie telecommande, capter son 0x30 (sniff kind=enroll) puis emettre
+     NOTRE 0x30 vers la destination d'enrolement captee. Le fabricant (man_id) vient de ce 0x30, pas de
+     la pyramide. Le profil de la pyramide ne sert qu'aux textes d'aide (learn / appaire_note). ── */
 let IO_ADD_PROFILE = null;
 let ioPairedId = null;   // id du volet io cree par l'appairage, cible du test (2) et du renommage (3)
-let ioCapturedFrame = null;   // trame 0x00 captee a l'etape 1 : destination + charge utile reelles, passee a l'enrolement (agnostique marque)
+let ioCaps = { up: null, stop: null, down: null };   // trames 0x00 captees a l'etape 1, une par action
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
   const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status');
-  const btn = $('#io-add-pair'), fin = $('#io-add-finish');
+  const btn = $('#io-add-pair'), fin = $('#io-add-finish'), cst = $('#io-cap-stat');
   if (title) title.textContent = p ? ('Ajouter : ' + (p.nom || 'volet io')) : 'Ajouter un volet io';
   if (learn) learn.textContent = (p && p.io && p.io.learn) || "Mets ta télécommande d'origine en apprentissage.";
   const anote = $('#io-add-appaire-note'); if (anote) anote.textContent = (p && p.io && p.io.appaire_note) || '';
   if (st) { st.hidden = true; st.textContent = ''; }
-  const fst = $('#io-freq-stat'); if (fst) { fst.hidden = true; fst.textContent = ''; }
-  if (fin) fin.hidden = true;        // on repart de l'etape 1 (capture) a chaque entree
+  if (cst) { cst.hidden = true; cst.textContent = ''; }
+  if (fin) fin.hidden = true;        // on repart des captures a chaque entree
   ioPairedId = null;
-  ioCapturedFrame = null; if (btn) btn.disabled = true;   // Appairer verrouille tant qu'une commande 0x00 n'est pas captee
-  // Etape 1 : TEST DE FREQUENCE (commun) -> sniff io ; rien capte = le calage de frequence du module est faux.
-  const ftb = $('#io-freq-test');
-  if (ftb) ftb.onclick = async () => {
+  ioCaps = { up: null, stop: null, down: null };
+  const ACT_LBL = { up: 'Montée', stop: 'Stop', down: 'Descente' };
+  const allCaptured = () => !!(ioCaps.up && ioCaps.stop && ioCaps.down);
+  const refreshPair = () => { if (btn) btn.disabled = !allCaptured(); };
+  refreshPair();   // Appairer verrouille tant que les 3 commandes ne sont pas captees
+  // Geste 1 : capturer une commande (sniff 0x00). Rien capte = calage de frequence a revoir (Systeme).
+  const capOne = async (act, b) => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
-    setRadioBusy(true); ftb.disabled = true;
-    if (fst) { fst.hidden = false; fst.className = 'statline'; fst.textContent = "Écoute 8 s… appuie une fois sur ta télécommande d'origine."; }
+    setRadioBusy(true); b.disabled = true;
+    if (cst) { cst.hidden = false; cst.className = 'statline'; cst.textContent = `Écoute 8 s… appuie une fois sur ${ACT_LBL[act]} de ta télécommande d'origine.`; }
     try {
-      const d = await api('/api/io/sniff', { method: 'POST' });
+      const d = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'cmd' }) });
       if (d && d.ok && d.frame) {
-        ioCapturedFrame = d.frame;        // le firmware ne rend qu'une commande 0x00 a CRC valide : destination + charge utile reelles (agnostique marque)
-        if (btn) btn.disabled = false;    // enrolement deverrouille
-        if (fst) { fst.className = 'statline ok'; fst.textContent = "✅ Commande captée (fréquence bonne). Passe à l'enrôlement."; }
-      } else { ioCapturedFrame = null; if (btn) btn.disabled = true;
-        if (fst) { fst.className = 'statline bad'; fst.textContent = "❌ Rien capté. Appuie bien sur un bouton (montée/stop/descente) pendant l'écoute ; si toujours rien, cale la fréquence io dans Système."; } }
-    } catch (e) { if (fst) { fst.className = 'statline bad'; fst.textContent = `❌ Échec (${e}).`; } }
-    finally { ftb.disabled = false; setRadioBusy(false); }
+        ioCaps[act] = d.frame;
+        if (cst) { cst.className = 'statline ok'; cst.textContent = `✅ ${ACT_LBL[act]} captée.` + (allCaptured() ? " Les 3 commandes sont prêtes, passe à l'enrôlement." : ' Capture les autres.'); }
+      } else if (cst) { cst.className = 'statline bad'; cst.textContent = `❌ Rien capté pour ${ACT_LBL[act]}. Appuie bien pendant l'écoute ; si toujours rien, cale la fréquence io dans Système.`; }
+    } catch (e) { if (cst) { cst.className = 'statline bad'; cst.textContent = `❌ Échec (${e}).`; } }
+    finally { b.disabled = false; setRadioBusy(false); refreshPair(); }
   };
-  // Etape 1 : ENROLEMENT (seule partie specifique io). POST sans trame -> le firmware synthetise la commande.
+  const bindCap = (sel, act) => { const b = $(sel); if (b) b.onclick = () => capOne(act, b); };
+  bindCap('#io-cap-up', 'up'); bindCap('#io-cap-stop', 'stop'); bindCap('#io-cap-down', 'down');
+  // Geste 2 : Appairer = capter le 0x30 de la telecommande pendant son PROG, puis emettre NOTRE 0x30.
   if (btn) btn.onclick = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
-    if (!ioCapturedFrame) { toast("Capture d'abord une commande (étape 1)"); return; }
-    const man = (p && p.io && typeof p.io.man_id === 'number') ? p.io.man_id : 2;
+    if (!allCaptured()) { toast("Capture d'abord les 3 commandes (geste 1)"); return; }
     setRadioBusy(true); btn.disabled = true;
-    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage en cours, le boîtier s'insère…"; }
     try {
-      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ frame: ioCapturedFrame, man_id: man, index: 0, profile: 1, tx: 1 }) });
+      if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Écoute du 0x30… garde ta télécommande en apprentissage (va-et-vient)."; }
+      const cap = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'enroll' }) });
+      if (!cap || !cap.ok || !cap.frame) {
+        if (st) { st.className = 'statline bad'; st.textContent = "❌ Enrôlement (0x30) non capté. Remets la télécommande en apprentissage et réessaie."; }
+        return;
+      }
+      if (st) { st.className = 'statline'; st.textContent = "0x30 capté, le boîtier insère son identité…"; }
+      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ up: ioCaps.up, stop: ioCaps.stop, down: ioCaps.down, enroll: cap.frame, index: 0, tx: 1 }) });
       ioPairedId = d.id;
       if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Teste-le, puis donne-lui un nom.`; }
       if (fin) fin.hidden = false;
       const nameInp = $('#io-volet-name'); if (nameInp) nameInp.value = d.id;
     } catch (e) {
       if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Remets la télécommande en apprentissage (va-et-vient) et réessaie.`; }
-    } finally { btn.disabled = false; setRadioBusy(false); }
+    } finally { btn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
   // Etape 2 : TEST (partage) -> pilotage commun a tous les volets (sendCmd -> /api/shutter -> io par proto).
   const bindCmd = (sel, cmd) => { const b = $(sel); if (b) b.onclick = () => { if (ioPairedId) sendCmd({ id: ioPairedId, cmd }, b); }; };
@@ -2340,9 +2335,15 @@ function profileFields(prof) {
   if (!prof) return [];
   const tx = prof.tx || {}, F = [];
   if (prof.freq_khz) F.push({ name: 'freq_khz', label: 'Fréquence porteuse (kHz)', widget: 'number', def: prof.freq_khz });
-  if (prof.io) {   /* io : relevés de la capture, affichés en lecture seule dans le MÊME composant (pas de tx à régler) */
-    F.push({ name: 'io_target',  label: 'Destination captée', readonly: true, def: '—', ronote: '(relevé de ta télécommande)' });
-    F.push({ name: 'io_payload', label: 'Charge utile captée', readonly: true, def: '—', ronote: '(relevé de ta télécommande)' });
+  if (prof.io) {   /* io : relevés de la capture, VISIBLES ET MODIFIABLES dans le MÊME composant (pas de tx KeeLoq à régler). Tout est hexa, rien en dur ; on corrige un octet mal capté sans ré-appairer. */
+    F.push({ name: 'io_target',       label: 'Destination des commandes (hex)', widget: 'hex', def: '' });
+    F.push({ name: 'io_enroll',       label: "Destination d'enrôlement (hex)", widget: 'hex', def: '' });
+    F.push({ name: 'io_payload_up',   label: 'Charge utile Montée (hex)', widget: 'hex', def: '' });
+    F.push({ name: 'io_payload_stop', label: 'Charge utile Stop (hex)', widget: 'hex', def: '' });
+    F.push({ name: 'io_payload_down', label: 'Charge utile Descente (hex)', widget: 'hex', def: '' });
+    F.push({ name: 'io_low_power',    label: 'Basse conso (hex)', widget: 'hex', def: '' });
+    F.push({ name: 'io_man_id',       label: 'Fabricant / man_id (hex)', widget: 'hex', def: '' });
+    F.push({ name: 'io_pair_status',  label: "Statut d'enrôlement (hex)", widget: 'hex', def: '' });
   }
   if ('te_us' in tx)      F.push({ name: 'te_us',  label: "TE d'émission (µs)", widget: 'number', def: tx.te_us });
   if ('repeat_bit' in tx) F.push({ name: 'tx_rpt', label: 'Bit de répétition (émettre comme la télécommande)', widget: 'onoff', def: tx.repeat_bit });
@@ -2396,21 +2397,26 @@ function txAdvanced(opts) {
     if (f.readonly) return `<div class="field"><label>${esc(f.label)}</label><p class="hint" style="margin:2px 0 0"><b>${esc(String(v[f.name] || f.def))}</b> ${esc(f.ronote || '(fixe pour cette marque)')}</p></div>`;
     if (f.widget === 'number') {
       const val = v[f.name] || f.def || '';
-      return `<div class="field"><label>${esc(f.label)}</label><input class="advf" data-name="${f.name}" type="number" step="1" value="${val}"></div>`;
+      return `<div class="field"><label>${esc(f.label)}</label><input class="advf" data-widget="number" data-name="${f.name}" type="number" step="1" value="${val}"></div>`;
+    }
+    if (f.widget === 'hex') {   /* relevé io editable : chaine hexa (octets separes par des espaces), rendue telle quelle */
+      const val = v[f.name] != null ? v[f.name] : (f.def || '');
+      return `<div class="field"><label>${esc(f.label)}</label><input class="advf" data-widget="hex" data-name="${f.name}" type="text" autocomplete="off" spellcheck="false" value="${esc(String(val))}"></div>`;
     }
     if (f.widget === 'onoff') {
       const cur = v[f.name] ? (v[f.name] === 2 ? 2 : 1) : (f.def ? 2 : 1);
-      return `<div class="field"><label>${esc(f.label)}</label><select class="advf" data-name="${f.name}"><option value="2"${cur === 2 ? ' selected' : ''}>Activé</option><option value="1"${cur === 1 ? ' selected' : ''}>Désactivé</option></select></div>`;
+      return `<div class="field"><label>${esc(f.label)}</label><select class="advf" data-widget="onoff" data-name="${f.name}"><option value="2"${cur === 2 ? ' selected' : ''}>Activé</option><option value="1"${cur === 1 ? ' selected' : ''}>Désactivé</option></select></div>`;
     }
     if (f.widget === 'choice') {
       const cur = v[f.name] || f.def;
-      return `<div class="field"><label>${esc(f.label)}</label><select class="advf" data-name="${f.name}">${f.options.map(([val, lbl]) => `<option value="${val}"${val === cur ? ' selected' : ''}>${esc(lbl)}</option>`).join('')}</select></div>`;
+      return `<div class="field"><label>${esc(f.label)}</label><select class="advf" data-widget="choice" data-name="${f.name}">${f.options.map(([val, lbl]) => `<option value="${val}"${val === cur ? ' selected' : ''}>${esc(lbl)}</option>`).join('')}</select></div>`;
     }
     return '';
   };
-  const profLine = opts.marque
-    ? `Pré-réglé depuis le profil <b>${esc(opts.marque)}</b> : ${fields.map(fieldDefaultText).join(' · ')}.`
-    : 'Réglages d\'émission de cet appareil.';
+  const defFields = fields.filter(f => f.widget !== 'hex');   /* les relevés io (hex) ne sont pas des "défauts de profil" à résumer */
+  const profLine = (opts.marque && defFields.length)
+    ? `Pré-réglé depuis le profil <b>${esc(opts.marque)}</b> : ${defFields.map(fieldDefaultText).join(' · ')}.`
+    : (fields.some(f => f.widget === 'hex') ? 'Relevés captés de ta télécommande : visibles et modifiables.' : 'Réglages d\'émission de cet appareil.');
   const el = document.createElement('details');
   el.className = 'field adv-panel'; el.style.margin = '10px 0';
   if (opts.open) el.open = true;
@@ -2420,7 +2426,9 @@ function txAdvanced(opts) {
     ${opts.onSave ? `<div class="row" style="margin-top:4px"><button class="btn primary adv-save">${esc(opts.saveLabel || 'Enregistrer')}</button>${fields.some(f => !f.readonly) ? '<button class="btn adv-reset" type="button" title="Remet les champs sur les valeurs du profil">↺ Valeurs du profil</button>' : ''}</div><div class="statline adv-stat" hidden><span class="dot"></span><b></b></div>` : ''}`;
   const read = () => {
     const out = {};
-    el.querySelectorAll('.advf').forEach(e => { out[e.dataset.name] = Number(e.value) || 0; });
+    el.querySelectorAll('.advf').forEach(e => {
+      out[e.dataset.name] = e.dataset.widget === 'hex' ? e.value.trim() : (Number(e.value) || 0);
+    });
     return out;
   };
   if (opts.onSave) {
@@ -2437,7 +2445,7 @@ function txAdvanced(opts) {
     if (reset) reset.onclick = () => {
       fields.forEach(f => {
         const e = el.querySelector(`.advf[data-name="${f.name}"]`); if (!e) return;
-        if (f.widget === 'number') e.value = f.def || '';
+        if (f.widget === 'number' || f.widget === 'hex') e.value = f.def || '';
         else if (f.widget === 'onoff') e.value = f.def ? '2' : '1';
         else if (f.widget === 'choice') e.value = f.def;
       });
@@ -2583,7 +2591,8 @@ async function openDeviceEdit(v) {
     if (!k.tx) { adv.innerHTML = `<p class="hint">Pas de réglages d'émission pour ce type (${esc(k.lbl)}).</p>`; return; }
     const switched = curProf && curProf.marque !== origMarque;
     const comp = txAdvanced({
-      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0, io_target: v.io_target || '', io_payload: v.io_payload || '' },
+      values: switched ? {} : { freq_khz: v.freq_khz || 0, te_us: v.te_us || 0, tx_rpt: v.tx_rpt || 0, tx_rmt: v.tx_rmt || 0, frame_bits: v.frame_bits || 0,
+        io_target: v.io_target || '', io_enroll: v.io_enroll || '', io_payload_up: v.io_payload_up || '', io_payload_stop: v.io_payload_stop || '', io_payload_down: v.io_payload_down || '', io_low_power: v.io_low_power || '', io_man_id: v.io_man_id || '', io_pair_status: v.io_pair_status || '' },
       profile: curProf, marque: (curProf && curProf.marque) || origMarque,
       open: true, saveLabel: 'Enregistrer les réglages',
       onSave: async (vals) => {   /* vals = champs du schéma (générique), envoyés tels quels ; pour l'io, la porteuse par appareil part aussi */

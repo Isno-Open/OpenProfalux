@@ -296,6 +296,26 @@ static const char *jstr(cJSON *o, const char *k) {
     cJSON *i = cJSON_GetObjectItem(o, k);
     return cJSON_IsString(i) ? i->valuestring : NULL;
 }
+/* Parse une liste d'octets hexa tolerante aux espaces et a un prefixe 0x par octet ("00 01 BF", "0x02",
+ * "01 43 00 00 80 D3"), telle que l'expose le status json. Sert a RELIRE un profil io edite dans le
+ * panneau avance. Rend le nombre d'octets, -1 si invalide ou > max. */
+static int hex_bytes(const char *s, uint8_t *out, int max) {
+    if (!s) return -1;
+    int n = 0;
+    while (*s) {
+        while (*s == ' ' || *s == '\t' || *s == ',') s++;
+        if (!*s) break;
+        if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+        if (!isxdigit((unsigned char)s[0])) return -1;
+        char tok[3] = { s[0], 0, 0 };
+        s++;
+        if (isxdigit((unsigned char)*s)) { tok[1] = *s; s++; }
+        if (n >= max) return -1;
+        unsigned b; if (sscanf(tok, "%2x", &b) != 1) return -1;
+        out[n++] = (uint8_t)b;
+    }
+    return n;
+}
 
 /* ── Handlers statiques ── */
 static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end, true); }
@@ -478,6 +498,28 @@ static esp_err_t h_volet_txparams(httpd_req_t *r) {
         cJSON_IsNumber(xm) ? (int)xm->valuedouble : -1,
         cJSON_IsNumber(fb) ? (int)fb->valuedouble : 0,
         jstr(j, "marque"));
+    /* Edition du profil io capte (panneau avance : voir ET modifier). Applique seulement si des champs io
+     * sont presents (reconnu par io_target, que seul un volet io expose). Tout vient des champs hexa edites,
+     * rien en dur ; io_store_set valide les longueurs et conserve cle + compteur. */
+    const char *iot = jstr(j, "io_target");
+    if (rc == 0 && iot) {
+        io_profile_t p; memset(&p, 0, sizeof p);
+        static const struct { const char *k; io_action_t a; } pay[IO_ACTION_COUNT] = {
+            { "io_payload_up", IO_ACTION_UP }, { "io_payload_stop", IO_ACTION_STOP }, { "io_payload_down", IO_ACTION_DOWN } };
+        uint8_t tmp[IO_PROFILE_PAYLOAD_MAX]; int k;
+        bool ok = hex_bytes(iot, p.cmd_target, 3) == 3
+               && hex_bytes(jstr(j, "io_enroll"), p.enroll_target, 3) == 3;
+        for (int i = 0; ok && i < IO_ACTION_COUNT; i++) {
+            k = hex_bytes(jstr(j, pay[i].k), tmp, IO_PROFILE_PAYLOAD_MAX);
+            if (k <= 0) { ok = false; break; }
+            memcpy(p.payload[pay[i].a], tmp, (size_t)k);
+            p.payload_len[pay[i].a] = (uint8_t)k;
+        }
+        if (ok && (ok = hex_bytes(jstr(j, "io_low_power"),   tmp, 1) == 1)) p.low_power   = tmp[0];
+        if (ok && (ok = hex_bytes(jstr(j, "io_man_id"),      tmp, 1) == 1)) p.man_id      = tmp[0];
+        if (ok && (ok = hex_bytes(jstr(j, "io_pair_status"), tmp, 1) == 1)) p.pair_status = tmp[0];
+        if (!ok || shutters_set_io_profile(jstr(j, "id"), &p) != 0) rc = -1;
+    }
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -1608,8 +1650,19 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
 /* ── io-homecontrol (2-FSK 868, experimental #87) : capture/ecoute pour l'enrolement io.
  * EXCLUSIF de l'ecoute PFX (un seul protocole radio a la fois). Pilotent le backend radio_io_*. ── */
 static esp_err_t h_io_sniff(httpd_req_t *r) {
+    /* Corps optionnel {"kind":"cmd"|"enroll"} : geste 1 ecoute une commande 0x00, geste 2 ecoute
+     * le 0x30 d'enrolement pendant le PROG. Defaut cmd (retrocompatible). */
+    io_sniff_kind_t kind = IO_SNIFF_CMD;
+    char *body = read_body(r);
+    if (body) {
+        cJSON *j = cJSON_Parse(body);
+        const char *k = jstr(j, "kind");
+        if (k && strcmp(k, "enroll") == 0) kind = IO_SNIFF_ENROLL;
+        cJSON_Delete(j);
+    }
+    free(body);
     uint8_t frame[32];
-    int n = radio_io_sniff(frame, sizeof frame, 8000);   /* 8 s d'ecoute d'UNE trame io */
+    int n = radio_io_sniff(frame, sizeof frame, 8000, kind);   /* 8 s d'ecoute d'UNE trame io du type demande */
     httpd_resp_set_type(r, "application/json");
     if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
     char hex[2 * sizeof(frame) + 1];

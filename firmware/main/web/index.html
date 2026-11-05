@@ -238,16 +238,20 @@
           <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2 id="io-add-title">Ajouter un volet io</h2>
           <p class="sub">Enrôlement io 1W : c'est <b>ta télécommande d'origine</b> qui autorise, le boîtier s'insère. Ta télécommande continue de fonctionner après.</p>
-          <h3>1. Capturer une commande</h3>
-          <p class="sub">Clique, puis appuie une fois sur un bouton (montée, stop ou descente) de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> du volet, sa destination et son contenu ; c'est elle qu'il rejouera avec sa propre identité. Rien de capté = calage de fréquence à revoir dans <a href="#sys/device">Système</a> (« Caler sur ma télécommande » / décalage io).</p>
-          <div class="row"><button id="io-freq-test" class="btn">📡 Capturer une commande</button></div>
-          <p class="statline" id="io-freq-stat" hidden></p>
+          <h3>1. Capturer les 3 commandes</h3>
+          <p class="sub">Pour chaque bouton ci-dessous, clique puis appuie <b>une fois</b> sur le bouton correspondant de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> du volet, sa destination et son contenu ; il les rejouera avec sa propre identité. Les trois sont captées (rien n'est deviné) : montée, stop et descente. Rien de capté = calage de fréquence à revoir dans <a href="#sys/device">Système</a> (« Caler sur ma télécommande » / décalage io).</p>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <button id="io-cap-up" class="btn">📡 Montée</button>
+            <button id="io-cap-stop" class="btn">📡 Stop</button>
+            <button id="io-cap-down" class="btn">📡 Descente</button>
+          </div>
+          <p class="statline" id="io-cap-stat" hidden></p>
           <h3>2. Enrôler le boîtier</h3>
           <ol class="sub" style="padding-left:1.2em">
             <li><b>Mets ta télécommande d'origine en apprentissage.</b> <span id="io-add-learn"></span></li>
-            <li>Dès que le volet fait son va-et-vient, clique <b>Appairer</b> : le boîtier envoie son identité dans cette fenêtre. <span id="io-add-appaire-note"></span></li>
+            <li>Pendant que le volet fait son va-et-vient, clique <b>Appairer</b> : le boîtier capte le 0x30 de ta télécommande puis insère sa propre identité dans cette fenêtre. <span id="io-add-appaire-note"></span></li>
           </ol>
-          <div class="row"><button id="io-add-pair" class="btn primary">Appairer</button></div>
+          <div class="row"><button id="io-add-pair" class="btn primary" disabled>Appairer</button></div>
           <p class="statline" id="io-add-status" hidden></p>
           <div id="io-add-finish" hidden>
             <h3>3. Tester</h3>
@@ -453,20 +457,8 @@
         </div>
         <div class="card" id="capture-root"></div>
         <div class="card">
-          <h2>io-homecontrol (Somfy io / Velux), expérimental</h2>
-          <p class="sub">Capture une commande normale (0x00) de la télécommande io pour apprendre sa cible et sa charge utile, puis appaire la carte ou reprends son identité. La position est estimée par les temps de course ; les appuis sur la télécommande io d'origine ne sont pas suivis.</p>
-          <form id="io-pair-form">
-            <div class="field"><label for="io-pair-up">Trame MONTER captée (0x00, hexa)</label><input id="io-pair-up" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
-            <div class="field"><label for="io-pair-stop">Trame STOP captée (0x00, hexa)</label><input id="io-pair-stop" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
-            <div class="field"><label for="io-pair-down">Trame DESCENDRE captée (0x00, hexa)</label><input id="io-pair-down" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
-            <div class="field"><label for="io-pair-enroll">Trame d'ENRÔLEMENT captée (0x30, pendant le PROG de la télécommande)</label><input id="io-pair-enroll" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
-            <div class="field"><label for="io-pair-index">Index d'identité</label><input id="io-pair-index" type="number" min="0" max="4294967295" step="1" value="0" required></div>
-            <div class="field"><label for="io-pair-mode">Action</label><select id="io-pair-mode"><option value="1">Appairer une nouvelle identité</option><option value="0">Reprendre une identité déjà appairée, sans émettre</option></select></div>
-            <div class="field"><label for="io-pair-rolling">Prochain compteur (obligatoire pour la reprise)</label><input id="io-pair-rolling" type="number" min="0" max="65535" step="1"></div>
-            <p class="hint">Pour le profil, prends une capture de montée, descente ou stop. L'appairage envoie une seule rafale de transfert de clé : mets d'abord le moteur en apprentissage (Velux : appui long sur RESET de la télécommande d'origine, jusqu'au va-et-vient). La reprise demande la même carte et le même index, avec un compteur supérieur au dernier utilisé.</p>
-            <button class="btn primary" type="submit">Appliquer l'identité io</button>
-            <p id="io-pair-status" class="hint" role="status"></p>
-          </form>
+          <h2>io-homecontrol (Somfy io / Velux) : diagnostic</h2>
+          <p class="sub">L'appairage d'un volet io se fait dans <a href="#remotes/add">Ajouter un appareil</a> (écran guidé : capture des commandes de ta télécommande, puis enrôlement). Ici, seulement les outils d'écoute et de maintenance io. La position est estimée par les temps de course ; les appuis sur la télécommande io d'origine ne sont pas suivis.</p>
           <div class="row"><button id="io-listen-btn" class="btn" type="button">Écoute io permanente : OFF</button></div>
           <p class="hint" id="io-listen-status"></p>
           <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">

@@ -51,7 +51,11 @@ void radio_set_listening(bool on);     /* interrupteur MAITRE : l'ecoute permane
  * passent la radio en FSK io sous mutex, puis restaurent l'OOK et la porteuse. ── */
 void radio_set_io_listening(bool on);  /* ecoute permanente io : journalise chaque trame captee */
 bool radio_is_io_listening(void);
-int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms);  /* ecoute UNE trame io (FSK) */
+/* Ce qu'une capture attend : une commande 0x00 (geste 1) ou le 0x30 d'enrolement (geste 2, PROG). La
+ * validite est jugee par la meme fonction que l'enrolement (io_profile_from_capture / io_enroll_from_capture),
+ * source unique du controle. */
+typedef enum { IO_SNIFF_CMD = 0, IO_SNIFF_ENROLL = 1 } io_sniff_kind_t;
+int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms, io_sniff_kind_t kind);  /* ecoute UNE trame io (FSK) du type demande */
 int  radio_io_send(const uint8_t src[3], io_action_t action, uint32_t freq_khz);  /* emet UNE action io 1W (rejeu verbatim) ; freq_khz != 0 = porteuse PAR APPAREIL (offset carte en plus) */
 int  radio_io_erase(void);   /* purge sous le meme mutex que les compteurs TX */
 /* tx=false : adoption persistante, aucun acces radio, rolling obligatoire. */

@@ -1506,6 +1506,25 @@ int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
     return 0;
 }
 
+/* Edition PAR APPAREIL du profil io capte (panneau avance : voir ET modifier les releves). On repart de
+ * la cle deja persistee (jamais reecrite) et du compteur courant ; seul le profil (cibles, charges utiles,
+ * basse conso, fabricant, statut) est remplace par les valeurs editees. L'appelant a deja valide/parse le
+ * hexa. Rend 0, -1 si volet introuvable/non io, -2 si pas de cle (volet pas encore appaire). */
+int shutters_set_io_profile(const char *id, const io_profile_t *p) {
+    if (!p) return -1;
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v || v->proto != VOLET_PROTO_IO) { UNLOCK(); return -1; }
+    uint32_t serial = v->virt_serial;
+    UNLOCK();
+    uint8_t src3[3] = { (uint8_t)(serial >> 16), (uint8_t)(serial >> 8), (uint8_t)serial };
+    uint8_t key[16];
+    if (!io_store_get_key(src3, key)) return -2;         /* pas encore appaire : rien a editer */
+    bool ok = io_store_set(src3, key, p, -1);            /* -1 = garder le compteur courant ; io_store valide */
+    memset(key, 0, sizeof key);
+    return ok ? 0 : -1;
+}
+
 /* Renomme un volet : change son id ET met a jour toutes les references (membres de centrale, suiveurs
  * de zone). L'id sert d'identifiant partout, dont le slug MQTT/Home Assistant : on retire l'ancienne
  * entite HA (ancien slug) et on publie la nouvelle. Cote HA, une NOUVELLE entite apparait, l'ancienne
@@ -1851,6 +1870,8 @@ char *shutters_status_json(void) {
                     cJSON_AddStringToObject(o, "io_low_power", hx);     /* basse conso captee (solaire vs secteur) */
                     snprintf(hx, sizeof hx, "0x%02X", iop.man_id);
                     cJSON_AddStringToObject(o, "io_man_id", hx);        /* fabricant capte du 0x30 */
+                    snprintf(hx, sizeof hx, "0x%02X", iop.pair_status);
+                    cJSON_AddStringToObject(o, "io_pair_status", hx);   /* statut d'enrolement capte du 0x30 */
                     /* Marque DEDUITE du man_id capte, seulement si aucune n'est stockee (sinon doublon de cle "marque"). */
                     const char *mq = !v->marque[0] ? io_man_name(iop.man_id) : NULL;
                     if (mq) cJSON_AddStringToObject(o, "marque", mq);   /* resout le profil io (Somfy/Velux) a l'edition */
