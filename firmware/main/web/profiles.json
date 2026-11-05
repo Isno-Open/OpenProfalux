@@ -80,16 +80,16 @@
       "mecanisme": "enrolement", "modulation": "2-FSK", "code": "roulant", "band": "868",
       "flow": "pair-io", "endpoint": "/api/io/pair/1w",
       "freq_khz": 868950,
-      "io": { "learn": "Sur une Somfy io : appui ~3 s sur PROG d'une télécommande déjà appairée, jusqu'au va-et-vient (le moteur reste ~2 min en programmation).", "appaire_note": "Fenêtre Somfy courte : clique Appairer juste après le va-et-vient." },
-      "note": "io-homecontrol 1W, ENROLEMENT (pas de clone de touches : les commandes io sont standard). man_id 0x02 (Somfy), CAPTE du 0x30. On s'insere via NOTRE 0x30 pendant la fenetre d'apprentissage, vers la dest d'enrolement CAPTEE. Appairage par CAPTURE : 3 commandes 0x00 (monter/stop/descendre) rejouees verbatim + le 0x30 du PROG ; rien en dur sauf le marqueur de marque. Somfy io en validation bout-en-bout sur moteur reel (Velux valide, @vodhash PR #118)."
+      "io": { "learn": "Sur une Somfy io : appui ~3 s sur PROG d'une télécommande déjà appairée, jusqu'au va-et-vient (le moteur reste ~2 min en programmation).", "appaire_note": "Fenêtre Somfy courte : clique Appairer juste après le va-et-vient.", "cmd": { "up": [[2, "0x00"], [5, "0xD3"]], "stop": [[2, "0xD2"], [5, "0xD2"]], "down": [[2, "0xC8"], [5, "0xD3"]] } },
+      "note": "io-homecontrol 1W, ENROLEMENT (pas de clone de touches : les commandes io sont standard). man_id 0x02 (Somfy), CAPTE du 0x30. On s'insere via NOTRE 0x30 pendant la fenetre d'apprentissage, vers la dest d'enrolement CAPTEE. 3 gestes : capter la telecommande (1 commande 0x00 -> cible, gabarit, basse conso, freq du VOLET), capter le PROG (0x30 -> enroll_target + man_id + f1 + statut), appairer. Les codes bouton montee/stop/descente (octets [2]/[5]) sont DECLARES ici (cmd), pas en dur dans le code, surchargeables par volet dans l'avance. Somfy io en validation bout-en-bout sur moteur reel (Velux valide, @vodhash PR #118)."
     },
     {
       "type": "volet", "marque": "Velux", "nom": "Volet Velux io (868 MHz)",
       "mecanisme": "enrolement", "modulation": "2-FSK", "code": "roulant", "band": "868",
       "flow": "pair-io", "endpoint": "/api/io/pair/1w",
       "freq_khz": 868950,
-      "io": { "learn": "Sur une Velux io : appui long (~10 s) sur RESET, jusqu'au va-et-vient du volet." },
-      "note": "io-homecontrol 1W, ENROLEMENT. man_id 0x01 (Velux), CAPTE du 0x30. Appairage par CAPTURE : 3 commandes 0x00 + le 0x30 du PROG, tout deduit des trames. Valide sur Velux io solaire par @vodhash (PR #118)."
+      "io": { "learn": "Sur une Velux io : appui long (~10 s) sur RESET, jusqu'au va-et-vient du volet.", "cmd": { "up": [[2, "0x00"]], "stop": [[2, "0xD2"]], "down": [[2, "0xC8"]] } },
+      "note": "io-homecontrol 1W, ENROLEMENT. man_id 0x01 (Velux), CAPTE du 0x30. 3 gestes : capter la telecommande (1 commande 0x00 -> cible, gabarit, basse conso, freq), capter le PROG (0x30), appairer. Codes bouton DECLARES ici (cmd) : Velux ne change que [2], ses [5] sont a 0. Valide sur Velux io solaire par @vodhash (PR #118)."
     }
   ]
 }

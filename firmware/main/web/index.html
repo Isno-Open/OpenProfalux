@@ -238,26 +238,23 @@
           <p class="hint"><a href="#remotes/add">← Ajouter un appareil</a></p>
           <h2 id="io-add-title">Ajouter un volet io</h2>
           <p class="sub">Enrôlement io 1W : c'est <b>ta télécommande d'origine</b> qui autorise, le boîtier s'insère. Ta télécommande continue de fonctionner après.</p>
-          <h3>1. Capturer les 3 commandes</h3>
-          <p class="sub">Pour chaque bouton ci-dessous, clique puis appuie <b>une fois</b> sur le bouton correspondant de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> du volet, sa destination et son contenu ; il les rejouera avec sa propre identité. Les trois sont captées (rien n'est deviné) : montée, stop et descente. Rien de capté = calage de fréquence à revoir dans <a href="#sys/device">Système</a> (« Caler sur ma télécommande » / décalage io).</p>
-          <div class="row" style="gap:8px;flex-wrap:wrap">
-            <button id="io-cap-up" class="btn">📡 Montée</button>
-            <button id="io-cap-stop" class="btn">📡 Stop</button>
-            <button id="io-cap-down" class="btn">📡 Descente</button>
-          </div>
+          <h3>1. Capter la télécommande</h3>
+          <p class="sub">Clique, puis appuie <b>une fois</b> sur un bouton (montée, stop ou descente) de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> de ton volet : sa destination, sa fréquence et son gabarit. Les codes montée/stop/descente viennent du profil de la marque ; ils sont ajustables dans les réglages avancés si ton moteur diffère. Rien de capté = calage de fréquence à revoir dans <a href="#sys/device">Système</a> (« Caler sur ma télécommande » / décalage io).</p>
+          <div class="row"><button id="io-cap-cmd" class="btn">📡 Capter la télécommande</button></div>
           <p class="statline" id="io-cap-stat" hidden></p>
-          <h3>2. Enrôler le boîtier</h3>
-          <ol class="sub" style="padding-left:1.2em">
-            <li><b>Mets ta télécommande d'origine en apprentissage.</b> <span id="io-add-learn"></span></li>
-            <li>Pendant que le volet fait son va-et-vient, clique <b>Appairer</b> : le boîtier capte le 0x30 de ta télécommande puis insère sa propre identité dans cette fenêtre. <span id="io-add-appaire-note"></span></li>
-          </ol>
+          <h3>2. Capter l'enrôlement (PROG)</h3>
+          <p class="sub"><b>Clique d'abord « Capter le PROG »</b> : le boîtier commence à écouter. <b>Ensuite seulement</b>, mets ta télécommande d'origine en apprentissage (PROG) pendant qu'il écoute. <span id="io-add-learn"></span> C'est au moment du PROG que la télécommande émet sa trame d'enrôlement (0x30) ; il faut donc écouter <b>avant</b> de la presser, sinon elle passe sans être captée.</p>
+          <div class="row"><button id="io-cap-prog" class="btn" disabled>📡 Capter le PROG</button></div>
+          <p class="statline" id="io-cap-prog-stat" hidden></p>
+          <h3>3. Appairer</h3>
+          <p class="sub">Garde ta télécommande en apprentissage, puis clique <b>Appairer</b> : le boîtier insère sa propre identité dans cette fenêtre. <span id="io-add-appaire-note"></span></p>
           <div class="row"><button id="io-add-pair" class="btn primary" disabled>Appairer</button></div>
           <p class="statline" id="io-add-status" hidden></p>
           <div id="io-add-finish" hidden>
-            <h3>3. Tester</h3>
+            <h3>4. Tester</h3>
             <p class="sub">Le moteur peut mettre un instant à répondre. Ces boutons pilotent le volet que tu viens d'appairer.</p>
             <div class="dpad enrol-pad"><button id="io-up">▲</button><button id="io-stop">■</button><button id="io-down">▼</button></div>
-            <h3>4. Nommer le volet</h3>
+            <h3>5. Nommer le volet</h3>
             <p class="sub">Il est déjà dans l'onglet <b>Volets</b>. Donne-lui un nom pour le retrouver (Home Assistant inclus).</p>
             <div class="field"><div class="row" style="flex-wrap:nowrap">
               <input id="io-volet-name" placeholder="Nom du volet (ex : Chambre)" style="flex:1;min-width:0" maxlength="23">

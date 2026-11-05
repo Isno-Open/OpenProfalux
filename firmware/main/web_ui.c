@@ -1671,14 +1671,17 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
     return httpd_resp_sendstr(r, out);
 }
-/* Appairage io 1W, TOUT capte (rien en dur sauf le marqueur de marque, qui est lui-meme capte du
- * 0x30). Corps JSON :
+/* Appairage io 1W, 3 gestes. UNE capture commande + l'overlay DECLARE de la marque + le 0x30 du PROG ;
+ * rien en dur dans le code (les codes d'action vivent dans profiles.json). Corps JSON :
  *   { "index":N, "tx":0|1, "rolling":N,
- *     "up":"<hex 0x00 monter>", "stop":"<hex 0x00 stop>", "down":"<hex 0x00 descendre>",
+ *     "cmd":"<hex 0x00 d'un bouton quelconque>",
+ *     "overlay":{ "up":[[2,"0x00"],[5,"0xD3"]], "stop":[[2,"0xD2"],[5,"0xD2"]], "down":[[2,"0xC8"],[5,"0xD3"]] },
  *     "enroll":"<hex 0x30 capte pendant le PROG de la vraie telecommande>" }
- * Les trois 0x00 donnent cmd_target + payload par action + basse conso ; le 0x30 donne enroll_target +
- * man_id + basse conso + statut. tx=0 : adoption sans emission (apres reflash/effacement NVS), rolling
- * obligatoire. La porteuse est geree par appareil (volet_t.freq_khz), hors de ce profil. */
+ * La commande 0x00 donne cmd_target + le gabarit de charge utile + basse conso (variable de l'appareil) ;
+ * l'overlay (lu de profiles.json par le navigateur, declare par marque) pose les octets d'action sur le
+ * gabarit pour former monter/stop/descendre ; le 0x30 donne enroll_target + man_id + basse conso + statut.
+ * tx=0 : adoption sans emission (apres reflash/effacement NVS), rolling obligatoire. La porteuse est geree
+ * par appareil (volet_t.freq_khz), hors de ce profil. */
 static int hex_to_frame(const char *hex, uint8_t *frame, int max) {
     if (!hex) return -1;
     size_t len = strlen(hex);
@@ -1703,18 +1706,42 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     bool tx = !txj || txj->valuedouble == 1;
     if (!tx && !roll) valid = false;   /* tx=0 (reprise sans emission) exige rolling */
 
-    /* Quatre captures : une 0x00 par action + le 0x30 d'enrolement. Rien n'est suppose, tout est lu. */
+    /* Geste 1 : UNE capture commande (0x00) -> gabarit + cmd_target + low_power (le variable de CET
+     * appareil). Les 3 ordres se DERIVENT en posant les octets d'action (bouton [2], fin [5]...) depuis
+     * l'overlay DECLARE de la marque (profiles.json, lu par le navigateur, pas en dur dans le code).
+     * Geste 2 : le 0x30 du PROG -> enroll_target + man_id + f[1] + statut. Rien d'invente : le gabarit et
+     * les cibles sont captes de l'appareil, les codes d'action sont declares par marque. */
     uint8_t frame[32];
     io_profile_t profile;
     memset(&profile, 0, sizeof profile);
-    const struct { const char *hex; io_action_t action; } caps[3] = {
-        { jstr(j, "up"),   IO_ACTION_UP },
-        { jstr(j, "stop"), IO_ACTION_STOP },
-        { jstr(j, "down"), IO_ACTION_DOWN } };
     bool profok = valid;
-    for (int i = 0; profok && i < 3; i++) {
-        int n = hex_to_frame(caps[i].hex, frame, sizeof frame);
-        profok = n > 0 && io_profile_from_capture(frame, n, &profile, caps[i].action) == 0;
+    int clen = hex_to_frame(jstr(j, "cmd"), frame, sizeof frame);
+    /* gabarit range dans le slot UP ; remplit cmd_target + low_power + payload[UP] */
+    if (!(clen > 0 && io_profile_from_capture(frame, clen, &profile, IO_ACTION_UP) == 0)) profok = false;
+    if (profok) {
+        uint8_t tlen = profile.payload_len[IO_ACTION_UP];
+        memcpy(profile.payload[IO_ACTION_STOP], profile.payload[IO_ACTION_UP], tlen);
+        memcpy(profile.payload[IO_ACTION_DOWN], profile.payload[IO_ACTION_UP], tlen);
+        profile.payload_len[IO_ACTION_STOP] = tlen;
+        profile.payload_len[IO_ACTION_DOWN] = tlen;
+        /* overlay de la marque : pour chaque action, liste de [offset, "0xHH"] posee sur le gabarit */
+        cJSON *ov = cJSON_GetObjectItem(j, "overlay");
+        static const struct { const char *k; io_action_t a; } ovk[IO_ACTION_COUNT] = {
+            { "up", IO_ACTION_UP }, { "stop", IO_ACTION_STOP }, { "down", IO_ACTION_DOWN } };
+        for (int i = 0; profok && i < IO_ACTION_COUNT; i++) {
+            cJSON *acts = ov ? cJSON_GetObjectItem(ov, ovk[i].k) : NULL;
+            if (!cJSON_IsArray(acts)) { profok = false; break; }   /* overlay obligatoire : sinon on devinerait */
+            cJSON *pair;
+            cJSON_ArrayForEach(pair, acts) {
+                cJSON *po = cJSON_IsArray(pair) ? cJSON_GetArrayItem(pair, 0) : NULL;
+                cJSON *pv = cJSON_IsArray(pair) ? cJSON_GetArrayItem(pair, 1) : NULL;
+                uint8_t vb;
+                if (!cJSON_IsNumber(po) || !cJSON_IsString(pv) || hex_bytes(pv->valuestring, &vb, 1) != 1) { profok = false; break; }
+                int off = (int)po->valuedouble;
+                if (off < 0 || off >= tlen) { profok = false; break; }
+                profile.payload[ovk[i].a][off] = vb;
+            }
+        }
     }
     if (profok) {
         int n = hex_to_frame(jstr(j, "enroll"), frame, sizeof frame);
@@ -1722,7 +1749,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     }
     if (!profok) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "il faut les 3 trames 0x00 (up/stop/down) + le 0x30 d'enrolement valides ; tx=0 exige rolling");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "il faut la trame 0x00 (commande) + l'overlay de la marque + le 0x30 d'enrolement valides ; tx=0 exige rolling");
     }
     uint8_t src[3], key[16];
     bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
