@@ -58,6 +58,8 @@ constexpr uint8_t OFFSET_DEST_NODE = 2;
 constexpr uint8_t OFFSET_SRC_NODE = 5;
 constexpr uint8_t OFFSET_COMMAND_ID = 8;
 constexpr uint8_t OFFSET_DATA = 9;
+constexpr uint8_t OFFSET_PAIR_MAN_ID = 25;   // trame 0x30 : octet fabricant (capte)
+constexpr uint8_t OFFSET_PAIR_STATUS = 26;   // trame 0x30 : octet de statut d'appairage (capte)
 
 // Control Byte 0 Masks
 constexpr uint8_t CTRL0_ORDER_MASK = 0xC0;      // bits 7-6 : debut (0x40) + fin (0x80) de message
@@ -181,14 +183,8 @@ constexpr uint8_t CMD_SET_MODE = 0x01;          // "Activate mode"
 constexpr uint8_t MANUFACTURER_SOMFY = 0x43;   // octet fabricant d'une commande 0x00
 constexpr uint8_t MANUFACTURER_VELUX = 0x61;
 
-// 1er octet de la charge utile d'une commande 0x00 : l'ORIGINE, pas une marque.
-// Observe a 0x01 sur les 8 commandes captees chez Pascal.
-constexpr uint8_t BUTTON_ORIGIN = 0x01;
-
-// Code bouton (1 octet, 3e octet de la charge utile), mesure chez samr037 (tx_runner.h).
-constexpr uint8_t BTN_UP   = 0x00;              // monter
-constexpr uint8_t BTN_DOWN = 0xC8;              // descendre
-constexpr uint8_t BTN_STOP = 0xD2;              // stop
+// L'origine, le fabricant et le code bouton d'une commande 0x00 ne sont PAS des constantes :
+// ils sont CAPTES de la vraie telecommande, une capture 0x00 par action (voir io_pair.cpp).
 
 // Bootloader Commands (0xE0-0xE1)
 constexpr uint8_t CMD_BOOTLOADER_START = 0xE0;
@@ -228,10 +224,9 @@ enum class DeviceType : uint8_t {
 // Broadcast Addresses
 // ============================================================================
 
-constexpr uint8_t BROADCAST_ADDRESS[NODE_ID_SIZE] = {0x00, 0x00, 0x00};
-
-// Adresse de diffusion Somfy en 1W : une telecommande emet vers 00 00 3F, le moteur
-// filtre par la source qu'il a appairee (samr037 tx_runner.c BROADCAST_DST).
-constexpr uint8_t SOMFY_BROADCAST_ADDR[NODE_ID_SIZE] = {0x00, 0x00, 0x3F};
+// Les adresses de diffusion ne sont PAS codees ici : elles sont CAPTEES des trames de la vraie
+// telecommande (dest de commande dans le 0x00, dest d'enrolement dans le 0x30). Une dest en dur
+// melangeait les marques : Velux emet commande ET enrolement vers 00 00 3F, mais Somfy emet ses
+// commandes vers 00 01 BF et son enrolement vers 00 00 3F. Voir io_pair.cpp.
 
 } // namespace iohome

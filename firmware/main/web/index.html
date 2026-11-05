@@ -456,9 +456,11 @@
           <h2>io-homecontrol (Somfy io / Velux), expérimental</h2>
           <p class="sub">Capture une commande normale (0x00) de la télécommande io pour apprendre sa cible et sa charge utile, puis appaire la carte ou reprends son identité. La position est estimée par les temps de course ; les appuis sur la télécommande io d'origine ne sont pas suivis.</p>
           <form id="io-pair-form">
-            <div class="field"><label for="io-pair-frame">Trame de commande captée (hexa, CRC compris)</label><input id="io-pair-frame" required pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
+            <div class="field"><label for="io-pair-up">Trame MONTER captée (0x00, hexa)</label><input id="io-pair-up" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
+            <div class="field"><label for="io-pair-stop">Trame STOP captée (0x00, hexa)</label><input id="io-pair-stop" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
+            <div class="field"><label for="io-pair-down">Trame DESCENDRE captée (0x00, hexa)</label><input id="io-pair-down" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
+            <div class="field"><label for="io-pair-enroll">Trame d'ENRÔLEMENT captée (0x30, pendant le PROG de la télécommande)</label><input id="io-pair-enroll" pattern="[0-9A-Fa-f]{44,64}" maxlength="64" autocomplete="off"></div>
             <div class="field"><label for="io-pair-index">Index d'identité</label><input id="io-pair-index" type="number" min="0" max="4294967295" step="1" value="0" required></div>
-            <div class="field"><label for="io-pair-man">Code fabricant (1 pour Velux, 2 pour Somfy)</label><input id="io-pair-man" type="number" min="0" max="255" step="1" value="1" required></div>
             <div class="field"><label for="io-pair-mode">Action</label><select id="io-pair-mode"><option value="1">Appairer une nouvelle identité</option><option value="0">Reprendre une identité déjà appairée, sans émettre</option></select></div>
             <div class="field"><label for="io-pair-rolling">Prochain compteur (obligatoire pour la reprise)</label><input id="io-pair-rolling" type="number" min="0" max="65535" step="1"></div>
             <p class="hint">Pour le profil, prends une capture de montée, descente ou stop. L'appairage envoie une seule rafale de transfert de clé : mets d'abord le moteur en apprentissage (Velux : appui long sur RESET de la télécommande d'origine, jusqu'au va-et-vient). La reprise demande la même carte et le même index, avec un compteur supérieur au dernier utilisé.</p>

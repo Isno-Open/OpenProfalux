@@ -13,18 +13,29 @@ extern "C" {
 
 /* Rend true et remplit key si une cle est enregistree pour cette source. */
 bool io_store_get_key(const uint8_t src[3], uint8_t key[16]);
-/* Profil d'emission d'un volet io, appris d'une trame captee de sa VRAIE telecommande. La charge
- * utile d'une commande io (origin, fabricant, bouton, puis une signature propre au type d'appareil)
- * et sa cible (broadcast encodant le type) dependent de l'appareil. On capture la charge utile
- * REELLE telle qu'elle passe sur l'air, longueur comprise (6 octets pour une "p0x00_14", 8 pour une
- * "p0x00_16"), et on la rejoue a l'identique en ne changeant que l'octet du bouton (position 2), la
- * source, le code roulant et le HMAC (signes avec NOTRE cle). Lire a offsets fixes cassait sur une
- * trame de 6 octets, ou frame[15]/frame[16] sont deja le code roulant, pas la charge utile. */
+/* Une action de volet : trois captures 0x00, une par touche de la vraie telecommande. */
+typedef enum { IO_ACTION_UP = 0, IO_ACTION_STOP = 1, IO_ACTION_DOWN = 2, IO_ACTION_COUNT = 3 } io_action_t;
+
+/* Profil d'un volet io, TOUT appris des trames captees de sa VRAIE telecommande, rien suppose :
+ *  - cmd_target    : destination des commandes, captee du 0x00 (Somfy 00 01 BF, Velux 00 00 3F) ;
+ *  - enroll_target : destination d'enrolement, captee du 0x30 (00 00 3F observe) ;
+ *  - payload[a]    : charge utile reelle de chaque action, rejouee VERBATIM (aucune reecriture) ;
+ *  - low_power     : octet de controle 1 capte (la DESTINATION est basse conso : solaire vs secteur),
+ *                    appris une fois, sert a l'enrolement ET aux commandes ;
+ *  - man_id        : fabricant capte du 0x30 (seule valeur de marque ; 0x02 Somfy, 0x01 Velux) ;
+ *  - pair_status   : octet de statut capte du 0x30.
+ * La porteuse n'est PAS ici : elle vit par appareil (volet_t.freq_khz), mesuree a la capture et
+ * ajustable, comme la porteuse Profalux (une config, un seul endroit). Un ancien profil (struct plus
+ * petit) est rejete par io_store_get_profile (taille differente) et traite comme a re-appairer. */
 #define IO_PROFILE_PAYLOAD_MAX 21   /* = iohome::FRAME_MAX_DATA_SIZE, repris ici pour rester en C */
 typedef struct {
-    uint8_t target[3];                        /* destination de la vraie trame (broadcast type-dependant) */
-    uint8_t payload[IO_PROFILE_PAYLOAD_MAX];  /* charge utile reelle captee, rejouee telle quelle */
-    uint8_t payload_len;                      /* longueur reelle de la charge utile */
+    uint8_t cmd_target[3];                                     /* dest commande, captee du 0x00 */
+    uint8_t enroll_target[3];                                  /* dest enrolement, captee du 0x30 */
+    uint8_t payload[IO_ACTION_COUNT][IO_PROFILE_PAYLOAD_MAX];  /* charge reelle PAR action, captee */
+    uint8_t payload_len[IO_ACTION_COUNT];                      /* longueur reelle par action */
+    uint8_t low_power;                                         /* f[1] capte (basse conso destination) */
+    uint8_t man_id;                                            /* fabricant capte du 0x30 */
+    uint8_t pair_status;                                       /* f[26] du 0x30 capte */
 } io_profile_t;
 
 /* Ecrit cle, profil et prochain compteur. -1 conserve le compteur (defaut 1).

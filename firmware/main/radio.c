@@ -226,7 +226,7 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
         int64_t left_us = end - esp_timer_get_time();
         if (left_us <= 0) break;
         int k = io_radio_rx_packet(buf, (size_t)max, (uint32_t)(left_us / 1000));
-        if (k > 0 && io_profile_from_capture(buf, k, &probe) == 0) { n = k; break; }  /* commande 0x00 valide */
+        if (k > 0 && io_profile_from_capture(buf, k, &probe, IO_ACTION_UP) == 0) { n = k; break; }  /* 0x00 valide ; probe jete, l'action ne sert qu'a remplir un slot ici inutilise */
         /* balise 0x20, CRC KO ou trame tronquee : on continue d'ecouter dans le temps restant */
     }
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
@@ -236,7 +236,7 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
     return n;
 }
 
-int radio_io_send(const uint8_t src[3], uint8_t button, uint32_t freq_khz) {
+int radio_io_send(const uint8_t src[3], io_action_t action, uint32_t freq_khz) {
     if (!s_mtx || !src) return -1;
     uint8_t key[16];
     bool was = s_paused; s_paused = true;
@@ -244,7 +244,7 @@ int radio_io_send(const uint8_t src[3], uint8_t button, uint32_t freq_khz) {
     uint32_t back = cc1101_get_freq_khz();
     io_radio_config();
     if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* porteuse par appareil ; 0 = CH2 868950 par defaut */
-    int r = io_store_get_key(src, key) ? io_hc_send_shutter_1w(src, key, button) : -1;
+    int r = io_store_get_key(src, key) ? io_hc_send_shutter_1w(src, key, action) : -1;
     cc1101_apply_config_ook();
     cc1101_set_freq_khz(back);
     xSemaphoreGive(s_mtx);
@@ -261,7 +261,7 @@ int radio_io_erase(void) {
 }
 
 int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
-                    uint8_t man_id, bool tx, int rolling) {
+                    bool tx, int rolling) {
     if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     int r = io_store_set(src, key, profile, rolling) ? 0 : -1;
@@ -269,7 +269,7 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         bool was = s_paused; s_paused = true;
         uint32_t back = cc1101_get_freq_khz();
         io_radio_config();
-        r = io_hc_pair_1w(profile, src, key, man_id);
+        r = io_hc_pair_1w(profile, src, key);
         cc1101_apply_config_ook();
         cc1101_set_freq_khz(back);
         s_paused = was;

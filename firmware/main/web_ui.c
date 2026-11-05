@@ -1618,49 +1618,65 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\"}", n, hex);
     return httpd_resp_sendstr(r, out);
 }
-/* profile=1 uniquement : 0x30 simple. tx=0 adopte sans emission, rolling obligatoire. */
+/* Appairage io 1W, TOUT capte (rien en dur sauf le marqueur de marque, qui est lui-meme capte du
+ * 0x30). Corps JSON :
+ *   { "index":N, "tx":0|1, "rolling":N,
+ *     "up":"<hex 0x00 monter>", "stop":"<hex 0x00 stop>", "down":"<hex 0x00 descendre>",
+ *     "enroll":"<hex 0x30 capte pendant le PROG de la vraie telecommande>" }
+ * Les trois 0x00 donnent cmd_target + payload par action + basse conso ; le 0x30 donne enroll_target +
+ * man_id + basse conso + statut. tx=0 : adoption sans emission (apres reflash/effacement NVS), rolling
+ * obligatoire. La porteuse est geree par appareil (volet_t.freq_khz), hors de ce profil. */
+static int hex_to_frame(const char *hex, uint8_t *frame, int max) {
+    if (!hex) return -1;
+    size_t len = strlen(hex);
+    if (len < 44 || len % 2 != 0 || (int)(len / 2) > max) return -1;   /* >= 22 octets */
+    for (size_t i = 0; i < len; i++) if (!isxdigit((unsigned char)hex[i])) return -1;
+    for (size_t i = 0; i < len / 2; i++) {
+        unsigned b;
+        if (sscanf(hex + 2 * i, "%2x", &b) != 1) return -1;
+        frame[i] = (uint8_t)b;
+    }
+    return (int)(len / 2);
+}
+
 static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     char *body = read_body(r);
     if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!cJSON_IsObject(j)) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "objet json attendu"); }
-    cJSON *idx = cJSON_GetObjectItem(j, "index"), *man = cJSON_GetObjectItem(j, "man_id");
-    cJSON *mode = cJSON_GetObjectItem(j, "profile"), *txj = cJSON_GetObjectItem(j, "tx");
+    cJSON *idx = cJSON_GetObjectItem(j, "index"), *txj = cJSON_GetObjectItem(j, "tx");
     cJSON *roll = cJSON_GetObjectItem(j, "rolling");
-    bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(man, 0, 255) &&
-                 json_integer(mode, 1, 1) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
+    bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
     bool tx = !txj || txj->valuedouble == 1;
-    uint8_t man_id = man ? (uint8_t)man->valuedouble : 2;
-    const char *hex = jstr(j, "frame");
-    size_t len = hex ? strlen(hex) : 0;
+    if (!tx && !roll) valid = false;   /* tx=0 (reprise sans emission) exige rolling */
+
+    /* Quatre captures : une 0x00 par action + le 0x30 d'enrolement. Rien n'est suppose, tout est lu. */
     uint8_t frame[32];
     io_profile_t profile;
-    bool profok;
-    if (len == 0) {
-        /* Pyramide : pas de trame fournie -> on SYNTHETISE le profil de commande du volet depuis la
-         * marque (man_id -> fabricant). Appairage io en 2 temps, SANS capture utilisateur. */
-        profok = valid && (tx || roll) && io_profile_synth(man_id, &profile) == 0;
-    } else {
-        /* Chemin capture (compat, robuste) : trame 0x00 reelle de la telecommande d'origine. */
-        valid = valid && len >= 44 && len <= 2 * sizeof frame && len % 2 == 0 && (tx || roll);
-        for (size_t i = 0; valid && i < len; i++) valid = isxdigit((unsigned char)hex[i]) != 0;
-        for (size_t i = 0; valid && i < len / 2; i++) {
-            unsigned b;
-            if (sscanf(hex + 2 * i, "%2x", &b) != 1) valid = false;
-            else frame[i] = (uint8_t)b;
-        }
-        profok = valid && io_profile_from_capture(frame, (int)(len / 2), &profile) == 0;
+    memset(&profile, 0, sizeof profile);
+    const struct { const char *hex; io_action_t action; } caps[3] = {
+        { jstr(j, "up"),   IO_ACTION_UP },
+        { jstr(j, "stop"), IO_ACTION_STOP },
+        { jstr(j, "down"), IO_ACTION_DOWN } };
+    bool profok = valid;
+    for (int i = 0; profok && i < 3; i++) {
+        int n = hex_to_frame(caps[i].hex, frame, sizeof frame);
+        profok = n > 0 && io_profile_from_capture(frame, n, &profile, caps[i].action) == 0;
+    }
+    if (profok) {
+        int n = hex_to_frame(jstr(j, "enroll"), frame, sizeof frame);
+        profok = n > 0 && io_enroll_from_capture(frame, n, &profile) == 0;
     }
     if (!profok) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "marque io inconnue, trame 0x00 invalide, ou champs (tx=0 exige rolling)");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "il faut les 3 trames 0x00 (up/stop/down) + le 0x30 d'enrolement valides ; tx=0 exige rolling");
     }
     uint8_t src[3], key[16];
     bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
     int rolling = roll ? (int)roll->valuedouble : -1;
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
-    int rc = radio_io_enroll(&profile, src, key, man_id, tx, rolling);
+    int rc = radio_io_enroll(&profile, src, key, tx, rolling);
     memset(key, 0, sizeof key);
     if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
     char id[SH_ID_LEN];
@@ -1668,7 +1684,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     uint32_t serial = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
     if (shutters_create_io_volet(id, serial) != 0)
         return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite enregistree mais volet non cree");
-    ESP_LOGW(TAG, "io : identite %s %s (man_id 0x%02X)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", man_id);
+    ESP_LOGW(TAG, "io : identite %s %s (man_id 0x%02X)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
     char out[80];
     snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d}", id, tx ? 1 : 0);
     httpd_resp_set_type(r, "application/json");

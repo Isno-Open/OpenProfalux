@@ -1605,8 +1605,9 @@ if ($('#io-pair-form')) $('#io-pair-form').onsubmit = async e => {
   e.preventDefault();
   if (radioBusy) return;
   const st = $('#io-pair-status'), btn = e.target.querySelector('button[type="submit"]');
-  const body = { frame: $('#io-pair-frame').value.trim(), index: Number($('#io-pair-index').value),
-    man_id: Number($('#io-pair-man').value), profile: 1, tx: Number($('#io-pair-mode').value) };
+  const body = { up: $('#io-pair-up').value.trim(), stop: $('#io-pair-stop').value.trim(),
+    down: $('#io-pair-down').value.trim(), enroll: $('#io-pair-enroll').value.trim(),
+    index: Number($('#io-pair-index').value), tx: Number($('#io-pair-mode').value) };
   const rolling = $('#io-pair-rolling').value;
   if (!body.tx && rolling === '') { st.textContent = 'Indique le prochain compteur non utilisé.'; return; }
   if (rolling !== '') body.rolling = Number(rolling);

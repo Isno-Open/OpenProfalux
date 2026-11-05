@@ -17,10 +17,10 @@ using namespace iohome::frame;
  * vers la destination dst, et l'emet. Le code roulant vient du compteur par-source de io_store
  * (croissant, anti-rejeu). Rend true si emise. */
 static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const uint8_t dst[3],
-                           uint8_t cmd, const uint8_t *payload, size_t n) {
+                           uint8_t cmd, const uint8_t *payload, size_t n, uint8_t low_power) {
     IoFrame f;
     init_frame(&f);
-    f.ctrl_byte_1 = CTRL1_LOW_POWER;   /* 1re trame avec le bit basse conso, comme la vraie telecommande */
+    f.ctrl_byte_1 = low_power;   /* CAPTE : la vraie telecommande met (ou non) le bit basse conso selon la destination */
     set_source(&f, src);
     set_destination(&f, dst);
     if (!set_command(&f, cmd, payload, n)) return false;
@@ -48,31 +48,19 @@ static bool send_signed_1w(const uint8_t src[3], const uint8_t key[16], const ui
     return ok;
 }
 
-/* Emet un appui bouton de volet Somfy io en 1W, calque sur une VRAIE trame de la telecommande du
- * volet (profil appris a l'appairage, voir io_store/io_pair). Commande 0x00. On rejoue la charge
- * utile captee a l'identique, a sa vraie longueur (6 octets [origin, fabricant, bouton, 0, 0, 0]
- * pour une p0x00_14, 8 pour une p0x00_16), et on ne change que l'octet du bouton (position 2). La
- * destination et le reste de la charge utile sont la signature du type d'appareil, rejoues tels
- * quels ; source, code roulant et HMAC sont les notres. Repete comme une vraie telecommande
- * (repeat = 4). Rend 0 si au moins une trame est emise, -1 si pas de profil ou echec radio. */
-extern "C" int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16], uint8_t button) {
-    if (!src || !key) return -1;
+/* Emet UNE action de volet io en 1W (monter/stop/descendre), rejouee VERBATIM depuis la trame 0x00
+ * REELLE de cette action, captee de la vraie telecommande (profil appris a l'appairage). On ne reecrit
+ * RIEN : ni le bouton, ni le reste. La destination (cmd_target), la charge utile (payload[action]) et
+ * la basse conso (low_power) viennent toutes du profil capte ; source, code roulant et HMAC sont les
+ * notres. Repete comme une vraie telecommande (repeat = 4). Rend 0 si au moins une trame est emise,
+ * -1 si l'action n'est pas captee ou en cas d'echec radio. */
+extern "C" int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16], io_action_t action) {
+    if (!src || !key || action < 0 || action >= IO_ACTION_COUNT) return -1;
 
     io_profile_t p;
     if (!io_store_get_profile(src, &p)) return -1;   /* ce volet n'a pas de profil appris */
-    if (p.payload_len < 3 || p.payload_len > FRAME_MAX_DATA_SIZE) return -1;  /* profil invalide */
+    uint8_t n = p.payload_len[action];
+    if (n < 3 || n > FRAME_MAX_DATA_SIZE) return -1;  /* action non captee ou profil invalide */
 
-    uint8_t payload[FRAME_MAX_DATA_SIZE];
-    memcpy(payload, p.payload, p.payload_len);
-    payload[2] = button;             /* seul l'octet du bouton change ; le reste = signature rejouee */
-
-    return send_signed_1w(src, key, p.target, CMD_EXECUTE, payload, p.payload_len) ? 0 : -1;
-}
-
-extern "C" int io_button_for_action(const char *action) {
-    if (!action) return -1;
-    if (!strcmp(action, "up"))   return BTN_UP;     /* ouvrir = monter */
-    if (!strcmp(action, "down")) return BTN_DOWN;   /* fermer = descendre */
-    if (!strcmp(action, "stop")) return BTN_STOP;
-    return -1;
+    return send_signed_1w(src, key, p.cmd_target, CMD_EXECUTE, p.payload[action], n, p.low_power) ? 0 : -1;
 }

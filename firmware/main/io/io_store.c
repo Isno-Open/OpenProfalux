@@ -43,8 +43,9 @@ bool io_store_next_rolling(const uint8_t src[3], uint16_t *out) {
 /* rolling = prochain compteur emis ; -1 conserve l'existant, ou initialise a 1. */
 bool io_store_set(const uint8_t src[3], const uint8_t key[16],
                   const io_profile_t *p, int rolling) {
-    if (!src || !key || !p || p->payload_len < 3 || p->payload_len > 13 ||   /* 32 octets moins en-tete, compteur, MAC et CRC */
-        rolling < -1 || rolling > UINT16_MAX) return false;
+    if (!src || !key || !p || rolling < -1 || rolling > UINT16_MAX) return false;
+    for (int a = 0; a < IO_ACTION_COUNT; a++)
+        if (p->payload_len[a] < 3 || p->payload_len[a] > 13) return false;   /* par action : 32 octets moins en-tete, compteur, MAC et CRC */
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
     char nk[8], nr[8], np[8];

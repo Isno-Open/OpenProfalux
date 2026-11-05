@@ -11,7 +11,7 @@
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include "io/io_store.h"   /* io_store_get_profile : destination + charge utile captees, pour la fiche d'un appareil io */
-#include "io/io_pair.h"    /* io_marque_name : marque (Somfy/Velux) d'un volet io depuis l'octet fabricant capte */
+#include "io/io_pair.h"    /* io_man_name : marque (Somfy/Velux) d'un volet io depuis le man_id capte du 0x30 */
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -720,8 +720,8 @@ static bool emit_virt(volet_t *v, uint8_t button) {
         return emit_virt_somfy(v, button);
     case VOLET_PROTO_IO: {
         const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
-        const char *action = button == PFX_BTN_UP ? "up" : button == PFX_BTN_DOWN ? "down" : "stop";
-        return radio_io_send(src, (uint8_t)io_button_for_action(action), v->freq_khz) == 0;
+        io_action_t act = button == PFX_BTN_UP ? IO_ACTION_UP : button == PFX_BTN_DOWN ? IO_ACTION_DOWN : IO_ACTION_STOP;
+        return radio_io_send(src, act, v->freq_khz) == 0;
     }
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
@@ -1830,20 +1830,29 @@ char *shutters_status_json(void) {
             snprintf(vhex, sizeof(vhex), (somfy || v->proto == VOLET_PROTO_IO) ? "0x%06X" : "0x%07X",
                      (unsigned)(somfy ? (v->virt_serial & 0xFFFFFF) : v->virt_serial));
             cJSON_AddStringToObject(o, "virt_serial", vhex);
-            if (v->proto == VOLET_PROTO_IO) {   /* relevé de capture, pour le panneau avancé (destination + charge utile reelles) */
+            if (v->proto == VOLET_PROTO_IO) {   /* releve de capture, panneau avance : TOUT est capte, rien en dur (lecture seule) */
                 io_profile_t iop;
                 uint8_t src3[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
                 if (io_store_get_profile(src3, &iop)) {
-                    char th[12]; snprintf(th, sizeof th, "%02X %02X %02X", iop.target[0], iop.target[1], iop.target[2]);
-                    cJSON_AddStringToObject(o, "io_target", th);
-                    char ph[3 * IO_PROFILE_PAYLOAD_MAX + 1]; int pp = 0;
-                    for (int b = 0; b < iop.payload_len && pp < (int)sizeof(ph) - 3; b++)
-                        pp += snprintf(ph + pp, sizeof(ph) - pp, "%s%02X", b ? " " : "", iop.payload[b]);
-                    cJSON_AddStringToObject(o, "io_payload", ph);
-                    /* Marque io DEDUITE du fabricant capte, seulement si aucune n'est stockee (sinon
-                     * l'emission v->marque ci-dessous ferait une 2e cle "marque"). Robuste : marche
-                     * sur un appareil enrole avant ce correctif, sans re-enrolement. */
-                    const char *mq = (!v->marque[0] && iop.payload_len > 1) ? io_marque_name(iop.payload[1]) : NULL;
+                    char th[12];
+                    snprintf(th, sizeof th, "%02X %02X %02X", iop.cmd_target[0], iop.cmd_target[1], iop.cmd_target[2]);
+                    cJSON_AddStringToObject(o, "io_target", th);        /* dest des commandes, captee du 0x00 */
+                    snprintf(th, sizeof th, "%02X %02X %02X", iop.enroll_target[0], iop.enroll_target[1], iop.enroll_target[2]);
+                    cJSON_AddStringToObject(o, "io_enroll", th);        /* dest d'enrolement, captee du 0x30 */
+                    static const char *const act_key[IO_ACTION_COUNT] = { "io_payload_up", "io_payload_stop", "io_payload_down" };
+                    for (int a = 0; a < IO_ACTION_COUNT; a++) {
+                        char ph[3 * IO_PROFILE_PAYLOAD_MAX + 1]; int pp = 0;
+                        for (int b = 0; b < iop.payload_len[a] && pp < (int)sizeof(ph) - 3; b++)
+                            pp += snprintf(ph + pp, sizeof(ph) - pp, "%s%02X", b ? " " : "", iop.payload[a][b]);
+                        cJSON_AddStringToObject(o, act_key[a], ph);     /* charge reelle PAR action, rejouee verbatim */
+                    }
+                    char hx[6];
+                    snprintf(hx, sizeof hx, "0x%02X", iop.low_power);
+                    cJSON_AddStringToObject(o, "io_low_power", hx);     /* basse conso captee (solaire vs secteur) */
+                    snprintf(hx, sizeof hx, "0x%02X", iop.man_id);
+                    cJSON_AddStringToObject(o, "io_man_id", hx);        /* fabricant capte du 0x30 */
+                    /* Marque DEDUITE du man_id capte, seulement si aucune n'est stockee (sinon doublon de cle "marque"). */
+                    const char *mq = !v->marque[0] ? io_man_name(iop.man_id) : NULL;
                     if (mq) cJSON_AddStringToObject(o, "marque", mq);   /* resout le profil io (Somfy/Velux) a l'edition */
                 }
             }
