@@ -239,9 +239,10 @@
           <h2 id="io-add-title">Ajouter un volet io</h2>
           <p class="sub">Enrôlement io 1W : c'est <b>ta télécommande d'origine</b> qui autorise, le boîtier s'insère. Ta télécommande continue de fonctionner après.</p>
           <h3>1. Capter la télécommande</h3>
-          <p class="sub">Clique, puis appuie <b>une fois</b> sur un bouton (montée, stop ou descente) de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> de ton volet : sa destination et son contenu. Les codes montée/stop/descente viennent du profil de la marque ; ils sont ajustables dans les réglages avancés si ton moteur diffère. Rien de capté = la fréquence io est sans doute à régler dans <a href="#sys/device" data-goto="sys-radioprof">Système</a> (« Caler sur ma télécommande » / décalage io).</p>
+          <p class="sub">Clique, puis appuie <b>une fois</b> sur un bouton (montée, stop ou descente) de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> de ton volet : sa destination et son contenu. Les codes montée/stop/descente viennent du profil de la marque ; ils sont ajustables dans les réglages avancés si ton moteur diffère.</p>
           <div class="row"><button id="io-cap-cmd" class="btn">📡 Capter la télécommande</button></div>
           <p class="statline" id="io-cap-stat" hidden></p>
+          <p class="hint" id="io-cap-help" hidden>Rien capté ? La fréquence io est sans doute à régler dans <a href="#sys/device" data-goto="sys-radioprof">Système</a> (« Caler sur ma télécommande » / décalage io).</p>
           <h3>2. Capter l'enrôlement (PROG)</h3>
           <p class="sub"><b>Clique d'abord « Capter le PROG »</b> : le boîtier commence à écouter. <b>Ensuite seulement</b>, mets ta télécommande d'origine en apprentissage (PROG) pendant qu'il écoute. <span id="io-add-learn"></span> C'est au moment du PROG que la télécommande émet sa trame d'enrôlement (0x30) ; il faut donc écouter <b>avant</b> de la presser, sinon elle passe sans être captée.</p>
           <div class="row"><button id="io-cap-prog" class="btn" disabled>📡 Capter le PROG</button></div>

@@ -2269,9 +2269,12 @@ function loadIoAdd() {
   // Geste 1 : capter la telecommande = UNE commande (sniff 0x00). On en tire le gabarit, la cible, la
   // basse conso et la freq du volet ; les codes bouton montee/stop/descente viennent du profil marque.
   // Rien capte = calage de frequence a revoir (Systeme).
+  const chelp = $('#io-cap-help');
+  if (chelp) chelp.hidden = true;   // l'aide "fréquence à régler dans Système" n'apparait QUE si une capture echoue
   if (cmdBtn) cmdBtn.onclick = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
     setRadioBusy(true); cmdBtn.disabled = true;
+    if (chelp) chelp.hidden = true;
     if (cst) { cst.hidden = false; cst.className = 'statline'; cst.textContent = "Écoute 8 s… appuie une fois sur un bouton (montée, stop ou descente) de ta télécommande d'origine."; }
     try {
       const d = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'cmd' }) });
@@ -2280,8 +2283,10 @@ function loadIoAdd() {
         ioCmdFreq = d.freq_khz || 0;   // porteuse reelle mesuree (canal + FREQEST) : reutilisee aux gestes 2 et 3, puis rangee dans la freq du volet
         if (cst) { cst.className = 'statline ok'; cst.textContent = "✅ Commande captée (fréquence bonne). Passe à l'enrôlement (geste 2)."; }
       } else { ioCmdFrame = null;
-        if (cst) { cst.className = 'statline bad'; cst.textContent = "❌ Rien capté. Appuie bien pendant l'écoute ; si toujours rien, cale la fréquence io dans Système."; } }
-    } catch (e) { if (cst) { cst.className = 'statline bad'; cst.textContent = `❌ Échec (${e}).`; } }
+        if (cst) { cst.className = 'statline bad'; cst.textContent = "❌ Rien capté. Appuie bien pendant l'écoute et réessaie."; }
+        if (chelp) chelp.hidden = false;   // echec : on propose le reglage de frequence (Système)
+      }
+    } catch (e) { if (cst) { cst.className = 'statline bad'; cst.textContent = `❌ Échec (${e}).`; } if (chelp) chelp.hidden = false; }
     finally { cmdBtn.disabled = false; setRadioBusy(false); refreshProg(); }
   };
   // Geste 2 : capter le PROG = ETAPE SEPAREE. Le boitier ECOUTE D'ABORD, PUIS l'utilisateur presse PROG :
