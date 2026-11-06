@@ -2244,8 +2244,7 @@ function routeLeaf(prof) {
 let IO_ADD_PROFILE = null;
 let ioPairedId = null;   // id du volet io cree par l'appairage, cible du test (2) et du renommage (3)
 let ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso)
-let ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1 (canal + FREQEST), reutilisee aux gestes 2 et 3
-let ioEnrollFrame = null;   // trame 0x30 captee au geste 2 (PROG), tenue jusqu'a l'appairage (geste 3)
+let ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1 (canal + FREQEST), reutilisee a l'enrolement
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
   const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status');
@@ -2258,14 +2257,10 @@ function loadIoAdd() {
   if (fin) fin.hidden = true;        // on repart des captures a chaque entree
   ioPairedId = null;
   ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso)
-  ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1, portee aux gestes 2 et 3
-  ioEnrollFrame = null;   // trame 0x30 captee au geste 2 (PROG), tenue cote navigateur jusqu'au geste 3
+  ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1, portee a l'enrolement
   const cmdBtn = $('#io-cap-cmd');
-  const progBtn = $('#io-cap-prog'), pst = $('#io-cap-prog-stat');
-  if (pst) { pst.hidden = true; pst.textContent = ''; }
-  const refreshProg = () => { if (progBtn) progBtn.disabled = !ioCmdFrame; };   // geste 2 ferme tant qu'aucune commande n'est captee
-  const refreshPair = () => { if (btn) btn.disabled = !ioEnrollFrame; };        // geste 3 ferme tant que le 0x30 manque
-  refreshProg(); refreshPair();
+  const refreshPair = () => { if (btn) btn.disabled = !ioCmdFrame; };   // Enroler ferme tant qu'aucune commande n'est captee (geste 1)
+  refreshPair();
   // Geste 1 : capter la telecommande = UNE commande (sniff 0x00). On en tire le gabarit, la cible, la
   // basse conso et la freq du volet ; les codes bouton montee/stop/descente viennent du profil marque.
   // Rien capte = calage de frequence a revoir (Systeme).
@@ -2284,44 +2279,27 @@ function loadIoAdd() {
       } else { ioCmdFrame = null;
         if (cst) { cst.className = 'statline bad'; cst.textContent = "❌ Rien capté. Appuie bien sur un bouton pendant l'écoute et réessaie."; } }
     } catch (e) { if (cst) { cst.className = 'statline bad'; cst.textContent = `❌ Échec (${e}).`; } }
-    finally { cmdBtn.disabled = false; setRadioBusy(false); refreshProg(); }
+    finally { cmdBtn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
-  // Geste 2 : capter le PROG = ETAPE SEPAREE. Le boitier ECOUTE D'ABORD, PUIS l'utilisateur presse PROG :
-  // le 0x30 est emis AU MOMENT du PROG, donc ecouter apres coup (p.ex. dans Appairer) le raterait.
-  if (progBtn) progBtn.onclick = async () => {
-    if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
-    if (!ioCmdFrame) { toast("Capte d'abord la télécommande (geste 1)"); return; }
-    setRadioBusy(true); progBtn.disabled = true;
-    if (pst) { pst.hidden = false; pst.className = 'statline'; pst.textContent = "Écoute… MAINTENANT mets ta télécommande en apprentissage (PROG). Le boîtier capte le 0x30."; }
-    try {
-      const cap = await api('/api/io/sniff', { method: 'POST', body: JSON.stringify({ kind: 'enroll', freq_khz: ioCmdFreq }) });
-      if (cap && cap.ok && cap.frame) {
-        ioEnrollFrame = cap.frame;
-        if (pst) { pst.className = 'statline ok'; pst.textContent = "✅ Enrôlement (0x30) capté. Passe à Appairer (geste 3)."; }
-      } else {
-        ioEnrollFrame = null;
-        if (pst) { pst.className = 'statline bad'; pst.textContent = "❌ 0x30 non capté. Clique ce bouton PUIS mets la télécommande en PROG pendant l'écoute, et réessaie."; }
-      }
-    } catch (e) { if (pst) { pst.className = 'statline bad'; pst.textContent = `❌ Échec (${e}).`; } }
-    finally { progBtn.disabled = false; setRadioBusy(false); refreshPair(); }
-  };
-  // Geste 3 : Appairer = emettre NOTRE 0x30 vers enroll_target capte. Le 0x30 a deja ete capte au geste 2.
+  // Geste 2 (fusion 2+3) : Enroler = le boitier ECOUTE le PROG PUIS emet NOTRE 0x30 dans la MEME requete.
+  // L'utilisateur clique Enroler PUIS met sa telecommande en PROG : on ecoute AVANT l'evenement, et notre
+  // 0x30 part ~1 s apres le sien, DANS la fenetre (le clic Appairer separe d'io12f emettait +18 s trop tard).
   if (btn) btn.onclick = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
-    if (!ioCmdFrame || !ioEnrollFrame) { toast("Capte la télécommande (geste 1) puis le PROG (geste 2) avant d'appairer"); return; }
+    if (!ioCmdFrame) { toast("Capte d'abord la télécommande (geste 1)"); return; }
     const overlay = p && p.io && p.io.cmd;   // codes bouton par action, declares par marque (profiles.json)
     if (!overlay) { toast("Profil sans codes de commande (cmd) : impossible de générer les ordres"); return; }
     setRadioBusy(true); btn.disabled = true;
-    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Appairage, le boîtier insère son identité…"; }
+    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Écoute… MAINTENANT mets ta télécommande en apprentissage (PROG). Le boîtier capte son 0x30 et insère son identité aussitôt (jusqu'à 20 s)."; }
     try {
-      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ cmd: ioCmdFrame, overlay, enroll: ioEnrollFrame, freq_khz: ioCmdFreq, index: 0, tx: 1 }) });
+      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ cmd: ioCmdFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 }) });
       ioPairedId = d.id;
-      if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} appairé. Teste-le, puis donne-lui un nom.`; }
+      if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} enrôlé. Le moteur doit faire un petit va-et-vient. Teste-le, puis donne-lui un nom.`; }
       if (fin) fin.hidden = false;
       const nameInp = $('#io-volet-name'); if (nameInp) nameInp.value = d.id;
     } catch (e) {
-      if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Reprends la capture du PROG (geste 2) et réessaie.`; }
-    } finally { setRadioBusy(false); refreshPair(); }
+      if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Clique Enrôler PUIS mets la télécommande en PROG pendant l'écoute, et réessaie.`; }
+    } finally { btn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
   // Etape 2 : TEST (partage) -> pilotage commun a tous les volets (sendCmd -> /api/shutter -> io par proto).
   const bindCmd = (sel, cmd) => { const b = $(sel); if (b) b.onclick = () => { if (ioPairedId) sendCmd({ id: ioPairedId, cmd }, b); }; };

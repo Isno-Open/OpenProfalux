@@ -1677,17 +1677,18 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\",\"freq_khz\":%u}", n, hex, (unsigned)io_radio_last_carrier_khz());
     return httpd_resp_sendstr(r, out);
 }
-/* Appairage io 1W, 3 gestes. UNE capture commande + l'overlay DECLARE de la marque + le 0x30 du PROG ;
- * rien en dur dans le code (les codes d'action vivent dans profiles.json). Corps JSON :
- *   { "index":N, "tx":0|1, "rolling":N,
+/* Appairage io 1W, 2 gestes (io12g). Geste 1 (ailleurs, /api/io/sniff kind=cmd) capte UNE commande.
+ * Geste 2 ICI = "Enroler" : l'appel CAPTE le 0x30 du PROG en direct PUIS emet notre 0x30 dans la MEME
+ * requete (timing : notre trame tombe dans la fenetre, pas +18 s plus tard). Rien en dur dans le code
+ * (les codes d'action vivent dans profiles.json). Corps JSON :
+ *   { "index":N, "tx":0|1, "rolling":N, "freq_khz":N,
  *     "cmd":"<hex 0x00 d'un bouton quelconque>",
- *     "overlay":{ "up":[[2,"0x00"],[5,"0xD3"]], "stop":[[2,"0xD2"],[5,"0xD2"]], "down":[[2,"0xC8"],[5,"0xD3"]] },
- *     "enroll":"<hex 0x30 capte pendant le PROG de la vraie telecommande>" }
+ *     "overlay":{ "up":[[2,"0x00"],[5,"0xD3"]], "stop":[[2,"0xD2"],[5,"0xD2"]], "down":[[2,"0xC8"],[5,"0xD3"]] } }
+ * (tx=0, reprise sans emission : ajouter "enroll":"<hex 0x30>", pas de capture live.)
  * La commande 0x00 donne cmd_target + le gabarit de charge utile + basse conso (variable de l'appareil) ;
  * l'overlay (lu de profiles.json par le navigateur, declare par marque) pose les octets d'action sur le
- * gabarit pour former monter/stop/descendre ; le 0x30 donne enroll_target + man_id + basse conso + statut.
- * tx=0 : adoption sans emission (apres reflash/effacement NVS), rolling obligatoire. La porteuse est geree
- * par appareil (volet_t.freq_khz), hors de ce profil. */
+ * gabarit pour former monter/stop/descendre ; le 0x30 capte donne enroll_target + man_id + basse conso +
+ * statut. La porteuse est geree par appareil (volet_t.freq_khz, apprise au geste 1). ZERO 0x20/0x2E/0x39. */
 static int hex_to_frame(const char *hex, uint8_t *frame, int max) {
     if (!hex) return -1;
     size_t len = strlen(hex);
@@ -1749,20 +1750,28 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
             }
         }
     }
+    /* Porteuse APPRISE au geste 1 (canal + FREQEST), rangee dans le parametre frequence par appareil
+     * existant (comme Profalux) : elle sert a ecouter/emettre a la bonne frequence, puis les commandes
+     * l'utilisent via volet_t.freq_khz. 0 = canal par defaut. Lue ici car la capture live du 0x30 ecoute
+     * a cette porteuse. */
+    cJSON *fqj = cJSON_GetObjectItem(j, "freq_khz");
+    uint32_t freq_khz = (cJSON_IsNumber(fqj) && fqj->valuedouble > 800000 && fqj->valuedouble < 1000000)
+                            ? (uint32_t)fqj->valuedouble : 0;
+    /* FUSION gestes 2+3 (fix io12g, timing) : on CAPTE le 0x30 du PROG puis on emet NOTRE 0x30 dans la
+     * MEME requete, pour que notre trame tombe DANS la fenetre (~1 s apres), comme le flux vodhash qui a
+     * enrole le Velux. L'utilisateur clique Enroler PUIS fait son PROG : on ecoute AVANT l'evenement,
+     * jusqu'a 20 s. Un clic Appairer separe (io12f) emettait +18 s plus tard, hors fenetre -> echec.
+     * tx=0 (reprise sans emission, rare, pas de PROG) prend le 0x30 fourni par le navigateur. */
     if (profok) {
-        int n = hex_to_frame(jstr(j, "enroll"), frame, sizeof frame);
+        int n;
+        if (tx) n = radio_io_sniff(frame, sizeof frame, 20000, IO_SNIFF_ENROLL, freq_khz);  /* capture live du 0x30 pendant le PROG */
+        else    n = hex_to_frame(jstr(j, "enroll"), frame, sizeof frame);
         profok = n > 0 && io_enroll_from_capture(frame, n, &profile) == 0;
     }
     if (!profok) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "il faut la trame 0x00 (commande) + l'overlay de la marque + le 0x30 d'enrolement valides ; tx=0 exige rolling");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande + overlay requis, et le 0x30 doit etre capte pendant le PROG (clique Enroler PUIS mets la telecommande en PROG) ; tx=0 exige rolling + trame enroll");
     }
-    /* Porteuse APPRISE au geste 1 (canal + FREQEST), rangee dans le parametre frequence par appareil
-     * existant (comme Profalux) : elle sert a emettre notre 0x30 a la bonne frequence, puis les commandes
-     * l'utilisent via volet_t.freq_khz. 0 = canal par defaut. */
-    cJSON *fqj = cJSON_GetObjectItem(j, "freq_khz");
-    uint32_t freq_khz = (cJSON_IsNumber(fqj) && fqj->valuedouble > 800000 && fqj->valuedouble < 1000000)
-                            ? (uint32_t)fqj->valuedouble : 0;
     uint8_t src[3], key[16];
     bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
     int rolling = roll ? (int)roll->valuedouble : -1;
