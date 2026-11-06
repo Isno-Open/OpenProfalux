@@ -29,6 +29,8 @@ void io_radio_set_freq_offset(int32_t khz);
  * canal io + FREQEST. Apprise a la capture (geste 1) pour alimenter le parametre frequence par
  * appareil existant (volet_t.freq_khz). 0 = pas encore mesure. */
 uint32_t io_radio_last_carrier_khz(void);
+/* Frequence nominale (kHz) d'un canal io (CH1 868250, CH2 868950, CH3 869850), pour le journal. */
+uint32_t io_radio_channel_khz(io_channel_t ch);
 /* Pose la porteuse io a une valeur absolue (surcharge PAR APPAREIL) ; l'offset carte s'ajoute encore.
  * A appeler APRES io_radio_config (qui a charge l'offset). Sans appel = CH2 868950 par defaut. */
 void io_radio_set_carrier_khz(uint32_t khz);

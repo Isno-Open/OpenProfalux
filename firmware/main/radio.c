@@ -274,31 +274,45 @@ int radio_io_erase(void) {
  * passif, apres emission. Lecture : une reponse captee PROUVE le 2W ; un silence ne prouve PAS le 1W
  * (bascule RX, mauvais canal a l'instant, ou plancher RSSI ~-95 dBm). A appeler sous le mutex, radio en
  * FSK io. */
-static void io_probe_motor_response(void) {
+static void io_log_rx_frame(const uint8_t *buf, int k, int8_t rssi, uint32_t khz, const char *where) {
+    char hex[2 * 32 + 1];
+    int m = k < 32 ? k : 32;
+    for (int i = 0; i < m; i++) snprintf(&hex[i * 2], 3, "%02X", buf[i]);
+    uint8_t cmd = io_frame_cmd(buf, k);
+    const char *lbl = io_cmd_label(cmd);
+    ESP_LOGW(TAG, "io DIAG reponse : trame (%d o, %u kHz, RSSI %d dBm, %s) cmd=0x%02X (%s) : %s",
+             k, (unsigned)khz, rssi, where, cmd, lbl ? lbl : "inconnu", hex);
+    /* Banniere dediee quand on voit la confirmation 0x2e : c'est la FIN de la ceremonie du remote. Vu
+     * APRES notre emission ici, elle situe notre 0x30 dans la ceremonie (io12g emet avant cette fin). */
+    if (io_cmd_is_pair_confirm(cmd))
+        ESP_LOGW(TAG, "===== io ETAPE : 0x2e vu = FIN de ceremonie du remote (RSSI %d dBm) =====", rssi);
+}
+
+static void io_probe_motor_response(uint32_t emit_khz) {
     uint8_t buf[32];
-    char hex[2 * sizeof(buf) + 1];
     const io_channel_t chans[3] = { IO_CH1, IO_CH2, IO_CH3 };
-    /* 1) notre porteuse courante (celle de l'emission), 1 s */
-    int64_t end = esp_timer_get_time() + 1000 * 1000;
+    uint32_t car_khz = emit_khz ? emit_khz : io_radio_channel_khz(IO_CH2);   /* porteuse d'emission (ou CH2 par defaut) */
     int seen = 0;
+    /* 1) notre porteuse courante (celle de l'emission), 3 s : couvre une reponse moteur sur canal ET le
+     * 0x2e de fin de ceremonie du remote, observe ~1,9 s apres notre 0x30 (meme canal que sa cle). */
+    int64_t end = esp_timer_get_time() + 3000 * 1000;
     while (esp_timer_get_time() < end) {
         int k = io_radio_rx_packet(buf, sizeof buf, 200);
         if (k <= 0) continue;
-        int8_t rssi = cc1101_get_rssi();
-        for (int i = 0; i < k && i < (int)sizeof buf; i++) snprintf(&hex[i * 2], 3, "%02X", buf[i]);
-        ESP_LOGW(TAG, "io DIAG reponse : trame (%d o, RSSI %d dBm, porteuse emission) : %s", k, rssi, hex);
+        io_log_rx_frame(buf, k, cc1101_get_rssi(), car_khz, "porteuse emission");
         seen++;
     }
-    /* 2) balayage des 3 canaux io (saut de frequence), 500 ms chacun */
+    /* 2) balayage des 3 canaux io (saut de frequence), 500 ms chacun : attrape une reponse moteur 2W
+     * qui repondrait sur un autre canal. Probabiliste (un seul CC1101, un canal a la fois). */
     for (int c = 0; c < 3; c++) {
         io_radio_set_channel(chans[c]);
+        char where[16];
+        snprintf(where, sizeof where, "canal %d", c + 1);
         int64_t cend = esp_timer_get_time() + 500 * 1000;
         while (esp_timer_get_time() < cend) {
             int k = io_radio_rx_packet(buf, sizeof buf, 200);
             if (k <= 0) continue;
-            int8_t rssi = cc1101_get_rssi();
-            for (int i = 0; i < k && i < (int)sizeof buf; i++) snprintf(&hex[i * 2], 3, "%02X", buf[i]);
-            ESP_LOGW(TAG, "io DIAG reponse : trame (%d o, RSSI %d dBm, canal %d) : %s", k, rssi, c + 1, hex);
+            io_log_rx_frame(buf, k, cc1101_get_rssi(), io_radio_channel_khz(chans[c]), where);
             seen++;
         }
     }
@@ -315,8 +329,22 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         uint32_t back = cc1101_get_freq_khz();
         io_radio_config();
         if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* notre 0x30 part a la porteuse apprise de l'appareil (geste 1) */
-        r = io_hc_pair_1w(profile, src, key);
-        if (r == 0) io_probe_motor_response();   /* DIAG : le moteur repond-il ? (1W vs 2W), passif */
+        uint32_t emit_khz = freq_khz ? freq_khz : io_radio_channel_khz(IO_CH2);
+        uint8_t ourframe[31];
+        int ourlen = 0;
+        r = io_hc_pair_1w(profile, src, key, ourframe, &ourlen);
+        if (r == 0) {
+            /* Banniere d'emission : NOTRE 0x30 est parti (horodatage ESP), sa frequence, sa dest
+             * d'enrolement CAPTEE et la trame exacte. Avec les bannieres de capture et le 0x2e ci-dessous,
+             * le journal donne la sequence complete (timing + frequence + trame) d'un coup d'oeil. */
+            char ohex[2 * sizeof(ourframe) + 1];
+            int m = ourlen < (int)sizeof(ourframe) ? ourlen : (int)sizeof(ourframe);
+            for (int i = 0; i < m; i++) snprintf(&ohex[i * 2], 3, "%02X", ourframe[i]);
+            ESP_LOGW(TAG, "===== io ETAPE : NOTRE 0x30 emis vers %02X%02X%02X (man_id 0x%02X, %u kHz) : %s =====",
+                     profile->enroll_target[0], profile->enroll_target[1], profile->enroll_target[2],
+                     profile->man_id, (unsigned)emit_khz, ohex);
+            io_probe_motor_response(emit_khz);   /* DIAG : le moteur repond-il ? (1W vs 2W), + capte le 0x2e de fin, passif */
+        }
         cc1101_apply_config_ook();
         cc1101_set_freq_khz(back);
         s_paused = was;

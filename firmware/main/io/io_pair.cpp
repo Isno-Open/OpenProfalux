@@ -72,6 +72,28 @@ extern "C" const char *io_man_name(uint8_t man_id) {
     return nullptr;
 }
 
+/* Octet de commande d'une trame io a l'offset fixe, ou 0xFF si trop courte (voir io_pair.h). */
+extern "C" uint8_t io_frame_cmd(const uint8_t *frame, int n) {
+    if (!frame || n <= OFFSET_COMMAND_ID) return 0xFF;
+    return frame[OFFSET_COMMAND_ID];
+}
+
+/* Libelle d'un octet de commande io pour le journal (voir io_pair.h). Les octets sont ceux declares
+ * dans iohome_constants.h : aucune valeur de protocole en dur ici. */
+extern "C" const char *io_cmd_label(uint8_t cmd) {
+    switch (cmd) {
+        case CMD_EXECUTE:        return "0x00 commande";
+        case CMD_PRIVATE_WRITE:  return "0x20 private-write";
+        case CMD_PAIR_CONFIRM:   return "0x2e confirmation (fin ceremonie)";
+        case CMD_KEY_TRANSFER_1W:return "0x30 cle d'enrolement";
+        case CMD_REMOVE_1W:      return "0x39 depairage";
+        default:                 return nullptr;
+    }
+}
+
+/* Vrai si l'octet est la confirmation de fin de ceremonie (0x2e) (voir io_pair.h). */
+extern "C" bool io_cmd_is_pair_confirm(uint8_t cmd) { return cmd == CMD_PAIR_CONFIRM; }
+
 static uint64_t splitmix64(uint64_t *s) {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -103,7 +125,7 @@ extern "C" bool io_derive_identity(uint32_t index, uint8_t out_src[3], uint8_t o
 }
 
 extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
-                             const uint8_t key[16]) {
+                             const uint8_t key[16], uint8_t *out_frame, int *out_len) {
     if (!profile || !src || !key) return -1;
     uint8_t f[31] = {0};
     f[OFFSET_CTRL_BYTE_0] = 28 | CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK;   /* longueur 31 + debut/fin + protocole 1W */
@@ -121,6 +143,8 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
     uint16_t crc = crypto::compute_crc16(f, 29);
     f[29] = (uint8_t)crc;          /* CRC16 (octets 29-30), calcule sur NOTRE trame */
     f[30] = (uint8_t)(crc >> 8);
+    if (out_frame) memcpy(out_frame, f, sizeof f);   /* trame exacte, pour le journal de diagnostic */
+    if (out_len) *out_len = (int)sizeof f;
     /* Enrolement « nouvelle telecommande » : UN SEUL transfert de cle 0x30, rien d'autre. L'ajout
      * d'une telecommande io se fait PAR PARRAINAGE (doc io « Copy Remote Controller (1W) », #87) :
      * la telecommande deja appairee ouvre l'apprentissage du moteur, nous sommes la nouvelle.

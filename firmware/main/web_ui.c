@@ -1671,6 +1671,11 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
     char hex[2 * sizeof(frame) + 1];
     for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&hex[i * 2], "%02X", frame[i]);
+    /* Banniere de journal auto-explicatif : marque l'etape franchie (geste 1 = commande 0x00, ou le
+     * 0x30 si une capture d'enrolement separee est demandee) avec la trame et sa porteuse mesuree. */
+    ESP_LOGW(TAG, "===== io ETAPE : %s captee (%d o, %u kHz) : %s =====",
+             kind == IO_SNIFF_ENROLL ? "0x30 d'enrolement" : "commande 0x00 (geste 1, bouton)",
+             n, (unsigned)io_radio_last_carrier_khz(), hex);
     char out[160];
     /* freq_khz : porteuse reelle mesuree de l'appareil (canal + FREQEST), a ranger dans le parametre
      * frequence par appareil au geste 3. Le navigateur ne s'en sert qu'apres une capture de commande. */
@@ -1773,7 +1778,8 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         if (profok) {
             char ehex[2 * sizeof(frame) + 1];
             for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&ehex[i * 2], "%02X", frame[i]);
-            ESP_LOGW(TAG, "io DIAG : 0x30 capte (%d octets) : %s", n, ehex);
+            ESP_LOGW(TAG, "===== io ETAPE : 0x30 d'enrolement capte pendant le PROG (%d o, %u kHz) : %s =====",
+                     n, (unsigned)io_radio_last_carrier_khz(), ehex);
         }
     }
     if (!profok) {

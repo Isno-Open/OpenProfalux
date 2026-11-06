@@ -95,6 +95,11 @@ void io_radio_set_freq_offset(int32_t khz) {
 
 uint32_t io_radio_last_carrier_khz(void) { return s_last_rx_carrier_khz; }
 
+uint32_t io_radio_channel_khz(io_channel_t ch) {
+    if (ch < IO_CH1 || ch > IO_CH3) ch = IO_CH2;
+    return IO_CH_KHZ[ch];
+}
+
 void io_radio_set_carrier_khz(uint32_t khz) {
     /* Surcharge de porteuse PAR APPAREIL : l'offset quartz de la carte s'applique encore par-dessus.
      * Appelee apres io_radio_config, donc s_offset_khz est deja charge. */
