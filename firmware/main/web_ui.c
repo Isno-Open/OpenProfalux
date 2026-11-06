@@ -1762,10 +1762,11 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     cJSON *fqj = cJSON_GetObjectItem(j, "freq_khz");
     uint32_t freq_khz = (cJSON_IsNumber(fqj) && fqj->valuedouble > 800000 && fqj->valuedouble < 1000000)
                             ? (uint32_t)fqj->valuedouble : 0;
-    /* FUSION gestes 2+3 (fix io12g, timing) : on CAPTE le 0x30 du PROG puis on emet NOTRE 0x30 dans la
-     * MEME requete, pour que notre trame tombe DANS la fenetre (~1 s apres), comme le flux vodhash qui a
-     * enrole le Velux. L'utilisateur clique Enroler PUIS fait son PROG : on ecoute AVANT l'evenement,
-     * jusqu'a 20 s. Un clic Appairer separe (io12f) emettait +18 s plus tard, hors fenetre -> echec.
+    /* FUSION gestes 2+3 dans la MEME requete : on CAPTE le 0x30 du PROG, puis radio_io_enroll attend la
+     * FIN de ceremonie du remote (0x2e) et emet NOTRE 0x30 ~1 s APRES (correctif timing B, facon vodhash
+     * qui a enrole le Velux). io12g emettait PENDANT la ceremonie, ~1,9 s avant le 0x2e, en collision.
+     * L'utilisateur clique Enroler PUIS fait son PROG : on ecoute AVANT l'evenement, jusqu'a 20 s, et le
+     * boitier gere tout le timing (aucun clic a synchroniser, ce qui avait tue io12f : clic separe a +18 s).
      * tx=0 (reprise sans emission, rare, pas de PROG) prend le 0x30 fourni par le navigateur. */
     if (profok) {
         int n;

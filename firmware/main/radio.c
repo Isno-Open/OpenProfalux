@@ -319,6 +319,31 @@ static void io_probe_motor_response(uint32_t emit_khz) {
     ESP_LOGW(TAG, "io DIAG reponse : %d trame(s) captee(s) apres notre 0x30 (0 = pas de reponse captable ; voir caveat)", seen);
 }
 
+/* Correctif timing (B) : attend la FIN de ceremonie du remote (0x2e) AVANT notre emission, puis ~1 s,
+ * comme vodhash qui emet APRES la ceremonie (ce qui a enrole le Velux). io12g emettait PENDANT, ~1,9 s
+ * avant le 0x2e, en collision. Avantage UX : le boitier gere le timing, Pascal n'a aucun clic a
+ * synchroniser (c'est le clic separe qui avait tue io12f). Ecoute sur la porteuse d'emission ; journalise
+ * chaque trame (io_log_rx_frame pose deja la banniere 0x2e). Rend true si le 0x2e a ete vu ; sinon on
+ * emet quand meme (best-effort loggue) pour ne pas rater la fenetre PROG. */
+static bool io_wait_ceremony_end(uint32_t car_khz, uint32_t timeout_ms) {
+    uint8_t buf[32];
+    bool seen = false;
+    int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    while (!seen && esp_timer_get_time() < end) {
+        int k = io_radio_rx_packet(buf, sizeof buf, 200);
+        if (k <= 0) continue;
+        io_log_rx_frame(buf, k, cc1101_get_rssi(), car_khz, "attente fin ceremonie");
+        if (io_cmd_is_pair_confirm(io_frame_cmd(buf, k))) seen = true;
+    }
+    if (seen) {
+        ESP_LOGW(TAG, "io DIAG : fin de ceremonie detectee, emission de notre 0x30 dans ~1 s (facon vodhash)");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    } else {
+        ESP_LOGW(TAG, "io DIAG : pas de 0x2e vu en %u ms, emission best-effort (voir caveat)", (unsigned)timeout_ms);
+    }
+    return seen;
+}
+
 int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
                     bool tx, int rolling, uint32_t freq_khz) {
     if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
@@ -330,6 +355,8 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         io_radio_config();
         if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* notre 0x30 part a la porteuse apprise de l'appareil (geste 1) */
         uint32_t emit_khz = freq_khz ? freq_khz : io_radio_channel_khz(IO_CH2);
+        /* Correctif timing B : on emet APRES la fin de ceremonie du remote (0x2e), pas pendant (io12g). */
+        io_wait_ceremony_end(emit_khz, 6000);
         uint8_t ourframe[31];
         int ourlen = 0;
         r = io_hc_pair_1w(profile, src, key, ourframe, &ourlen);
