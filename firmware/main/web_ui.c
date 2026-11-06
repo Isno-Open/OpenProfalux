@@ -1767,6 +1767,14 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         if (tx) n = radio_io_sniff(frame, sizeof frame, 20000, IO_SNIFF_ENROLL, freq_khz);  /* capture live du 0x30 pendant le PROG */
         else    n = hex_to_frame(jstr(j, "enroll"), frame, sizeof frame);
         profok = n > 0 && io_enroll_from_capture(frame, n, &profile) == 0;
+        /* DIAG enrolement : le 0x30 capte n'apparait pas dans l'ecoute permanente (en pause pendant le
+         * sniff). On le logge ICI, avec l'horodatage ESP, pour mesurer a distance le delai capture->emission
+         * et le situer dans la ceremonie PROG (son 0x2E arrive ~1,9 s plus tard). Rien n'est modifie au flux. */
+        if (profok) {
+            char ehex[2 * sizeof(frame) + 1];
+            for (int i = 0; i < n && i < (int)sizeof(frame); i++) sprintf(&ehex[i * 2], "%02X", frame[i]);
+            ESP_LOGW(TAG, "io DIAG : 0x30 capte (%d octets) : %s", n, ehex);
+        }
     }
     if (!profok) {
         cJSON_Delete(j);

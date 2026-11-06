@@ -267,6 +267,44 @@ int radio_io_erase(void) {
     return r;
 }
 
+/* DIAG enrolement (1W vs 2W) : juste APRES notre 0x30, on ECOUTE une reponse du moteur et on logge TOUTE
+ * trame recue (hex + RSSI + canal), sans filtre : une reponse 2W serait un type qu'on ne reconnait pas.
+ * D'abord sur NOTRE porteuse (latence TX->RX minimale, meilleure chance d'une reponse sur canal), puis
+ * balayage des 3 canaux io au cas ou le moteur saute de frequence. NE CHANGE RIEN a l'enrolement : purement
+ * passif, apres emission. Lecture : une reponse captee PROUVE le 2W ; un silence ne prouve PAS le 1W
+ * (bascule RX, mauvais canal a l'instant, ou plancher RSSI ~-95 dBm). A appeler sous le mutex, radio en
+ * FSK io. */
+static void io_probe_motor_response(void) {
+    uint8_t buf[32];
+    char hex[2 * sizeof(buf) + 1];
+    const io_channel_t chans[3] = { IO_CH1, IO_CH2, IO_CH3 };
+    /* 1) notre porteuse courante (celle de l'emission), 1 s */
+    int64_t end = esp_timer_get_time() + 1000 * 1000;
+    int seen = 0;
+    while (esp_timer_get_time() < end) {
+        int k = io_radio_rx_packet(buf, sizeof buf, 200);
+        if (k <= 0) continue;
+        int8_t rssi = cc1101_get_rssi();
+        for (int i = 0; i < k && i < (int)sizeof buf; i++) snprintf(&hex[i * 2], 3, "%02X", buf[i]);
+        ESP_LOGW(TAG, "io DIAG reponse : trame (%d o, RSSI %d dBm, porteuse emission) : %s", k, rssi, hex);
+        seen++;
+    }
+    /* 2) balayage des 3 canaux io (saut de frequence), 500 ms chacun */
+    for (int c = 0; c < 3; c++) {
+        io_radio_set_channel(chans[c]);
+        int64_t cend = esp_timer_get_time() + 500 * 1000;
+        while (esp_timer_get_time() < cend) {
+            int k = io_radio_rx_packet(buf, sizeof buf, 200);
+            if (k <= 0) continue;
+            int8_t rssi = cc1101_get_rssi();
+            for (int i = 0; i < k && i < (int)sizeof buf; i++) snprintf(&hex[i * 2], 3, "%02X", buf[i]);
+            ESP_LOGW(TAG, "io DIAG reponse : trame (%d o, RSSI %d dBm, canal %d) : %s", k, rssi, c + 1, hex);
+            seen++;
+        }
+    }
+    ESP_LOGW(TAG, "io DIAG reponse : %d trame(s) captee(s) apres notre 0x30 (0 = pas de reponse captable ; voir caveat)", seen);
+}
+
 int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
                     bool tx, int rolling, uint32_t freq_khz) {
     if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
@@ -278,6 +316,7 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         io_radio_config();
         if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* notre 0x30 part a la porteuse apprise de l'appareil (geste 1) */
         r = io_hc_pair_1w(profile, src, key);
+        if (r == 0) io_probe_motor_response();   /* DIAG : le moteur repond-il ? (1W vs 2W), passif */
         cc1101_apply_config_ook();
         cc1101_set_freq_khz(back);
         s_paused = was;
