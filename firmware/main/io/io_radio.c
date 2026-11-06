@@ -84,6 +84,9 @@ static bool s_offset_loaded;
  * io_radio_set_carrier_khz). Sert a apprendre la frequence reelle de l'appareil a la 1re capture
  * (geste 1), rangee dans le parametre frequence par appareil existant (volet_t.freq_khz). 0 = pas encore mesure. */
 static uint32_t s_last_rx_carrier_khz;
+/* Base de porteuse reellement posee (canal ou surcharge par appareil), hors offset carte : sert de
+ * reference a la mesure FREQEST, pour ne pas supposer CH2 quand on ecoute a la frequence d'un profil. */
+static uint32_t s_base_carrier_khz;
 
 void io_radio_set_freq_offset(int32_t khz) {
     s_offset_khz = (khz < -100 || khz > 100) ? 0 : khz;
@@ -95,6 +98,7 @@ uint32_t io_radio_last_carrier_khz(void) { return s_last_rx_carrier_khz; }
 void io_radio_set_carrier_khz(uint32_t khz) {
     /* Surcharge de porteuse PAR APPAREIL : l'offset quartz de la carte s'applique encore par-dessus.
      * Appelee apres io_radio_config, donc s_offset_khz est deja charge. */
+    s_base_carrier_khz = khz;
     cc1101_set_freq_khz((uint32_t)((int32_t)khz + s_offset_khz));
 }
 
@@ -109,6 +113,7 @@ void io_radio_set_channel(io_channel_t ch) {
         }
         io_radio_set_freq_offset(offset);
     }
+    s_base_carrier_khz = IO_CH_KHZ[ch];
     cc1101_set_freq_khz((uint32_t)((int32_t)IO_CH_KHZ[ch] + s_offset_khz));
 }
 
@@ -175,12 +180,12 @@ int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms) {
         for (uint8_t i = 0; i < n; i++) {
             IohcUnframerResult r = iohc_unframer_feed_byte(&u, fifo[i]);
             if (r == IohcUnframerFrameDone) {
-                /* Porteuse reelle de CET appareil : canal io + FREQEST (offset estime du signal recu,
-                 * signed, 1 LSB ~= 1,587 kHz). FREQEST est mesure par rapport a notre porteuse courante
-                 * (canal + offset carte) ; on range donc canal + FREQEST, SANS l'offset carte, qui sera
-                 * rajoute au TX par io_radio_set_carrier_khz. Lu AVANT SIDLE, etat RX encore frais. */
+                /* Porteuse reelle de CET appareil : base reellement ecoutee (freq du profil ou canal) +
+                 * FREQEST (offset estime du signal recu, signed, 1 LSB ~= 1,587 kHz). FREQEST est relatif
+                 * a notre porteuse courante (base + offset carte) ; on range donc base + FREQEST, SANS
+                 * l'offset carte, qui sera rajoute au TX par io_radio_set_carrier_khz. Lu AVANT SIDLE. */
                 int8_t fq = (int8_t)cc1101_read_reg(CC_STAT_FREQEST | 0x40);
-                s_last_rx_carrier_khz = (uint32_t)((int32_t)IO_CH_KHZ[IO_CH2] + ((int32_t)fq * 1587 / 1000));
+                s_last_rx_carrier_khz = (uint32_t)((int32_t)s_base_carrier_khz + ((int32_t)fq * 1587 / 1000));
                 size_t len = u.frame_pos < max ? u.frame_pos : max;
                 for (size_t k = 0; k < len; k++) buf[k] = u.frame[k];
                 cc1101_strobe_cmd(CC_SIDLE);
