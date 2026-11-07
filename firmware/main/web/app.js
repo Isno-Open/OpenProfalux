@@ -2301,6 +2301,30 @@ function loadIoAdd() {
       if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Clique Enrôler PUIS mets la télécommande en PROG pendant l'écoute, et réessaie.`; }
     } finally { btn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
+  // Diagnostic (ecoute seule) : capturer un enrolement qui MARCHE (systeme d'origine) pour comparer.
+  // Toggle l'ecoute io pure (/api/io/listen), ZERO emission, aucun danger. Independant du flux Enroler.
+  const capBtn = $('#io-cap-enrol'), capSt = $('#io-cap-enrol-stat');
+  if (capBtn) {
+    let capOn = false;
+    capBtn.onclick = async () => {
+      capBtn.disabled = true;
+      // Bannière de phase AVANT d'écouter : segmente la capture dans le journal (on tire /api/log ensuite).
+      if (!capOn && typeof ioBanner === 'function') await ioBanner('CAPTURE appairage : ecoute demarree');
+      const d = await api('/api/io/listen', { method: 'POST', body: JSON.stringify({ on: !capOn }) }).catch(() => null);
+      capBtn.disabled = false;
+      if (d && d.ok) {
+        capOn = !!d.on;
+        if (!capOn && typeof ioBanner === 'function') await ioBanner('CAPTURE appairage : ecoute arretee');
+        capBtn.textContent = capOn ? '⏹ Arrêter la capture' : '📡 Capturer un appairage (écoute)';
+        if (capSt) {
+          capSt.hidden = false; capSt.className = 'statline' + (capOn ? '' : ' ok');
+          capSt.textContent = capOn
+            ? '📡 Écoute active (aucune émission). Réalise maintenant un enrôlement qui fonctionne sur le moteur, puis clique « Arrêter ». Toutes les trames reçues partent au Journal.'
+            : '✅ Capture arrêtée. La séquence est dans le Journal (Système), à comparer.';
+        }
+      } else if (capSt) { capSt.hidden = false; capSt.className = 'statline bad'; capSt.textContent = "❌ Impossible de changer l'écoute."; }
+    };
+  }
   // Etape 2 : TEST (partage) -> pilotage commun a tous les volets (sendCmd -> /api/shutter -> io par proto).
   const bindCmd = (sel, cmd) => { const b = $(sel); if (b) b.onclick = () => { if (ioPairedId) sendCmd({ id: ioPairedId, cmd }, b); }; };
   bindCmd('#io-up', 'up'); bindCmd('#io-stop', 'stop'); bindCmd('#io-down', 'down');

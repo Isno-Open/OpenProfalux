@@ -244,8 +244,13 @@
           <p class="statline" id="io-cap-stat" hidden></p>
           <h3>2. Enrôler</h3>
           <p class="sub"><b>Clique d'abord « Enrôler »</b> : le boîtier commence à écouter. <b>Ensuite seulement</b>, mets ta télécommande d'origine en apprentissage (PROG). <span id="io-add-learn"></span> Le boîtier capte le signal d'enrôlement de ta télécommande et insère <b>aussitôt</b> sa propre identité, dans la même fenêtre. <span id="io-add-appaire-note"></span> Écoute jusqu'à 20 s : clique <b>avant</b> de presser PROG, sinon le signal passe sans être capté.</p>
-          <div class="row"><button id="io-add-pair" class="btn primary" disabled>Enrôler</button></div>
+          <div class="row">
+            <button id="io-add-pair" class="btn primary" disabled>Enrôler</button>
+            <button id="io-cap-enrol" class="btn" type="button">📡 Capturer un appairage (écoute)</button>
+          </div>
+          <p class="sub">Le 2<sup>e</sup> bouton est un <b>outil de diagnostic, sans danger</b> : <b>écoute seule</b>, il journalise un appairage qui <b>fonctionne</b> (ton système habituel) pour le comparer au nôtre. <b>Aucune émission.</b> Clique, réalise l'appairage sur le moteur, puis arrête.</p>
           <p class="statline" id="io-add-status" hidden></p>
+          <p class="statline" id="io-cap-enrol-stat" hidden></p>
           <div id="io-add-finish" hidden>
             <h3>3. Tester</h3>
             <p class="sub">Le moteur peut mettre un instant à répondre. Ces boutons pilotent le volet que tu viens d'appairer.</p>

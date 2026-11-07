@@ -575,6 +575,8 @@ static void rx_task(void *arg) {
             io_radio_config();
             uint8_t iob[32];
             int ni = io_radio_rx_packet(iob, sizeof iob, 300);
+            int8_t rssi = ni > 0 ? cc1101_get_rssi() : 0;   /* lu AVANT restauration OOK (sinon stale) */
+            uint32_t khz = io_radio_last_carrier_khz();     /* porteuse mesuree de la trame (base + FREQEST) */
             cc1101_apply_config_ook();
             cc1101_set_freq_khz(ook_freq);
             xSemaphoreGive(s_mtx);
@@ -582,7 +584,17 @@ static void rx_task(void *arg) {
                 char hex[2 * 32 + 1];
                 int m = ni > 32 ? 32 : ni;
                 for (int i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02X", iob[i]);
-                ESP_LOGW(TAG, "Trame io captee (%d octets) : %s", ni, hex);
+                /* Capture (ecoute seule) : on nomme la commande pour lire une ceremonie d'enrolement
+                 * d'un coup d'oeil (0x30 cle, 0x20 private-write, 0x2e confirmation...), avec frequence
+                 * et RSSI. Sert a enregistrer une sequence qui MARCHE pour comparer. Aucune emission. */
+                uint8_t cmd = io_frame_cmd(iob, ni);
+                const char *lbl = io_cmd_label(cmd);
+                ESP_LOGW(TAG, "io capture : trame (%d o, %u kHz, RSSI %d dBm) cmd=0x%02X (%s) : %s",
+                         ni, (unsigned)khz, rssi, cmd, lbl ? lbl : "inconnu", hex);
+                /* Meme repere ETAPE que le chemin d'enrolement, avec le MEME libelle (io_cmd_label),
+                 * pour que le journal d'un appairage capte soit DIRECTEMENT comparable ligne a ligne a
+                 * celui de notre enrolement (0x00, 0x30, serie 0x20, 0x2e cote a cote). */
+                if (lbl) ESP_LOGW(TAG, "===== io ETAPE : %s captee (%u kHz) =====", lbl, (unsigned)khz);
             } else {
                 vTaskDelay(pdMS_TO_TICKS(5));
             }
