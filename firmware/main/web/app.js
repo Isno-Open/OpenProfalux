@@ -2290,15 +2290,15 @@ function loadIoAdd() {
     const overlay = p && p.io && p.io.cmd;   // codes bouton par action, declares par marque (profiles.json)
     if (!overlay) { toast("Profil sans codes de commande (cmd) : impossible de générer les ordres"); return; }
     setRadioBusy(true); btn.disabled = true;
-    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "Écoute… MAINTENANT mets ta télécommande en apprentissage (PROG). Le boîtier capte son 0x30 et insère son identité aussitôt (jusqu'à 20 s)."; }
+    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "🎧 Écoute en cours — mets MAINTENANT ta télécommande en apprentissage (PROG). (Tu as bien cliqué le bouton D'ABORD, le PROG ENSUITE : c'est le bon ordre.) Le boîtier capte la cérémonie et envoie son identité ~5 s après la fin."; }
     try {
       const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ cmd: ioCmdFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 }) });
       ioPairedId = d.id;
-      if (st) { st.className = 'statline ok'; st.textContent = `✅ ${d.id} enrôlé. Le moteur doit faire un petit va-et-vient. Teste-le, puis donne-lui un nom.`; }
+      if (st) { st.className = 'statline ok'; st.textContent = `📡 Trame d'appairage envoyée (${d.id}). L'io ne renvoie pas d'accusé, donc le boîtier ne peut pas confirmer : regarde si le volet fait un petit va-et-vient, puis teste les flèches ci-dessous. S'il bouge, donne-lui un nom.`; }
       if (fin) fin.hidden = false;
       const nameInp = $('#io-volet-name'); if (nameInp) nameInp.value = d.id;
     } catch (e) {
-      if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Clique Enrôler PUIS mets la télécommande en PROG pendant l'écoute, et réessaie.`; }
+      if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Ordre : clique le bouton D'ABORD, PUIS mets la télécommande en PROG pendant l'écoute, et réessaie.`; }
     } finally { btn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
   // Diagnostic (ecoute seule) : capturer un enrolement qui MARCHE (systeme d'origine) pour comparer.

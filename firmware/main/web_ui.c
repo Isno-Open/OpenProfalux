@@ -1803,7 +1803,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     /* Range la porteuse apprise dans le parametre frequence par appareil (meme champ que Profalux) :
      * les commandes io (radio_io_send(v->freq_khz)) l'utiliseront, et elle est editable dans l'avance. */
     if (freq_khz) shutters_set_tx_params(id, freq_khz, 0, -1, -1, 0, NULL);
-    ESP_LOGW(TAG, "io : identite %s %s (man_id 0x%02X)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
+    ESP_LOGW(TAG, "io : identite %s %s (man_id remote capte 0x%02X ; emis = enroleur)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
     char out[80];
     snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d}", id, tx ? 1 : 0);
     httpd_resp_set_type(r, "application/json");

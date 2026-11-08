@@ -336,8 +336,8 @@ static bool io_wait_ceremony_end(uint32_t car_khz, uint32_t timeout_ms) {
         if (io_cmd_is_pair_confirm(io_frame_cmd(buf, k))) seen = true;
     }
     if (seen) {
-        ESP_LOGW(TAG, "io DIAG : fin de ceremonie detectee, emission de notre 0x30 dans ~1 s (facon vodhash)");
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGW(TAG, "io DIAG : fin de ceremonie detectee, emission de notre 0x30 dans ~5 s");
+        vTaskDelay(pdMS_TO_TICKS(5000));
     } else {
         ESP_LOGW(TAG, "io DIAG : pas de 0x2e vu en %u ms, emission best-effort (voir caveat)", (unsigned)timeout_ms);
     }
@@ -367,9 +367,11 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
             char ohex[2 * sizeof(ourframe) + 1];
             int m = ourlen < (int)sizeof(ourframe) ? ourlen : (int)sizeof(ourframe);
             for (int i = 0; i < m; i++) snprintf(&ohex[i * 2], 3, "%02X", ourframe[i]);
+            /* man_id EMIS (octet 25 de notre trame), pas le man_id capte du remote : on affiche ce qu'on
+             * a reellement envoye (0x01, l'enroleur), sinon le journal relit a tort le 0x02 capte. */
             ESP_LOGW(TAG, "===== io ETAPE : NOTRE 0x30 emis vers %02X%02X%02X (man_id 0x%02X, %u kHz) : %s =====",
                      profile->enroll_target[0], profile->enroll_target[1], profile->enroll_target[2],
-                     profile->man_id, (unsigned)emit_khz, ohex);
+                     (ourlen > 25 ? ourframe[25] : 0), (unsigned)emit_khz, ohex);
             io_probe_motor_response(emit_khz);   /* DIAG : le moteur repond-il ? (1W vs 2W), + capte le 0x2e de fin, passif */
         }
         cc1101_apply_config_ook();

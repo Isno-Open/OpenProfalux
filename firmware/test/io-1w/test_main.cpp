@@ -132,11 +132,14 @@ int main() {
 
     uint8_t src[3], key[16], src2[3], key2[16];
     assert(io_derive_identity(0, src, key) && io_derive_identity(0, src2, key2));
-    const uint8_t expected_src[] = {0xAC, 0xC1, 0x84};
+    const uint8_t expected_src[] = {0x06, 0xC1, 0x84};   /* 1er octet force en type controleur 0x02..0x09 (0xAC & 7 = 4 -> 0x02+4 = 0x06) */
     const uint8_t expected_key[] = {0x13,0x96,0x29,0xF8,0x1D,0xE6,0x5A,0x06,0xD8,0x8F,0x13,0xA3,0x10,0x0F,0xC9,0x3E};
     assert(memcmp(src, expected_src, 3) == 0 && memcmp(key, expected_key, 16) == 0);
     assert(memcmp(src, src2, 3) == 0 && memcmp(key, key2, 16) == 0);
     assert(io_derive_identity(1, src2, key2) && memcmp(src, src2, 3) != 0);
+    /* 1er octet = type CONTROLEUR (0x02..0x09), comme les identites passerelle DEVMEL : un moteur Somfy
+     * n'enrole pas une src de type telecommande (0x0D). Garde-fou sur plusieurs index. */
+    for (uint32_t i = 0; i < 8; i++) { uint8_t s[3], k[16]; assert(io_derive_identity(i, s, k) && s[0] >= 0x02 && s[0] <= 0x09); }
 
     assert(io_store_set(src, key, &profile, 0x1234));
     uint8_t stored_key[16]; io_profile_t stored_profile;

@@ -114,7 +114,12 @@ extern "C" bool io_derive_identity(uint32_t index, uint8_t out_src[3], uint8_t o
     seed ^= ((uint64_t)index + 1) * 0xD1B54A32D192ED03ULL;
     uint64_t st = seed;
     uint64_t a = splitmix64(&st);
-    out_src[0] = (uint8_t)(a & 0xFF); if (out_src[0] == 0x00) out_src[0] = 0x0D;  /* type telecommande */
+    /* 1er octet = TYPE de noeud (nibble bas) : une passerelle/controleur est en 0x02..0x09, une
+     * telecommande en 0x0D. Les 11 identites DEVMEL (passerelle qui enrole) sont TOUTES en 0x02..0x09 ;
+     * notre box joue le meme role, donc meme type. io12g..j emettait une src en 0x5D (type telecommande
+     * 0xD) : le moteur Somfy a refuse l'enrolement. On force donc 0x02..0x09 (verite terrain capture
+     * DEVMEL 2026-11-08). Identite fraiche sinon (octets 1-2 derives MAC+index), jamais une src DEVMEL. */
+    out_src[0] = (uint8_t)(0x02 + (a & 0x07));
     out_src[1] = (uint8_t)((a >> 8) & 0xFF);
     out_src[2] = (uint8_t)((a >> 16) & 0xFF);
     for (int i = 0; i < 16; i += 8) {
@@ -122,6 +127,19 @@ extern "C" bool io_derive_identity(uint32_t index, uint8_t out_src[3], uint8_t o
         for (int j = 0; j < 8; j++) out_key[i + j] = (uint8_t)(k >> (8 * j));
     }
     return true;
+}
+
+/* Comme io_derive_identity, mais choisit le plus petit index dont la source n'est PAS deja enrolee
+ * (io_store). Donne une identite DISTINCTE par volet io : sinon tous les volets prendraient l'index 0
+ * (meme MAC+0) -> meme id, meme entree io_store, le 2e ecraserait le 1er. Pour le 1er volet, index 0
+ * (dormant). */
+extern "C" bool io_derive_free_identity(uint8_t out_src[3], uint8_t out_key[16]) {
+    for (uint32_t index = 0; index < 4096; index++) {
+        if (!io_derive_identity(index, out_src, out_key)) return false;
+        uint8_t probe[16];
+        if (!io_store_get_key(out_src, probe)) return true;   /* source pas encore enrolee = libre */
+    }
+    return false;   /* epuise (improbable) */
 }
 
 extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
