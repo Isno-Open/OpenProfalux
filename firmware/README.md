@@ -72,6 +72,9 @@ ou pousser son URL via MQTT (`openprofalux/ota/pull`).
 idf.py -B build-m5-atom-lite -p /dev/ttyUSB0 flash monitor
 ```
 
+Sur Mac, où le flash USB via Docker est capricieux, une procédure pas à pas installe ESP-IDF v6.1 en
+natif : [`../docs/FLASH-MACOS.md`](../docs/FLASH-MACOS.md).
+
 ## Retour automatique après une mise à jour
 Une mise à jour démarre **en essai**. Elle est validée après une minute sans plantage, ou plus tôt
 si le boîtier redémarre de lui-même (Wi-Fi revenu, configuration enregistrée) ou reçoit une
