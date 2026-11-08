@@ -129,6 +129,13 @@ constexpr uint8_t MANUFACTURER_SOMFY_PAIR = 0x02;
 constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
 constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01
 
+// man_id du 0x30 D'ENROLEMENT que NOUS emettons = marque de l'ENROLEUR (la passerelle qui ajoute
+// une identite), PAS du moteur. Verite terrain (capture d'un enrolement DEVMEL reel le 2026-11-08,
+// + banc vodhash) : DEVMEL enrole un moteur SOMFY et vodhash un VELUX avec la MEME valeur 0x01. Les
+// MANUFACTURER_*_PAIR ci-dessus sont la marque que les TELECOMMANDES mettent dans LEUR ceremonie
+// (Somfy 0x02) : a NE PAS reemettre comme notre man_id (bug io12g/h : on reemettait le 0x02 capte).
+constexpr uint8_t IO_ENROLL_MAN_ID        = 0x01;
+
 // Rythme d'emission de l'appairage, RELEVE sur l'enrolement reel d'une passerelle tierce du 2026-10-24 (issue #87,
 // journal 6, 48 emissions chronometrees) : chaque trame est emise 4 FOIS, octet pour octet
 // IDENTIQUES, CRC compris, et le code roulant NE BOUGE PAS entre les repetitions ; repetitions

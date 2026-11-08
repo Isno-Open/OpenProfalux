@@ -53,7 +53,7 @@ extern "C" int io_enroll_from_capture(const uint8_t *frame, int n, io_profile_t 
         !crypto::verify_crc16(frame, n) || frame[OFFSET_COMMAND_ID] != CMD_KEY_TRANSFER_1W) return -1;  /* dest apprise seulement sur un 0x30 */
     memcpy(out->enroll_target, &frame[OFFSET_DEST_NODE], NODE_ID_SIZE);  /* dest d'enrolement, captee */
     out->low_power   = frame[OFFSET_CTRL_BYTE_1];                        /* basse conso captee */
-    out->man_id      = frame[OFFSET_PAIR_MAN_ID];                        /* fabricant capte (seule valeur de marque) */
+    out->man_id      = frame[OFFSET_PAIR_MAN_ID];                        /* man_id du REMOTE, capte pour INFO (panneau avance) ; notre emission utilise IO_ENROLL_MAN_ID, pas celui-ci */
     out->pair_status = frame[OFFSET_PAIR_STATUS];                        /* statut capte */
     return 0;
 }
@@ -134,7 +134,7 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
     memcpy(&f[OFFSET_SRC_NODE], src, NODE_ID_SIZE);
     f[OFFSET_COMMAND_ID] = CMD_KEY_TRANSFER_1W;
     if (!crypto::encrypt_1w_key(key, src, &f[OFFSET_DATA])) return -1;
-    f[OFFSET_PAIR_MAN_ID] = profile->man_id;                              /* CAPTE : fabricant */
+    f[OFFSET_PAIR_MAN_ID] = IO_ENROLL_MAN_ID;                             /* marque de l'ENROLEUR (0x01, DEVMEL+vodhash), PAS le man_id capte du remote (bug io12g/h) */
     f[OFFSET_PAIR_STATUS] = profile->pair_status;                         /* CAPTE : statut */
     uint16_t seq;
     if (!io_store_next_rolling(src, &seq)) return -1;

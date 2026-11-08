@@ -158,10 +158,11 @@ int main() {
     assert(sent[0][9+2] == 0xC8 && sent[0][9+5] == 0xD3);
     check_burst(0x1235, 17, 0x00, true);
 
-    // Enrolement : NOTRE 0x30 vers enroll_target capte (00 00 3F), man_id/statut/basse conso captes.
+    // Enrolement : NOTRE 0x30 vers enroll_target capte (00 00 3F). man_id = IO_ENROLL_MAN_ID (0x01,
+    // marque de l'ENROLEUR), PAS le man_id capte du remote (0x02 ici) : verite terrain DEVMEL+vodhash.
     assert(io_hc_pair_1w(&profile, src, key, NULL, NULL) == 0);
     assert(sent[0].size() == 31 && sent[0][8] == 0x30 && memcmp(&sent[0][2], enroll_dst, 3) == 0);
-    assert(sent[0][25] == 0x02 && sent[0][26] == 0x01 && sent[0][1] == 0x00);
+    assert(sent[0][25] == IO_ENROLL_MAN_ID && sent[0][26] == 0x01 && sent[0][1] == 0x00);
     check_burst(0x1236, 27, 0x00, false);
 
     commit_ok = false;
