@@ -76,15 +76,40 @@ ne convient pas, il ne connaît que le nom par défaut `dependencies.lock`. La C
 un build a dû créer ou recalculer l'un de ces fichiers (manifeste `idf_component.yml`
 modifié, nouvelle puce) : commettre celui qu'elle affiche.
 
-## Flasher + console série
+## Flasher
 
-Décommenter la section `devices:` de `docker-compose.yml` et ajuster le port.
+Docker, ci-dessus, sert à **compiler**. Pour **flasher**, il faut un outil sur la machine
+reliée à l'ESP32 en USB : `idf.py`/`esptool` vivent dans le conteneur, pas sur l'hôte.
+
+Le plus simple, **sans rien compiler** : prendre le binaire prêt à l'emploi de la
+[dernière release](https://github.com/Isno-Open/OpenProfalux/releases)
+(`openprofalux-<carte>-<version>-full.bin`, image complète à flasher à 0x0) et le poser
+avec esptool :
+
+```bash
+pip install esptool
+esptool --port /dev/ttyUSB0 write-flash 0x0 openprofalux-<carte>-full.bin
+# Windows : --port COM3 ; macOS : --port /dev/cu.usbserial-XXXX
+```
+
+Si on a compilé soi-même **avec un ESP-IDF installé en local** (hors Docker) :
+
+```bash
+idf.py -B build-<carte> -p /dev/ttyUSB0 flash monitor
+```
+
+Flasher **à travers** le conteneur est possible mais fragile (il faut passer l'USB :
+décommenter la section `devices:` de `docker-compose.yml`, et ça ne fonctionne quasiment
+pas hors Linux, Docker Desktop ne relayant pas l'USB) :
 
 ```bash
 docker compose run --rm esp-idf bash -c "
     idf.py -B build-isno-super -p /dev/ttyUSB0 flash monitor
 "
 ```
+
+**Mises à jour ensuite** : par **OTA** depuis l'interface web (onglet OTA), sans câble ni
+Docker.
 
 ## Setup MQTT côté HA (pré-requis)
 
