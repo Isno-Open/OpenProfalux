@@ -18,6 +18,7 @@ using namespace iohome;
 static std::map<std::string, std::vector<uint8_t>> saved, pending;
 static bool commit_ok = true, radio_ok = true;
 static std::vector<std::vector<uint8_t>> sent;
+static std::vector<int64_t> sent_at;
 
 extern "C" {
 int nvs_open(const char *, int, nvs_handle_t *h) { *h = 1; pending = saved; return ESP_OK; }
@@ -38,7 +39,13 @@ int nvs_set_u32(nvs_handle_t h, const char *key, uint32_t n) { return nvs_set_bl
 int nvs_get_used_entry_count(nvs_handle_t, size_t *n) { *n = saved.size(); return ESP_OK; }
 int nvs_erase_all(nvs_handle_t) { pending.clear(); return ESP_OK; }
 int io_radio_tx_frame(const uint8_t *p, uint8_t n) {
-    sent.emplace_back(p, p + n); return radio_ok ? 0 : -1;
+    return io_radio_tx_frame_at(p, n, 0, NULL);
+}
+int io_radio_tx_frame_at(const uint8_t *p, uint8_t n, int64_t at, int64_t *actual) {
+    const int64_t start = at ? at : (sent_at.empty() ? 1000000 : sent_at.back() + 10000);
+    sent.emplace_back(p, p + n); sent_at.push_back(start);
+    if (actual) *actual = start;
+    return radio_ok ? 0 : -1;
 }
 }
 int esp_read_mac(uint8_t mac[6], int) {
@@ -82,6 +89,7 @@ static void check_burst(uint16_t rolling, size_t counter_at, uint8_t first_ctrl1
         assert(crypto::verify_crc16(f.data(), f.size()));
     }
     sent.clear();
+    sent_at.clear();
 }
 
 // Fabrique une trame io valide pour le banc (CRC = celui du stub). hmac=6 pour une commande, 0 pour un 0x30.
@@ -177,9 +185,11 @@ int main() {
         assert(crypto::verify_crc16(f.data(), f.size()));                 // CRC propre a chaque variante
     }
     assert(sent[0][1] == 0x20 && sent[1][1] == 0x00);                     // copie 1 = FC20, copie 2 = FC00
+    assert(sent_at[1] - sent_at[0] == (int64_t)IO_ENROLL_CTRL1_GAP_MS * 1000); // debut-a-debut = 143 ms
     assert(std::equal(sent[0].begin() + 2, sent[0].end() - 2, sent[1].begin() + 2));  // seul ctrl1+CRC changent
     assert(sent[0][0] == sent[1][0]);
     sent.clear();
+    sent_at.clear();
 
     commit_ok = false;
     assert(io_hc_send_shutter_1w(src, key, IO_ACTION_DOWN) == -1 && sent.empty());

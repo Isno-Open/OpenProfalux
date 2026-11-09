@@ -46,6 +46,11 @@ int io_radio_tx_packet(const uint8_t *buf, size_t len);
  * a test8 (issue #87) on a compare notre INTENTION au trafic d'une passerelle tierce, jamais nos octets aux
  * siens. Un defaut d'assemblage ne pouvait se voir nulle part. */
 int io_radio_tx_frame(const uint8_t *io_bytes, uint8_t n);
+/* Variante horodatee pour une paire dont l'intervalle RF doit etre exact. `data_start_us == 0`
+ * conserve le preambule normal ; sinon les premiers bits de donnees sont programmes a cet instant
+ * esp_timer. `actual_start_us` recoit l'instant effectif de remplissage de la FIFO. */
+int io_radio_tx_frame_at(const uint8_t *io_bytes, uint8_t n, int64_t data_start_us,
+                         int64_t *actual_start_us);
 int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms);
 
 #ifdef __cplusplus

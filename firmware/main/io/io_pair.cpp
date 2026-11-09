@@ -185,8 +185,9 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
     f20[29] = (uint8_t)crc20;          /* CRC propre a la variante FC20 */
     f20[30] = (uint8_t)(crc20 >> 8);
 
-    const int rc20 = io_radio_tx_frame(f20, sizeof f20);          /* copie 1 : FC20 */
-    vTaskDelay(pdMS_TO_TICKS(IO_ENROLL_CTRL1_GAP_MS));            /* ~143 ms debut-a-debut */
-    const int rc00 = io_radio_tx_frame(f, sizeof f);              /* copie 2 : FC00, meme seq */
+    int64_t start20 = 0;
+    const int rc20 = io_radio_tx_frame_at(f20, sizeof f20, 0, &start20); /* copie 1 : FC20 */
+    const int64_t start00 = start20 + (int64_t)IO_ENROLL_CTRL1_GAP_MS * 1000;
+    const int rc00 = io_radio_tx_frame_at(f, sizeof f, start00, NULL);   /* FC00 exactement +143 ms */
     return (rc20 == 0 && rc00 == 0) ? 0 : -1;                     /* une paire partielle n'est pas un succes */
 }

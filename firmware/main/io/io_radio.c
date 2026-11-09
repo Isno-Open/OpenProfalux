@@ -130,8 +130,26 @@ void io_radio_config(void) {
     io_radio_set_channel(IO_CH2);
 }
 
-int io_radio_tx_packet(const uint8_t *buf, size_t len) {
+static void wait_until_us(int64_t target_us) {
+    for (;;) {
+        int64_t left = target_us - esp_timer_get_time();
+        if (left <= 0) return;
+        /* Dormir pour le gros du delai, puis finir en microsecondes sans depasser la cible. */
+        if (left > 3000) {
+            uint32_t ms = (uint32_t)((left - 2000) / 1000);
+            TickType_t ticks = pdMS_TO_TICKS(ms);
+            if (ticks > 0) { vTaskDelay(ticks); continue; }
+        }
+        esp_rom_delay_us((uint32_t)(left > 1000 ? 1000 : left));
+    }
+}
+
+static int io_radio_tx_packet_at(const uint8_t *buf, size_t len, int64_t data_start_us,
+                                 int64_t *actual_start_us) {
     if (!buf || len == 0 || len > 60) return -1;     /* trame io encapsulee ~40 o, < taille FIFO 64 */
+    /* Pour une emission programmee, garder le preambule normal de 10 ms au lieu de commencer TX
+     * tout de suite et de fabriquer artificiellement un preambule long de plus de 100 ms. */
+    if (data_start_us > 0) wait_until_us(data_start_us - 10000);
     cc1101_strobe_cmd(CC_SIDLE);
     cc1101_strobe_cmd(CC_SFTX);                       /* vide la TXFIFO */
     cc1101_write_reg(CC_REG_PKTLEN, (uint8_t)len);    /* longueur fixe = ce paquet */
@@ -143,8 +161,10 @@ int io_radio_tx_packet(const uint8_t *buf, size_t len) {
         esp_rom_delay_us(500);
     }
     /* Reveil fixe de 500 ms (suffit a un Velux solaire), a affiner en mesurant la fenetre RX du moteur. */
-    if (first_tx) vTaskDelay(pdMS_TO_TICKS(500));
+    if (data_start_us > 0) wait_until_us(data_start_us);
+    else if (first_tx) vTaskDelay(pdMS_TO_TICKS(500));
     else esp_rom_delay_us(10000);
+    if (actual_start_us) *actual_start_us = esp_timer_get_time();
     /* Alimenter la FIFO par blocs SPI supportes avant qu'elle se vide. */
     for (size_t i = 0; i < len; i += 31) {
         size_t chunk = len - i;
@@ -161,6 +181,10 @@ failed:
     cc1101_strobe_cmd(CC_SIDLE);
     cc1101_strobe_cmd(CC_SFTX);
     return -1;
+}
+
+int io_radio_tx_packet(const uint8_t *buf, size_t len) {
+    return io_radio_tx_packet_at(buf, len, 0, NULL);
 }
 
 /* Recoit UNE trame io et la rend DESASSEMBLEE (octets io, pas les octets FIFO encapsules UART).
@@ -209,7 +233,8 @@ int io_radio_rx_packet(uint8_t *buf, size_t max, uint32_t timeout_ms) {
     return 0;   /* rien recu dans le delai */
 }
 
-int io_radio_tx_frame(const uint8_t *io_bytes, uint8_t n) {
+int io_radio_tx_frame_at(const uint8_t *io_bytes, uint8_t n, int64_t data_start_us,
+                         int64_t *actual_start_us) {
     char hex[2 * 32 + 1];
     uint8_t m = n > 32 ? 32 : n;
     for (uint8_t i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02X", io_bytes[i]);
@@ -222,5 +247,9 @@ int io_radio_tx_frame(const uint8_t *io_bytes, uint8_t n) {
         ESP_LOGE(TAG, "encapsulation refusee (%u octets io)", (unsigned)n);
         return -1;
     }
-    return io_radio_tx_packet(fifo, k);
+    return io_radio_tx_packet_at(fifo, k, data_start_us, actual_start_us);
+}
+
+int io_radio_tx_frame(const uint8_t *io_bytes, uint8_t n) {
+    return io_radio_tx_frame_at(io_bytes, n, 0, NULL);
 }
