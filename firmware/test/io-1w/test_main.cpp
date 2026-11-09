@@ -112,7 +112,9 @@ int main() {
     // Le 0x30 d'enrolement : cle(16) + man_id(0x02 Somfy) + statut(0x01), pas de HMAC.
     std::vector<uint8_t> key30(16); for (int i = 0; i < 16; i++) key30[i] = (uint8_t)(0x40 + i);
     std::vector<uint8_t> body30 = key30; body30.push_back(0x02); body30.push_back(0x01);
-    auto enr = mkframe(0x00, enroll_dst, CMD_KEY_TRANSFER_1W, body30, 0);
+    /* La capture retient la PREMIERE copie du couple reel, donc FC20. L'emetteur doit tout de meme
+     * reconstruire FC20 -> FC00 ; ce cas attrape la regression FC20 -> FC20. */
+    auto enr = mkframe(0x20, enroll_dst, CMD_KEY_TRANSFER_1W, body30, 0);
 
     // --- Extraction : rien n'est suppose, tout vient des trames. L'appelant met le profil a zero. ---
     io_profile_t profile; memset(&profile, 0, sizeof profile);

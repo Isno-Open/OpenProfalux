@@ -40,7 +40,7 @@ extern "C" int io_profile_from_capture(const uint8_t *frame, int n, io_profile_t
 }
 
 /* Apprend l'enrolement depuis le 0x30 de la VRAIE telecommande, capte pendant sa fenetre PROG : sa
- * destination d'enrolement, son octet de controle 1 (basse conso), son fabricant et son statut. Rien
+ * destination d'enrolement, son fabricant et son statut. Rien
  * n'est suppose, tout est lu. Remplit les champs d'enrolement de *out (deja mis a zero par l'appelant).
  * Rend 0 si c'est un 0x30 valide, -1 sinon.
  * NOTE (option 2 « Somfy d'abord », 2026-11-05) : l'enrolement EXIGE un 0x30 capte, sans repli. Valide
@@ -52,7 +52,8 @@ extern "C" int io_enroll_from_capture(const uint8_t *frame, int n, io_profile_t 
         (frame[OFFSET_CTRL_BYTE_0] & (CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK)) != (CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK) ||
         !crypto::verify_crc16(frame, n) || frame[OFFSET_COMMAND_ID] != CMD_KEY_TRANSFER_1W) return -1;  /* dest apprise seulement sur un 0x30 */
     memcpy(out->enroll_target, &frame[OFFSET_DEST_NODE], NODE_ID_SIZE);  /* dest d'enrolement, captee */
-    out->low_power   = frame[OFFSET_CTRL_BYTE_1];                        /* basse conso captee */
+    /* Ne pas recopier ctrl1 ici : la capture peut etre FC20 ou FC00 selon la copie retenue. Le bit
+     * de commande reste celui appris sur les 0x00 ; la paire d'enrolement force elle-meme 20 -> 00. */
     out->man_id      = frame[OFFSET_PAIR_MAN_ID];                        /* man_id du REMOTE, capte pour INFO (panneau avance) ; notre emission utilise IO_ENROLL_MAN_ID, pas celui-ci */
     out->pair_status = frame[OFFSET_PAIR_STATUS];                        /* statut capte */
     return 0;
@@ -147,7 +148,9 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
     if (!profile || !src || !key) return -1;
     uint8_t f[31] = {0};
     f[OFFSET_CTRL_BYTE_0] = 28 | CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK;   /* longueur 31 + debut/fin + protocole 1W */
-    f[OFFSET_CTRL_BYTE_1] = profile->low_power;                            /* CAPTE : basse conso de la destination */
+    /* La capture peut tomber sur la premiere copie FC20. La copie de fermeture doit pourtant etre
+     * FC00 : on conserve les autres bits captures, mais on force explicitement le bit LPM a zero. */
+    f[OFFSET_CTRL_BYTE_1] = (uint8_t)(profile->low_power & ~CTRL1_LOW_POWER);
     memcpy(&f[OFFSET_DEST_NODE], profile->enroll_target, NODE_ID_SIZE);    /* CAPTE : dest d'enrolement (00 00 3F observe) */
     memcpy(&f[OFFSET_SRC_NODE], src, NODE_ID_SIZE);
     f[OFFSET_COMMAND_ID] = CMD_KEY_TRANSFER_1W;
@@ -177,14 +180,13 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
      * reste un autre motif prouve, non retenu ici car la cible est un Somfy. */
     uint8_t f20[31];
     memcpy(f20, f, sizeof f);
-    f20[OFFSET_CTRL_BYTE_1] = (uint8_t)(profile->low_power | CTRL1_LOW_POWER);   /* bit 0x20 -> FC20 */
+    f20[OFFSET_CTRL_BYTE_1] = (uint8_t)(f[OFFSET_CTRL_BYTE_1] | CTRL1_LOW_POWER); /* bit 0x20 -> FC20 */
     uint16_t crc20 = crypto::compute_crc16(f20, 29);
     f20[29] = (uint8_t)crc20;          /* CRC propre a la variante FC20 */
     f20[30] = (uint8_t)(crc20 >> 8);
 
-    int rc = -1;
-    if (io_radio_tx_frame(f20, sizeof f20) == 0) rc = 0;          /* copie 1 : FC20 */
+    const int rc20 = io_radio_tx_frame(f20, sizeof f20);          /* copie 1 : FC20 */
     vTaskDelay(pdMS_TO_TICKS(IO_ENROLL_CTRL1_GAP_MS));            /* ~143 ms debut-a-debut */
-    if (io_radio_tx_frame(f,   sizeof f)   == 0) rc = 0;          /* copie 2 : FC00, meme seq */
-    return rc;
+    const int rc00 = io_radio_tx_frame(f, sizeof f);              /* copie 2 : FC00, meme seq */
+    return (rc20 == 0 && rc00 == 0) ? 0 : -1;                     /* une paire partielle n'est pas un succes */
 }
