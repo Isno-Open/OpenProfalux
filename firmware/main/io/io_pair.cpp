@@ -168,11 +168,23 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
      * la telecommande deja appairee ouvre l'apprentissage du moteur, nous sommes la nouvelle.
      * On ne reproduit PAS la ceremonie de la telecommande maitre (0x39 + rafale 0x20 + 0x2e) : la
      * rafale 0x20 est du REGLAGE DE FINS DE COURSE et dereglerait un moteur deja regle.
-     * ⚠️ On reemet LES MEMES octets : repasser par le constructeur incrementerait le code roulant. */
+     * ⚠️ Les deux copies gardent la MEME seq (seuls ctrl1 et son CRC changent) : repasser par le
+     *    constructeur incrementerait le code roulant. */
+    /* Rafale d'enrolement, ecole DEVMEL (capture Somfy de Pascal, 2026-11-08) : DEUX copies a seq
+     * CONSTANTE, la 1re avec le bit 0x20 de ctrl1 (FC20, debut de rafale), la 2e sans (FC00),
+     * ~143 ms d'ecart. Le CRC couvre ctrl1, recalcule pour la variante FC20. io12k emettait 4x
+     * FC00 (ni DEVMEL ni vodhash) -> refus du Somfy. L'ecole vodhash/Velux (4x FC20 identiques)
+     * reste un autre motif prouve, non retenu ici car la cible est un Somfy. */
+    uint8_t f20[31];
+    memcpy(f20, f, sizeof f);
+    f20[OFFSET_CTRL_BYTE_1] = (uint8_t)(profile->low_power | CTRL1_LOW_POWER);   /* bit 0x20 -> FC20 */
+    uint16_t crc20 = crypto::compute_crc16(f20, 29);
+    f20[29] = (uint8_t)crc20;          /* CRC propre a la variante FC20 */
+    f20[30] = (uint8_t)(crc20 >> 8);
+
     int rc = -1;
-    for (uint8_t i = 0; i < IO_TX_REPEATS; i++) {
-        if (io_radio_tx_frame(f, sizeof f) == 0) rc = 0;
-        if (i + 1 < IO_TX_REPEATS) vTaskDelay(pdMS_TO_TICKS(IO_TX_REPEAT_GAP_MS));
-    }
+    if (io_radio_tx_frame(f20, sizeof f20) == 0) rc = 0;          /* copie 1 : FC20 */
+    vTaskDelay(pdMS_TO_TICKS(IO_ENROLL_CTRL1_GAP_MS));            /* ~143 ms debut-a-debut */
+    if (io_radio_tx_frame(f,   sizeof f)   == 0) rc = 0;          /* copie 2 : FC00, meme seq */
     return rc;
 }

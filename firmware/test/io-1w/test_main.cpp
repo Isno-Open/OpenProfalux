@@ -66,8 +66,9 @@ bool encrypt_1w_key(const uint8_t key[16], const uint8_t[3], uint8_t out[16]) {
 }
 }}
 
-// Une rafale = 4 trames meme compteur. first_ctrl1 = octet de controle 1 CAPTE (basse conso) ;
-// clear_after : la commande retire le bit LPM apres la 1re trame, l'enrolement (0x30) reemet a l'identique.
+// Rafale de COMMANDE = 4 trames meme compteur. first_ctrl1 = octet de controle 1 CAPTE (basse conso) ;
+// clear_after : la commande retire le bit LPM apres la 1re trame. (L'enrolement 0x30 utilise la paire
+// DEVMEL FC20->FC00, verifiee separement plus bas, pas cette fonction.)
 static void check_burst(uint16_t rolling, size_t counter_at, uint8_t first_ctrl1, bool clear_after) {
     assert(sent.size() == 4);
     for (size_t i = 0; i < sent.size(); i++) {
@@ -161,12 +162,22 @@ int main() {
     assert(sent[0][9+2] == 0xC8 && sent[0][9+5] == 0xD3);
     check_burst(0x1235, 17, 0x00, true);
 
-    // Enrolement : NOTRE 0x30 vers enroll_target capte (00 00 3F). man_id = IO_ENROLL_MAN_ID (0x01,
-    // marque de l'ENROLEUR), PAS le man_id capte du remote (0x02 ici) : verite terrain DEVMEL+vodhash.
+    // Enrolement ecole DEVMEL (capture Somfy de Pascal 2026-11-08) : EXACTEMENT 2 copies a seq
+    // CONSTANTE, FC20 (bit 0x20 de ctrl1) puis FC00. man_id = IO_ENROLL_MAN_ID (0x01, marque de
+    // l'ENROLEUR), PAS le man_id capte du remote (0x02 ici). Le CRC couvre ctrl1 : propre a chaque
+    // variante. (Ni 4x FC00 d'io12k, ni 4x FC20 de vodhash : la paire du Somfy.)
     assert(io_hc_pair_1w(&profile, src, key, NULL, NULL) == 0);
-    assert(sent[0].size() == 31 && sent[0][8] == 0x30 && memcmp(&sent[0][2], enroll_dst, 3) == 0);
-    assert(sent[0][25] == IO_ENROLL_MAN_ID && sent[0][26] == 0x01 && sent[0][1] == 0x00);
-    check_burst(0x1236, 27, 0x00, false);
+    assert(sent.size() == 2);                                              // paire DEVMEL, pas 4 copies
+    for (const auto &f : sent) {
+        assert(f.size() == 31 && f[8] == 0x30 && memcmp(&f[2], enroll_dst, 3) == 0);
+        assert(f[25] == IO_ENROLL_MAN_ID && f[26] == 0x01);               // enroleur 0x01, statut 0x01
+        assert(f[27] == 0x12 && f[28] == 0x36);                           // MEME seq 0x1236 sur les 2
+        assert(crypto::verify_crc16(f.data(), f.size()));                 // CRC propre a chaque variante
+    }
+    assert(sent[0][1] == 0x20 && sent[1][1] == 0x00);                     // copie 1 = FC20, copie 2 = FC00
+    assert(std::equal(sent[0].begin() + 2, sent[0].end() - 2, sent[1].begin() + 2));  // seul ctrl1+CRC changent
+    assert(sent[0][0] == sent[1][0]);
+    sent.clear();
 
     commit_ok = false;
     assert(io_hc_send_shutter_1w(src, key, IO_ACTION_DOWN) == -1 && sent.empty());

@@ -144,6 +144,13 @@ constexpr uint8_t IO_ENROLL_MAN_ID        = 0x01;
 constexpr uint8_t  IO_TX_REPEATS          = 4;
 constexpr uint16_t IO_TX_REPEAT_GAP_MS    = 25;
 
+// Ecole DEVMEL (capture Somfy de Pascal, 2026-11-08) : l'enrolement 0x30 reussi n'est PAS une
+// rafale identique. C'est DEUX copies a seq CONSTANTE : la 1re avec le bit 0x20 de ctrl1 (FC20),
+// la 2e sans (FC00), espacees d'environ 143 ms debut-a-debut (W77472826 -> W77472969). Le CRC
+// couvre ctrl1, donc recalcule par variante. (L'ecole vodhash/Velux = 4x FC20 identiques : autre
+// motif prouve, non retenu ici car la cible est un Somfy.)
+constexpr uint16_t IO_ENROLL_CTRL1_GAP_MS = 143;
+
 // NOTE 2026-10-28 : les adresses d'ecriture de la rafale 0x20 (0x0C00, 0x05XX) ont ete
 // RETIREES. C'etait du REGLAGE DE FINS DE COURSE (doc io : enter_settings_mode,
 // save_lower/upper_end_limit, save_settings), emis par la telecommande MAITRE qui parraine,
