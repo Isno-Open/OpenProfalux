@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "esp_timer.h"
 #include "esp_log.h"
 
@@ -34,7 +35,20 @@ static uint32_t s_freq_khz = 0;
 static int8_t   s_rssi = 0;
 static int64_t  s_t_us = 0;
 
+/* Lot de trames collecte par rfcap_capture_multi : persiste entre la capture et l'envoi du rapport
+ * (deux requetes HTTP distinctes). Le texte JSON des trames est accumule a la volee. */
+#define RFCAP_FRAMES_JSON_MAX 20480
+static char     s_frames_json[RFCAP_FRAMES_JSON_MAX];
+static int      s_frames_len = 0;
+static int      s_frames_count = 0;
+/* Derniere trame AJOUTEE au lot : sert a dedoublonner la suivante (code fixe presse plusieurs fois)
+ * et de trame `pulses`/`n` de compatibilite dans le JSON du rapport. */
+static uint8_t  s_prev_lvl[RFCAP_MAX_PULSES];
+static uint16_t s_prev_us[RFCAP_MAX_PULSES];
+static int      s_prev_n = 0;
+
 int rfcap_capture(int radio, uint32_t timeout_ms) {
+    s_frames_count = 0;   /* une capture SIMPLE invalide un lot multi precedent : le rapport prendra celle-ci */
     const char *band = NULL; uint32_t carrier = 0, cur = 0, low = 0, high = 0; uint8_t pn = 0, ver = 0;
     cc1101_radio_info(radio, &band, &carrier, &cur, &low, &high, &pn, &ver);   /* remplit band/cur ; l'idx est valide par radio_capture_raw_on */
     int8_t rssi = 0;
@@ -85,6 +99,75 @@ int rfcap_last_json(char *out, int max) {
                        s_n, s_radio, s_band_mhz, (unsigned)s_freq_khz, s_rssi, (unsigned)age_ms);
     for (int i = 0; i < s_n && off < max - 24; i++)
         off += snprintf(out + off, max - off, "%s[%d,%u]", i ? "," : "", s_lvl[i], (unsigned)s_us[i]);
+    off += snprintf(out + off, max - off, "]}");
+    return off;
+}
+
+/* La capture courante (s_lvl/s_us/s_n) est-elle identique a la derniere AJOUTEE au lot ? */
+static bool rfcap_same_as_prev(void) {
+    if (s_n <= 0 || s_n != s_prev_n) return false;
+    for (int i = 0; i < s_n; i++)
+        if (s_lvl[i] != s_prev_lvl[i] || s_us[i] != s_prev_us[i]) return false;
+    return true;
+}
+
+/* Ajoute la capture courante au lot JSON s_frames_json. Rend false si pas la place (lot clos tel
+ * quel), de sorte qu'on n'ecrive JAMAIS une trame partielle (JSON toujours valide). */
+static bool rfcap_frames_append(void) {
+    int need = s_n * 10 + 48;   /* taille pessimiste : "[l,uuuuu]," ~ 10 car. par impulsion + enveloppe */
+    if (s_frames_len + need > RFCAP_FRAMES_JSON_MAX - 64) return false;
+    int off = s_frames_len;
+    off += snprintf(s_frames_json + off, RFCAP_FRAMES_JSON_MAX - off,
+                    "%s{\"rssi\":%d,\"pulses\":[", s_frames_count ? "," : "", s_rssi);
+    for (int i = 0; i < s_n; i++)
+        off += snprintf(s_frames_json + off, RFCAP_FRAMES_JSON_MAX - off,
+                        "%s[%d,%u]", i ? "," : "", s_lvl[i], (unsigned)s_us[i]);
+    off += snprintf(s_frames_json + off, RFCAP_FRAMES_JSON_MAX - off, "]}");
+    s_frames_len = off;
+    s_frames_count++;
+    memcpy(s_prev_lvl, s_lvl, (size_t)s_n);
+    memcpy(s_prev_us, s_us, (size_t)s_n * sizeof(uint16_t));
+    s_prev_n = s_n;
+    return true;
+}
+
+int rfcap_capture_multi(int radio, uint32_t window_ms) {
+    const char *band = NULL; uint32_t carrier = 0, cur = 0, low = 0, high = 0; uint8_t pn = 0, ver = 0;
+    cc1101_radio_info(radio, &band, &carrier, &cur, &low, &high, &pn, &ver);   /* meta de la radio (band/porteuse) */
+    s_frames_len = 0; s_frames_count = 0; s_prev_n = 0;
+    int64_t t_end = esp_timer_get_time() + (int64_t)window_ms * 1000;
+    while (esp_timer_get_time() < t_end && s_frames_count < RFCAP_MAX_FRAMES) {
+        int64_t remain_us = t_end - esp_timer_get_time();
+        if (remain_us < 300 * 1000) break;   /* trop peu de temps restant pour une pression utile */
+        int8_t rssi = 0;
+        int n = radio_capture_raw_on(radio, (uint32_t)(remain_us / 1000), s_lvl, s_us, RFCAP_MAX_PULSES, &rssi);
+        if (n <= 0) continue;                 /* rien capte dans ce qui restait de la fenetre */
+        s_n = n; s_radio = radio;
+        s_freq_khz = cur ? cur : carrier;
+        s_band_mhz = band ? atoi(band) : 0;
+        s_rssi = rssi; s_t_us = esp_timer_get_time();
+        if (rfcap_same_as_prev()) continue;   /* meme trame qu'a l'instant (code fixe re-presse) : on ignore */
+        if (!rfcap_frames_append()) break;    /* lot plein : on s'arrete proprement */
+    }
+    ESP_LOGW(TAG, "capture multi radio %d : %d trame(s) distincte(s) sur %u ms",
+             radio, s_frames_count, (unsigned)window_ms);
+    return s_frames_count;
+}
+
+int rfcap_frames_json(char *out, int max) {
+    if (!out || max < 32) return 0;
+    if (s_frames_count <= 0) return rfcap_last_json(out, max);   /* repli : capture simple, ou {"n":0} */
+    int off = snprintf(out, max, "{\"radio\":%d,\"band\":\"%d\",\"freq_khz\":%u,\"nframes\":%d,\"frames\":[",
+                       s_radio, s_band_mhz, (unsigned)s_freq_khz, s_frames_count);
+    int copy = s_frames_len;
+    if (copy > max - off - 96) copy = max - off - 96;   /* garde-fou : laisse la place a la fin + compat */
+    if (copy > 0) { memcpy(out + off, s_frames_json, (size_t)copy); off += copy; }
+    off += snprintf(out + off, max - off, "]");
+    /* Compat ancien serveur : `pulses` + `n` = la DERNIERE trame (decodee au minimum si le serveur
+     * ne lit pas `frames`). */
+    off += snprintf(out + off, max - off, ",\"n\":%d,\"rssi\":%d,\"pulses\":[", s_prev_n, s_rssi);
+    for (int i = 0; i < s_prev_n && off < max - 8; i++)
+        off += snprintf(out + off, max - off, "%s[%d,%u]", i ? "," : "", s_prev_lvl[i], (unsigned)s_prev_us[i]);
     off += snprintf(out + off, max - off, "]}");
     return off;
 }

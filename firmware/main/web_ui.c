@@ -1111,6 +1111,20 @@ static esp_err_t h_capture_start(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
+/* Capture MULTI-trames pour le rapport (POST /api/capture/multi?radio=N) : sur 15 s, collecte CHAQUE
+ * pression distincte (plusieurs hoppings d'un code tournant, une seule trame pour un code fixe repete).
+ * Rend {"nframes":K}. Le lot est garde pour l'envoi du rapport (/api/report via rfcap_frames_json). */
+static esp_err_t h_capture_multi(httpd_req_t *r) {
+    char q[64], v[12];
+    int radio = 0;
+    if (httpd_req_get_url_query_str(r, q, sizeof q) == ESP_OK
+        && httpd_query_key_value(q, "radio", v, sizeof v) == ESP_OK) { int i = atoi(v); if (i > 0) radio = i; }
+    int k = rfcap_capture_multi(radio, 15000);
+    char out[48];
+    snprintf(out, sizeof(out), "{\"nframes\":%d}", k);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_capture_last(httpd_req_t *r) {
     char *buf = malloc(6144);
     if (!buf) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
@@ -1709,9 +1723,10 @@ static esp_err_t h_report(httpd_req_t *r) {
     char chip[13];
     snprintf(chip, sizeof chip, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    char *cap = malloc(6144);
+    /* Le lot multi-trames (rfcap_frames_json) peut etre gros ; repli sur la capture simple si aucun lot. */
+    char *cap = malloc(24576);
     if (!cap) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"mem\"}"); }
-    rfcap_last_json(cap, 6144);
+    rfcap_frames_json(cap, 24576);
 
     cJSON *rep = cJSON_CreateObject();
     cJSON_AddStringToObject(rep, "chip_id", chip);
@@ -1859,6 +1874,7 @@ void web_ui_start(void) {
     reg(s, "/api/rx/sweep",     HTTP_POST, h_rx_sweep);
     reg(s, "/api/rx/sweep",     HTTP_GET,  h_rx_sweep_status);
     reg(s, "/api/capture/start",  HTTP_POST, h_capture_start);   /* capture OOK brute (issue #95) */
+    reg(s, "/api/capture/multi",  HTTP_POST, h_capture_multi);   /* capture multi-trames pour le rapport */
     reg(s, "/api/capture/last",   HTTP_GET,  h_capture_last);
     reg(s, "/api/capture/replay", HTTP_POST, h_capture_replay);
     reg(s, "/api/report", HTTP_POST, h_report);   /* rapport de capture radio : POST au relais www.isno.fr -> issue + email */

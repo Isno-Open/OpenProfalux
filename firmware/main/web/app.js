@@ -2114,8 +2114,10 @@ fetch('/api/session')
     const t = await fetch('/api/capture/last').then(r => r.text()).catch(() => '(indisponible)');
     if (pre) { pre.textContent = (t && t.trim()) || '(aucune capture)'; pre.hidden = false; }
   };
-  /* Capture d'une telecommande DEPUIS la page rapport : la trame s'obtient ici, plus besoin de passer
-     par l'onglet RF. Memes endpoints que la capture brute (/api/radios, POST /api/capture/start). */
+  /* Capture d'une telecommande DEPUIS la page rapport : plus besoin de passer par l'onglet RF.
+     Capture MULTI (POST /api/capture/multi) : pendant 15 s on garde CHAQUE pression distincte (les
+     hoppings d'un code tournant aident le decodage serveur) ; un code fixe repete ne compte qu'une
+     fois. Toutes les trames sont jointes au rapport. */
   (async function repBuildCapture() {
     const host = $('#rep-cap-btns'); if (!host) return;
     const st = $('#rep-cap-status');
@@ -2127,11 +2129,12 @@ fetch('/api/session')
     host.querySelectorAll('.cap-do').forEach(b => b.onclick = async () => {
       const band = b.dataset.band;
       busy(true);
-      if (st) { st.className = 'hint'; st.textContent = `📡 Presse le bouton de ta télécommande ${band ? band + ' MHz ' : ''}MAINTENANT (~15 s)…`; }
-      const res = await api('/api/capture/start?radio=' + (+b.dataset.radio), { method: 'POST' }).catch(() => null);
+      if (st) { st.className = 'hint'; st.textContent = `📡 Presse ta télécommande ${band ? band + ' MHz ' : ''}plusieurs fois pendant 15 s (chaque pression distincte est gardée)…`; }
+      const res = await api('/api/capture/multi?radio=' + (+b.dataset.radio), { method: 'POST' }).catch(() => null);
       busy(false);
       if (!st) return;
-      if (res && res.n > 0) st.innerHTML = `✅ Trame captée : <b>${res.n} impulsions</b>${res.band ? ' sur ' + esc(res.band) + ' MHz' : ''}${res.freq_khz ? ' à ' + (res.freq_khz / 1000).toFixed(3) + ' MHz' : ''}. Elle sera jointe au rapport.`;
+      const k = res && typeof res.nframes === 'number' ? res.nframes : 0;
+      if (k > 0) st.innerHTML = `✅ <b>${k} trame${k > 1 ? 's' : ''}</b> captée${k > 1 ? 's' : ''}. ${k > 1 ? 'Toutes seront jointes' : 'Elle sera jointe'} au rapport.`;
       else st.innerHTML = '❌ Rien capté en 15 s. Vérifie la bande, l\'antenne et la distance (&lt; 1 m), puis réessaie.';
     });
   })();

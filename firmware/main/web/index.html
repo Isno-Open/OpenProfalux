@@ -63,6 +63,7 @@
     <button class="tab" data-t="mqtt"><span>📡</span>MQTT</button>
     <button class="tab" data-t="ota"><span>⬆️</span>OTA<b class="tab-badge" id="ota-badge" title="Mise à jour disponible" aria-label="mise à jour disponible" hidden></b></button>
     <button class="tab" data-t="sys"><span>⚙️</span>Système</button>
+    <button class="tab" data-t="support"><span>📨</span>Support</button>
     <button class="tab" data-t="about"><span>ℹ️</span>À propos</button>
   </nav>
 
@@ -346,7 +347,6 @@
         <button class="subtab" data-s="backup">Sauvegarde</button>
         <button class="subtab" data-s="rf">RF (debug)</button>
         <button class="subtab" data-s="log">Journal</button>
-        <button class="subtab" data-s="report">Rapport</button>
       </nav>
 
       <div class="subpanel active" data-sp="device">
@@ -460,30 +460,31 @@
         </div>
       </div>
 
-      <div class="subpanel" data-sp="report">
-        <div class="card">
-          <h2>Rapport de capture radio</h2>
-          <p class="sub">Envoie-nous une capture : pour un <b>debug</b> (ça ne pilote pas), ou pour faire <b>ajouter une nouvelle marque</b>. Ton email sert au suivi, il <b>n'apparaît jamais</b> dans le rapport public.</p>
-          <div class="field"><label>Capter ta télécommande</label>
-            <div class="row" id="rep-cap-btns"></div>
-            <p class="hint" id="rep-cap-status">Choisis la bande, presse le bouton de ta télécommande, et la trame est captée ici, sans passer par l'onglet RF.</p>
-          </div>
-          <div class="field"><label>Ton email (pour le suivi)</label><input id="rep-email" type="email" placeholder="toi@exemple.fr"></div>
-          <div class="field"><label>Marque / modèle de moteur</label><input id="rep-brand" type="text" placeholder="Somfy, CAME, Nice, Velux..."></div>
-          <div class="field"><label>Modèle de télécommande (optionnel)</label><input id="rep-model" type="text" placeholder=""></div>
-          <div class="field"><label>But</label>
-            <select id="rep-purpose">
-              <option value="debug">Debug (ça ne marche pas)</option>
-              <option value="new-brand">Nouvelle marque à ajouter</option>
-            </select></div>
-          <div class="field"><label>Ce que tu as fait, étape par étape</label><textarea id="rep-note" rows="4" placeholder="Ex. j'ai capturé en pressant le bouton montée de ma télécommande ; le portail a fait..."></textarea></div>
-          <p class="hint">La trame captée ci-dessus (ou la dernière reçue) est jointe automatiquement au rapport. <a href="#" id="rep-jview">voir la capture jointe</a></p>
-          <div class="row"><button id="rep-send" class="btn primary" type="button">📨 Envoyer le rapport</button></div>
-          <div class="statline" id="rep-status" hidden><span class="dot"></span><b></b></div>
-          <pre id="rep-jpreview" class="log" hidden></pre>
-        </div>
-      </div>
+    </section>
 
+    <!-- Support : rapport de capture radio. Onglet a part entiere, sorti des sous-onglets Systeme. -->
+    <section class="panel" data-p="support">
+      <div class="card">
+        <h2>Rapport de capture radio</h2>
+        <p class="sub">Envoie-nous une capture : pour un <b>debug</b> (ça ne pilote pas), ou pour faire <b>ajouter une nouvelle marque</b>. Ton email sert au suivi, il <b>n'apparaît jamais</b> dans le rapport public.</p>
+        <div class="field"><label>Capter ta télécommande</label>
+          <div class="row" id="rep-cap-btns"></div>
+          <p class="hint" id="rep-cap-status">Choisis la bande, puis presse ta télécommande une ou plusieurs fois pendant 15 s. Chaque pression distincte est captée ici, sans passer par l'onglet RF.</p>
+        </div>
+        <div class="field"><label>Ton email (pour le suivi)</label><input id="rep-email" type="email" placeholder="toi@exemple.fr"></div>
+        <div class="field"><label>Marque / modèle de moteur</label><input id="rep-brand" type="text" placeholder="Somfy, CAME, Nice, Velux..."></div>
+        <div class="field"><label>Modèle de télécommande (optionnel)</label><input id="rep-model" type="text" placeholder=""></div>
+        <div class="field"><label>But</label>
+          <select id="rep-purpose">
+            <option value="debug">Debug (ça ne marche pas)</option>
+            <option value="new-brand">Nouvelle marque à ajouter</option>
+          </select></div>
+        <div class="field"><label>Ce que tu as fait, étape par étape</label><textarea id="rep-note" rows="4" placeholder="Ex. j'ai capturé en pressant le bouton montée de ma télécommande ; le portail a fait..."></textarea></div>
+        <p class="hint">Les trames captées ci-dessus (ou la dernière reçue) sont jointes automatiquement au rapport. <a href="#" id="rep-jview">voir la capture jointe</a></p>
+        <div class="row"><button id="rep-send" class="btn primary" type="button">📨 Envoyer le rapport</button></div>
+        <div class="statline" id="rep-status" hidden><span class="dot"></span><b></b></div>
+        <pre id="rep-jpreview" class="log" hidden></pre>
+      </div>
     </section>
 
     <!-- À propos -->

@@ -23,3 +23,21 @@ int  rfcap_replay(int repeats);
  * {"n":0} si pas de capture. Forme :
  *   {"n":..,"radio":..,"band":"433","freq_khz":..,"rssi":..,"age_ms":..,"pulses":[[lvl,us],...]} */
 int  rfcap_last_json(char *out, int max);
+
+/* Combien de trames distinctes au plus une capture MULTI collecte. */
+#define RFCAP_MAX_FRAMES 6
+
+/* Capture MULTI-trames : pendant window_ms, collecte CHAQUE pression distincte sur la radio idx.
+ * Dedoublonne deux trames identiques qui se suivent (un code FIXE presse plusieurs fois ne compte
+ * qu'une fois) ; garde les trames differentes (les hoppings d'un code TOURNANT). Utile pour un
+ * rapport de debug : plusieurs echantillons aident le decodage serveur. Stocke le lot pour le
+ * rapport ; la DERNIERE trame reste aussi la "derniere capture" (rejeu + rfcap_last_json).
+ * Rend le nombre de trames collectees (>=0), <0 en cas d'erreur. */
+int  rfcap_capture_multi(int radio, uint32_t window_ms);
+
+/* Ecrit le lot de trames collectees par rfcap_capture_multi en JSON dans out, rend sa longueur.
+ * Forme (le serveur sait relire l'ancienne a UNE trame via `pulses`/`n`, et la nouvelle via `frames`) :
+ *   {"radio":..,"band":"868","freq_khz":..,"nframes":K,"frames":[{"rssi":..,"pulses":[[lvl,us],..]},..],
+ *    "pulses":[derniere trame],"n":..}
+ * {"n":0} si aucune trame. */
+int  rfcap_frames_json(char *out, int max);
