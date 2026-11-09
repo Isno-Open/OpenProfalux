@@ -2114,6 +2114,27 @@ fetch('/api/session')
     const t = await fetch('/api/capture/last').then(r => r.text()).catch(() => '(indisponible)');
     if (pre) { pre.textContent = (t && t.trim()) || '(aucune capture)'; pre.hidden = false; }
   };
+  /* Capture d'une telecommande DEPUIS la page rapport : la trame s'obtient ici, plus besoin de passer
+     par l'onglet RF. Memes endpoints que la capture brute (/api/radios, POST /api/capture/start). */
+  (async function repBuildCapture() {
+    const host = $('#rep-cap-btns'); if (!host) return;
+    const st = $('#rep-cap-status');
+    const d = await api('/api/radios').catch(() => null);
+    const radios = (d && Array.isArray(d.radios) && d.radios.length) ? d.radios : [{ idx: 0, band: '' }];
+    host.innerHTML = radios.map(r =>
+      `<button class="btn cap-do" type="button" data-radio="${r.idx || 0}" data-band="${esc(r.band || '')}">📡 Capturer ${r.band ? esc(r.band) + ' MHz' : ''}</button>`).join('');
+    const busy = b => host.querySelectorAll('button').forEach(x => x.disabled = b);
+    host.querySelectorAll('.cap-do').forEach(b => b.onclick = async () => {
+      const band = b.dataset.band;
+      busy(true);
+      if (st) { st.className = 'hint'; st.textContent = `📡 Presse le bouton de ta télécommande ${band ? band + ' MHz ' : ''}MAINTENANT (~15 s)…`; }
+      const res = await api('/api/capture/start?radio=' + (+b.dataset.radio), { method: 'POST' }).catch(() => null);
+      busy(false);
+      if (!st) return;
+      if (res && res.n > 0) st.innerHTML = `✅ Trame captée : <b>${res.n} impulsions</b>${res.band ? ' sur ' + esc(res.band) + ' MHz' : ''}${res.freq_khz ? ' à ' + (res.freq_khz / 1000).toFixed(3) + ' MHz' : ''}. Elle sera jointe au rapport.`;
+      else st.innerHTML = '❌ Rien capté en 15 s. Vérifie la bande, l\'antenne et la distance (&lt; 1 m), puis réessaie.';
+    });
+  })();
 })();
 
 /* ── Écran unifié « Ajouter un appareil » : pyramide TYPE → MARQUE → PROFIL, rendue depuis

@@ -76,8 +76,9 @@ select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--
 [hidden]{display:none!important}   /* une classe .field/.row ne doit jamais reafficher un element cache */
 .field{display:grid;gap:5px;margin-bottom:12px}
 .field label{font-size:.78rem;font-weight:600;color:var(--muted);letter-spacing:.01em}
-.field input[type=text],.field input[type=password],.field input[type=file],.field input[type=number],.field input:not([type]){width:100%;padding:9px 11px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.92rem}
-.field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+.field input[type=text],.field input[type=password],.field input[type=file],.field input[type=number],.field input[type=email],.field input:not([type]),.field textarea{width:100%;padding:9px 11px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.92rem}
+.field textarea{resize:vertical;min-height:4.5em;line-height:1.45}
+.field input:focus,.field textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
 .field .help{font-size:.74rem;color:var(--muted);line-height:1.45}
 
 .switch{display:flex;align-items:center;gap:11px;padding:11px 0;cursor:pointer}
