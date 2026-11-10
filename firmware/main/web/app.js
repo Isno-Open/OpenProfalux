@@ -2293,7 +2293,7 @@ function loadIoAdd() {
     const overlay = p && p.io && p.io.cmd;   // codes bouton par action, declares par marque (profiles.json)
     if (!overlay) { toast("Profil sans codes de commande (cmd) : impossible de générer les ordres"); return; }
     setRadioBusy(true); btn.disabled = true; if (devmelBtn) devmelBtn.disabled = true;
-    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "🎧 Écoute en cours — mets MAINTENANT ta télécommande en apprentissage (PROG). (Tu as bien cliqué le bouton D'ABORD, le PROG ENSUITE : c'est le bon ordre.) Le boîtier capte la cérémonie et envoie son identité ~5 s après la fin."; }
+    if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "🎧 Écoute en cours. Mets MAINTENANT ta télécommande en apprentissage (PROG). (Tu as bien cliqué le bouton D'ABORD, le PROG ENSUITE : c'est le bon ordre.) Le boîtier capte la cérémonie et envoie son identité ~5 s après la fin."; }
     try {
       const req = { cmd: ioCmdFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 };
       if (devmelMode) req.devmel_pool = true;
