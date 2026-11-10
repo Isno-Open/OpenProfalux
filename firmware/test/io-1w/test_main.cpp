@@ -55,6 +55,13 @@ int esp_read_mac(uint8_t mac[6], int) {
 
 /* CRC de reference ; le double AES expose le compteur donne au MAC, sans tester AES. */
 namespace iohome { namespace crypto {
+bool aes128_encrypt(const uint8_t input[16], const uint8_t key[16], uint8_t output[16]) {
+    const uint8_t expected_iv[] = {0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04};
+    const uint8_t expected_tk[] = {0x34,0xc3,0x46,0x6e,0xd8,0x8f,0x4e,0x8e,0x16,0xaa,0x47,0x39,0x49,0x88,0x43,0x73};
+    const uint8_t expected_aes[] = {0xd0,0xca,0x12,0x6f,0x5c,0x6d,0x00,0x67,0x82,0x7a,0xd5,0x28,0x74,0xc6,0x8d,0x21};
+    if (memcmp(input, expected_iv, 16) || memcmp(key, expected_tk, 16)) return false;
+    memcpy(output, expected_aes, 16); return true;
+}
 uint16_t compute_crc16(const uint8_t *data, size_t n, uint16_t crc) {
     for (size_t i = 0; i < n; i++) {
         crc ^= data[i];
@@ -148,6 +155,15 @@ int main() {
     assert(memcmp(src, expected_src, 3) == 0 && memcmp(key, expected_key, 16) == 0);
     assert(memcmp(src, src2, 3) == 0 && memcmp(key, key2, 16) == 0);
     assert(io_derive_identity(1, src2, key2) && memcmp(src, src2, 3) != 0);
+    // Reproduction DEVMEL deterministe : index 1 (046EB4), seed fixe -> X4 et cle oracle Python.
+    uint8_t dx4[4];
+    assert(io_derive_devmel_pool_identity(1, 1762768800000000ULL, src2, key2, dx4));
+    const uint8_t devmel_src[] = {0x04,0x6E,0xB4};
+    const uint8_t devmel_x4[] = {0x24,0xA6,0xEA,0x01};
+    const uint8_t devmel_key[] = {0x8F,0xF0,0x07,0xDB,0xD1,0x4C,0x3E,0xA9,0x35,0x84,0xAE,0xC8,0xF7,0x41,0x65,0x1F};
+    assert(memcmp(src2, devmel_src, 3) == 0 && memcmp(dx4, devmel_x4, 4) == 0);
+    assert(memcmp(key2, devmel_key, 16) == 0);
+    assert(!io_derive_devmel_pool_identity(11, 1, src2, key2, dx4));
     /* 1er octet = type CONTROLEUR (0x02..0x09), comme les identites passerelle DEVMEL : un moteur Somfy
      * n'enrole pas une src de type telecommande (0x0D). Garde-fou sur plusieurs index. */
     for (uint32_t i = 0; i < 8; i++) { uint8_t s[3], k[16]; assert(io_derive_identity(i, s, k) && s[0] >= 0x02 && s[0] <= 0x09); }

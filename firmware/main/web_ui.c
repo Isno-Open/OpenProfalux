@@ -9,6 +9,7 @@
 #include "enrol_gate.h"
 #include "radio.h"
 #include "io/io_pair.h"
+#include "esp_random.h"
 #include "io/io_radio.h"   /* io_radio_set_freq_offset */
 #include <ctype.h>
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
@@ -1713,6 +1714,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!cJSON_IsObject(j)) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "objet json attendu"); }
     cJSON *idx = cJSON_GetObjectItem(j, "index"), *txj = cJSON_GetObjectItem(j, "tx");
+    cJSON *dpj = cJSON_GetObjectItem(j, "devmel_pool_index");
     cJSON *roll = cJSON_GetObjectItem(j, "rolling");
     bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
     bool tx = !txj || txj->valuedouble == 1;
@@ -1787,11 +1789,46 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         cJSON_Delete(j);
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande + overlay requis, et le 0x30 doit etre capte pendant le PROG (clique Enroler PUIS mets la telecommande en PROG) ; tx=0 exige rolling + trame enroll");
     }
-    uint8_t src[3], key[16];
-    bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
+    uint8_t src[3], key[16], x4[4] = {0};
+    bool devmel_mode = cJSON_IsNumber(dpj) && dpj->valuedouble >= -1 && dpj->valuedouble <= 10 &&
+                       dpj->valuedouble == (int)dpj->valuedouble;
+    int devmel_index = devmel_mode ? (int)dpj->valuedouble : -2;
+    bool derived;
+    if (devmel_mode) {
+        /* -1 = prochain membre libre du pool ; 0..10 = choix explicite pour le diagnostic. */
+        if (devmel_index < 0) {
+            derived = false;
+            for (int candidate = 0; candidate < 11; candidate++) {
+                uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
+                if (!io_derive_devmel_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
+                if (!io_store_get_key(probe_src, stored)) { devmel_index = candidate; derived = true; break; }
+            }
+            if (derived) derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 0, src, key, x4);
+        } else {
+            uint8_t probe_key[16], probe_x4[4], stored[16];
+            derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 1, src, probe_key, probe_x4) &&
+                      !io_store_get_key(src, stored);
+            if (derived) derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 0, src, key, x4);
+        }
+    } else if (tx) {
+        /* Produit normal : forge la prochaine identite locale libre, mais ne reutilise plus sa cle
+         * deterministe historique. Chaque nouvel enrolement recoit une vraie cle systeme fraiche,
+         * conservee ensuite par io_store avec le volet. */
+        derived = io_derive_free_identity(src, key);
+        if (derived) esp_fill_random(key, sizeof key);
+    } else {
+        /* Reprise explicite sans TX : compatibilite de l'outil avance existant. */
+        derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
+    }
     int rolling = roll ? (int)roll->valuedouble : -1;
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
+    if (devmel_mode)
+        ESP_LOGW(TAG, "io TEST DEVMEL : pool=%d src=%02X%02X%02X X4=%02X%02X%02X%02X, cle T/X4 calculee",
+                 devmel_index, src[0], src[1], src[2], x4[0], x4[1], x4[2], x4[3]);
+    else if (tx)
+        ESP_LOGW(TAG, "io OpenProfalux : identite locale libre %02X%02X%02X, nouvelle cle aleatoire materielle",
+                 src[0], src[1], src[2]);
     int rc = radio_io_enroll(&profile, src, key, tx, rolling, freq_khz);
     memset(key, 0, sizeof key);
     if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
@@ -1804,8 +1841,9 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
      * les commandes io (radio_io_send(v->freq_khz)) l'utiliseront, et elle est editable dans l'avance. */
     if (freq_khz) shutters_set_tx_params(id, freq_khz, 0, -1, -1, 0, NULL);
     ESP_LOGW(TAG, "io : identite %s %s (man_id remote capte 0x%02X ; emis = enroleur)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
-    char out[80];
-    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d}", id, tx ? 1 : 0);
+    char out[120];
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d,\"mode\":\"%s\",\"pool_index\":%d}",
+             id, tx ? 1 : 0, devmel_mode ? "devmel-tx4" : "openprofalux", devmel_mode ? devmel_index : -1);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }

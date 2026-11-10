@@ -2248,7 +2248,7 @@ let ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1 (canal + FREQE
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
   const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status');
-  const btn = $('#io-add-pair'), fin = $('#io-add-finish'), cst = $('#io-cap-stat');
+  const btn = $('#io-add-pair'), devmelBtn = $('#io-add-pair-devmel'), fin = $('#io-add-finish'), cst = $('#io-cap-stat');
   if (title) title.textContent = p ? ('Ajouter : ' + (p.nom || 'volet io')) : 'Ajouter un volet io';
   if (learn) learn.textContent = (p && p.io && p.io.learn) || "Mets ta télécommande d'origine en apprentissage.";
   const anote = $('#io-add-appaire-note'); if (anote) anote.textContent = (p && p.io && p.io.appaire_note) || '';
@@ -2259,7 +2259,10 @@ function loadIoAdd() {
   ioCmdFrame = null;      // trame 0x00 d'UNE commande, captee au geste 1 (gabarit + cible + basse conso)
   ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1, portee a l'enrolement
   const cmdBtn = $('#io-cap-cmd');
-  const refreshPair = () => { if (btn) btn.disabled = !ioCmdFrame; };   // Enroler ferme tant qu'aucune commande n'est captee (geste 1)
+  const refreshPair = () => {
+    if (btn) btn.disabled = !ioCmdFrame;
+    if (devmelBtn) devmelBtn.disabled = !ioCmdFrame;
+  };   // Enroler ferme tant qu'aucune commande n'est captee (geste 1)
   refreshPair();
   // Geste 1 : capter la telecommande = UNE commande (sniff 0x00). On en tire le gabarit, la cible, la
   // basse conso et la freq du volet ; les codes bouton montee/stop/descente viennent du profil marque.
@@ -2284,23 +2287,30 @@ function loadIoAdd() {
   // Geste 2 (fusion 2+3) : Enroler = le boitier ECOUTE le PROG PUIS emet NOTRE 0x30 dans la MEME requete.
   // L'utilisateur clique Enroler PUIS met sa telecommande en PROG : on ecoute AVANT l'evenement, et notre
   // 0x30 part ~1 s apres le sien, DANS la fenetre (le clic Appairer separe d'io12f emettait +18 s trop tard).
-  if (btn) btn.onclick = async () => {
+  const startIoPair = async (devmelMode) => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
     if (!ioCmdFrame) { toast("Capte d'abord la télécommande (geste 1)"); return; }
     const overlay = p && p.io && p.io.cmd;   // codes bouton par action, declares par marque (profiles.json)
     if (!overlay) { toast("Profil sans codes de commande (cmd) : impossible de générer les ordres"); return; }
-    setRadioBusy(true); btn.disabled = true;
+    setRadioBusy(true); btn.disabled = true; if (devmelBtn) devmelBtn.disabled = true;
     if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "🎧 Écoute en cours — mets MAINTENANT ta télécommande en apprentissage (PROG). (Tu as bien cliqué le bouton D'ABORD, le PROG ENSUITE : c'est le bon ordre.) Le boîtier capte la cérémonie et envoie son identité ~5 s après la fin."; }
     try {
-      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify({ cmd: ioCmdFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 }) });
+      const req = { cmd: ioCmdFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 };
+      if (devmelMode) {
+        const pool = $('#io-devmel-pool');
+        req.devmel_pool_index = pool ? Number(pool.value) : -1;
+      }
+      const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify(req) });
       ioPairedId = d.id;
       if (st) { st.className = 'statline ok'; st.textContent = `📡 Trame d'appairage envoyée (${d.id}). L'io ne renvoie pas d'accusé, donc le boîtier ne peut pas confirmer : regarde si le volet fait un petit va-et-vient, puis teste les flèches ci-dessous. S'il bouge, donne-lui un nom.`; }
       if (fin) fin.hidden = false;
       const nameInp = $('#io-volet-name'); if (nameInp) nameInp.value = d.id;
     } catch (e) {
       if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Ordre : clique le bouton D'ABORD, PUIS mets la télécommande en PROG pendant l'écoute, et réessaie.`; }
-    } finally { btn.disabled = false; setRadioBusy(false); refreshPair(); }
+    } finally { btn.disabled = false; if (devmelBtn) devmelBtn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
+  if (btn) btn.onclick = () => startIoPair(false);
+  if (devmelBtn) devmelBtn.onclick = () => startIoPair(true);
   // Etape 2 : TEST (partage) -> pilotage commun a tous les volets (sendCmd -> /api/shutter -> io par proto).
   const bindCmd = (sel, cmd) => { const b = $(sel); if (b) b.onclick = () => { if (ioPairedId) sendCmd({ id: ioPairedId, cmd }, b); }; };
   bindCmd('#io-up', 'up'); bindCmd('#io-stop', 'stop'); bindCmd('#io-down', 'down');
