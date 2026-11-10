@@ -39,7 +39,13 @@ typedef struct {
     uint8_t pair_status;                                       /* f[26] du 0x30 capte */
 } io_profile_t;
 
-/* Ecrit cle, profil et prochain compteur. -1 conserve le compteur (defaut 1).
+/* Compteur roulant INITIAL d'une identite d'enrolement fraiche (jamais vue en NVS).
+ * 3, et pas 1 : verite terrain DEVMEL, une identite fraichement creee demarre son 0x30 a
+ * 0x0003 (038541, 021A66 dans IO-ENROLEMENT-SEQUENCE-COMPLETE) ; partir de 1/2 risque de
+ * les voir lies a leur systeme. */
+#define IO_ENROLL_INITIAL_ROLLING 3
+
+/* Ecrit cle, profil et prochain compteur. -1 conserve le compteur (defaut IO_ENROLL_INITIAL_ROLLING).
  * Refuse un compteur explicite inferieur a celui deja stocke. Sous mutex radio. */
 bool io_store_set(const uint8_t src[3], const uint8_t key[16], const io_profile_t *p, int rolling);
 /* Reserve et persiste le prochain compteur avant TX. Refuse erreurs et debordement. */

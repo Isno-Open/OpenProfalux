@@ -211,5 +211,9 @@ int main() {
     assert(!io_store_next_rolling(src, &seq));
     assert(io_store_set(src, key, &profile, 0));
     assert(io_store_next_rolling(src, &seq) && seq == 0);
+    // Identite FRAICHE (rolling=-1, jamais vue en NVS) : compteur initial = IO_ENROLL_INITIAL_ROLLING
+    // (0x0003), verite terrain DEVMEL (038541/021A66 demarrent a 0003). src2 n'a jamais ete stockee.
+    assert(io_store_set(src2, key, &profile, -1));
+    assert(io_store_next_rolling(src2, &seq) && seq == 0x0003);   // 0x0003 voulu (DEVMEL), pas le vieux 0x0001
     puts("banc io 1W : capture par action + enrolement, rejeu verbatim, identite, compteur, rafales et persistance OK");
 }

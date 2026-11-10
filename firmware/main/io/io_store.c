@@ -40,7 +40,7 @@ bool io_store_next_rolling(const uint8_t src[3], uint16_t *out) {
     return true;
 }
 
-/* rolling = prochain compteur emis ; -1 conserve l'existant, ou initialise a 1. */
+/* rolling = prochain compteur emis ; -1 conserve l'existant, ou initialise a IO_ENROLL_INITIAL_ROLLING. */
 bool io_store_set(const uint8_t src[3], const uint8_t key[16],
                   const io_profile_t *p, int rolling) {
     if (!src || !key || !p || rolling < -1 || rolling > UINT16_MAX) return false;
@@ -50,7 +50,7 @@ bool io_store_set(const uint8_t src[3], const uint8_t key[16],
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
     char nk[8], nr[8], np[8];
     key_name(src, 'k', nk); key_name(src, 'r', nr); key_name(src, 'p', np);
-    uint32_t roll = 1;
+    uint32_t roll = IO_ENROLL_INITIAL_ROLLING;
     esp_err_t e = nvs_get_u32(h, nr, &roll);
     bool found = e == ESP_OK;
     if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
