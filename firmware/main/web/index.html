@@ -247,17 +247,8 @@
           <div class="row">
             <button id="io-add-pair" class="btn primary" disabled>Démarrer l'appairage — identité OpenProfalux</button>
             <button id="io-add-pair-devmel" class="btn" disabled>Démarrer l'appairage — identité DEVMEL connue (test)</button>
-            <select id="io-devmel-pool" title="Identité du pool DEVMEL">
-              <option value="-1">DEVMEL : prochaine libre</option>
-              <option value="0">0 — 078DAD</option><option value="1">1 — 046EB4</option>
-              <option value="2">2 — 038541</option><option value="3">3 — 0254C3</option>
-              <option value="4">4 — 024DE7</option><option value="5">5 — 021A66</option>
-              <option value="6">6 — 055A72</option><option value="7">7 — 063874</option>
-              <option value="8">8 — 08AD38</option><option value="9">9 — 09AC65</option>
-              <option value="10">10 — 7DDA1D</option>
-            </select>
           </div>
-          <p class="hint">Le premier bouton forge une identité OpenProfalux libre et une clé aléatoire fraîche. Le second utilise l'une des 11 identités du pool et une clé fraîche calculée exactement par la méthode DEVMEL <code>T/X4</code>. « Prochaine libre » évite de réutiliser localement une source déjà stockée.</p>
+          <p class="hint">Le premier bouton forge une identité OpenProfalux libre et une clé aléatoire fraîche. Le second choisit automatiquement la prochaine identité libre parmi les 11 du pool et calcule une clé fraîche exactement par la méthode DEVMEL <code>T/X4</code>.</p>
           <p class="statline" id="io-add-status" hidden></p>
           <div id="io-add-finish" hidden>
             <h3>3. Tester</h3>

@@ -2296,10 +2296,7 @@ function loadIoAdd() {
     if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "🎧 Écoute en cours — mets MAINTENANT ta télécommande en apprentissage (PROG). (Tu as bien cliqué le bouton D'ABORD, le PROG ENSUITE : c'est le bon ordre.) Le boîtier capte la cérémonie et envoie son identité ~5 s après la fin."; }
     try {
       const req = { cmd: ioCmdFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 };
-      if (devmelMode) {
-        const pool = $('#io-devmel-pool');
-        req.devmel_pool_index = pool ? Number(pool.value) : -1;
-      }
+      if (devmelMode) req.devmel_pool = true;
       const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify(req) });
       ioPairedId = d.id;
       if (st) { st.className = 'statline ok'; st.textContent = `📡 Trame d'appairage envoyée (${d.id}). L'io ne renvoie pas d'accusé, donc le boîtier ne peut pas confirmer : regarde si le volet fait un petit va-et-vient, puis teste les flèches ci-dessous. S'il bouge, donne-lui un nom.`; }

@@ -1714,7 +1714,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!cJSON_IsObject(j)) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "objet json attendu"); }
     cJSON *idx = cJSON_GetObjectItem(j, "index"), *txj = cJSON_GetObjectItem(j, "tx");
-    cJSON *dpj = cJSON_GetObjectItem(j, "devmel_pool_index");
+    cJSON *dpj = cJSON_GetObjectItem(j, "devmel_pool");
     cJSON *roll = cJSON_GetObjectItem(j, "rolling");
     bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
     bool tx = !txj || txj->valuedouble == 1;
@@ -1790,26 +1790,18 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande + overlay requis, et le 0x30 doit etre capte pendant le PROG (clique Enroler PUIS mets la telecommande en PROG) ; tx=0 exige rolling + trame enroll");
     }
     uint8_t src[3], key[16], x4[4] = {0};
-    bool devmel_mode = cJSON_IsNumber(dpj) && dpj->valuedouble >= -1 && dpj->valuedouble <= 10 &&
-                       dpj->valuedouble == (int)dpj->valuedouble;
-    int devmel_index = devmel_mode ? (int)dpj->valuedouble : -2;
+    bool devmel_mode = cJSON_IsTrue(dpj);
+    int devmel_index = -1;
     bool derived;
     if (devmel_mode) {
-        /* -1 = prochain membre libre du pool ; 0..10 = choix explicite pour le diagnostic. */
-        if (devmel_index < 0) {
-            derived = false;
-            for (int candidate = 0; candidate < 11; candidate++) {
-                uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
-                if (!io_derive_devmel_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
-                if (!io_store_get_key(probe_src, stored)) { devmel_index = candidate; derived = true; break; }
-            }
-            if (derived) derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 0, src, key, x4);
-        } else {
-            uint8_t probe_key[16], probe_x4[4], stored[16];
-            derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 1, src, probe_key, probe_x4) &&
-                      !io_store_get_key(src, stored);
-            if (derived) derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 0, src, key, x4);
+        /* Le choix n'est jamais fourni par le client : prochain membre libre du pool, point. */
+        derived = false;
+        for (int candidate = 0; candidate < 11; candidate++) {
+            uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
+            if (!io_derive_devmel_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
+            if (!io_store_get_key(probe_src, stored)) { devmel_index = candidate; derived = true; break; }
         }
+        if (derived) derived = io_derive_devmel_pool_identity((uint8_t)devmel_index, 0, src, key, x4);
     } else if (tx) {
         /* Produit normal : forge la prochaine identite locale libre, mais ne reutilise plus sa cle
          * deterministe historique. Chaque nouvel enrolement recoit une vraie cle systeme fraiche,
