@@ -49,11 +49,18 @@ static const uint8_t DEVMEL_IO_T_OBF[11][16] = {
 #define IO_T_BASE  0xD10A5EEDu
 #define IO_T_STEP  0x6D2B79F5u
 
+/* Pool produit : meme fabrique que le pool de compatibilite, avec ses propres identites et T.
+ * Le fichier ne contient que des T masquees ; les valeurs claires ne sont jamais embarquees. */
+#include "io_local_pool.inc"
+#define LOCAL_IO_T_OBFK1 0x8C31E75A4DB209F6ULL
+#define LOCAL_IO_T_OBFK2 0x27D4A90C61BEF853ULL
+#define LOCAL_IO_T_PRIME 0x01000193u
+#define LOCAL_IO_T_BASE  0x4F504649u
+#define LOCAL_IO_T_STEP  0x9E3779B9u
+
 static uint32_t devmel_lcg(uint32_t x) { return 0x41C64E6Du * x + 0x3039u; }
 
-extern "C" bool io_derive_devmel_pool_identity(uint8_t idx, uint64_t seed_us,
-                                                 uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
-    if (idx >= 11 || !src || !key) return false;
+static bool io_make_x4(uint8_t idx, uint64_t seed_us, uint8_t x4[4]) {
     if (!seed_us) {
         struct timeval tv;
         if (gettimeofday(&tv, NULL) != 0) return false;
@@ -65,23 +72,48 @@ extern "C" bool io_derive_devmel_pool_identity(uint8_t idx, uint64_t seed_us,
     uint64_t quotient = (((uint64_t)(random30 >> 1) * 0x80000101ULL) >> 54);
     uint32_t mixed = random30 + 2u * (uint32_t)quotient;
     uint32_t source = (mixed << 8) + idx + 0x100u;
-    uint8_t x4[4] = {(uint8_t)(source >> 24), (uint8_t)(source >> 16),
-                     (uint8_t)(source >> 8), (uint8_t)source};
+    x4[0] = (uint8_t)(source >> 24); x4[1] = (uint8_t)(source >> 16);
+    x4[2] = (uint8_t)(source >> 8);  x4[3] = (uint8_t)source;
+    return true;
+}
+
+static bool io_derive_pool_identity(uint8_t idx, uint64_t seed_us,
+                                    const uint8_t ids[11][3], const uint8_t obf[11][16],
+                                    uint64_t k1, uint64_t k2, uint32_t prime,
+                                    uint32_t base, uint32_t step,
+                                    uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
+    if (idx >= 11 || !src || !key) return false;
+    uint8_t x4[4];
+    if (!io_make_x4(idx, seed_us, x4)) return false;
     uint8_t iv[16], aes[16];
-    memcpy(src, DEVMEL_IO_IDS[idx], 3);
+    memcpy(src, ids[idx], 3);
     for (int i = 0; i < 16; i++) iv[i] = src[i % 3];
     if (!crypto::aes128_encrypt(iv, TRANSFER_KEY, aes)) return false;
     for (int block = 0; block < 4; block++) {
-        uint32_t seed = IO_T_BASE ^ ((uint32_t)idx * IO_T_PRIME) ^ ((uint32_t)block * IO_T_STEP);
-        uint32_t mask = keeloq_encrypt(seed, (block & 1) ? IO_T_OBFK2 : IO_T_OBFK1);
+        uint32_t mask_seed = base ^ ((uint32_t)idx * prime) ^ ((uint32_t)block * step);
+        uint32_t mask = keeloq_encrypt(mask_seed, (block & 1) ? k2 : k1);
         for (int b = 0; b < 4; b++) {
             int i = block * 4 + b;
-            uint8_t t = DEVMEL_IO_T_OBF[idx][i] ^ (uint8_t)(mask >> (24 - 8 * b));
+            uint8_t t = obf[idx][i] ^ (uint8_t)(mask >> (24 - 8 * b));
             key[i] = t ^ aes[i] ^ x4[i & 3];
         }
     }
     if (out_x4) memcpy(out_x4, x4, 4);
     return true;
+}
+
+extern "C" bool io_derive_devmel_pool_identity(uint8_t idx, uint64_t seed_us,
+                                                 uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
+    return io_derive_pool_identity(idx, seed_us, DEVMEL_IO_IDS, DEVMEL_IO_T_OBF,
+                                   IO_T_OBFK1, IO_T_OBFK2, IO_T_PRIME, IO_T_BASE, IO_T_STEP,
+                                   src, key, out_x4);
+}
+
+extern "C" bool io_derive_local_pool_identity(uint8_t idx, uint64_t seed_us,
+                                                uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
+    return io_derive_pool_identity(idx, seed_us, LOCAL_IO_IDS, LOCAL_IO_T_OBF,
+                                   LOCAL_IO_T_OBFK1, LOCAL_IO_T_OBFK2, LOCAL_IO_T_PRIME,
+                                   LOCAL_IO_T_BASE, LOCAL_IO_T_STEP, src, key, out_x4);
 }
 
 /* Apprend UNE action depuis une trame 0x00 captee de la VRAIE telecommande. Disposition 1W :

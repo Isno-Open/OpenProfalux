@@ -59,8 +59,10 @@ bool aes128_encrypt(const uint8_t input[16], const uint8_t key[16], uint8_t outp
     const uint8_t expected_iv[] = {0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04};
     const uint8_t expected_tk[] = {0x34,0xc3,0x46,0x6e,0xd8,0x8f,0x4e,0x8e,0x16,0xaa,0x47,0x39,0x49,0x88,0x43,0x73};
     const uint8_t expected_aes[] = {0xd0,0xca,0x12,0x6f,0x5c,0x6d,0x00,0x67,0x82,0x7a,0xd5,0x28,0x74,0xc6,0x8d,0x21};
-    if (memcmp(input, expected_iv, 16) || memcmp(key, expected_tk, 16)) return false;
-    memcpy(output, expected_aes, 16); return true;
+    if (memcmp(key, expected_tk, 16)) return false;
+    if (!memcmp(input, expected_iv, 16)) memcpy(output, expected_aes, 16);
+    else for (int i = 0; i < 16; i++) output[i] = input[i] ^ key[i];
+    return true;
 }
 uint16_t compute_crc16(const uint8_t *data, size_t n, uint16_t crc) {
     for (size_t i = 0; i < n; i++) {
@@ -164,6 +166,24 @@ int main() {
     assert(memcmp(src2, devmel_src, 3) == 0 && memcmp(dx4, devmel_x4, 4) == 0);
     assert(memcmp(key2, devmel_key, 16) == 0);
     assert(!io_derive_devmel_pool_identity(11, 1, src2, key2, dx4));
+    // Pool OpenProfalux : 11 identites fixes distinctes, meme X4 et meme fabrique de cle.
+    const uint8_t compatible_ids[11][3] = {
+        {0x07,0x8D,0xAD},{0x04,0x6E,0xB4},{0x03,0x85,0x41},{0x02,0x54,0xC3},
+        {0x02,0x4D,0xE7},{0x02,0x1A,0x66},{0x05,0x5A,0x72},{0x06,0x38,0x74},
+        {0x08,0xAD,0x38},{0x09,0xAC,0x65},{0x7D,0xDA,0x1D}
+    };
+    uint8_t local_seen[11][3];
+    for (uint8_t i = 0; i < 11; i++) {
+        uint8_t lk[16], lx4[4], lk_again[16], lx4_again[4];
+        assert(io_derive_local_pool_identity(i, 1762768800000000ULL, local_seen[i], lk, lx4));
+        assert(local_seen[i][0] >= 0x02 && local_seen[i][0] <= 0x09 && lx4[3] == i);
+        assert(io_derive_local_pool_identity(i, 1762768800000000ULL, src2, lk_again, lx4_again));
+        assert(memcmp(local_seen[i], src2, 3) == 0 && memcmp(lk, lk_again, 16) == 0 &&
+               memcmp(lx4, lx4_again, 4) == 0);
+        for (uint8_t j = 0; j < i; j++) assert(memcmp(local_seen[i], local_seen[j], 3) != 0);
+        for (uint8_t j = 0; j < 11; j++) assert(memcmp(local_seen[i], compatible_ids[j], 3) != 0);
+    }
+    assert(!io_derive_local_pool_identity(11, 1, src2, key2, dx4));
     /* 1er octet = type CONTROLEUR (0x02..0x09), comme les identites passerelle DEVMEL : un moteur Somfy
      * n'enrole pas une src de type telecommande (0x0D). Garde-fou sur plusieurs index. */
     for (uint32_t i = 0; i < 8; i++) { uint8_t s[3], k[16]; assert(io_derive_identity(i, s, k) && s[0] >= 0x02 && s[0] <= 0x09); }

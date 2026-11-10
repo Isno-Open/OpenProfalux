@@ -35,6 +35,9 @@ bool io_derive_free_identity(uint8_t out_src[3], uint8_t out_key[16]);
  * seed_us=0 prend gettimeofday ; une valeur imposee rend le calcul testable. out_x4 optionnel. */
 bool io_derive_devmel_pool_identity(uint8_t pool_index, uint64_t seed_us,
                                     uint8_t out_src[3], uint8_t out_key[16], uint8_t out_x4[4]);
+/* Pool produit fixe de 11 identites : meme fabrique X4/T que le pool de compatibilite. */
+bool io_derive_local_pool_identity(uint8_t pool_index, uint64_t seed_us,
+                                   uint8_t out_src[3], uint8_t out_key[16], uint8_t out_x4[4]);
 /* Emet NOTRE 0x30 d'enrolement vers la dest CAPTEE du profil ; identite deja persistee ; l'appelant
  * tient la radio en mode io. Dest, basse conso, fabricant et statut viennent tous du profil capte.
  * out_frame (>= 31 o) et out_len, s'ils sont fournis, recoivent la trame reellement emise pour le
