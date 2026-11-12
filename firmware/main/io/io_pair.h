@@ -44,10 +44,10 @@ bool io_derive_local_pool_identity(uint8_t pool_index, uint64_t seed_us,
  * journal de diagnostic ; passer NULL/NULL si on n'en veut pas. */
 int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
                   uint8_t *out_frame, int *out_len);
-/* Ceremonie Situo io complete : 0x39 signe (notre adresse), 0x30 (man_id CAPTE), deux 0x20 signes,
- * 4 copies chacune. Meme contrat que io_hc_pair_1w ; out_frame recoit le 0x30 emis. */
-int io_hc_pair_1w_situo(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
-                        uint8_t *out_frame, int *out_len);
+/* Ceremonie d'ajout complete (recette iohc-flipper, Somfy et Velux) : 0x39 signe (notre adresse),
+ * 0x30 vers 4 destinations (man_id CAPTE), puis STOP et DESCENTE signes. out_frame recoit le 0x30. */
+int io_hc_pair_1w_ceremony(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
+                           uint8_t *out_frame, int *out_len);
 #ifdef __cplusplus
 }
 #endif

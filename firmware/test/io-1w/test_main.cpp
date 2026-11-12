@@ -256,33 +256,40 @@ int main() {
     // (0x0003), verite terrain de la passerelle de reference (ses identites demarrent a 0003). src2 n'a jamais ete stockee.
     assert(io_store_set(src2, key, &profile, -1));
     assert(io_store_next_rolling(src2, &seq) && seq == 0x0003);   // 0x0003 voulu (reference), pas le vieux 0x0001
-    // Ceremonie Situo io (stekoverflo) : 0x39 signe a NOTRE adresse, 0x30 (man_id CAPTE), puis deux 0x20
-    // signes. Chaque trame : 4 copies identiques, ctrl1 0x00, son propre code roulant (croissant).
+    // Ceremonie d'ajout iohc-flipper : 0x39 signe a NOTRE adresse vers 00003F, 0x30 (man_id CAPTE) vers
+    // les 4 destinations au MEME code roulant, puis STOP et DESCENTE captes. Chaque trame : 4 copies, la
+    // 1re avec le bit basse conso (sauf commandes : basse conso captee), un code roulant par trame.
     sent.clear(); sent_at.clear();
     assert(io_store_set(src, key, &profile, 0x0100));
-    uint8_t situo30[31]; int situo30_len = 0;
-    assert(io_hc_pair_1w_situo(&profile, src, key, situo30, &situo30_len) == 0);
-    assert(sent.size() == 16);
-    const uint8_t situo_cmds[4] = {0x39, 0x30, 0x20, 0x20};
-    const size_t situo_seq_at[4] = {10, 27, 14, 14};   // 0x39 : 1 o de donnee ; 0x30 : 18 ; 0x20 : 5
-    for (size_t t = 0; t < 4; t++) {
+    uint8_t cer30[31]; int cer30_len = 0;
+    assert(io_hc_pair_1w_ceremony(&profile, src, key, cer30, &cer30_len) == 0);
+    assert(sent.size() == 4 + 16 + 4 + 4);
+    auto check_group = [&](size_t first, uint8_t cmd, const uint8_t dst[3], size_t seq_at, uint16_t seq,
+                           bool lpm_first) {
         for (size_t c = 0; c < 4; c++) {
-            const auto &f = sent[t * 4 + c];
-            assert(f == sent[t * 4]);                                   // copies identiques
-            assert(f[1] == IO_SITUO_CTRL1 && f[8] == situo_cmds[t]);
-            assert(memcmp(&f[2], enroll_dst, 3) == 0 && memcmp(&f[5], src, 3) == 0);   // 0x39 a NOTRE adresse
-            assert(f[situo_seq_at[t]] == 0x01 && f[situo_seq_at[t] + 1] == t);       // 0x0100..0x0103
+            const auto &f = sent[first + c];
+            assert(f[8] == cmd && memcmp(&f[2], dst, 3) == 0 && memcmp(&f[5], src, 3) == 0);
+            assert(f[1] == ((lpm_first && c == 0) ? 0x20 : 0x00));
+            assert(f[seq_at] == (seq >> 8) && f[seq_at + 1] == (seq & 0xFF));
             assert(crypto::verify_crc16(f.data(), f.size()));
+            assert(std::equal(f.begin() + 2, f.end() - 2, sent[first].begin() + 2));   // seuls ctrl1 et CRC changent
         }
+    };
+    check_group(0, 0x39, IO_PAIR_BROADCAST, 10, 0x0100, true);
+    for (size_t d = 0; d < 4; d++) {
+        check_group(4 + 4 * d, 0x30, IO_PAIR_DESTS[d], 27, 0x0101, true);   // meme code roulant partout
+        assert(sent[4 + 4 * d][25] == profile.man_id && sent[4 + 4 * d][26] == profile.pair_status);
     }
-    assert(profile.man_id == 0x02 && sent[4][25] == profile.man_id);   // man_id capte, pas IO_ENROLL_MAN_ID
-    assert(sent[4][26] == profile.pair_status);
-    assert(memcmp(&sent[8][9], IO_SITUO_PRIVATE_1, 5) == 0 && memcmp(&sent[12][9], IO_SITUO_PRIVATE_2, 5) == 0);
-    assert(situo30_len == 31 && memcmp(situo30, sent[4].data(), 31) == 0);   // le journal voit le 0x30 emis
+    assert(profile.man_id == 0x02);                                      // capte, pas IO_ENROLL_MAN_ID
+    check_group(20, 0x00, cmd_dst, 17, 0x0102, false);
+    assert(sent[20][9 + 2] == 0xD2);                                     // STOP capte
+    check_group(24, 0x00, cmd_dst, 17, 0x0103, false);
+    assert(sent[24][9 + 2] == 0xC8);                                     // DESCENTE captee
+    assert(cer30_len == 31 && memcmp(&cer30[2], IO_PAIR_DESTS[0], 3) == 0 && cer30[8] == 0x30);
     sent.clear(); sent_at.clear();
     io_profile_t no_man = profile;
-    no_man.man_id = 0;                                                 // pas de 0x30 capte : on ne devine pas
-    assert(io_hc_pair_1w_situo(&no_man, src, key, NULL, NULL) == -1 && sent.empty());
+    no_man.man_id = 0;                                                   // pas de 0x30 capte : on ne devine pas
+    assert(io_hc_pair_1w_ceremony(&no_man, src, key, NULL, NULL) == -1 && sent.empty());
 
     puts("banc io 1W : capture par action + enrolement, rejeu verbatim, identite, compteur, rafales et persistance OK");
 }

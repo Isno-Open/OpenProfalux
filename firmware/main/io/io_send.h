@@ -17,14 +17,14 @@ extern "C" {
  * Rend 0 si au moins une trame est emise, -1 sinon. */
 int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16], io_action_t action);
 
-/* Emet une trame io deja construite (CRC compris) en IO_TX_REPEATS copies identiques, gap_ms d'ecart.
- * Rend 0 si au moins une copie est partie. */
-int io_hc_send_frame_burst(const uint8_t *io_bytes, size_t nb, uint16_t gap_ms);
+/* Emet une trame io deja construite en `copies` copies, gap_ms d'ecart : la 1re avec le bit basse
+ * conso de ctrl1, les suivantes sans (CRC recalcule). Modifie io_bytes. Rend 0 si une copie est partie. */
+int io_hc_send_frame_lpm_burst(uint8_t *io_bytes, size_t nb, uint8_t copies, uint16_t gap_ms);
 
-/* Construit une trame 1W signee (cmd + charge utile + code roulant + HMAC) a ctrl1 donne, vers dst,
- * et l'emet en rafale identique. Un code roulant par rafale. Rend 0 si au moins une copie est partie. */
+/* Construit une trame 1W signee (cmd + charge utile + code roulant + HMAC) vers dst et l'emet en
+ * rafale basse conso puis normale. Un code roulant par rafale. Rend 0 si une copie est partie. */
 int io_hc_send_signed_1w(const uint8_t src[3], const uint8_t key[16], const uint8_t dst[3],
-                         uint8_t cmd, const uint8_t *payload, size_t n, uint8_t ctrl1, uint16_t gap_ms);
+                         uint8_t cmd, const uint8_t *payload, size_t n, uint8_t copies, uint16_t gap_ms);
 
 #ifdef __cplusplus
 }

@@ -151,21 +151,27 @@ constexpr uint16_t IO_TX_REPEAT_GAP_MS    = 25;
 // motif prouve, non retenu ici car la cible est un Somfy.)
 constexpr uint16_t IO_ENROLL_CTRL1_GAP_MS = 143;
 
-// Ceremonie d'ajout d'une telecommande 1W, recette d'une Situo io sur un appui COURT de PROG.
-// Source : stekoverflo/esphome-somfy-io (CC1101 comme nous, en service quotidien sur un store Somfy
-// avec une Situo io), dont le 0x30 est celui de rspaargaren/iohomecontrol (man_id 0x02 Somfy, 4 copies
-// a 40 ms). Sequence : 0x39 signe a NOTRE adresse (n'efface que notre propre entree, jamais celle de
-// la telecommande d'origine), 0x30 (cle), puis deux 0x20 signes avec la cle qu'on vient de transmettre.
-// D'apres l'auteur, sans ces deux 0x20 le moteur ignore l'appairage : ils lui prouvent qu'on detient
-// la cle. Ce sont les memes 0x0C00 et 0x05FF que la capture journal6 ; la note du 2026-10-28 ci-dessous
-// les prenait pour du reglage de fins de course, ce que l'usage quotidien de stekoverflo dement.
-// Chaque trame a son propre code roulant ; ses 4 copies sont identiques, ctrl1 = 0x00 comme les vraies
-// telecommandes Somfy.
-constexpr uint8_t  IO_SITUO_CTRL1           = 0x00;
-constexpr uint16_t IO_SITUO_REPEAT_GAP_MS   = 40;
-constexpr uint8_t  IO_SITUO_REMOVE_DATA[1]  = {0x00};
-constexpr uint8_t  IO_SITUO_PRIVATE_1[5]    = {0x02, 0x03, 0x0C, 0x00, 0x00};
-constexpr uint8_t  IO_SITUO_PRIVATE_2[5]    = {0x02, 0x03, 0x05, 0xFF, 0x00};
+// Ceremonie d'ajout d'un emetteur 1W, recette de samr037/iohc-flipper (CC1101 comme nous, validee sur
+// du vrai materiel Somfy ET Velux avec une seule et meme ceremonie, tx_runner.c send_pair_with_identity) :
+//   1. 0x39 signe a NOTRE adresse vers 00003F : n'efface que notre propre entree eventuelle ;
+//   2. 0x30 (cle enveloppee, man_id capte) vers les 4 destinations d'enrolement, meme code roulant ;
+//      chaque moteur ne retient que la destination de sa classe ;
+//   3. STOP puis DESCENTE signes avec la nouvelle cle : exiges par Velux (manuel KLI 313, p. 10,
+//      etape 5, dans les 3 s), sans effet genant sur Somfy (court arret puis debut de descente).
+// Chaque trame part en IO_PAIR_COPIES copies : la 1re avec le bit basse conso de ctrl1, les autres
+// sans, a IO_PAIR_COPY_GAP_MS d'ecart, comme une vraie telecommande.
+constexpr uint8_t  IO_PAIR_BROADCAST[3]      = {0x00, 0x00, 0x3F};   // tous les appareils
+constexpr uint8_t  IO_PAIR_DESTS[4][3]       = {
+    {0x00, 0x00, 0x3F},   // tous les appareils (Somfy)
+    {0x00, 0x00, 0xBF},   // Velux fenetre (GGL, GGU, CVP)
+    {0x00, 0x00, 0xFF},   // Velux volet (SSL, SST)
+    {0x00, 0x03, 0x7F},   // Velux store et autres variantes
+};
+constexpr uint8_t  IO_PAIR_REMOVE_DATA[1]    = {0x00};
+constexpr uint8_t  IO_PAIR_COPIES            = 4;
+constexpr uint16_t IO_PAIR_COPY_GAP_MS       = 14;
+constexpr uint16_t IO_PAIR_DEST_GAP_MS       = 20;
+constexpr uint16_t IO_PAIR_STEP_GAP_MS       = 40;
 
 // NOTE 2026-10-28 : les adresses d'ecriture de la rafale 0x20 (0x0C00, 0x05XX) ont ete
 // RETIREES. C'etait du REGLAGE DE FINS DE COURSE (doc io : enter_settings_mode,
