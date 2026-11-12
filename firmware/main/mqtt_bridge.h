@@ -54,6 +54,7 @@ typedef struct {
     void (*on_ota_pull)(const char *url);                             /* openprofalux/ota/pull */
     void (*on_connected)(void);                                       /* broker connecte : publier la decouverte */
     void (*on_disconnected)(void);                                    /* broker perdu : statut hors ligne */
+    void (*on_cloud_connected)(void);                                 /* cloud connecte : republier l'etat des appareils */
 } mqtt_handlers_t;
 
 int  mqtt_bridge_set_handlers(const mqtt_handlers_t *h);

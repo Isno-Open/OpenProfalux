@@ -95,6 +95,7 @@ char *shutters_status_json(void);
 /* Publie la discovery HA (1 cover par volet) + l'etat courant. A appeler apres connexion MQTT. */
 void shutters_mqtt_announce(const char *device);
 void shutters_mqtt_lost(void);   /* broker perdu -> statut hors ligne */
+void shutters_cloud_resync(void);   /* cloud (re)connecte : republie description + etat de chaque appareil */
 /* Export dataset slide : par telecommande, ses trames distinctes {hop, bouton, t} (tout brut). */
 typedef struct { uint32_t hop; uint32_t t; uint8_t button; } dframe_t;
 int  shutters_remote_count(void);

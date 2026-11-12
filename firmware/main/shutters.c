@@ -10,6 +10,7 @@
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
+#include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -766,11 +767,19 @@ static void ha_state_str(const volet_t *v, char *out) {
     else if (v->position >= 99)   strcpy(out, "closed");    /* fermeture 100 = ferme (bas) */
     else                          strcpy(out, "stopped");
 }
-/* Publie position + etat du volet (retained). Appele sous LOCK. */
+/* Publie description + position + etat du volet (retained). Appele sous LOCK. La description
+ * (attrs : type, positionnel) sert au portail cloud pour choisir la carte ; elle part avec l'etat,
+ * donc a chaque changement et a chaque resynchronisation. Publie des que le MQTT local OU le cloud
+ * est la : un boitier pilote seulement par le cloud doit aussi montrer ses appareils. */
 static void publish_volet_state(volet_t *v) {
-    if (!s_mqtt_ready) return;
-    char topic[96], pl[16], st[10], slug[SH_ID_LEN];
+    if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;
+    char topic[96], pl[16], st[10], slug[SH_ID_LEN], attrs[64];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
+    /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
+    if (cover_attrs_json(v->type, s_log_frames && !v->central && !is_zone(v), attrs, sizeof(attrs)) > 0) {
+        snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
+        pub_defer(topic, attrs, 1, 1);
+    }
     if (s_log_frames) {   /* position publiee seulement si suivi actif (coherent avec la decouverte + l'UI) */
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
         snprintf(pl, sizeof(pl), "%d", 100 - (int)(v->position + 0.5f));   /* HA = % d'OUVERTURE (100=ouvert) ; interne = fermeture */
@@ -2018,6 +2027,16 @@ void shutters_mqtt_announce(const char *device) {
      * 1000 QoS1) SOUS LOCK dans la tache MQTT tenait le LOCK trop longtemps -> httpd/commandes
      * figes ("plante"). Les nouvelles trames sont publiees en direct par shutters_on_rx. */
     ESP_LOGI(TAG, "HA discovery publiee pour %d cover(s), device=%s", s_nvolets, s_device);
+}
+
+/* Connexion cloud (re)etablie : le portail n'a rien vu de ce qui s'est passe avant, et un appareil
+ * qui ne bouge pas ne republie rien. On republie description et etat de chaque appareil. */
+void shutters_cloud_resync(void) {
+    LOCK();
+    for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
+    UNLOCK();
+    pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
+    ESP_LOGI(TAG, "cloud : etat de %d appareil(s) republie", s_nvolets);
 }
 
 void shutters_mqtt_lost(void) {
