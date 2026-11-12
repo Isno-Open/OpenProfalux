@@ -13,6 +13,12 @@
 #include <map>
 #include <string>
 #include <vector>
+#if __has_include("io_compat_pool_test.inc") && __has_include("io_compat_pool.inc")
+#include "io_compat_pool_test.inc"
+#define IO_TEST_HAVE_COMPAT_POOL 1
+#else
+#define IO_TEST_HAVE_COMPAT_POOL 0
+#endif
 
 using namespace iohome;
 static std::map<std::string, std::vector<uint8_t>> saved, pending;
@@ -56,12 +62,12 @@ int esp_read_mac(uint8_t mac[6], int) {
 /* CRC de reference ; le double AES expose le compteur donne au MAC, sans tester AES. */
 namespace iohome { namespace crypto {
 bool aes128_encrypt(const uint8_t input[16], const uint8_t key[16], uint8_t output[16]) {
-    const uint8_t expected_iv[] = {0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04,0x6e,0xb4,0x04};
     const uint8_t expected_tk[] = {0x34,0xc3,0x46,0x6e,0xd8,0x8f,0x4e,0x8e,0x16,0xaa,0x47,0x39,0x49,0x88,0x43,0x73};
-    const uint8_t expected_aes[] = {0xd0,0xca,0x12,0x6f,0x5c,0x6d,0x00,0x67,0x82,0x7a,0xd5,0x28,0x74,0xc6,0x8d,0x21};
     if (memcmp(key, expected_tk, 16)) return false;
-    if (!memcmp(input, expected_iv, 16)) memcpy(output, expected_aes, 16);
-    else for (int i = 0; i < 16; i++) output[i] = input[i] ^ key[i];
+#if IO_TEST_HAVE_COMPAT_POOL
+    if (!memcmp(input, COMPAT_TEST_IV, 16)) { memcpy(output, COMPAT_TEST_AES, 16); return true; }
+#endif
+    for (int i = 0; i < 16; i++) output[i] = input[i] ^ key[i];
     return true;
 }
 uint16_t compute_crc16(const uint8_t *data, size_t n, uint16_t crc) {
@@ -84,7 +90,7 @@ bool encrypt_1w_key(const uint8_t key[16], const uint8_t[3], uint8_t out[16]) {
 
 // Rafale de COMMANDE = 4 trames meme compteur. first_ctrl1 = octet de controle 1 CAPTE (basse conso) ;
 // clear_after : la commande retire le bit LPM apres la 1re trame. (L'enrolement 0x30 utilise la paire
-// DEVMEL FC20->FC00, verifiee separement plus bas, pas cette fonction.)
+// de reference FC20->FC00, verifiee separement plus bas, pas cette fonction.)
 static void check_burst(uint16_t rolling, size_t counter_at, uint8_t first_ctrl1, bool clear_after) {
     assert(sent.size() == 4);
     for (size_t i = 0; i < sent.size(); i++) {
@@ -157,21 +163,18 @@ int main() {
     assert(memcmp(src, expected_src, 3) == 0 && memcmp(key, expected_key, 16) == 0);
     assert(memcmp(src, src2, 3) == 0 && memcmp(key, key2, 16) == 0);
     assert(io_derive_identity(1, src2, key2) && memcmp(src, src2, 3) != 0);
-    // Reproduction DEVMEL deterministe : index 1 (046EB4), seed fixe -> X4 et cle oracle Python.
+    // Pool de compatibilite (PRIVE, hors depot public) : reproduction deterministe, index 1, seed fixe
+    // -> X4 et cle de l'oracle Python. Sans le fichier prive, le pool doit etre desactive.
     uint8_t dx4[4];
-    assert(io_derive_devmel_pool_identity(1, 1762768800000000ULL, src2, key2, dx4));
-    const uint8_t devmel_src[] = {0x04,0x6E,0xB4};
-    const uint8_t devmel_x4[] = {0x24,0xA6,0xEA,0x01};
-    const uint8_t devmel_key[] = {0x8F,0xF0,0x07,0xDB,0xD1,0x4C,0x3E,0xA9,0x35,0x84,0xAE,0xC8,0xF7,0x41,0x65,0x1F};
-    assert(memcmp(src2, devmel_src, 3) == 0 && memcmp(dx4, devmel_x4, 4) == 0);
-    assert(memcmp(key2, devmel_key, 16) == 0);
-    assert(!io_derive_devmel_pool_identity(11, 1, src2, key2, dx4));
+#if IO_TEST_HAVE_COMPAT_POOL
+    assert(io_derive_compat_pool_identity(1, 1762768800000000ULL, src2, key2, dx4));
+    assert(memcmp(src2, COMPAT_TEST_SRC, 3) == 0 && memcmp(dx4, COMPAT_TEST_X4, 4) == 0);
+    assert(memcmp(key2, COMPAT_TEST_KEY, 16) == 0);
+#else
+    assert(!io_derive_compat_pool_identity(1, 1762768800000000ULL, src2, key2, dx4));
+#endif
+    assert(!io_derive_compat_pool_identity(11, 1, src2, key2, dx4));
     // Pool OpenProfalux : 11 identites fixes distinctes, meme X4 et meme fabrique de cle.
-    const uint8_t compatible_ids[11][3] = {
-        {0x07,0x8D,0xAD},{0x04,0x6E,0xB4},{0x03,0x85,0x41},{0x02,0x54,0xC3},
-        {0x02,0x4D,0xE7},{0x02,0x1A,0x66},{0x05,0x5A,0x72},{0x06,0x38,0x74},
-        {0x08,0xAD,0x38},{0x09,0xAC,0x65},{0x7D,0xDA,0x1D}
-    };
     uint8_t local_seen[11][3];
     for (uint8_t i = 0; i < 11; i++) {
         uint8_t lk[16], lx4[4], lk_again[16], lx4_again[4];
@@ -181,10 +184,12 @@ int main() {
         assert(memcmp(local_seen[i], src2, 3) == 0 && memcmp(lk, lk_again, 16) == 0 &&
                memcmp(lx4, lx4_again, 4) == 0);
         for (uint8_t j = 0; j < i; j++) assert(memcmp(local_seen[i], local_seen[j], 3) != 0);
-        for (uint8_t j = 0; j < 11; j++) assert(memcmp(local_seen[i], compatible_ids[j], 3) != 0);
+#if IO_TEST_HAVE_COMPAT_POOL
+        for (uint8_t j = 0; j < 11; j++) assert(memcmp(local_seen[i], COMPAT_TEST_IDS[j], 3) != 0);
+#endif
     }
     assert(!io_derive_local_pool_identity(11, 1, src2, key2, dx4));
-    /* 1er octet = type CONTROLEUR (0x02..0x09), comme les identites passerelle DEVMEL : un moteur Somfy
+    /* 1er octet = type CONTROLEUR (0x02..0x09), comme les identites passerelle de reference : un moteur Somfy
      * n'enrole pas une src de type telecommande (0x0D). Garde-fou sur plusieurs index. */
     for (uint32_t i = 0; i < 8; i++) { uint8_t s[3], k[16]; assert(io_derive_identity(i, s, k) && s[0] >= 0x02 && s[0] <= 0x09); }
 
@@ -208,12 +213,12 @@ int main() {
     assert(sent[0][9+2] == 0xC8 && sent[0][9+5] == 0xD3);
     check_burst(0x1235, 17, 0x00, true);
 
-    // Enrolement ecole DEVMEL (capture Somfy de Pascal 2026-11-08) : EXACTEMENT 2 copies a seq
+    // Enrolement ecole passerelle de reference (capture Somfy de Pascal 2026-11-08) : EXACTEMENT 2 copies a seq
     // CONSTANTE, FC20 (bit 0x20 de ctrl1) puis FC00. man_id = IO_ENROLL_MAN_ID (0x01, marque de
     // l'ENROLEUR), PAS le man_id capte du remote (0x02 ici). Le CRC couvre ctrl1 : propre a chaque
     // variante. (Ni 4x FC00 d'io12k, ni 4x FC20 de vodhash : la paire du Somfy.)
     assert(io_hc_pair_1w(&profile, src, key, NULL, NULL) == 0);
-    assert(sent.size() == 2);                                              // paire DEVMEL, pas 4 copies
+    assert(sent.size() == 2);                                              // paire de reference, pas 4 copies
     for (const auto &f : sent) {
         assert(f.size() == 31 && f[8] == 0x30 && memcmp(&f[2], enroll_dst, 3) == 0);
         assert(f[25] == IO_ENROLL_MAN_ID && f[26] == 0x01);               // enroleur 0x01, statut 0x01
@@ -248,9 +253,9 @@ int main() {
     assert(io_store_set(src, key, &profile, 0));
     assert(io_store_next_rolling(src, &seq) && seq == 0);
     // Identite FRAICHE (rolling=-1, jamais vue en NVS) : compteur initial = IO_ENROLL_INITIAL_ROLLING
-    // (0x0003), verite terrain DEVMEL (038541/021A66 demarrent a 0003). src2 n'a jamais ete stockee.
+    // (0x0003), verite terrain de la passerelle de reference (ses identites demarrent a 0003). src2 n'a jamais ete stockee.
     assert(io_store_set(src2, key, &profile, -1));
-    assert(io_store_next_rolling(src2, &seq) && seq == 0x0003);   // 0x0003 voulu (DEVMEL), pas le vieux 0x0001
+    assert(io_store_next_rolling(src2, &seq) && seq == 0x0003);   // 0x0003 voulu (reference), pas le vieux 0x0001
     // Ceremonie Situo io (stekoverflo) : 0x39 signe a NOTRE adresse, 0x30 (man_id CAPTE), puis deux 0x20
     // signes. Chaque trame : 4 copies identiques, ctrl1 0x00, son propre code roulant (croissant).
     sent.clear(); sent_at.clear();

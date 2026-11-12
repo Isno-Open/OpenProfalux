@@ -22,33 +22,15 @@ extern "C" {
 using namespace iohome;
 using namespace iohome::frame;
 
-/* Tables privees reversees dans AirSendWebService : mode A/B de diagnostic uniquement.
- * Le moteur ne demande pas T/X4 au protocole io ; ce chemin sert a reproduire DEVMEL au byte pres. */
-static const uint8_t DEVMEL_IO_IDS[11][3] = {
-    {0x07,0x8D,0xAD}, {0x04,0x6E,0xB4}, {0x03,0x85,0x41}, {0x02,0x54,0xC3},
-    {0x02,0x4D,0xE7}, {0x02,0x1A,0x66}, {0x05,0x5A,0x72}, {0x06,0x38,0x74},
-    {0x08,0xAD,0x38}, {0x09,0xAC,0x65}, {0x7D,0xDA,0x1D}
-};
-/* T est confidentielle : meme protection au repos que le pool PFX. Aucune ligne ci-dessous
- * n'est une ligne T en clair ; une seule est demasquee octet par octet pendant le calcul. */
-static const uint8_t DEVMEL_IO_T_OBF[11][16] = {
-    {0x41,0xb2,0xd4,0x85,0xe0,0xef,0x6e,0x81,0x44,0x97,0xf6,0x12,0x93,0x9b,0x2c,0xce},
-    {0xf7,0x08,0x27,0x1c,0x80,0xe8,0xb3,0x52,0x9f,0xd9,0x13,0x80,0x0f,0xd7,0xb0,0x36},
-    {0xca,0x09,0x32,0xd8,0xd7,0x9d,0x38,0x4f,0x67,0xd4,0x0c,0xec,0x6f,0xf5,0xa2,0x65},
-    {0x6c,0xcf,0x35,0x5a,0x15,0x24,0xa6,0xc0,0x74,0xf1,0x7d,0xe5,0x6b,0x0d,0x1f,0x57},
-    {0x79,0xd2,0xd9,0xb1,0x8c,0x29,0x59,0xf8,0xcf,0x00,0x06,0x2a,0x2e,0x54,0x35,0xfa},
-    {0x93,0x0b,0x97,0x00,0x31,0x96,0xf6,0xb7,0xf6,0x2d,0x8b,0x0e,0x94,0x73,0x43,0xd6},
-    {0xac,0xae,0x79,0xf7,0xdb,0xf3,0x81,0x34,0x4c,0xdd,0x58,0xd7,0xa2,0xd1,0x14,0x63},
-    {0x23,0x2a,0x25,0x56,0xe0,0x81,0x94,0x76,0x61,0xf3,0xc5,0x48,0xb1,0xa6,0x58,0xc4},
-    {0x8d,0x85,0x21,0x0b,0xed,0xa1,0xdd,0x5f,0xaa,0x7b,0xb2,0xda,0x76,0x86,0x6f,0xbb},
-    {0x08,0x83,0xfe,0xc4,0x95,0x0f,0xb7,0xe5,0x49,0xc4,0xce,0x10,0x61,0x8a,0xff,0x9a},
-    {0xe6,0x56,0xfc,0x42,0xc4,0x9b,0x19,0xe5,0x56,0x56,0x8d,0xea,0x27,0x37,0xe6,0xde}
-};
-#define IO_T_OBFK1 0x719D3A5CE2B6840FULL
-#define IO_T_OBFK2 0xC54A91E73D286BF0ULL
-#define IO_T_PRIME 0x01000193u
-#define IO_T_BASE  0xD10A5EEDu
-#define IO_T_STEP  0x6D2B79F5u
+/* Pool de compatibilite : PRIVE, hors du depot public. Le fichier est fourni a la construction
+ * depuis le depot prive (firmware-private/io_compat_pool.inc). Absent, ce pool est desactive et
+ * le reste du firmware fonctionne a l'identique. */
+#if __has_include("io_compat_pool.inc")
+#include "io_compat_pool.inc"
+#define IO_HAVE_COMPAT_POOL 1
+#else
+#define IO_HAVE_COMPAT_POOL 0
+#endif
 
 /* Pool produit : meme fabrique que le pool de compatibilite, avec ses propres identites et T.
  * Le fichier ne contient que des T masquees ; les valeurs claires ne sont jamais embarquees. */
@@ -59,7 +41,7 @@ static const uint8_t DEVMEL_IO_T_OBF[11][16] = {
 #define LOCAL_IO_T_BASE  0x4F504649u
 #define LOCAL_IO_T_STEP  0x9E3779B9u
 
-static uint32_t devmel_lcg(uint32_t x) { return 0x41C64E6Du * x + 0x3039u; }
+static uint32_t pool_lcg(uint32_t x) { return 0x41C64E6Du * x + 0x3039u; }
 
 static bool io_make_x4(uint8_t idx, uint64_t seed_us, uint8_t x4[4]) {
     if (!seed_us) {
@@ -67,7 +49,7 @@ static bool io_make_x4(uint8_t idx, uint64_t seed_us, uint8_t x4[4]) {
         if (gettimeofday(&tv, NULL) != 0) return false;
         seed_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint32_t)tv.tv_usec;
     }
-    uint32_t r1 = devmel_lcg((uint32_t)seed_us), r2 = devmel_lcg(r1), r3 = devmel_lcg(r2);
+    uint32_t r1 = pool_lcg((uint32_t)seed_us), r2 = pool_lcg(r1), r3 = pool_lcg(r2);
     uint32_t upper = ((r1 >> 6) & 0x1FFC00u) | ((r2 >> 16) & 0x3FFu);
     uint32_t random30 = (upper << 10) | ((r3 >> 16) & 0x3FFu);
     uint64_t quotient = (((uint64_t)(random30 >> 1) * 0x80000101ULL) >> 54);
@@ -103,11 +85,16 @@ static bool io_derive_pool_identity(uint8_t idx, uint64_t seed_us,
     return true;
 }
 
-extern "C" bool io_derive_devmel_pool_identity(uint8_t idx, uint64_t seed_us,
+extern "C" bool io_derive_compat_pool_identity(uint8_t idx, uint64_t seed_us,
                                                  uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
-    return io_derive_pool_identity(idx, seed_us, DEVMEL_IO_IDS, DEVMEL_IO_T_OBF,
-                                   IO_T_OBFK1, IO_T_OBFK2, IO_T_PRIME, IO_T_BASE, IO_T_STEP,
-                                   src, key, out_x4);
+#if IO_HAVE_COMPAT_POOL
+    return io_derive_pool_identity(idx, seed_us, COMPAT_IO_IDS, COMPAT_IO_T_OBF,
+                                   COMPAT_IO_T_OBFK1, COMPAT_IO_T_OBFK2, COMPAT_IO_T_PRIME,
+                                   COMPAT_IO_T_BASE, COMPAT_IO_T_STEP, src, key, out_x4);
+#else
+    (void)idx; (void)seed_us; (void)src; (void)key; (void)out_x4;
+    return false;   /* pool prive absent de cette construction */
+#endif
 }
 
 extern "C" bool io_derive_local_pool_identity(uint8_t idx, uint64_t seed_us,
@@ -216,10 +203,10 @@ extern "C" bool io_derive_identity(uint32_t index, uint8_t out_src[3], uint8_t o
     uint64_t st = seed;
     uint64_t a = splitmix64(&st);
     /* 1er octet = TYPE de noeud (nibble bas) : une passerelle/controleur est en 0x02..0x09, une
-     * telecommande en 0x0D. Les 11 identites DEVMEL (passerelle qui enrole) sont TOUTES en 0x02..0x09 ;
+     * telecommande en 0x0D. Les 11 identites de la passerelle de reference sont TOUTES en 0x02..0x09 ;
      * notre box joue le meme role, donc meme type. io12g..j emettait une src en 0x5D (type telecommande
      * 0xD) : le moteur Somfy a refuse l'enrolement. On force donc 0x02..0x09 (verite terrain capture
-     * DEVMEL 2026-11-08). Identite fraiche sinon (octets 1-2 derives MAC+index), jamais une src DEVMEL. */
+     * de reference 2026-11-08). Identite fraiche sinon (octets 1-2 derives MAC+index), jamais une src du pool de compatibilite. */
     out_src[0] = (uint8_t)(0x02 + (a & 0x07));
     out_src[1] = (uint8_t)((a >> 8) & 0xFF);
     out_src[2] = (uint8_t)((a >> 16) & 0xFF);
@@ -255,7 +242,7 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
     memcpy(&f[OFFSET_SRC_NODE], src, NODE_ID_SIZE);
     f[OFFSET_COMMAND_ID] = CMD_KEY_TRANSFER_1W;
     if (!crypto::encrypt_1w_key(key, src, &f[OFFSET_DATA])) return -1;
-    f[OFFSET_PAIR_MAN_ID] = IO_ENROLL_MAN_ID;                             /* marque de l'ENROLEUR (0x01, DEVMEL+vodhash), PAS le man_id capte du remote (bug io12g/h) */
+    f[OFFSET_PAIR_MAN_ID] = IO_ENROLL_MAN_ID;                             /* marque de l'ENROLEUR (0x01, passerelle de reference + vodhash), PAS le man_id capte du remote (bug io12g/h) */
     f[OFFSET_PAIR_STATUS] = profile->pair_status;                         /* CAPTE : statut */
     uint16_t seq;
     if (!io_store_next_rolling(src, &seq)) return -1;
@@ -273,10 +260,10 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
      * rafale 0x20 est du REGLAGE DE FINS DE COURSE et dereglerait un moteur deja regle.
      * ⚠️ Les deux copies gardent la MEME seq (seuls ctrl1 et son CRC changent) : repasser par le
      *    constructeur incrementerait le code roulant. */
-    /* Rafale d'enrolement, ecole DEVMEL (capture Somfy de Pascal, 2026-11-08) : DEUX copies a seq
+    /* Rafale d'enrolement, ecole passerelle de reference (capture Somfy de Pascal, 2026-11-08) : DEUX copies a seq
      * CONSTANTE, la 1re avec le bit 0x20 de ctrl1 (FC20, debut de rafale), la 2e sans (FC00),
      * ~143 ms d'ecart. Le CRC couvre ctrl1, recalcule pour la variante FC20. io12k emettait 4x
-     * FC00 (ni DEVMEL ni vodhash) -> refus du Somfy. L'ecole vodhash/Velux (4x FC20 identiques)
+     * FC00 (ni la reference ni vodhash) -> refus du Somfy. L'ecole vodhash/Velux (4x FC20 identiques)
      * reste un autre motif prouve, non retenu ici car la cible est un Somfy. */
     uint8_t f20[31];
     memcpy(f20, f, sizeof f);

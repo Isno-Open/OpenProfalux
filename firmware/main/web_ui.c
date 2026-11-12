@@ -1716,7 +1716,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!cJSON_IsObject(j)) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "objet json attendu"); }
     cJSON *idx = cJSON_GetObjectItem(j, "index"), *txj = cJSON_GetObjectItem(j, "tx");
-    cJSON *dpj = cJSON_GetObjectItem(j, "devmel_pool");
+    cJSON *dpj = cJSON_GetObjectItem(j, "compat_pool");
     cJSON *roll = cJSON_GetObjectItem(j, "rolling");
     bool valid = json_integer(idx, 0, UINT32_MAX) && json_integer(txj, 0, 1) && json_integer(roll, 0, UINT16_MAX);
     bool tx = !txj || txj->valuedouble == 1;
@@ -1791,10 +1791,10 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande, overlay et trame 0x30 du PROG requis ; tx=0 exige aussi rolling");
     }
     uint8_t src[3], key[16], x4[4] = {0};
-    bool devmel_mode = cJSON_IsTrue(dpj);
+    bool compat_mode = cJSON_IsTrue(dpj);
     int pool_index = -1;
     bool derived;
-    if (devmel_mode) {
+    if (compat_mode) {
         /* Le choix n'est jamais fourni par le client : depart aleatoire, puis premier membre libre
          * en parcours circulaire. Une identite deja rangee dans io_store n'est jamais regeneree
          * avec une nouvelle cle. */
@@ -1803,10 +1803,10 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         for (int offset = 0; offset < 11; offset++) {
             const int candidate = (pool_start + offset) % 11;
             uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
-            if (!io_derive_devmel_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
+            if (!io_derive_compat_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
             if (!io_store_get_key(probe_src, stored)) { pool_index = candidate; derived = true; break; }
         }
-        if (derived) derived = io_derive_devmel_pool_identity((uint8_t)pool_index, 0, src, key, x4);
+        if (derived) derived = io_derive_compat_pool_identity((uint8_t)pool_index, 0, src, key, x4);
     } else if (tx) {
         /* Meme politique pour le pool produit : identite libre choisie depuis un depart aleatoire. */
         derived = false;
@@ -1825,8 +1825,8 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     int rolling = roll ? (int)roll->valuedouble : -1;
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
-    if (devmel_mode)
-        ESP_LOGW(TAG, "io TEST DEVMEL : pool=%d src=%02X%02X%02X X4=%02X%02X%02X%02X, cle T/X4 calculee",
+    if (compat_mode)
+        ESP_LOGW(TAG, "io TEST pool compatible : pool=%d src=%02X%02X%02X X4=%02X%02X%02X%02X, cle T/X4 calculee",
                  pool_index, src[0], src[1], src[2], x4[0], x4[1], x4[2], x4[3]);
     else if (tx)
         ESP_LOGW(TAG, "io OpenProfalux : pool=%d src=%02X%02X%02X X4=%02X%02X%02X%02X, cle T/X4 calculee",
@@ -1845,7 +1845,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     ESP_LOGW(TAG, "io : identite %s %s (man_id remote capte 0x%02X ; emis = enroleur)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
     char out[120];
     snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d,\"mode\":\"%s\",\"pool_index\":%d}",
-             id, tx ? 1 : 0, devmel_mode ? "devmel-tx4" : "openprofalux-tx4", pool_index);
+             id, tx ? 1 : 0, compat_mode ? "compat-tx4" : "openprofalux-tx4", pool_index);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }

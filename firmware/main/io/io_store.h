@@ -40,8 +40,8 @@ typedef struct {
 } io_profile_t;
 
 /* Compteur roulant INITIAL d'une identite d'enrolement fraiche (jamais vue en NVS).
- * 3, et pas 1 : verite terrain DEVMEL, une identite fraichement creee demarre son 0x30 a
- * 0x0003 (038541, 021A66 dans IO-ENROLEMENT-SEQUENCE-COMPLETE) ; partir de 1/2 risque de
+ * 3, et pas 1 : verite terrain de la passerelle de reference, une identite fraichement creee demarre son 0x30 a
+ * 0x0003 (relevee sur deux de ses identites) ; partir de 1/2 risque de
  * les voir lies a leur systeme. */
 #define IO_ENROLL_INITIAL_ROLLING 3
 

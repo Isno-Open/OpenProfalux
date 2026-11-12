@@ -36,3 +36,7 @@ firmware/build-*/
 firmware/release/
 firmware/sdkconfig.devkit
 dist/
+
+# Pool de compatibilite io : PRIVE, fourni depuis OpenProfalux-Research/firmware-private
+firmware/main/io/io_compat_pool.inc
+firmware/main/io/io_compat_pool_test.inc

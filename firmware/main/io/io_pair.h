@@ -31,9 +31,9 @@ bool io_cmd_is_pair_confirm(uint8_t cmd);
 bool io_derive_identity(uint32_t index, uint8_t out_src[3], uint8_t out_key[16]);
 /* Identite deterministe LIBRE : plus petit index dont la source n'est pas deja enrolee (une par volet io). */
 bool io_derive_free_identity(uint8_t out_src[3], uint8_t out_key[16]);
-/* Mode diagnostic prive : reproduit la fabrique DEVMEL pour une des 11 identites du pool.
+/* Mode diagnostic prive : reproduit la fabrique de reference pour une des 11 identites du pool.
  * seed_us=0 prend gettimeofday ; une valeur imposee rend le calcul testable. out_x4 optionnel. */
-bool io_derive_devmel_pool_identity(uint8_t pool_index, uint64_t seed_us,
+bool io_derive_compat_pool_identity(uint8_t pool_index, uint64_t seed_us,
                                     uint8_t out_src[3], uint8_t out_key[16], uint8_t out_x4[4]);
 /* Pool produit fixe de 11 identites : meme fabrique X4/T que le pool de compatibilite. */
 bool io_derive_local_pool_identity(uint8_t pool_index, uint64_t seed_us,

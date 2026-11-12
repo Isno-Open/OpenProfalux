@@ -130,8 +130,8 @@ constexpr uint8_t MANUFACTURER_VELUX_PAIR = 0x01;
 constexpr uint8_t PAIR_STATUS_BYTE        = 0x01;   // 2e octet de statut du 0x30, observe a 0x01
 
 // man_id du 0x30 D'ENROLEMENT que NOUS emettons = marque de l'ENROLEUR (la passerelle qui ajoute
-// une identite), PAS du moteur. Verite terrain (capture d'un enrolement DEVMEL reel le 2026-11-08,
-// + banc vodhash) : DEVMEL enrole un moteur SOMFY et vodhash un VELUX avec la MEME valeur 0x01. Les
+// une identite), PAS du moteur. Verite terrain (capture d'un enrolement reel par une passerelle de reference le 2026-11-08,
+// + banc vodhash) : la reference enrole un moteur SOMFY et vodhash un VELUX avec la MEME valeur 0x01. Les
 // MANUFACTURER_*_PAIR ci-dessus sont la marque que les TELECOMMANDES mettent dans LEUR ceremonie
 // (Somfy 0x02) : a NE PAS reemettre comme notre man_id (bug io12g/h : on reemettait le 0x02 capte).
 constexpr uint8_t IO_ENROLL_MAN_ID        = 0x01;
@@ -144,7 +144,7 @@ constexpr uint8_t IO_ENROLL_MAN_ID        = 0x01;
 constexpr uint8_t  IO_TX_REPEATS          = 4;
 constexpr uint16_t IO_TX_REPEAT_GAP_MS    = 25;
 
-// Ecole DEVMEL (capture Somfy de Pascal, 2026-11-08) : l'enrolement 0x30 reussi n'est PAS une
+// Ecole passerelle de reference (capture Somfy de Pascal, 2026-11-08) : l'enrolement 0x30 reussi n'est PAS une
 // rafale identique. C'est DEUX copies a seq CONSTANTE : la 1re avec le bit 0x20 de ctrl1 (FC20),
 // la 2e sans (FC00), espacees d'environ 143 ms debut-a-debut (W77472826 -> W77472969). Le CRC
 // couvre ctrl1, donc recalcule par variante. (L'ecole vodhash/Velux = 4x FC20 identiques : autre
