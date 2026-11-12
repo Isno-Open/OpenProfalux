@@ -1794,17 +1794,24 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     int pool_index = -1;
     bool derived;
     if (devmel_mode) {
-        /* Le choix n'est jamais fourni par le client : prochain membre libre du pool, point. */
+        /* Le choix n'est jamais fourni par le client : depart aleatoire, puis premier membre libre
+         * en parcours circulaire. Une identite deja rangee dans io_store n'est jamais regeneree
+         * avec une nouvelle cle. */
         derived = false;
-        for (int candidate = 0; candidate < 11; candidate++) {
+        const int pool_start = (int)(esp_random() % 11u);
+        for (int offset = 0; offset < 11; offset++) {
+            const int candidate = (pool_start + offset) % 11;
             uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
             if (!io_derive_devmel_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
             if (!io_store_get_key(probe_src, stored)) { pool_index = candidate; derived = true; break; }
         }
         if (derived) derived = io_derive_devmel_pool_identity((uint8_t)pool_index, 0, src, key, x4);
     } else if (tx) {
+        /* Meme politique pour le pool produit : identite libre choisie depuis un depart aleatoire. */
         derived = false;
-        for (int candidate = 0; candidate < 11; candidate++) {
+        const int pool_start = (int)(esp_random() % 11u);
+        for (int offset = 0; offset < 11; offset++) {
+            const int candidate = (pool_start + offset) % 11;
             uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
             if (!io_derive_local_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
             if (!io_store_get_key(probe_src, stored)) { pool_index = candidate; derived = true; break; }
