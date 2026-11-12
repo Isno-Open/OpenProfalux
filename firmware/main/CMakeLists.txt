@@ -73,6 +73,8 @@ idf_component_register(
         "req_guard.c"
         "ota.c"
         "ota_rollback.c"
+        "cloud_topic.c"
+        "cloud_enroll.c"
         "radio.c"
         "rf_capture.c"
         "radio_profile.c"

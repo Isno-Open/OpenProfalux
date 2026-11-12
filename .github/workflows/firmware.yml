@@ -229,6 +229,40 @@ jobs:
              -o ota_rollback_host_test
           ./ota_rollback_host_test
 
+  # Le mapping de topics cloud (cloud_topic.c) : le prefixe par device_id qui isole chaque boitier
+  # dans openprofalux/{device_id}/# (isolation ACL). Voir firmware/test/cloud-topic. Pur, gcc suffit.
+  banc-cloud-topic:
+    name: Banc de test du mapping de topics cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cloud_topic (gcc + AddressSanitizer)
+        working-directory: firmware/test/cloud-topic
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/cloud_topic.c \
+             -o cloud_topic_host_test
+          ./cloud_topic_host_test
+
+  # Les decisions du cloud (cloud_enroll.c) : validation du bundle d'appairage et gate d'activation
+  # (handlers /api/cloud/pair et /toggle, et le boot). Voir firmware/test/cloud-enroll. Pur, gcc suffit.
+  banc-cloud-enroll:
+    name: Banc de test des decisions du cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cloud_enroll (gcc + AddressSanitizer)
+        working-directory: firmware/test/cloud-enroll
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/cloud_enroll.c \
+             -o cloud_enroll_host_test
+          ./cloud_enroll_host_test
+
   # Le nom mDNS du boitier (mdns_name.c) : nettoyage du nom choisi, nom par defaut a suffixe
   # pour un boitier neuf. Voir firmware/test/mdns-name.
   banc-mdns-name:

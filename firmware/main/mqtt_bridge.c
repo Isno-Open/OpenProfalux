@@ -23,6 +23,15 @@ static char s_avail_topic[64];   /* topic de disponibilite HA (LWT) : openprofal
  * la connexion (esp-mqtt peut les referencer), liberes au stop. NULL = absent. */
 static char *s_tls_ca = NULL, *s_tls_cert = NULL, *s_tls_key = NULL;
 
+/* ── Connexion CLOUD additive (broker ISNO), EN PLUS du local qui reste INTACT. Un 2e client, ses
+ * propres certificats, et des topics prefixes par le device_id (= segment d'isolation de l'ACL). ── */
+static esp_mqtt_client_handle_t s_mqtt_cloud = NULL;
+static char  s_cloud_id[40];      /* device_id (doit = CN du certificat client cote broker) */
+static char  s_cloud_base[56];    /* "openprofalux/{device_id}" */
+static char  s_cloud_avail[72];   /* LWT cloud : "{base}/status" */
+static char *s_cloud_ca = NULL, *s_cloud_cert = NULL, *s_cloud_key = NULL;
+static volatile bool s_cloud_connected = false;
+
 /* Reconnexion espacee : 10 s, puis 20, 40, 80, et 2 min au plus ; 10 s des qu'une
  * connexion reussit. La reconnexion automatique d'esp-mqtt retentait toutes les 10 s
  * sans fin : un broker injoignable ecrivait ~6 lignes toutes les 17 s, plus de la
@@ -147,6 +156,9 @@ static const char *cert_key(const char *which) {
     if (!strcmp(which, "ca"))   return "ca";
     if (!strcmp(which, "cert")) return "cert";
     if (!strcmp(which, "key"))  return "key";
+    if (!strcmp(which, "cloud_ca"))   return "cloud_ca";
+    if (!strcmp(which, "cloud_cert")) return "cloud_cert";
+    if (!strcmp(which, "cloud_key"))  return "cloud_key";
     return NULL;
 }
 /* Lit un certificat PEM sur le tas, termine par \0 (exige par esp-mqtt). NULL si absent,
@@ -201,6 +213,17 @@ static void free_tls_certs(void) {
     free(s_tls_ca);   s_tls_ca   = NULL;
     free(s_tls_cert); s_tls_cert = NULL;
     free(s_tls_key);  s_tls_key  = NULL;
+}
+
+/* Mapping des topics cloud (prefixe device_id = isolation ACL) : unite PURE cloud_topic.h/.c,
+ * testee sur PC (firmware/test/cloud-topic). */
+#include "cloud_topic.h"
+/* Publie aussi sur le cloud si actif, avec le topic réécrit. Ne touche jamais le client local. */
+static void cloud_pub(const char *local_topic, const char *payload, int qos, int retain) {
+    if (!s_mqtt_cloud) return;
+    char ct[192];
+    if (cloud_topic_from_local(local_topic, s_cloud_id, s_cloud_base, ct, sizeof(ct)))
+        esp_mqtt_client_publish(s_mqtt_cloud, ct, payload, 0, qos, retain);
 }
 
 int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char *user, const char *pass) {
@@ -275,22 +298,108 @@ void mqtt_bridge_stop(void) {
 int mqtt_bridge_set_handlers(const mqtt_handlers_t *h) { s_hdl = *h; return 0; }
 
 int mqtt_pub_state(const char *device, const char *json) {
-    if (!s_mqtt) return -1;
     char topic[64]; snprintf(topic, sizeof(topic), TOPIC_BASE "/%s/state", device);
+    cloud_pub(topic, json, 1, 1);            /* cloud (si actif), topic préfixé device_id */
+    if (!s_mqtt) return -1;
     return esp_mqtt_client_publish(s_mqtt, topic, json, 0, 1, 1);
 }
 
 int mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain) {
+    cloud_pub(topic, payload, qos, retain);  /* cloud (si actif) ; "homeassistant/..." reste local */
     if (!s_mqtt) return -1;
     return esp_mqtt_client_publish(s_mqtt, topic, payload, 0, qos, retain);
 }
 
 int mqtt_pub_system_status(void) {
-    if (!s_mqtt) return -1;
     char payload[256];
     snprintf(payload, sizeof(payload),
              "{\"fw\":\"%s\",\"target\":\"" TARGET_NAME "\",\"free_heap\":%u}",
              esp_app_get_description()->version, (unsigned)esp_get_free_heap_size());
+    cloud_pub(TOPIC_BASE "/system/status", payload, 0, 1);
+    if (!s_mqtt) return -1;
     return esp_mqtt_client_publish(s_mqtt, TOPIC_BASE "/system/status", payload, 0, 1, 1);
 }
+
+/* ── Client CLOUD : évènements (LWT + abonnements device-préfixés), démarrage mTLS, arrêt ── */
+static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
+    (void)arg; (void)base; (void)id;
+    esp_mqtt_event_handle_t evt = event_data;
+    switch (evt->event_id) {
+        case MQTT_EVENT_CONNECTED: {
+            s_cloud_connected = true;
+            esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, "online", 0, 1, 1);
+            char sub[96];
+            snprintf(sub, sizeof(sub), "%s/cover/+/set", s_cloud_base);          esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/cover/+/set_position", s_cloud_base); esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/listen/#", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/ota/pull", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/update/install", s_cloud_base);       esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            ESP_LOGI(TAG, "cloud connecté, base=%s", s_cloud_base);
+            break;
+        }
+        case MQTT_EVENT_DISCONNECTED:
+            s_cloud_connected = false;
+            break;
+        case MQTT_EVENT_DATA: {
+            char lt[192];
+            if (local_topic_from_cloud(evt->topic, evt->topic_len, s_cloud_base, lt, sizeof(lt)))
+                handle_incoming(lt, (int)strlen(lt), evt->data, evt->data_len);
+            break;
+        }
+        case MQTT_EVENT_ERROR:
+            if (evt->error_handle && evt->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
+                ESP_LOGE(TAG, "cloud TLS : tls_stack=0x%x cert_flags=0x%08x",
+                         (unsigned)evt->error_handle->esp_tls_stack_err,
+                         (unsigned)evt->error_handle->esp_tls_cert_verify_flags);
+            else
+                ESP_LOGE(TAG, "cloud MQTT error");
+            break;
+        default: break;
+    }
+}
+
+void mqtt_cloud_stop(void) {
+    if (s_mqtt_cloud) { esp_mqtt_client_stop(s_mqtt_cloud); esp_mqtt_client_destroy(s_mqtt_cloud); s_mqtt_cloud = NULL; }
+    free(s_cloud_ca);   s_cloud_ca   = NULL;
+    free(s_cloud_cert); s_cloud_cert = NULL;
+    free(s_cloud_key);  s_cloud_key  = NULL;
+    s_cloud_connected = false;
+}
+
+int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
+    if (!cloud_uri || !*cloud_uri || !device_id || !*device_id) return -1;   /* vide => cloud désactivé */
+    mqtt_cloud_stop();
+    strncpy(s_cloud_id, device_id, sizeof(s_cloud_id) - 1); s_cloud_id[sizeof(s_cloud_id) - 1] = 0;
+    snprintf(s_cloud_base,  sizeof(s_cloud_base),  "openprofalux/%s", s_cloud_id);
+    snprintf(s_cloud_avail, sizeof(s_cloud_avail), "%s/status", s_cloud_base);
+    static char s_curi[160];
+    snprintf(s_curi, sizeof(s_curi), "%s", cloud_uri);
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = s_curi,
+        .credentials.client_id = s_cloud_id,
+        .session.last_will.topic = s_cloud_avail,
+        .session.last_will.msg = "offline",
+        .session.last_will.msg_len = 7,
+        .session.last_will.qos = 1,
+        .session.last_will.retain = 1,
+    };
+    s_cloud_ca   = read_cert_nvs("cloud_ca");
+    s_cloud_cert = read_cert_nvs("cloud_cert");
+    s_cloud_key  = read_cert_nvs("cloud_key");
+    if (s_cloud_ca) cfg.broker.verification.certificate = s_cloud_ca;         /* CA ISNO privée */
+    else            cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+    if (s_cloud_cert && s_cloud_key) {                                         /* mTLS : cert client */
+        cfg.credentials.authentication.certificate = s_cloud_cert;
+        cfg.credentials.authentication.key         = s_cloud_key;
+    }
+    s_cloud_connected = false;
+    s_mqtt_cloud = esp_mqtt_client_init(&cfg);
+    esp_mqtt_client_register_event(s_mqtt_cloud, ESP_EVENT_ANY_ID, mqtt_cloud_event_cb, NULL);
+    esp_mqtt_client_start(s_mqtt_cloud);
+    ESP_LOGI(TAG, "cloud MQTT started, uri=%s base=%s mTLS=%s",
+             s_curi, s_cloud_base, (s_cloud_cert && s_cloud_key) ? "oui" : "non");
+    return 0;
+}
+
+bool mqtt_cloud_is_connected(void) { return s_cloud_connected; }
 

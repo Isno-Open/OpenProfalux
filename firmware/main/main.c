@@ -22,6 +22,7 @@
 #include "radio_profile.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
+#include "cloud_enroll.h"   /* cloud_want : gate d'activation du cloud (testée) */
 #include "shutters.h"
 #include "pfx_enrol.h"
 #include "web_ui.h"
@@ -54,6 +55,9 @@ static char s_wifi_pass[64]   = "";
 static char s_mqtt_uri[160]   = "mqtt://ha.local:1883";
 static char s_mqtt_user[128]  = "";   /* certains brokers utilisent des tokens JWT longs */
 static char s_mqtt_pass[256]  = "";   /* HA peut generer des mdp broker >64 : marge (nvs_get_str echoue si buffer trop court -> champ vide -> 'not authorized'). Aligne sur OpenXtraflame. */
+static char s_mqtt_cloud_uri[160] = "";   /* broker cloud (mqtts://hote:8883) ; vide = cloud desactive (local seul) */
+static char s_cloud_dev_id[40]    = "";   /* device_id cloud = CN du certificat client (isolation ACL) ; vide = reprend le nom d'appareil */
+static uint8_t s_cloud_on         = 1;    /* interrupteur cloud (toggle UI) ; defaut 1 = actif si cloud_uri present */
 
 /* Load user config from NVS "cfg" namespace */
 static void load_config(void) {
@@ -66,6 +70,9 @@ static void load_config(void) {
     sz = sizeof(s_mqtt_uri);    nvs_get_str(h, "mqtt_uri", s_mqtt_uri, &sz);
     sz = sizeof(s_mqtt_user);   nvs_get_str(h, "mqtt_user", s_mqtt_user, &sz);
     sz = sizeof(s_mqtt_pass);   nvs_get_str(h, "mqtt_pass", s_mqtt_pass, &sz);
+    sz = sizeof(s_mqtt_cloud_uri); nvs_get_str(h, "cloud_uri", s_mqtt_cloud_uri, &sz);
+    sz = sizeof(s_cloud_dev_id);   nvs_get_str(h, "cloud_dev", s_cloud_dev_id, &sz);
+    nvs_get_u8(h, "cloud_on", &s_cloud_on);
     uint8_t lf = 0; nvs_get_u8(h, "log_frames", &lf); s_log_frames = lf;
     uint8_t mo = 1; nvs_get_u8(h, "mqtt_obey", &mo); s_mqtt_obey = mo;   /* absent = oui */
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
@@ -322,7 +329,11 @@ void app_main(void) {
     web_ui_start();
 
     /* 6. MQTT */
-    if (wifi_bridge_is_connected() && strlen(s_mqtt_uri) > 0) {
+    /* Local (HA) et/ou cloud (broker ISNO), ADDITIF : le cloud ne remplace rien, il s'ajoute.
+     * Un boitier sans HA peut n'avoir que le cloud. Handlers communs aux deux connexions. */
+    bool want_local = wifi_bridge_is_connected() && strlen(s_mqtt_uri) > 0;
+    bool want_cloud = cloud_want(wifi_bridge_is_connected(), s_mqtt_cloud_uri, s_cloud_on);
+    if (want_local || want_cloud) {
         /* Handlers AVANT le start : la decouverte HA est publiee sur l'evenement CONNECTED
          * (vraie connexion), plus au boot a l'aveugle. Le statut UI suit CONNECTED/DISCONNECTED. */
         mqtt_handlers_t h = {
@@ -332,9 +343,15 @@ void app_main(void) {
             .on_disconnected = shutters_mqtt_lost,    /* -> statut hors ligne */
         };
         mqtt_bridge_set_handlers(&h);
+    }
+    if (want_local) {
         mqtt_bridge_start(s_mqtt_uri, s_device_name,
                           strlen(s_mqtt_user) ? s_mqtt_user : NULL,
                           strlen(s_mqtt_pass) ? s_mqtt_pass : NULL);
+    }
+    if (want_cloud) {   /* 2e connexion mTLS vers le broker ISNO, topics prefixes par le device_id */
+        if (!s_cloud_dev_id[0]) strlcpy(s_cloud_dev_id, s_device_name, sizeof(s_cloud_dev_id));
+        mqtt_cloud_start(s_mqtt_cloud_uri, s_cloud_dev_id);
     }
 
     ESP_LOGI(TAG, "PRET (%s). Pilotage via HA/MQTT + UI web. Capture/replay actif.", TARGET_NAME);

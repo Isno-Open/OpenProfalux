@@ -24,6 +24,16 @@
 int  mqtt_bridge_start(const char *broker_uri, const char *client_id, const char *user, const char *pass);
 void mqtt_bridge_stop(void);
 
+/* ── Connexion CLOUD additive (broker ISNO en mqtts mTLS), EN PLUS du local, qui reste INTACT. ──
+ * Un 2e client MQTT. Les topics cloud sont prefixes par le device_id (openprofalux/{device_id}/...)
+ * pour coller a l'ACL du broker. La publication des volets (mqtt_pub_*) part automatiquement sur les
+ * DEUX connexions, avec le prefixe pose cote cloud ; les commandes cloud recues sont ramenees a la
+ * forme locale et traitees par le meme chemin. cloud_uri vide => cloud non demarre (local seul).
+ * Certificats cloud via mqtt_cert_write avec which = "cloud_ca" | "cloud_cert" | "cloud_key". */
+int  mqtt_cloud_start(const char *cloud_uri, const char *device_id);
+void mqtt_cloud_stop(void);
+bool mqtt_cloud_is_connected(void);
+
 /* Certificats TLS pour mqtts, stockes en SPIFFS (partition storage, 960 Ko) et non en
  * NVS : la NVS de 16 Ko est deja trop juste pour la config des volets, exactement comme
  * pour le ring de trames. which = "ca" (autorite du broker) | "cert" (client) | "key"

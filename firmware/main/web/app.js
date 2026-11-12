@@ -87,6 +87,7 @@ function applyRoute() {
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
+  if (main === 'cloud' && typeof loadCloud === 'function') loadCloud();
   if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
   if (main === 'remotes' && sub === 'devices' && typeof renderDevices === 'function') renderDevices();
   if (main === 'remotes' && sub === 'learn' && typeof setupCaptureScreen === 'function') setupCaptureScreen();
@@ -1633,6 +1634,42 @@ async function runRxTest(idx, band, btn) {
   else st.innerHTML = `❌ Rien capté en 15 s sur ${where}. Ce test lit les télécommandes Profalux/KeeLoq (à code tournant) : une Somfy RTS ou un portail CAME ne s'y verront pas, même reçus. Sinon vérifie l'antenne, la distance < 1 m, et le gain RX.`;
 }
 loadDiag();
+/* ── Cloud (app.isno.fr) : appairage, statut, toggle, oubli ── */
+async function loadCloud() {
+  let s;
+  try { s = await api('/api/cloud/status'); } catch (e) { return; }
+  const st = $('#cloud-status'); if (!st) return;
+  const b = st.querySelector('b');
+  if (!s.paired) { st.className = 'statline'; b.textContent = 'Non appairé'; }
+  else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud coupé · ' + esc(s.device_id || ''); }
+  else if (s.connected) { st.className = 'statline ok'; b.textContent = 'Connecté · ' + esc(s.device_id || ''); }
+  else { st.className = 'statline bad'; b.textContent = 'Appairé, hors ligne · ' + esc(s.device_id || ''); }
+  if (s.server) $('#cloud-server').value = s.server;
+  $('#cloud-actions').hidden = !s.paired;
+  const tg = $('#cloud-toggle'); tg.textContent = s.enabled ? 'Couper' : 'Activer'; tg.dataset.on = s.enabled ? '1' : '0';
+}
+$('#cloud-pair').onclick = async () => {
+  const code = $('#cloud-code').value.trim(), server = $('#cloud-server').value.trim();
+  if (!code) { toast('Entre le code d\'appairage'); return; }
+  const btn = $('#cloud-pair'); btn.disabled = true; btn.textContent = 'Appairage…';
+  try {
+    const r = await api('/api/cloud/pair', { method: 'POST', body: JSON.stringify({ code, server }) });
+    if (r && r.ok) { toast('Appairé : ' + (r.device_id || '')); $('#cloud-code').value = ''; }
+    else toast('Échec appairage (' + ((r && r.err) || '?') + ')');
+  } catch (e) { toast('Échec appairage'); }
+  finally { btn.disabled = false; btn.textContent = 'Appairer'; loadCloud(); }
+};
+$('#cloud-toggle').onclick = async () => {
+  const on = $('#cloud-toggle').dataset.on !== '1';
+  try { await api('/api/cloud/toggle', { method: 'POST', body: JSON.stringify({ on }) }); } catch (e) {}
+  loadCloud();
+};
+$('#cloud-forget').onclick = async () => {
+  if (!confirm('Oublier le cloud sur ce boîtier ? (le compte garde le device, ré-appairage possible)')) return;
+  try { await api('/api/cloud/forget', { method: 'POST' }); toast('Cloud oublié'); } catch (e) {}
+  loadCloud();
+};
+
 $('#mqtt-detect').onclick = async () => {
   const b = $('#mqtt-detect'); b.textContent = 'Recherche…'; b.disabled = true;
   const r = await api('/api/mqtt/discover').catch(() => ({}));
