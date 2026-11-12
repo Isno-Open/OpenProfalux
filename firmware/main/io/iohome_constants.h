@@ -151,6 +151,22 @@ constexpr uint16_t IO_TX_REPEAT_GAP_MS    = 25;
 // motif prouve, non retenu ici car la cible est un Somfy.)
 constexpr uint16_t IO_ENROLL_CTRL1_GAP_MS = 143;
 
+// Ceremonie d'ajout d'une telecommande 1W, recette d'une Situo io sur un appui COURT de PROG.
+// Source : stekoverflo/esphome-somfy-io (CC1101 comme nous, en service quotidien sur un store Somfy
+// avec une Situo io), dont le 0x30 est celui de rspaargaren/iohomecontrol (man_id 0x02 Somfy, 4 copies
+// a 40 ms). Sequence : 0x39 signe a NOTRE adresse (n'efface que notre propre entree, jamais celle de
+// la telecommande d'origine), 0x30 (cle), puis deux 0x20 signes avec la cle qu'on vient de transmettre.
+// D'apres l'auteur, sans ces deux 0x20 le moteur ignore l'appairage : ils lui prouvent qu'on detient
+// la cle. Ce sont les memes 0x0C00 et 0x05FF que la capture journal6 ; la note du 2026-10-28 ci-dessous
+// les prenait pour du reglage de fins de course, ce que l'usage quotidien de stekoverflo dement.
+// Chaque trame a son propre code roulant ; ses 4 copies sont identiques, ctrl1 = 0x00 comme les vraies
+// telecommandes Somfy.
+constexpr uint8_t  IO_SITUO_CTRL1           = 0x00;
+constexpr uint16_t IO_SITUO_REPEAT_GAP_MS   = 40;
+constexpr uint8_t  IO_SITUO_REMOVE_DATA[1]  = {0x00};
+constexpr uint8_t  IO_SITUO_PRIVATE_1[5]    = {0x02, 0x03, 0x0C, 0x00, 0x00};
+constexpr uint8_t  IO_SITUO_PRIVATE_2[5]    = {0x02, 0x03, 0x05, 0xFF, 0x00};
+
 // NOTE 2026-10-28 : les adresses d'ecriture de la rafale 0x20 (0x0C00, 0x05XX) ont ete
 // RETIREES. C'etait du REGLAGE DE FINS DE COURSE (doc io : enter_settings_mode,
 // save_lower/upper_end_limit, save_settings), emis par la telecommande MAITRE qui parraine,

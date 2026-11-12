@@ -378,7 +378,8 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         if (wait_ceremony_end) io_wait_ceremony_end(emit_khz, 6000);
         uint8_t ourframe[31];
         int ourlen = 0;
-        r = io_hc_pair_1w(profile, src, key, ourframe, &ourlen);
+        /* Ceremonie Situo io (0x39, 0x30, deux 0x20 signes), recette de stekoverflo/esphome-somfy-io. */
+        r = io_hc_pair_1w_situo(profile, src, key, ourframe, &ourlen);
         if (r == 0) {
             /* Banniere d'emission : NOTRE 0x30 est parti (horodatage ESP), sa frequence, sa dest
              * d'enrolement CAPTEE et la trame exacte. Avec les bannieres de capture et le 0x2e ci-dessous,
@@ -386,9 +387,8 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
             char ohex[2 * sizeof(ourframe) + 1];
             int m = ourlen < (int)sizeof(ourframe) ? ourlen : (int)sizeof(ourframe);
             for (int i = 0; i < m; i++) snprintf(&ohex[i * 2], 3, "%02X", ourframe[i]);
-            /* man_id EMIS (octet 25 de notre trame), pas le man_id capte du remote : on affiche ce qu'on
-             * a reellement envoye (0x01, l'enroleur), sinon le journal relit a tort le 0x02 capte. */
-            ESP_LOGW(TAG, "===== io ETAPE : NOTRE 0x30 emis vers %02X%02X%02X (man_id 0x%02X, %u kHz) : %s =====",
+            /* man_id EMIS (octet 25 de notre trame) : celui capte de la telecommande d'origine. */
+            ESP_LOGW(TAG, "===== io ETAPE : ceremonie Situo emise (0x39, 0x30, 0x20 x2) ; NOTRE 0x30 vers %02X%02X%02X (man_id 0x%02X, %u kHz) : %s =====",
                      profile->enroll_target[0], profile->enroll_target[1], profile->enroll_target[2],
                      (ourlen > 25 ? ourframe[25] : 0), (unsigned)emit_khz, ohex);
             io_probe_motor_response(emit_khz);   /* DIAG : le moteur repond-il ? (1W vs 2W), + capte le 0x2e de fin, passif */

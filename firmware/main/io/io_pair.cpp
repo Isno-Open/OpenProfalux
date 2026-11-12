@@ -10,6 +10,7 @@
 #include "iohome_frame.h"
 #include "iohome_constants.h"
 #include "io_radio.h"
+#include "io_send.h"
 extern "C" {
 #include "keeloq.h"
 }
@@ -289,4 +290,54 @@ extern "C" int io_hc_pair_1w(const io_profile_t *profile, const uint8_t src[3],
     const int64_t start00 = start20 + (int64_t)IO_ENROLL_CTRL1_GAP_MS * 1000;
     const int rc00 = io_radio_tx_frame_at(f, sizeof f, start00, NULL);   /* FC00 exactement +143 ms */
     return (rc20 == 0 && rc00 == 0) ? 0 : -1;                     /* une paire partielle n'est pas un succes */
+}
+
+/* Ceremonie d'ajout d'une telecommande 1W, recette Situo io (voir IO_SITUO_* dans iohome_constants.h) :
+ *   0x39 signe a NOTRE adresse -> 0x30 (cle) -> 0x20 02 03 0C 00 00 signe -> 0x20 02 03 05 FF 00 signe.
+ * Chaque trame : son propre code roulant, 4 copies identiques a 40 ms, ctrl1 0x00.
+ * man_id du 0x30 = celui CAPTE du 0x30 de la telecommande d'origine (0x02 Somfy, 0x01 Velux) : il suit
+ * la marque sans valeur en dur. La telecommande d'origine doit avoir mis le moteur en mode ajout (PROG)
+ * juste avant : c'est l'appelant (clic Appairer) qui garantit ce moment.
+ * out_frame/out_len recoivent le 0x30 emis, pour le journal. */
+extern "C" int io_hc_pair_1w_situo(const io_profile_t *profile, const uint8_t src[3],
+                                   const uint8_t key[16], uint8_t *out_frame, int *out_len) {
+    if (!profile || !src || !key) return -1;
+    if (profile->man_id == 0) return -1;   /* pas de 0x30 capte : on ne devine pas la marque */
+    const uint8_t *dst = profile->enroll_target;
+
+    /* 1. 0x39 signe : n'efface que notre propre entree eventuelle (essai precedent). */
+    if (io_hc_send_signed_1w(src, key, dst, CMD_REMOVE_1W, IO_SITUO_REMOVE_DATA,
+                             sizeof IO_SITUO_REMOVE_DATA, IO_SITUO_CTRL1, IO_SITUO_REPEAT_GAP_MS) != 0)
+        return -1;
+    vTaskDelay(pdMS_TO_TICKS(IO_SITUO_REPEAT_GAP_MS));
+
+    /* 2. 0x30 : cle enveloppee + man_id capte + statut capte + code roulant, sans MAC. */
+    uint8_t f[31] = {0};
+    f[OFFSET_CTRL_BYTE_0] = 28 | CTRL0_ORDER_MASK | CTRL0_PROTOCOL_MASK;
+    f[OFFSET_CTRL_BYTE_1] = IO_SITUO_CTRL1;
+    memcpy(&f[OFFSET_DEST_NODE], dst, NODE_ID_SIZE);
+    memcpy(&f[OFFSET_SRC_NODE], src, NODE_ID_SIZE);
+    f[OFFSET_COMMAND_ID] = CMD_KEY_TRANSFER_1W;
+    if (!crypto::encrypt_1w_key(key, src, &f[OFFSET_DATA])) return -1;
+    f[OFFSET_PAIR_MAN_ID] = profile->man_id;
+    f[OFFSET_PAIR_STATUS] = profile->pair_status;
+    uint16_t seq;
+    if (!io_store_next_rolling(src, &seq)) return -1;
+    f[27] = (uint8_t)(seq >> 8);
+    f[28] = (uint8_t)seq;
+    uint16_t crc = crypto::compute_crc16(f, 29);
+    f[29] = (uint8_t)crc;
+    f[30] = (uint8_t)(crc >> 8);
+    if (out_frame) memcpy(out_frame, f, sizeof f);
+    if (out_len) *out_len = (int)sizeof f;
+    if (io_hc_send_frame_burst(f, sizeof f, IO_SITUO_REPEAT_GAP_MS) != 0) return -1;
+    vTaskDelay(pdMS_TO_TICKS(IO_SITUO_REPEAT_GAP_MS));
+
+    /* 3 et 4. Les deux 0x20 signes avec la cle qu'on vient de transmettre. */
+    if (io_hc_send_signed_1w(src, key, dst, CMD_PRIVATE_WRITE, IO_SITUO_PRIVATE_1,
+                             sizeof IO_SITUO_PRIVATE_1, IO_SITUO_CTRL1, IO_SITUO_REPEAT_GAP_MS) != 0)
+        return -1;
+    vTaskDelay(pdMS_TO_TICKS(IO_SITUO_REPEAT_GAP_MS));
+    return io_hc_send_signed_1w(src, key, dst, CMD_PRIVATE_WRITE, IO_SITUO_PRIVATE_2,
+                                sizeof IO_SITUO_PRIVATE_2, IO_SITUO_CTRL1, IO_SITUO_REPEAT_GAP_MS);
 }
