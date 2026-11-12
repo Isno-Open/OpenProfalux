@@ -242,19 +242,22 @@
           <p class="sub">Clique, puis appuie <b>une fois</b> sur un bouton (montée, stop ou descente) de <b>ta télécommande d'origine</b> (écoute 8 s). Le boîtier lit la <b>vraie commande</b> de ton volet : sa destination et son contenu. Les codes montée/stop/descente viennent du profil de la marque ; ils sont ajustables dans les réglages avancés si ton moteur diffère.</p>
           <div class="row"><button id="io-cap-cmd" class="btn">📡 Capter la télécommande</button></div>
           <p class="statline" id="io-cap-stat" hidden></p>
-          <h3>2. Appairer (dans cet ordre)</h3>
-          <p class="sub"><b>① Clique « Démarrer l'appairage »</b> : le boîtier se met à écouter. <b>② Seulement après</b>, mets ta télécommande d'origine en apprentissage (PROG). <b>C'est bien le bouton d'abord, le PROG ensuite</b> (pas l'inverse). <span id="io-add-learn"></span> Le boîtier capte la cérémonie de ta télécommande, attend la fin, puis envoie sa propre identité d'appairage. <span id="io-add-appaire-note"></span> Écoute jusqu'à 20 s : si tu fais le PROG avant d'avoir cliqué, le signal passe sans être capté.</p>
+          <h3>2. Mettre la télécommande en PROG</h3>
+          <p class="sub"><b>① Clique « Écouter le PROG »</b>, puis <b>② mets la télécommande d'origine en apprentissage</b>. <span id="io-add-learn"></span> Le boîtier capture la cérémonie mais n'émet encore aucune identité. <span id="io-add-appaire-note"></span></p>
+          <div class="row"><button id="io-cap-enroll" class="btn" disabled>🎧 Écouter le PROG</button></div>
+          <h3>3. Appairer la nouvelle identité</h3>
+          <p class="sub">Quand la capture PROG est terminée, clique séparément sur l'identité à présenter. L'émission part à ce clic, comme sur la box de référence.</p>
           <div class="row">
-            <button id="io-add-pair" class="btn primary" disabled>Démarrer l'appairage : identité OpenProfalux</button>
-            <button id="io-add-pair-devmel" class="btn" disabled>Démarrer l'appairage : identité libre du pool compatible (test)</button>
+            <button id="io-add-pair" class="btn primary" disabled>Appairer : identité OpenProfalux</button>
+            <button id="io-add-pair-devmel" class="btn" disabled>Appairer : identité libre du pool compatible (test)</button>
           </div>
           <p class="hint">Chaque bouton choisit automatiquement la prochaine identité libre dans son pool de 11 et calcule une clé fraîche par la même fabrique <code>T/X4</code>. Une identité sauvegardée n'est jamais réutilisée.</p>
           <p class="statline" id="io-add-status" hidden></p>
           <div id="io-add-finish" hidden>
-            <h3>3. Tester</h3>
+            <h3>4. Tester</h3>
             <p class="sub">Le moteur peut mettre un instant à répondre. Ces boutons pilotent le volet que tu viens d'appairer.</p>
             <div class="dpad enrol-pad"><button id="io-up">▲</button><button id="io-stop">■</button><button id="io-down">▼</button></div>
-            <h3>4. Nommer le volet</h3>
+            <h3>5. Nommer le volet</h3>
             <p class="sub">Il est déjà dans l'onglet <b>Volets</b>. Donne-lui un nom pour le retrouver (Home Assistant inclus).</p>
             <div class="field"><div class="row" style="flex-wrap:nowrap">
               <input id="io-volet-name" placeholder="Nom du volet (ex : Chambre)" style="flex:1;min-width:0" maxlength="23">

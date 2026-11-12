@@ -63,7 +63,7 @@ int  radio_io_erase(void);   /* purge sous le meme mutex que les compteurs TX */
 /* tx=false : adoption persistante, aucun acces radio, rolling obligatoire. freq_khz : porteuse par
  * appareil pour emettre notre 0x30 (0 = canal par defaut), apprise de la capture (geste 1). */
 int  radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
-                     bool tx, int rolling, uint32_t freq_khz);
+                     bool tx, int rolling, uint32_t freq_khz, bool wait_ceremony_end);
 
 /* Auto-calibration du gain RX : balaie les gains, verrouille le 1er qui capte une trame
  * valide pendant que l'utilisateur appuie sur sa telecommande. Non bloquant (tache de fond). */

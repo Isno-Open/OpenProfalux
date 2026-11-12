@@ -226,6 +226,7 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms, io_sniff_kind_t k
     int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     int n = 0;
     io_profile_t probe;
+    uint8_t enroll_frame[32];
     while (esp_timer_get_time() < end) {
         int64_t left_us = end - esp_timer_get_time();
         if (left_us <= 0) break;
@@ -234,7 +235,24 @@ int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms, io_sniff_kind_t k
         int ok = (kind == IO_SNIFF_ENROLL)
                      ? io_enroll_from_capture(buf, k, &probe)                 /* 0x30 valide */
                      : io_profile_from_capture(buf, k, &probe, IO_ACTION_UP); /* 0x00 valide ; probe jete, l'action ne sert qu'a remplir un slot ici inutilise */
-        if (ok == 0) { n = k; break; }
+        if (ok == 0) {
+            n = k;
+            if (kind != IO_SNIFF_ENROLL) break;
+            /* Le 0x30 arrive au debut du PROG. Le conserver, puis ne rendre la main a l'UI qu'apres
+             * le 0x2e de fin (ou 6 s best-effort), afin que le clic Appairer distinct ne puisse pas
+             * partir au milieu de la ceremonie. Les trames suivantes vont reutiliser buf. */
+            memcpy(enroll_frame, buf, (size_t)n);
+            bool ended = false;
+            int64_t ceremony_end = esp_timer_get_time() + 6000 * 1000;
+            while (esp_timer_get_time() < ceremony_end) {
+                int q = io_radio_rx_packet(buf, (size_t)max, 200);
+                if (q > 0 && io_cmd_is_pair_confirm(io_frame_cmd(buf, q))) { ended = true; break; }
+            }
+            memcpy(buf, enroll_frame, (size_t)n);
+            ESP_LOGW(TAG, "io PROG capture seule : 0x30 conserve, fin 0x2e %s ; pret pour clic Appairer",
+                     ended ? "vue" : "non vue (delai 6 s)");
+            break;
+        }
     }
     cc1101_apply_config_ook();                 /* restaure la modulation OOK Profalux */
     cc1101_set_freq_khz(back);                 /* restaure la porteuse */
@@ -345,7 +363,7 @@ static bool io_wait_ceremony_end(uint32_t car_khz, uint32_t timeout_ms) {
 }
 
 int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
-                    bool tx, int rolling, uint32_t freq_khz) {
+                    bool tx, int rolling, uint32_t freq_khz, bool wait_ceremony_end) {
     if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     int r = io_store_set(src, key, profile, rolling) ? 0 : -1;
@@ -355,8 +373,9 @@ int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uin
         io_radio_config();
         if (freq_khz) io_radio_set_carrier_khz(freq_khz);   /* notre 0x30 part a la porteuse apprise de l'appareil (geste 1) */
         uint32_t emit_khz = freq_khz ? freq_khz : io_radio_channel_khz(IO_CH2);
-        /* Correctif timing B : on emet APRES la fin de ceremonie du remote (0x2e), pas pendant (io12g). */
-        io_wait_ceremony_end(emit_khz, 6000);
+        /* Flux fusionne historique : attendre le 0x2e. Avec les trois actions separees, la ceremonie
+         * a deja ete capturee et l'utilisateur vient de cliquer Appairer : emission immediate. */
+        if (wait_ceremony_end) io_wait_ceremony_end(emit_khz, 6000);
         uint8_t ourframe[31];
         int ourlen = 0;
         r = io_hc_pair_1w(profile, src, key, ourframe, &ourlen);

@@ -1667,7 +1667,8 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     }
     free(body);
     uint8_t frame[32];
-    int n = radio_io_sniff(frame, sizeof frame, 8000, kind, freq_khz);   /* 8 s d'ecoute d'UNE trame io du type demande */
+    const uint32_t timeout_ms = kind == IO_SNIFF_ENROLL ? 20000u : 8000u;
+    int n = radio_io_sniff(frame, sizeof frame, timeout_ms, kind, freq_khz);
     httpd_resp_set_type(r, "application/json");
     if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
     char hex[2 * sizeof(frame) + 1];
@@ -1683,14 +1684,15 @@ static esp_err_t h_io_sniff(httpd_req_t *r) {
     snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\",\"freq_khz\":%u}", n, hex, (unsigned)io_radio_last_carrier_khz());
     return httpd_resp_sendstr(r, out);
 }
-/* Appairage io 1W, 2 gestes (io12g). Geste 1 (ailleurs, /api/io/sniff kind=cmd) capte UNE commande.
- * Geste 2 ICI = "Enroler" : l'appel CAPTE le 0x30 du PROG en direct PUIS emet notre 0x30 dans la MEME
- * requete (timing : notre trame tombe dans la fenetre, pas +18 s plus tard). Rien en dur dans le code
+/* Appairage io 1W en trois actions. Geste 1 (ailleurs, /api/io/sniff kind=cmd) capte UNE commande ;
+ * geste 2 (/api/io/sniff kind=enroll) capte le 0x30 du PROG sans emission ; geste 3 ICI presente
+ * notre identite au clic humain distinct. Rien en dur dans le code
  * (les codes d'action vivent dans profiles.json). Corps JSON :
  *   { "index":N, "tx":0|1, "rolling":N, "freq_khz":N,
  *     "cmd":"<hex 0x00 d'un bouton quelconque>",
  *     "overlay":{ "up":[[2,"0x00"],[5,"0xD3"]], "stop":[[2,"0xD2"],[5,"0xD2"]], "down":[[2,"0xC8"],[5,"0xD3"]] } }
- * (tx=0, reprise sans emission : ajouter "enroll":"<hex 0x30>", pas de capture live.)
+ * "enroll" contient le 0x30 deja capture. Sans ce champ, l'ancien flux fusionne reste accepte.
+ * (tx=0, reprise sans emission : rolling et enroll obligatoires.)
  * La commande 0x00 donne cmd_target + le gabarit de charge utile + basse conso (variable de l'appareil) ;
  * l'overlay (lu de profiles.json par le navigateur, declare par marque) pose les octets d'action sur le
  * gabarit pour former monter/stop/descendre ; le 0x30 capte donne enroll_target + man_id + basse conso +
@@ -1764,16 +1766,15 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     cJSON *fqj = cJSON_GetObjectItem(j, "freq_khz");
     uint32_t freq_khz = (cJSON_IsNumber(fqj) && fqj->valuedouble > 800000 && fqj->valuedouble < 1000000)
                             ? (uint32_t)fqj->valuedouble : 0;
-    /* FUSION gestes 2+3 dans la MEME requete : on CAPTE le 0x30 du PROG, puis radio_io_enroll attend la
-     * FIN de ceremonie du remote (0x2e) et emet NOTRE 0x30 ~1 s APRES (correctif timing B, facon vodhash
-     * qui a enrole le Velux). io12g emettait PENDANT la ceremonie, ~1,9 s avant le 0x2e, en collision.
-     * L'utilisateur clique Enroler PUIS fait son PROG : on ecoute AVANT l'evenement, jusqu'a 20 s, et le
-     * boitier gere tout le timing (aucun clic a synchroniser, ce qui avait tue io12f : clic separe a +18 s).
-     * tx=0 (reprise sans emission, rare, pas de PROG) prend le 0x30 fourni par le navigateur. */
+    /* Nouveau flux : le navigateur fournit le 0x30 capture au geste precedent ; aucune attente radio
+     * n'est refaite et l'identite part au clic. Repli compatible : sans "enroll", capture live puis
+     * attente de fin de ceremonie comme avant. */
+    const char *enroll_hex = jstr(j, "enroll");
+    const bool separate_actions = enroll_hex && *enroll_hex;
     if (profok) {
         int n;
-        if (tx) n = radio_io_sniff(frame, sizeof frame, 20000, IO_SNIFF_ENROLL, freq_khz);  /* capture live du 0x30 pendant le PROG */
-        else    n = hex_to_frame(jstr(j, "enroll"), frame, sizeof frame);
+        if (separate_actions || !tx) n = hex_to_frame(enroll_hex, frame, sizeof frame);
+        else                         n = radio_io_sniff(frame, sizeof frame, 20000, IO_SNIFF_ENROLL, freq_khz);
         profok = n > 0 && io_enroll_from_capture(frame, n, &profile) == 0;
         /* DIAG enrolement : le 0x30 capte n'apparait pas dans l'ecoute permanente (en pause pendant le
          * sniff). On le logge ICI, avec l'horodatage ESP, pour mesurer a distance le delai capture->emission
@@ -1787,7 +1788,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     }
     if (!profok) {
         cJSON_Delete(j);
-        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande + overlay requis, et le 0x30 doit etre capte pendant le PROG (clique Enroler PUIS mets la telecommande en PROG) ; tx=0 exige rolling + trame enroll");
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande, overlay et trame 0x30 du PROG requis ; tx=0 exige aussi rolling");
     }
     uint8_t src[3], key[16], x4[4] = {0};
     bool devmel_mode = cJSON_IsTrue(dpj);
@@ -1830,7 +1831,7 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     else if (tx)
         ESP_LOGW(TAG, "io OpenProfalux : pool=%d src=%02X%02X%02X X4=%02X%02X%02X%02X, cle T/X4 calculee",
                  pool_index, src[0], src[1], src[2], x4[0], x4[1], x4[2], x4[3]);
-    int rc = radio_io_enroll(&profile, src, key, tx, rolling, freq_khz);
+    int rc = radio_io_enroll(&profile, src, key, tx, rolling, freq_khz, tx && !separate_actions);
     memset(key, 0, sizeof key);
     if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
     char id[SH_ID_LEN];
