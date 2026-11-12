@@ -1,7 +1,7 @@
 # Pilotage à distance (mode cloud)
 
 Le firmware peut, **en option**, se connecter à un service de pilotage à distance : le service
-ISNO, ou votre propre instance auto-hébergée de [isno-cloud](https://github.com/Isno-Open/isno-cloud).
+ISNO, ou votre propre instance auto-hébergée de [OpenCloudApp](https://github.com/Isno-Open/OpenCloudApp).
 Le mode cloud est **additif** : le MQTT local continue de fonctionner exactement comme avant.
 
 ## Principe
