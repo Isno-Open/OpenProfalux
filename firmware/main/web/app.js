@@ -2249,7 +2249,7 @@ let ioCmdFreq = 0;          // porteuse reelle mesuree au geste 1 (canal + FREQE
 function loadIoAdd() {
   const p = IO_ADD_PROFILE;
   const title = $('#io-add-title'), learn = $('#io-add-learn'), st = $('#io-add-status');
-  const btn = $('#io-add-pair'), compatBtn = $('#io-add-pair-compat'), fin = $('#io-add-finish'), cst = $('#io-cap-stat');
+  const btn = $('#io-add-pair'), fin = $('#io-add-finish'), cst = $('#io-cap-stat');
   if (title) title.textContent = p ? ('Ajouter : ' + (p.nom || 'volet io')) : 'Ajouter un volet io';
   if (learn) learn.textContent = (p && p.io && p.io.learn) || "Mets ta télécommande d'origine en apprentissage.";
   const anote = $('#io-add-appaire-note'); if (anote) anote.textContent = (p && p.io && p.io.appaire_note) || '';
@@ -2264,7 +2264,6 @@ function loadIoAdd() {
   const refreshPair = () => {
     if (enrollBtn) enrollBtn.disabled = !ioCmdFrame;
     if (btn) btn.disabled = !(ioCmdFrame && ioEnrollFrame);
-    if (compatBtn) compatBtn.disabled = !(ioCmdFrame && ioEnrollFrame);
   };
   refreshPair();
   // Geste 1 : capter la telecommande = UNE commande (sniff 0x00). On en tire le gabarit, la cible, la
@@ -2303,16 +2302,15 @@ function loadIoAdd() {
     finally { setRadioBusy(false); refreshPair(); }
   };
   // Geste 3 : clic humain distinct ; utilise le 0x30 deja capture et emet immediatement notre identite.
-  const startIoPair = async (compatMode) => {
+  const startIoPair = async () => {
     if (radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
     if (!ioCmdFrame || !ioEnrollFrame) { toast("Capture d'abord la commande puis le PROG"); return; }
     const overlay = p && p.io && p.io.cmd;   // codes bouton par action, declares par marque (profiles.json)
     if (!overlay) { toast("Profil sans codes de commande (cmd) : impossible de générer les ordres"); return; }
-    setRadioBusy(true); btn.disabled = true; if (compatBtn) compatBtn.disabled = true;
+    setRadioBusy(true); btn.disabled = true;
     if (st) { st.hidden = false; st.className = 'statline'; st.textContent = "📡 Émission de la nouvelle identité au clic…"; }
     try {
       const req = { cmd: ioCmdFrame, enroll: ioEnrollFrame, overlay, freq_khz: ioCmdFreq, index: 0, tx: 1 };
-      if (compatMode) req.compat_pool = true;
       const d = await api('/api/io/pair/1w', { method: 'POST', body: JSON.stringify(req) });
       ioPairedId = d.id;
       if (st) { st.className = 'statline ok'; st.textContent = `📡 Trame d'appairage envoyée (${d.id}). L'io ne renvoie pas d'accusé, donc le boîtier ne peut pas confirmer : regarde si le volet fait un petit va-et-vient, puis teste les flèches ci-dessous. S'il bouge, donne-lui un nom.`; }
@@ -2320,10 +2318,9 @@ function loadIoAdd() {
       const nameInp = $('#io-volet-name'); if (nameInp) nameInp.value = d.id;
     } catch (e) {
       if (st) { st.className = 'statline bad'; st.textContent = `❌ Échec (${e}). Recapture le PROG avant un nouvel essai.`; }
-    } finally { btn.disabled = false; if (compatBtn) compatBtn.disabled = false; setRadioBusy(false); refreshPair(); }
+    } finally { btn.disabled = false; setRadioBusy(false); refreshPair(); }
   };
-  if (btn) btn.onclick = () => startIoPair(false);
-  if (compatBtn) compatBtn.onclick = () => startIoPair(true);
+  if (btn) btn.onclick = () => startIoPair();
   // Etape 2 : TEST (partage) -> pilotage commun a tous les volets (sendCmd -> /api/shutter -> io par proto).
   const bindCmd = (sel, cmd) => { const b = $(sel); if (b) b.onclick = () => { if (ioPairedId) sendCmd({ id: ioPairedId, cmd }, b); }; };
   bindCmd('#io-up', 'up'); bindCmd('#io-stop', 'stop'); bindCmd('#io-down', 'down');
