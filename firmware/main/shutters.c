@@ -816,7 +816,8 @@ static const char *remote_slug(const char *serial) {
     return (serial[0] == '0' && (serial[1] == 'x' || serial[1] == 'X')) ? serial + 2 : serial;
 }
 static void publish_batt_state(remote_t *r) {
-    if (!s_mqtt_ready || !r->name[0] || !r->batt.known) return;
+    /* local OU cloud : un boitier relie au seul cloud publie aussi la pile (cf. publish_volet_state) */
+    if ((!s_mqtt_ready && !mqtt_cloud_is_connected()) || !r->name[0] || !r->batt.known) return;
     char topic[64];
     snprintf(topic, sizeof(topic), "openprofalux/remote/%s/battery", remote_slug(r->serial));
     pub_defer(topic, r->batt.low ? "ON" : "OFF", 0, 1);
@@ -1984,7 +1985,7 @@ bool shutters_prev_cfg_time(time_t *t) {
 /* ── Integration Home Assistant (MQTT) ── */
 /* Etat de l'entite update HA : version installee + derniere version GitHub connue. */
 static void publish_update_state(void) {
-    if (!s_mqtt_ready) return;
+    if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;   /* local OU cloud, comme les volets */
     const esp_app_desc_t *d = esp_app_get_description();
     const char *inst = d ? d->version : "?";
     const char *latest = ota_latest_version();
@@ -2034,9 +2035,11 @@ void shutters_mqtt_announce(const char *device) {
 void shutters_cloud_resync(void) {
     LOCK();
     for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
+    for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
+    publish_update_state();                                                      /* version installee / derniere */
     UNLOCK();
     pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
-    ESP_LOGI(TAG, "cloud : etat de %d appareil(s) republie", s_nvolets);
+    ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s) et version republies", s_nvolets, s_nremotes);
 }
 
 void shutters_mqtt_lost(void) {

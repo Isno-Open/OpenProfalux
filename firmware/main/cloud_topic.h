@@ -8,7 +8,16 @@
 
 #define OPF_ROOT "openprofalux/"
 
+/* Sous-arbres de "openprofalux/" qui ne partent JAMAIS au cloud :
+ *  - "frames/" : trames radio captees (numero de serie, code tournant, RSSI de TOUTE telecommande
+ *    entendue, voisins compris). Donnee personnelle d'un tiers : elle reste dans la maison.
+ *  - "counter/", "busy/" : synchronisation entre cartes du meme reseau local (compteur, verrou
+ *    d'emission) ; sans objet dans le cloud.
+ *  - "log" : journal de debogage du boitier. */
+extern const char *const CLOUD_LOCAL_ONLY[];
+
 /* Local -> cloud. "openprofalux/<reste>" devient "<base>/<reste>" ou base = "openprofalux/<device_id>".
+ * Un sous-arbre de CLOUD_LOCAL_ONLY renvoie false (reste local).
  * Un topic HORS "openprofalux/" (ex. "homeassistant/..." de la Discovery HA) renvoie false : il ne
  * part PAS au cloud (l'ACL le refuserait, le cloud rend sa propre IHM). Un topic DEJA prefixe par le
  * device_id est laisse tel quel. false aussi si le resultat ne tient pas dans cap. */

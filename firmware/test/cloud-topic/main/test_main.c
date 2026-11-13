@@ -31,6 +31,22 @@ int main(void) {
     check(!cloud_topic_from_local("homeassistant/cover/x/config", id, base, out, sizeof out),
           "T2 topic homeassistant/ : refuse (local-only)");
 
+    /* Restent locaux : trames radio (donnees de tiers), synchro inter-cartes, journal. */
+    check(!cloud_topic_from_local("openprofalux/frames/last", id, base, out, sizeof out),
+          "T2b trame radio derniere : reste locale (donnee d'un tiers)");
+    check(!cloud_topic_from_local("openprofalux/frames/log/3", id, base, out, sizeof out),
+          "T2c journal de trames : reste local");
+    check(!cloud_topic_from_local("openprofalux/counter/0x1067", id, base, out, sizeof out)
+          && !cloud_topic_from_local("openprofalux/busy/868", id, base, out, sizeof out),
+          "T2d synchro inter-cartes : reste locale");
+    check(!cloud_topic_from_local("openprofalux/log", id, base, out, sizeof out),
+          "T2e journal de debogage : reste local");
+    check(cloud_topic_from_local("openprofalux/logo", id, base, out, sizeof out),
+          "T2f « log » est un topic exact, pas un prefixe");
+    check(cloud_topic_from_local("openprofalux/remote/1067/battery", id, base, out, sizeof out)
+          && eq(out, "openprofalux/opf-a1b2c3d4e5/remote/1067/battery"),
+          "T2g pile d'une telecommande : part au cloud");
+
     /* Deja prefixe par NOTRE device_id : laisse tel quel (pas de double prefixe). */
     check(cloud_topic_from_local("openprofalux/opf-a1b2c3d4e5/cover/salon/state", id, base, out, sizeof out)
           && eq(out, "openprofalux/opf-a1b2c3d4e5/cover/salon/state"),
