@@ -12,6 +12,9 @@
 #include <nvs.h>
 #include <cJSON.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_mqtt = NULL;
@@ -31,6 +34,93 @@ static char  s_cloud_base[56];    /* "openprofalux/{device_id}" */
 static char  s_cloud_avail[72];   /* LWT cloud : "{base}/status" */
 static char *s_cloud_ca = NULL, *s_cloud_cert = NULL, *s_cloud_key = NULL;
 static volatile bool s_cloud_connected = false;
+/* Coupures et tentatives ratees du cloud depuis le demarrage, publiees avec le battement : une
+ * fuite par tentative se voit alors comme une baisse de memoire a chaque increment. */
+static volatile uint32_t s_cloud_drops = 0, s_cloud_errors = 0;
+uint32_t mqtt_cloud_drops(void)  { return s_cloud_drops; }
+uint32_t mqtt_cloud_errors(void) { return s_cloud_errors; }
+static volatile bool s_connected = false;         /* client local connecte (lu par sa file) */
+
+/* ── Envoi par FILE, une par connexion ──
+ * esp-mqtt tient le verrou d'un client pendant que sa tache traite un evenement (connexion,
+ * message recu) et pendant qu'elle se connecte. Publier DIRECTEMENT sur un client depuis la
+ * tache de l'AUTRE client croise les deux verrous : a la connexion simultanee des deux
+ * brokers, la tache locale attend le verrou cloud pendant que la tache cloud attend le verrou
+ * local, et tout ce qui publie ensuite reste bloque (battement, donc validation OTA). Mesure
+ * le 2026-11-13 sur l'ATOM et reproduit dans QEMU (test/qemu/run.sh).
+ * Ici, publier = deposer dans la file du client vise ; une tache par client la vide. Aucune
+ * tache ne tient un verrou de client en attendant l'autre : les deux connexions vivent en
+ * parallele, et un broker injoignable ne retarde plus l'autre. L'ordre est garde par client.
+ * Seules les publications d'un client DEPUIS SA PROPRE tache (disponibilite a la connexion)
+ * restent directes : meme tache, meme verrou, rien a croiser. */
+#define OUTBOX_DEPTH     32   /* la tache vide la file au fil de l'eau : 32 suffisent en rafale */
+#define OUTBOX_WAIT_MS  200   /* file pleine : attente bornee, puis le message est compte perdu */
+#define OUTBOX_STACK   3072
+#define OUTBOX_PRIO       5   /* celle des taches esp-mqtt */
+typedef struct { char *topic; char *payload; int qos; int retain; } outmsg_t;
+typedef struct {
+    const char *task_name;
+    esp_mqtt_client_handle_t *client;   /* &s_mqtt ou &s_mqtt_cloud : NULL = connexion absente */
+    volatile bool *connected;           /* &s_connected ou &s_cloud_connected */
+    QueueHandle_t q;
+    TaskHandle_t task;
+    uint32_t dropped;
+} outbox_t;
+static outbox_t s_out_local = { .task_name = "mqtt_out_local", .client = &s_mqtt, .connected = &s_connected };
+static outbox_t s_out_cloud = { .task_name = "mqtt_out_cloud", .client = &s_mqtt_cloud, .connected = &s_cloud_connected };
+
+static void outbox_task(void *arg) {
+    outbox_t *o = arg;
+    outmsg_t m;
+    for (;;) {
+        if (xQueueReceive(o->q, &m, portMAX_DELAY) != pdTRUE) continue;
+        esp_mqtt_client_handle_t c = *o->client;
+        if (c) esp_mqtt_client_publish(c, m.topic, m.payload, 0, m.qos, m.retain);
+        free(m.topic); free(m.payload);
+    }
+}
+
+/* Cree la file et sa tache au premier demarrage du client ; elles vivent ensuite pour toujours
+ * (un client arrete puis relance retrouve la meme file). */
+static void outbox_open(outbox_t *o) {
+    if (o->q) return;
+    QueueHandle_t q = xQueueCreate(OUTBOX_DEPTH, sizeof(outmsg_t));
+    if (!q) { ESP_LOGE(TAG, "%s : file non creee (memoire)", o->task_name); return; }
+    o->q = q;
+    if (xTaskCreate(outbox_task, o->task_name, OUTBOX_STACK, o, OUTBOX_PRIO, &o->task) != pdPASS) {
+        ESP_LOGE(TAG, "%s : tache non creee (memoire)", o->task_name);
+        vQueueDelete(q); o->q = NULL;
+    }
+}
+
+/* Rien n'entre dans la file d'une connexion coupee. Mesure le 2026-11-13 sur l'ATOM : pendant
+ * qu'un cloud tombe se reconnectait, sa tache d'envoi attendait la fin de la poignee de main et la
+ * file se remplissait de copies (un volet en mouvement publie toutes les 150 ms) ; la memoire
+ * manquait alors a la poignee de main elle-meme, qui echouait, et ainsi de suite. Rien n'est perdu
+ * a ne pas garder ces messages : a la connexion, chaque client republie l'etat complet
+ * (annonce HA en local, shutters_cloud_resync pour le cloud). */
+/* Pile restee libre au plus bas, la plus petite des deux taches d'envoi : sert a ajuster
+ * OUTBOX_STACK d'apres la mesure (publiee avec le battement). 0 = aucune tache. */
+uint32_t mqtt_outbox_stack_free(void) {
+    uint32_t m = 0;
+    outbox_t *all[] = { &s_out_local, &s_out_cloud };
+    for (int i = 0; i < 2; i++) {
+        if (!all[i]->task) continue;
+        uint32_t w = (uint32_t)uxTaskGetStackHighWaterMark(all[i]->task);
+        if (!m || w < m) m = w;
+    }
+    return m;
+}
+
+static int outbox_send(outbox_t *o, const char *topic, const char *payload, int qos, int retain) {
+    if (!o->q || !*o->client || !*o->connected) return -1;
+    outmsg_t m = { strdup(topic), strdup(payload ? payload : ""), qos, retain };
+    if (m.topic && m.payload && xQueueSend(o->q, &m, pdMS_TO_TICKS(OUTBOX_WAIT_MS)) == pdTRUE) return 0;
+    free(m.topic); free(m.payload);
+    o->dropped++;
+    ESP_LOGW(TAG, "%s : message perdu (%s), %u depuis le demarrage", o->task_name, topic, (unsigned)o->dropped);
+    return -1;
+}
 
 /* Reconnexion espacee : 10 s, puis 20, 40, 80, et 2 min au plus ; 10 s des qu'une
  * connexion reussit. La reconnexion automatique d'esp-mqtt retentait toutes les 10 s
@@ -41,7 +131,6 @@ static volatile bool s_cloud_connected = false;
 #define MQTT_RETRY_MAX_MS 120000
 static esp_timer_handle_t s_retry_timer = NULL;
 static uint32_t s_retry_ms = MQTT_RETRY_MIN_MS;
-static volatile bool s_connected = false;
 static void retry_cb(void *arg) {
     (void)arg;
     if (!s_mqtt || s_connected) return;
@@ -61,7 +150,7 @@ static void publish_log(const char *level, const char *msg) {
     snprintf(payload, sizeof(payload),
              "{\"lvl\":\"%s\",\"msg\":\"%s\",\"client\":\"%s\"}",
              level, msg, s_client_id);
-    esp_mqtt_client_publish(s_mqtt, topic, payload, 0, 0, 0);
+    outbox_send(&s_out_local, topic, payload, 0, 0);   /* appele aussi depuis la tache cloud */
 }
 
 /* Route incoming message to handlers based on topic */
@@ -223,7 +312,7 @@ static void cloud_pub(const char *local_topic, const char *payload, int qos, int
     if (!s_mqtt_cloud) return;
     char ct[192];
     if (cloud_topic_from_local(local_topic, s_cloud_id, s_cloud_base, ct, sizeof(ct)))
-        esp_mqtt_client_publish(s_mqtt_cloud, ct, payload, 0, qos, retain);
+        outbox_send(&s_out_cloud, ct, payload, qos, retain);
 }
 
 int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char *user, const char *pass) {
@@ -284,6 +373,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
     }
     s_mqtt = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(s_mqtt, ESP_EVENT_ANY_ID, mqtt_event_cb, NULL);
+    outbox_open(&s_out_local);
     esp_mqtt_client_start(s_mqtt);
     ESP_LOGI(TAG, "MQTT started, broker=%s", broker_uri);
     return 0;
@@ -291,7 +381,8 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
 
 void mqtt_bridge_stop(void) {
     if (s_retry_timer) esp_timer_stop(s_retry_timer);   /* plus de relance d'un client detruit */
-    if (s_mqtt) { esp_mqtt_client_stop(s_mqtt); esp_mqtt_client_destroy(s_mqtt); s_mqtt = NULL; }
+    /* handle oublie AVANT l'arret : la file locale cesse aussitot de publier sur ce client */
+    if (s_mqtt) { esp_mqtt_client_handle_t c = s_mqtt; s_mqtt = NULL; esp_mqtt_client_stop(c); esp_mqtt_client_destroy(c); }
     free_tls_certs();
 }
 
@@ -300,24 +391,24 @@ int mqtt_bridge_set_handlers(const mqtt_handlers_t *h) { s_hdl = *h; return 0; }
 int mqtt_pub_state(const char *device, const char *json) {
     char topic[64]; snprintf(topic, sizeof(topic), TOPIC_BASE "/%s/state", device);
     cloud_pub(topic, json, 1, 1);            /* cloud (si actif), topic préfixé device_id */
-    if (!s_mqtt) return -1;
-    return esp_mqtt_client_publish(s_mqtt, topic, json, 0, 1, 1);
+    return outbox_send(&s_out_local, topic, json, 1, 1);
 }
 
 int mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain) {
     cloud_pub(topic, payload, qos, retain);  /* cloud (si actif) ; "homeassistant/..." reste local */
-    if (!s_mqtt) return -1;
-    return esp_mqtt_client_publish(s_mqtt, topic, payload, 0, qos, retain);
+    return outbox_send(&s_out_local, topic, payload, qos, retain);
+}
+
+static void system_status_json(char *buf, size_t len) {
+    snprintf(buf, len, "{\"fw\":\"%s\",\"target\":\"" TARGET_NAME "\",\"free_heap\":%u}",
+             esp_app_get_description()->version, (unsigned)esp_get_free_heap_size());
 }
 
 int mqtt_pub_system_status(void) {
     char payload[256];
-    snprintf(payload, sizeof(payload),
-             "{\"fw\":\"%s\",\"target\":\"" TARGET_NAME "\",\"free_heap\":%u}",
-             esp_app_get_description()->version, (unsigned)esp_get_free_heap_size());
+    system_status_json(payload, sizeof(payload));
     cloud_pub(TOPIC_BASE "/system/status", payload, 0, 1);
-    if (!s_mqtt) return -1;
-    return esp_mqtt_client_publish(s_mqtt, TOPIC_BASE "/system/status", payload, 0, 1, 1);
+    return outbox_send(&s_out_local, TOPIC_BASE "/system/status", payload, 1, 1);
 }
 
 /* ── Client CLOUD : évènements (LWT + abonnements device-préfixés), démarrage mTLS, arrêt ── */
@@ -328,6 +419,9 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
         case MQTT_EVENT_CONNECTED: {
             s_cloud_connected = true;
             esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, "online", 0, 1, 1);
+            /* La version part aussi a la connexion du cloud : sinon elle ne partait qu'a celle du
+             * broker local, et un cloud connecte apres lui ne la recevait jamais (vu dans QEMU). */
+            { char st[256]; system_status_json(st, sizeof(st)); cloud_pub(TOPIC_BASE "/system/status", st, 0, 1); }
             char sub[96];
             snprintf(sub, sizeof(sub), "%s/cover/+/set", s_cloud_base);          esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/cover/+/set_position", s_cloud_base); esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
@@ -339,6 +433,7 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             break;
         }
         case MQTT_EVENT_DISCONNECTED:
+            if (s_cloud_connected) s_cloud_drops++;
             s_cloud_connected = false;
             break;
         case MQTT_EVENT_DATA: {
@@ -348,6 +443,7 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             break;
         }
         case MQTT_EVENT_ERROR:
+            s_cloud_errors++;
             if (evt->error_handle && evt->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
                 ESP_LOGE(TAG, "cloud TLS : tls_stack=0x%x cert_flags=0x%08x",
                          (unsigned)evt->error_handle->esp_tls_stack_err,
@@ -360,7 +456,8 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
 }
 
 void mqtt_cloud_stop(void) {
-    if (s_mqtt_cloud) { esp_mqtt_client_stop(s_mqtt_cloud); esp_mqtt_client_destroy(s_mqtt_cloud); s_mqtt_cloud = NULL; }
+    /* handle oublie AVANT l'arret : la file cloud cesse aussitot de publier sur ce client */
+    if (s_mqtt_cloud) { esp_mqtt_client_handle_t c = s_mqtt_cloud; s_mqtt_cloud = NULL; esp_mqtt_client_stop(c); esp_mqtt_client_destroy(c); }
     free(s_cloud_ca);   s_cloud_ca   = NULL;
     free(s_cloud_cert); s_cloud_cert = NULL;
     free(s_cloud_key);  s_cloud_key  = NULL;
@@ -396,6 +493,7 @@ int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
     s_cloud_connected = false;
     s_mqtt_cloud = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(s_mqtt_cloud, ESP_EVENT_ANY_ID, mqtt_cloud_event_cb, NULL);
+    outbox_open(&s_out_cloud);
     esp_mqtt_client_start(s_mqtt_cloud);
     ESP_LOGI(TAG, "cloud MQTT started, uri=%s base=%s mTLS=%s",
              s_curi, s_cloud_base, (s_cloud_cert && s_cloud_key) ? "oui" : "non");

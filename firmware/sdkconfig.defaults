@@ -56,3 +56,7 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+# Allocateur de mbedTLS fourni par le firmware (main/tls_pool.c) : reserve TLS prise au
+# demarrage, taille declaree par la carte (tls_pool_kb). Sans reserve declaree, meme
+# comportement qu'avant (calloc).
+CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC=y

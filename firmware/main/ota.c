@@ -14,6 +14,7 @@
 #include "esp_system.h"
 #include "nvs.h"
 #include "ota_rollback.h"
+#include "github_tag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -238,6 +239,10 @@ const char *ota_latest_url(void)     { return s_latest_url; }
 static volatile uint32_t s_check_n = 0;   /* l'UI y voit la fin d'une verification demandee */
 uint32_t ota_check_count(void)       { return s_check_n; }
 
+/* Au-dela, "tag_name" n'est plus attendu : la reponse est jugee mauvaise. Il arrive dans les
+ * premiers centaines d'octets de la reponse de l'API. */
+#define GITHUB_READ_MAX 8192
+
 esp_err_t ota_check_github(void)
 {
     /* ⚠️ L'adresse doit être la définitive : cette fonction lit la réponse avec
@@ -247,10 +252,13 @@ esp_err_t ota_check_github(void)
      * vérification échouait en silence et l'entité de mise à jour côté HA ne voyait plus
      * jamais de nouvelle version. Le téléchargement lui-même (esp_https_ota) suit les
      * redirections, y compris celle de GitHub vers objects.githubusercontent.com. */
+    /* Lecture par petits morceaux : on ne cherche que "tag_name", qui arrive tot dans le JSON.
+     * Avant, 4 Ko de tampon de reception + 6 Ko pour la reponse, pris d'un coup 30 s apres le
+     * demarrage : sur l'ATOM, ces ~11 Ko manquaient au reste (mesure le 2026-11-13). */
     esp_http_client_config_t cfg = {
         .url = "https://api.github.com/repos/Isno-Open/OpenProfalux/releases/latest",
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 10000, .buffer_size = 4096, .buffer_size_tx = 1024,
+        .timeout_ms = 10000, .buffer_size = 1024, .buffer_size_tx = 512,
         .user_agent = "OpenProfalux-OTA",   /* l'API GitHub exige un User-Agent */
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
@@ -258,20 +266,20 @@ esp_err_t ota_check_github(void)
     esp_err_t err = esp_http_client_open(c, 0);
     if (err != ESP_OK) { esp_http_client_cleanup(c); s_check_n++; return err; }
     esp_http_client_fetch_headers(c);
-    char *buf = malloc(6144);
-    if (!buf) { esp_http_client_close(c); esp_http_client_cleanup(c); s_check_n++; return ESP_ERR_NO_MEM; }
-    int total = 0, r;
-    while (total < 6143 && (r = esp_http_client_read(c, buf + total, 6143 - total)) > 0) total += r;
-    buf[total > 0 ? total : 0] = 0;
+    github_tag_t st; github_tag_init(&st);
+    char chunk[256];
+    size_t total = 0;
+    while (total < GITHUB_READ_MAX) {
+        int r = esp_http_client_read(c, chunk, sizeof(chunk));
+        if (r <= 0) break;
+        total += (size_t)r;
+        if (github_tag_feed(&st, chunk, (size_t)r)) break;
+    }
+    const char *tag = st.tag;
     esp_http_client_close(c); esp_http_client_cleanup(c);
-    /* tag_name arrive tot dans le JSON -> recherche legere (pas de gros parse). URL par convention. */
     esp_err_t rc = ESP_FAIL;
-    char *t = strstr(buf, "\"tag_name\":\"");
-    if (t) {
-        t += strlen("\"tag_name\":\"");
-        char *e = strchr(t, '"');
-        if (e && (e - t) < 20) {
-            char tag[24]; size_t nn = (size_t)(e - t); memcpy(tag, t, nn); tag[nn] = 0;
+    if (tag[0]) {
+        {   /* bloc garde tel quel : meme construction de l'adresse qu'avant */
             strlcpy(s_latest_ver, tag[0] == 'v' ? tag + 1 : tag, sizeof(s_latest_ver));
             /* Asset de CETTE carte : scripts/release.sh nomme chaque binaire
              * openprofalux-<carte>-ota.bin, <carte> etant l'id de boards/<carte>.json,
@@ -283,7 +291,6 @@ esp_err_t ota_check_github(void)
             rc = ESP_OK;
         }
     }
-    free(buf);
     ESP_LOGI(TAG, "GitHub latest=%s url=%s", s_latest_ver, s_latest_url[0] ? s_latest_url : "(?)");
     s_check_n++;
     return rc;

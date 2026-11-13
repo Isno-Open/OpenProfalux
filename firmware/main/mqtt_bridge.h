@@ -47,6 +47,11 @@ int  mqtt_pub_state(const char *device_name, const char *json);
 int  mqtt_pub_system_status(void);
 /* Publish générique (topic libre). qos/retain passés tels quels. */
 int  mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain);
+/* Pile restee libre au plus bas (octets) des taches d'envoi par file. */
+uint32_t mqtt_outbox_stack_free(void);
+/* Coupures du cloud (connecte -> deconnecte) et erreurs de connexion, depuis le demarrage. */
+uint32_t mqtt_cloud_drops(void);
+uint32_t mqtt_cloud_errors(void);
 
 /* Callback registered by main - dispatched based on topic */
 typedef struct {

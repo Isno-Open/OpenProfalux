@@ -22,6 +22,7 @@
 #include "radio_profile.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
+#include "tls_pool.h"
 #include "cloud_enroll.h"   /* cloud_want : gate d'activation du cloud (testée) */
 #include "shutters.h"
 #include "pfx_enrol.h"
@@ -98,10 +99,19 @@ static void load_config(void) {
 
 /* Publish state JSON (heartbeat : etat liaison + heap libre) */
 static void publish_state(const char *last_cmd) {
-    char json[192];
+    char json[384];
+    /* reserve TLS : libre, plus bas atteint, debordements (voir tls_pool.h) ; sert a la dimensionner */
+    tls_pool_stats_t tp; tls_pool_stats(&tp);
+    int ring = 0, hops = 0; shutters_mem_sizes(&ring, &hops);   /* tailles deduites de la RAM */
     snprintf(json, sizeof(json),
-        "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u}",
-        last_cmd, wifi_bridge_rssi(), (unsigned)esp_get_free_heap_size());
+        "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u,\"min_heap\":%u,"
+        "\"tls_pool\":%u,\"tls_free\":%u,\"tls_min\":%u,\"tls_spills\":%u,"
+        "\"ring\":%d,\"hops_cap\":%d,\"out_stack\":%u,\"cloud_drops\":%u,\"cloud_errors\":%u,\"up_s\":%u}",
+        last_cmd, wifi_bridge_rssi(), (unsigned)esp_get_free_heap_size(),
+        (unsigned)esp_get_minimum_free_heap_size(),
+        (unsigned)tp.size, (unsigned)tp.free_now, (unsigned)tp.free_min, (unsigned)tp.spills,
+        ring, hops, (unsigned)mqtt_outbox_stack_free(),
+        (unsigned)mqtt_cloud_drops(), (unsigned)mqtt_cloud_errors(), (unsigned)(esp_timer_get_time() / 1000000));
     mqtt_pub_state(s_device_name, json);
 }
 
@@ -162,6 +172,7 @@ static void on_wifi_back(void) {   /* appele depuis la tache d'evenements : on n
 
 void app_main(void) {
     log_ring_init();   /* journal de l'interface web : avant le premier message */
+    tls_pool_init();   /* reserve TLS prise d'un bloc, avant que le demarrage ne morcelle la memoire */
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║ OpenProfalux v%s : target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
@@ -363,7 +374,11 @@ void app_main(void) {
      * module radio et la tache shutters. */
     uint32_t hb = 0; bool ota_marked = false;
     while (1) {
-        if (++hb >= 1200) { hb = 0; publish_state("HEARTBEAT");
+        if (++hb >= 1200) { hb = 0;
+            /* Premier battement (~60 s) : tout tourne, la RAM libre est representative. Le ring RF
+             * et les sets de hops prennent leur taille d'apres elle (shutters_size_from_ram). */
+            shutters_size_from_ram();
+            publish_state("HEARTBEAT");
             if (!ota_marked) { ota_mark_valid(); ota_marked = true; }
         }
         vTaskDelay(pdMS_TO_TICKS(50));
