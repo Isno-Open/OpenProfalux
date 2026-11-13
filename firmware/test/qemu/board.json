@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "Carte de SIMULATION : le firmware tourne dans QEMU (ESP32), reseau par l'Ethernet",
+    "OpenCores que QEMU emule. Hors de boards/ expres : ni la CI ni les releases ne la",
+    "construisent. La radio est declaree comme sur l'ATOM, mais QEMU n'emule pas de CC1101 :",
+    "son initialisation echoue et le firmware continue sans radio, ce qui suffit pour",
+    "eprouver le reseau, le MQTT local et le cloud. Voir run.sh."
+  ],
+  "id": "qemu-esp32",
+  "name": "Simulation QEMU (ESP32)",
+  "ap_slug": "OpenProfalux",
+  "mcu": "esp32",
+  "flash_mb": 4,
+  "radios": [
+    {
+      "chip": "CC1101",
+      "band": "868",
+      "module": "E07-900M10S",
+      "pins": {
+        "sck": 19,
+        "miso": 33,
+        "mosi": 23,
+        "cs": 22,
+        "gdo0": 25,
+        "gdo2": -1
+      }
+    }
+  ],
+  "ethernet": {
+    "phy": "openeth"
+  },
+  "ui": {
+    "button": -1,
+    "led": -1,
+    "led_active_high": true
+  },
+  "region": "eu",
+  "bands_allowed_khz": [
+    {
+      "radio": "868",
+      "low": 863000,
+      "high": 870000,
+      "carrier_khz": 868350,
+      "max_dbm": 10
+    }
+  ],
+  "spi_freq_hz": 4000000
+}

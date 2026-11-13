@@ -36,6 +36,10 @@ def pick_radio(d):
 # genere l'horloge 50 MHz et la sort (cartes Olimex POE). "ext_in" : horloge
 # fournie par un oscillateur externe (ESP32-GATEWAY/EVB).
 _ETH_CLK_MODE = {"out": "EMAC_CLK_OUT", "ext_in": "EMAC_CLK_EXT_IN"}
+# PHY reconnus. "openeth" : le MAC OpenCores que QEMU emule, pour la carte de simulation
+# (firmware/test/qemu), jamais une carte reelle.
+ETH_PHY_OPENETH = "openeth"
+_ETH_PHYS = ("LAN8720", ETH_PHY_OPENETH)
 
 
 def ethernet_lines(d):
@@ -44,6 +48,18 @@ def ethernet_lines(d):
     eth = d.get("ethernet")
     if not eth:
         return ["", "#define BOARD_HAS_ETHERNET   0"]
+    phy = str(eth.get("phy", "LAN8720"))
+    if phy not in _ETH_PHYS:
+        raise SystemExit("ethernet.phy %r inconnu dans %s (attendu %s)" % (phy, d["id"], "|".join(_ETH_PHYS)))
+    if phy == ETH_PHY_OPENETH:
+        # MAC emule par QEMU : ni broches, ni horloge, ni alimentation de PHY
+        return [
+            "",
+            "/* Ethernet EMULE par QEMU (carte de simulation %s), pas de broche. */" % d["id"],
+            "#define BOARD_HAS_ETHERNET   1",
+            "#define ETH_IS_OPENETH       1",
+            '#define ETH_PHY_MODEL        "%s"' % phy,
+        ]
     mode = str(eth.get("clk_mode", "out"))
     if mode not in _ETH_CLK_MODE:
         raise SystemExit("ethernet.clk_mode %r inconnu dans %s (attendu out|ext_in)" % (mode, d["id"]))
@@ -51,7 +67,8 @@ def ethernet_lines(d):
         "",
         "/* Ethernet filaire (voir boards/%s.json). BOARD_HAS_ETHERNET garde le code reseau. */" % d["id"],
         "#define BOARD_HAS_ETHERNET   1",
-        '#define ETH_PHY_MODEL        "%s"' % eth.get("phy", "LAN8720"),
+        "#define ETH_IS_OPENETH       0",
+        '#define ETH_PHY_MODEL        "%s"' % phy,
         "#define ETH_MDC_GPIO         %d" % int(eth.get("mdc", 23)),
         "#define ETH_MDIO_GPIO        %d" % int(eth.get("mdio", 18)),
         "#define ETH_PHY_POWER_GPIO   %d" % int(eth.get("phy_power", -1)),

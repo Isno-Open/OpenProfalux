@@ -7,7 +7,8 @@
 # devient "<prochaine release>-<label>", ex. 0.2.12-test9, affichee au boot et dans l'UI.
 #
 # Usage :
-#   ./build-test.sh <label>        # le label doit contenir "test", ex. test9
+#   ./build-test.sh <label>                # toutes les cartes ; le label doit contenir "test", ex. test9
+#   ./build-test.sh <label> <carte>...     # seulement ces cartes (noms de boards/), ex. m5-atom-lite
 #
 # Produit dans ./release-test/ :
 #   openprofalux-<carte>-<label>.bin        app seule, pour l'onglet OTA du boitier / HA
@@ -44,7 +45,18 @@ fi
 
 REL="$(pwd)/release-test"; mkdir -p "$REL"
 echo ">> version embarquee : $FULL"
-for f in ../boards/*.json; do
+# Cartes demandees apres le label, sinon toutes : un essai sur UN boitier ne construit que lui.
+shift
+if [ "$#" -gt 0 ]; then
+  BOARDS=()
+  for b in "$@"; do
+    [ -f "../boards/$b.json" ] || { echo "carte inconnue : $b (voir ../boards/)"; exit 1; }
+    BOARDS+=("../boards/$b.json")
+  done
+else
+  BOARDS=(../boards/*.json)
+fi
+for f in "${BOARDS[@]}"; do
   board="$(basename "$f" .json)"
   target="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcu'])" "$f")"
   bdir="build-test-$board"

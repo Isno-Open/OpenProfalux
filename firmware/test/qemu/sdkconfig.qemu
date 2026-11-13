@@ -1,0 +1,8 @@
+# Ajouts a sdkconfig.defaults pour la carte de simulation QEMU (voir run.sh).
+# MAC Ethernet OpenCores, le seul reseau que QEMU emule pour l'ESP32.
+CONFIG_ETH_USE_OPENETH=y
+# QEMU est plus lent que la puce (le formatage SPIFFS du premier demarrage y prend ~40 s) :
+# les chiens de garde y declenchent sur des durees qui n'existent pas sur le materiel.
+# Un interblocage se lit alors au journal (plus de battement), pas a un redemarrage.
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_ESP_INT_WDT=n

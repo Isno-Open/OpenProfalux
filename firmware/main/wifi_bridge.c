@@ -18,8 +18,12 @@
 #include "hardware_config.h"   /* BOARD_HAS_ETHERNET + brochage ETH (board_pins.h) */
 #if BOARD_HAS_ETHERNET
 #include <esp_eth.h>
+#if ETH_IS_OPENETH
+#include <esp_eth_mac_openeth.h>  /* MAC emule par QEMU (CONFIG_ETH_USE_OPENETH, carte de simulation) */
+#else
 #include <esp_eth_mac_esp.h>      /* eth_esp32_emac_config_t, ETH_ESP32_EMAC_DEFAULT_CONFIG */
 #include <esp_eth_phy_lan87xx.h>  /* esp_eth_phy_new_lan87xx (composant espressif/lan87xx, IDF >= 6.1) */
+#endif
 #include <driver/gpio.h>
 static esp_eth_handle_t s_eth = NULL;
 static esp_netif_t     *s_eth_netif = NULL;
@@ -185,6 +189,24 @@ int wifi_bridge_init(void) {
 /* Reseau filaire (LAN8720 via RMII). Si le cable donne une adresse, le flux normal
  * (mDNS, MQTT, decouverte HA) continue comme en Wi-Fi ; sinon l'appelant retombe sur le STA. */
 int wifi_bridge_start_eth(void) {
+#if ETH_IS_OPENETH
+    /* Carte de simulation : MAC OpenCores emule par QEMU, PHY generique, aucune broche. */
+    esp_netif_config_t qnetif_cfg = ESP_NETIF_DEFAULT_ETH();
+    s_eth_netif = esp_netif_new(&qnetif_cfg);
+    eth_mac_config_t qmac_cfg = ETH_MAC_DEFAULT_CONFIG();
+    eth_phy_config_t qphy_cfg = ETH_PHY_DEFAULT_CONFIG();
+    qphy_cfg.reset_gpio_num = -1;
+    esp_eth_config_t qeth_cfg = ETH_DEFAULT_CONFIG(esp_eth_mac_new_openeth(&qmac_cfg), esp_eth_phy_new_generic(&qphy_cfg));
+    if (esp_eth_driver_install(&qeth_cfg, &s_eth) != ESP_OK) {
+        ESP_LOGE(TAG, "Ethernet emule : installation du pilote echouee");
+        return -1;
+    }
+    ESP_ERROR_CHECK(esp_netif_attach(s_eth_netif, esp_eth_new_netif_glue(s_eth)));
+    esp_event_handler_instance_register(ETH_EVENT, ESP_EVENT_ANY_ID, eth_event_cb, NULL, NULL);
+    ESP_ERROR_CHECK(esp_eth_start(s_eth));
+    ESP_LOGI(TAG, "Ethernet emule (QEMU) demarre");
+    return 0;
+#else
     /* Alim du PHY (Olimex : GPIO12 pilote l'alimentation du LAN8720). */
     if (ETH_PHY_POWER_GPIO >= 0) {
         gpio_config_t io = { .pin_bit_mask = 1ULL << ETH_PHY_POWER_GPIO, .mode = GPIO_MODE_OUTPUT };
@@ -222,6 +244,7 @@ int wifi_bridge_start_eth(void) {
     ESP_LOGI(TAG, "Ethernet demarre (PHY %s addr %d, MDC=%d MDIO=%d clk=%d)",
              ETH_PHY_MODEL, ETH_PHY_ADDR, ETH_MDC_GPIO, ETH_MDIO_GPIO, ETH_CLK_GPIO);
     return 0;
+#endif
 }
 #endif
 
