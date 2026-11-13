@@ -1790,19 +1790,17 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
         return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "enrolement : commande, overlay et trame 0x30 du PROG requis ; tx=0 exige aussi rolling");
     }
     uint8_t src[3], key[16], x4[4] = {0};
-    int pool_index = -1;
     bool derived = false;
     if (tx) {
-        /* Notre identite : membre libre du pool OpenProfalux, depart aleatoire puis parcours
-         * circulaire. Une identite deja rangee dans io_store n'est jamais regeneree avec une nouvelle cle. */
-        const int pool_start = (int)(esp_random() % 11u);
-        for (int offset = 0; offset < 11; offset++) {
-            const int candidate = (pool_start + offset) % 11;
-            uint8_t probe_src[3], probe_key[16], probe_x4[4], stored[16];
-            if (!io_derive_local_pool_identity((uint8_t)candidate, 1, probe_src, probe_key, probe_x4)) continue;
-            if (!io_store_get_key(probe_src, stored)) { pool_index = candidate; derived = true; break; }
+        /* Notre identite : adresse et alea R tires a chaque appairage (esp_fill_random). Une adresse
+         * deja rangee dans io_store est retiree au sort : jamais deux cles pour la meme source. */
+        for (int attempt = 0; attempt < 16 && !derived; attempt++) {
+            uint8_t rnd[19], stored[16];
+            esp_fill_random(rnd, sizeof rnd);
+            if (!io_make_random_identity(rnd, 0, src, key, x4)) break;
+            memset(rnd, 0, sizeof rnd);
+            if (!io_store_get_key(src, stored)) derived = true;
         }
-        if (derived) derived = io_derive_local_pool_identity((uint8_t)pool_index, 0, src, key, x4);
     } else {
         /* Reprise explicite sans TX : compatibilite de l'outil avance existant. */
         derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
@@ -1811,8 +1809,8 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
     if (tx)
-        ESP_LOGW(TAG, "io OpenProfalux : pool=%d src=%02X%02X%02X X4=%02X%02X%02X%02X, cle T/X4 calculee",
-                 pool_index, src[0], src[1], src[2], x4[0], x4[1], x4[2], x4[3]);
+        ESP_LOGW(TAG, "io OpenProfalux : src=%02X%02X%02X tiree, X4=%02X%02X%02X%02X, cle R/X4 calculee",
+                 src[0], src[1], src[2], x4[0], x4[1], x4[2], x4[3]);
     int rc = radio_io_enroll(&profile, src, key, tx, rolling, freq_khz, tx && !separate_actions);
     memset(key, 0, sizeof key);
     if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
@@ -1826,8 +1824,8 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     if (freq_khz) shutters_set_tx_params(id, freq_khz, 0, -1, -1, 0, NULL);
     ESP_LOGW(TAG, "io : identite %s %s (man_id capte et emis 0x%02X)", id, tx ? "appairee, 0x30 emis" : "reprise sans emission", profile.man_id);
     char out[120];
-    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d,\"mode\":\"%s\",\"pool_index\":%d}",
-             id, tx ? 1 : 0, "openprofalux-tx4", pool_index);
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d,\"mode\":\"%s\"}",
+             id, tx ? 1 : 0, "openprofalux-random");
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }

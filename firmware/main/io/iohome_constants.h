@@ -96,6 +96,13 @@ constexpr uint8_t TRANSFER_KEY[AES_KEY_SIZE] = {
   0x16, 0xAA, 0x47, 0x39, 0x49, 0x88, 0x43, 0x73
 };
 
+// Type de noeud dans le 1er octet d'adresse : controleur/passerelle en 0x02..0x09 (0x0D = telecommande,
+// refuse par un moteur Somfy en io12g..j). Une adresse tiree au hasard prend son 1er octet dans cette plage.
+constexpr uint8_t IO_CONTROLLER_TYPE_MIN   = 0x02;
+constexpr uint8_t IO_CONTROLLER_TYPE_COUNT = 8;     // 0x02..0x09
+// Octets d'alea pour une identite tiree : 3 pour l'adresse, 16 pour R (cle).
+constexpr uint8_t IO_RANDOM_IDENTITY_BYTES = 3 + AES_KEY_SIZE;
+
 // IV Padding Value
 constexpr uint8_t IV_PADDING = 0x55;
 

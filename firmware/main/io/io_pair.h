@@ -35,6 +35,10 @@ bool io_derive_free_identity(uint8_t out_src[3], uint8_t out_key[16]);
  * seed_us=0 prend gettimeofday ; une valeur imposee rend le calcul testable. out_x4 optionnel. */
 bool io_derive_compat_pool_identity(uint8_t pool_index, uint64_t seed_us,
                                     uint8_t out_src[3], uint8_t out_key[16], uint8_t out_x4[4]);
+/* Identite tiree a l'appairage : rnd = 19 octets d'alea (3 adresse + 16 R). Adresse en plage controleur,
+ * cle = R ^ AES(cle de transfert, IV) ^ X4. seed_us=0 prend gettimeofday. out_x4 optionnel. */
+bool io_make_random_identity(const uint8_t rnd[19], uint64_t seed_us,
+                             uint8_t out_src[3], uint8_t out_key[16], uint8_t out_x4[4]);
 /* Pool produit fixe de 11 identites : meme fabrique X4/T que le pool de compatibilite. */
 bool io_derive_local_pool_identity(uint8_t pool_index, uint64_t seed_us,
                                    uint8_t out_src[3], uint8_t out_key[16], uint8_t out_x4[4]);

@@ -85,6 +85,29 @@ static bool io_derive_pool_identity(uint8_t idx, uint64_t seed_us,
     return true;
 }
 
+/* Identite tiree au hasard a chaque appairage (remplace le pool fixe). rnd vient de l'alea materiel
+ * (esp_fill_random) ; le passer en argument rend le calcul testable.
+ * - adresse : 1er octet dans la plage controleur (jamais 00 ni FF, donc jamais une diffusion
+ *   00003F/0000BF/... ni FFFFFE/FFFFFF), 2 octets suivants tires ;
+ * - cle = R ^ AES(TRANSFER_KEY, IV de l'adresse) ^ X4, notre recette sans table T : R (16 octets tires)
+ *   porte les 128 bits d'alea. Sans R, le 0x30 porterait X4 seul et la cle se retrouverait en ~2^30 essais.
+ * X4 garde son format (index 0). Le controle d'adresse deja enrolee reste chez l'appelant (io_store). */
+extern "C" bool io_make_random_identity(const uint8_t rnd[IO_RANDOM_IDENTITY_BYTES], uint64_t seed_us,
+                                        uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
+    if (!rnd || !src || !key) return false;
+    uint8_t x4[4];
+    if (!io_make_x4(0, seed_us, x4)) return false;
+    src[0] = (uint8_t)(IO_CONTROLLER_TYPE_MIN + rnd[0] % IO_CONTROLLER_TYPE_COUNT);
+    src[1] = rnd[1];
+    src[2] = rnd[2];
+    uint8_t iv[16], aes[16];
+    for (int i = 0; i < 16; i++) iv[i] = src[i % 3];
+    if (!crypto::aes128_encrypt(iv, TRANSFER_KEY, aes)) return false;
+    for (int i = 0; i < 16; i++) key[i] = rnd[3 + i] ^ aes[i] ^ x4[i & 3];
+    if (out_x4) memcpy(out_x4, x4, 4);
+    return true;
+}
+
 extern "C" bool io_derive_compat_pool_identity(uint8_t idx, uint64_t seed_us,
                                                  uint8_t src[3], uint8_t key[16], uint8_t out_x4[4]) {
 #if IO_HAVE_COMPAT_POOL

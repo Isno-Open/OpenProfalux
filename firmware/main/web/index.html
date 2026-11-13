@@ -243,7 +243,7 @@
           <div class="row"><button id="io-cap-cmd" class="btn">📡 Capter la télécommande</button></div>
           <p class="statline" id="io-cap-stat" hidden></p>
           <h3>2. Mettre la télécommande en PROG</h3>
-          <p class="sub"><b>① Clique « Écouter le PROG »</b>, puis <b>② mets la télécommande d'origine en apprentissage</b>. <span id="io-add-learn"></span> Le boîtier capture la cérémonie mais n'émet encore aucune identité. <span id="io-add-appaire-note"></span></p>
+          <p class="sub"><b>① Clique « Écouter le PROG »</b>, puis <b>② mets la télécommande d'origine en apprentissage</b>. <span id="io-add-learn"></span> Le boîtier lit le 0x30 de la télécommande (fabricant, statut) et attend sa fin de cérémonie (0x2e). Il n'émet rien à cette étape. <span id="io-add-appaire-note"></span></p>
           <div class="row"><button id="io-cap-enroll" class="btn" disabled>🎧 Écouter le PROG</button></div>
           <h3>3. Appairer la nouvelle identité</h3>
           <p class="sub">Quand la capture PROG est terminée, clique sur Appairer. L'émission part à ce clic, comme sur la box de référence.</p>

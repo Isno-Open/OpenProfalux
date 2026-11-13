@@ -189,6 +189,28 @@ int main() {
 #endif
     }
     assert(!io_derive_local_pool_identity(11, 1, src2, key2, dx4));
+    // Identite tiree : adresse en plage controleur quel que soit l'alea, cle = R ^ AES(IV) ^ X4.
+    {
+        const uint8_t first_bytes[] = {0x00, 0xFF, 0x0D, 0x02, 0x09, 0x7A};
+        for (uint8_t fb : first_bytes) {
+            uint8_t rnd[19], rs[3], rk[16], rx4[4], iv[16], aes[16];
+            for (int i = 0; i < 19; i++) rnd[i] = (uint8_t)(0xA5 ^ (i * 37) ^ fb);
+            rnd[0] = fb;
+            assert(io_make_random_identity(rnd, 1762768800000000ULL, rs, rk, rx4));
+            assert(rs[0] >= 0x02 && rs[0] <= 0x09 && rs[1] == rnd[1] && rs[2] == rnd[2]);
+            for (int i = 0; i < 16; i++) iv[i] = rs[i % 3];
+            assert(iohome::crypto::aes128_encrypt(iv, iohome::TRANSFER_KEY, aes));
+            for (int i = 0; i < 16; i++) assert((uint8_t)(rk[i] ^ aes[i] ^ rx4[i & 3]) == rnd[3 + i]);
+            assert(rx4[3] == 0);   // X4 garde son format, index 0
+            // R porte l'alea : meme adresse et meme heure, R different => cle differente
+            uint8_t rnd2[19], rk2[16];
+            memcpy(rnd2, rnd, 19); rnd2[10] ^= 0x01;
+            assert(io_make_random_identity(rnd2, 1762768800000000ULL, rs, rk2, rx4));
+            assert(memcmp(rk, rk2, 16) != 0);
+        }
+        uint8_t rs[3], rk[16];
+        assert(!io_make_random_identity(nullptr, 1, rs, rk, nullptr));
+    }
     /* 1er octet = type CONTROLEUR (0x02..0x09), comme les identites passerelle de reference : un moteur Somfy
      * n'enrole pas une src de type telecommande (0x0D). Garde-fou sur plusieurs index. */
     for (uint32_t i = 0; i < 8; i++) { uint8_t s[3], k[16]; assert(io_derive_identity(i, s, k) && s[0] >= 0x02 && s[0] <= 0x09); }
