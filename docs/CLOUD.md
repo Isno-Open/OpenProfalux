@@ -37,6 +37,37 @@ L'onglet **Cloud** de l'interface web de l'appareil permet de :
 
 Le protocole d'appairage côté serveur est décrit dans le dépôt isno-cloud.
 
+## Ce qui se fait depuis le portail, et ce qui reste sur place
+
+Décidé avec Olivier le 2026-11-14. Le portail montre et commande ce qui a du sens à distance ;
+tout ce qui demande d'être à côté du volet ou de la télécommande reste dans l'interface locale.
+
+**Reste dans l'interface locale :** l'appairage et l'enrôlement (apprentissage et clonage des
+télécommandes, appairage virtuel Profalux, appareils Somfy virtuels), la capture et le rejeu de
+trames, le réglage de la réception radio, l'appairage cloud du boîtier, la découverte du broker HA.
+
+**Depuis le portail, par ordre d'intérêt :**
+
+1. **Étalonnage** : temps de montée et de descente. Un volet n'est déclaré positionnel que s'il est
+   étalonné (sinon sa position ne veut rien dire).
+2. **Renommer** un volet ou une télécommande.
+3. **Santé du boîtier**, en lecture : signal Wi-Fi, mémoire, dernier redémarrage, journal ; alerte
+   pile faible des télécommandes.
+4. **Mises à jour** : installer (fait), revenir à la version précédente (avec confirmation), version
+   en essai.
+5. **Ordre d'affichage** et **orientation** de la façade.
+6. **Centrales et zones.**
+7. **Télécommandes connues** : supprimer, ignorer ou réaccepter.
+8. **Sauvegarde** : télécharger ; restaurer plus tard, avec double confirmation.
+9. **Écoute permanente** : modifiable à distance.
+
+**En lecture seule dans le portail :** le profil radio d'un volet (personnalisé ou non, fréquence),
+le Wi-Fi et la connexion MQTT locale du boîtier (on ne coupe pas à distance le lien qui le relie),
+l'état du mode cloud.
+
+**Couper le cloud** ne se fait que sur le boîtier. Avant de couper, il prévient le portail qu'il ne
+communiquera plus : le portail affiche « cloud désactivé sur le boîtier », et non une simple panne.
+
 ## API locale de l'appareil
 
 | Méthode | Route | Rôle |
