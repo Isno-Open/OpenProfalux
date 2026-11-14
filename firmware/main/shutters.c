@@ -816,10 +816,11 @@ static void ha_state_str(const volet_t *v, char *out) {
  * est la : un boitier pilote seulement par le cloud doit aussi montrer ses appareils. */
 static void publish_volet_state(volet_t *v) {
     if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;
-    char topic[96], pl[16], st[10], slug[SH_ID_LEN], attrs[64];
+    /* attrs : type et positionnel (~40 o) + le nom echappe (SH_ID_LEN octets, au pire x6 en \\u00XX) */
+    char topic[96], pl[16], st[10], slug[SH_ID_LEN], attrs[64 + 6 * SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
     /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
-    if (cover_attrs_json(v->type, s_log_frames && !v->central && !is_zone(v), attrs, sizeof(attrs)) > 0) {
+    if (cover_attrs_json(v->type, s_log_frames && !v->central && !is_zone(v), v->id, attrs, sizeof(attrs)) > 0) {
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
         pub_defer(topic, attrs, 1, 1);
     }

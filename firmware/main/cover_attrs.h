@@ -9,6 +9,8 @@
 /* Nom d'un dev_type_t tel que profiles.json le declare (cle de "types"), NULL si inconnu. */
 const char *dev_type_name(uint8_t type);
 
-/* Ecrit {"type":"<nom>","positional":true|false} dans out. Rend la longueur, ou -1 si le type est
- * inconnu ou si le tampon est trop petit (rien d'exploitable n'est alors ecrit). */
-int cover_attrs_json(uint8_t type, bool positional, char *out, size_t cap);
+/* Ecrit {"type":"<nom>","positional":true|false,"name":"<nom de l'appareil>"} dans out. Le nom est
+ * celui que l'utilisateur a donne (accents compris, en UTF-8), echappe pour JSON : le portail
+ * l'affiche tel quel, au lieu du slug des topics. name NULL ou vide : pas de champ name. Rend la
+ * longueur, ou -1 si le type est inconnu ou si le tampon est trop petit (rien n'est alors ecrit). */
+int cover_attrs_json(uint8_t type, bool positional, const char *name, char *out, size_t cap);

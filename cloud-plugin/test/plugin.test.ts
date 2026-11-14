@@ -52,6 +52,16 @@ test("le releve reel d'un boitier donne : en ligne, un volet positionnel a 0 %, 
   assert.equal(s.devices.size, 1, "battement, ecoute radio et etat texte ne creent pas d'appareil");
 });
 
+test("nom : celui que le boitier publie (accents compris), sinon le slug rendu lisible", () => {
+  const nom = (attrs: string): string | undefined => {
+    const f = read({ box: BOX, path: "cover/Sejour_d_ete/attrs", payload: attrs, retained: true })[0];
+    return f && f.fact === FACT.device ? f.name : undefined;
+  };
+  assert.equal(nom('{"type":"volet","positional":true,"name":"Séjour d\'été"}'), "Séjour d'été");
+  assert.equal(nom('{"type":"volet","positional":true}'), "Sejour d ete", "firmware plus ancien : le slug, espaces rendus");
+  assert.equal(nom('{"type":"volet","positional":true,"name":"  "}'), "Sejour d ete", "nom vide : le slug");
+});
+
 test("commandes : celles que le firmware attend, sous le prefixe du boitier", () => {
   clearDeviceFamilies();
   registerDeviceFamily(family);

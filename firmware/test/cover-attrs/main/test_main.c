@@ -31,13 +31,21 @@ int main(int argc, char **argv) {
     printf("Banc cover_attrs\n");
     char out[96];
 
-    check(cover_attrs_json(TYPE_VOLET, true, out, sizeof out) > 0 && !strcmp(out, "{\"type\":\"volet\",\"positional\":true}"),
+    check(cover_attrs_json(TYPE_VOLET, true, NULL, out, sizeof out) > 0 && !strcmp(out, "{\"type\":\"volet\",\"positional\":true}"),
           "T0 volet positionnel");
-    check(cover_attrs_json(TYPE_PORTAIL, false, out, sizeof out) > 0 && !strcmp(out, "{\"type\":\"portail\",\"positional\":false}"),
+    check(cover_attrs_json(TYPE_PORTAIL, false, "", out, sizeof out) > 0 && !strcmp(out, "{\"type\":\"portail\",\"positional\":false}"),
           "T1 portail impulsionnel");
-    check(cover_attrs_json(200, false, out, sizeof out) == -1, "T2 type inconnu : refuse, rien d'invente");
-    check(cover_attrs_json(TYPE_VOLET, true, out, 10) == -1 && out[0] == 0, "T3 tampon trop petit : refuse, chaine vide");
+    check(cover_attrs_json(200, false, "x", out, sizeof out) == -1, "T2 type inconnu : refuse, rien d'invente");
+    check(cover_attrs_json(TYPE_VOLET, true, NULL, out, 10) == -1 && out[0] == 0, "T3 tampon trop petit : refuse, chaine vide");
     check(dev_type_name(TYPE_PORTAIL + 1) == NULL, "T4 au-dela de l'enum : NULL");
+    /* le vrai nom de l'appareil, tel que l'utilisateur l'a donne, echappe pour JSON */
+    check(cover_attrs_json(TYPE_VOLET, true, "Chambre Parents", out, sizeof out) > 0
+          && !strcmp(out, "{\"type\":\"volet\",\"positional\":true,\"name\":\"Chambre Parents\"}"), "T7 nom : tel quel");
+    check(cover_attrs_json(TYPE_VOLET, false, "S\xc3\xa9jour d'\xc3\xa9t\xc3\xa9", out, sizeof out) > 0
+          && !strcmp(out, "{\"type\":\"volet\",\"positional\":false,\"name\":\"S\xc3\xa9jour d'\xc3\xa9t\xc3\xa9\"}"), "T8 nom : accents UTF-8 et apostrophe intacts");
+    check(cover_attrs_json(TYPE_VOLET, false, "a\"b\\c\nd", out, sizeof out) > 0
+          && !strcmp(out, "{\"type\":\"volet\",\"positional\":false,\"name\":\"a\\\"b\\\\c\\u000ad\"}"), "T9 nom : guillemet, barre oblique inverse et retour a la ligne echappes");
+    check(cover_attrs_json(TYPE_VOLET, true, "Chambre Parents", out, 50) == -1 && out[0] == 0, "T10 nom qui ne tient pas : refuse, chaine vide");
 
     /* Coherence avec profiles.json : chaque type de l'enum y est declare sous ce nom et ce code. */
     const char *path = argc > 1 ? argv[1] : "../../main/web/profiles.json";

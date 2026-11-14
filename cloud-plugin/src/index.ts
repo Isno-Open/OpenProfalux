@@ -4,7 +4,7 @@
 //
 // Ce que publie le boitier sous `openprofalux/<boitier>/` (relai cloud du firmware, cloud_topic.c) :
 //   status                    online, testament offline (retenu)              -> presence
-//   cover/<id>/attrs          {"type":"volet","positional":true} (retenu)      -> appareil
+//   cover/<id>/attrs          {"type":"volet","positional":true,"name":"Séjour"} (retenu) -> appareil
 //   cover/<id>/position       0..100 (retenu)                                  -> position
 //   remote/<tel>/battery      ON si la pile est faible (retenu)               -> alerte
 //   system/status             {"fw":"0.2.16","target":"m5-atom-lite",...}      -> version
@@ -31,8 +31,10 @@ const json = (s: string): Record<string, unknown> | null => {
   try { const v: unknown = JSON.parse(s); return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null; }
   catch { return null; }
 };
-/** Le slug du firmware remplace les espaces par « _ » (slugify) : le nom lisible les rend. */
-const nameOf = (slug: string): string => slug.replace(/_/g, " ");
+/** Nom de l'appareil : celui que le boitier publie (le vrai, accents compris) ; un firmware plus
+ *  ancien ne publie que le slug des topics, dont on rend au moins les espaces (« _ »). */
+const nameOf = (published: unknown, slug: string): string =>
+  typeof published === "string" && published.trim() !== "" ? published : slug.replace(/_/g, " ");
 
 export function read({ path, payload, retained }: FamilyMessage): Fact[] {
   if (path === "status") {
@@ -48,7 +50,7 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     }
     const a = json(payload);
     if (!a) return [];
-    return [{ fact: FACT.device, device, kind: typeof a.type === "string" ? a.type : "", name: nameOf(device), hidden: a.positional === true ? [] : [CONTROL_ID.position] }];
+    return [{ fact: FACT.device, device, kind: typeof a.type === "string" ? a.type : "", name: nameOf(a.name, device), hidden: a.positional === true ? [] : [CONTROL_ID.position] }];
   }
   m = /^remote\/([^/]+)\/battery$/.exec(path);
   // une alerte par passage a « pile faible » vu en direct ; le retenu resservi au branchement n'en est pas un
