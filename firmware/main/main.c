@@ -444,6 +444,7 @@ void app_main(void) {
 #endif
         memprobe_watch();
         memtrace_poll();
+        memprobe_stacks();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

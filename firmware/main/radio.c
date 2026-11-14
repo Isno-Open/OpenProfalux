@@ -406,6 +406,7 @@ static void rx_task(void *arg) {
 void radio_start(radio_frame_cb_t cb) {
     if (!s_mtx) radio_init();
     s_cb = cb; s_run = true;
-    xTaskCreate(rx_task, "radio_rx", 4096, NULL, 5, NULL);
+    /* 3072 : marge minimale mesuree 3072 o sur 4096 (ATOM Lite, ecoute permanente, 2026-11-14). */
+    xTaskCreate(rx_task, "radio_rx", 3072, NULL, 5, NULL);
     ESP_LOGI(TAG, "RX permanent demarre (arbitrage RX/TX par mutex, fenetre %d ms)", RX_WINDOW_MS);
 }

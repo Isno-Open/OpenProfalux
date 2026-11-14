@@ -109,3 +109,30 @@ void memtrace_window(const char *why, uint32_t ms, bool leaks) { (void)why; (voi
 void memtrace_poll(void) {}
 void memprobe_watch(void) {}
 #endif
+
+/* Marge de pile de chaque tache, pour regler les piles sur la mesure et non sur une
+ * estimation. Build de diagnostic seulement (test/heapdiag/sdkconfig.stacks) : la liste
+ * des taches demande CONFIG_FREERTOS_USE_TRACE_FACILITY. */
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+#include <stdlib.h>
+#include <esp_log.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#define STACKS_EVERY_US (120LL * 1000000)   /* toutes les 2 min : couvre GitHub, volets, OTA */
+void memprobe_stacks(void) {
+    static int64_t next = 0;
+    int64_t now = esp_timer_get_time();
+    if (now < next) return;
+    next = now + STACKS_EVERY_US;
+    UBaseType_t n = uxTaskGetNumberOfTasks();
+    TaskStatus_t *st = malloc(n * sizeof(*st));
+    if (!st) return;
+    n = uxTaskGetSystemState(st, n, NULL);
+    for (UBaseType_t i = 0; i < n; i++)   /* usStackHighWaterMark : octets jamais touches */
+        ESP_LOGW("memprobe", "PILE %s marge_min=%u", st[i].pcTaskName, (unsigned)st[i].usStackHighWaterMark);
+    free(st);
+}
+#else
+void memprobe_stacks(void) {}
+#endif

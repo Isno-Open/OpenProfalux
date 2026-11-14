@@ -78,6 +78,10 @@ static void turn_give(bool *held) { if (*held) { *held = false; tls_turn_give();
 /* Pile : 1 552 o utilises au plus haut sur l'ATOM (cloudtest5, out_stack = 1 520 o libres sur
  * 3 072). 2 304 o laissent ~750 o de marge. out_stack, publie avec le battement, le surveille. */
 #define OUTBOX_STACK   2304
+/* Pile de chaque tache esp-mqtt (une pour HA, une pour le cloud). Marge minimale mesuree au
+ * pire cas sur l'ATOM Lite le 2026-11-14 : 2948 o jamais touches sur les 6144 par defaut,
+ * poignee de main TLS mutuelle et commandes comprises. 5120 en gardent ~1,9 Ko. */
+#define MQTT_TASK_STACK 5120
 #define OUTBOX_PRIO       5   /* celle des taches esp-mqtt */
 typedef struct { char *topic; char *payload; int qos; int retain; } outmsg_t;
 typedef struct {
@@ -466,6 +470,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
     else
         snprintf(s_uri, sizeof(s_uri), "%s", broker_uri ? broker_uri : "");
     esp_mqtt_client_config_t cfg = {
+        .task.stack_size = MQTT_TASK_STACK,
         .outbox.limit = OUTBOX_BUDGET,   /* file interne d'esp-mqtt (QoS 1 en attente d'accuse) bornee aussi */
         .broker.address.uri = s_uri,
         .credentials.client_id = client_id,
@@ -679,6 +684,7 @@ int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
     static char s_curi[160];
     snprintf(s_curi, sizeof(s_curi), "%s", cloud_uri);
     esp_mqtt_client_config_t cfg = {
+        .task.stack_size = MQTT_TASK_STACK,
         .outbox.limit = OUTBOX_BUDGET,   /* file interne d'esp-mqtt (QoS 1 en attente d'accuse) bornee aussi */
         .broker.address.uri = s_curi,
         .credentials.client_id = s_cloud_id,

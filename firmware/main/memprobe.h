@@ -20,3 +20,6 @@ void memtrace_poll(void);
 /* Boucle de fond : une sonde a chaque baisse du minimum de plus de 1 Ko, et une fenetre de
  * tracage d'une seconde quand le libre passe sous MEMWATCH_LOW (le creux en cours). */
 void memprobe_watch(void);
+/* Boucle de fond, build de diagnostic : marge minimale de pile de chaque tache (« PILE nom
+ * marge_min=… »), toutes les 2 min. Vide sans CONFIG_FREERTOS_USE_TRACE_FACILITY. */
+void memprobe_stacks(void);
