@@ -17,6 +17,11 @@ static void check(bool ok, const char *name) {
  * compris, 2026-11-14). */
 #define PEAK_CLOUD          (24576 - 4364)
 #define PEAK_LOCAL_CLOUD    (22528 - 832)
+/* Reserve de 22 016 o, 6 292 libres au plus bas : verification GitHub seule (MQTT local en clair),
+ * 2026-11-14. Avec une reserve de 15 872 o, juste au-dessus de ce pic, le morcellement faisait
+ * deborder 4 blocs par verification : d'ou la marge exigee au-dessus de chaque pic. */
+#define PEAK_GITHUB         (22016 - 6292)
+#define FRAG_MARGIN         1024
 
 int main(void) {
     printf("Banc tls_budget\n");
@@ -27,11 +32,11 @@ int main(void) {
     size_t cloud  = tls_pool_need(false, false, true,  true);
     size_t both   = tls_pool_need(true,  false, true,  true);
     check(none == 0, "T0 aucun TLS attendu : pas de reserve");
-    check(gh > 0, "T1 verification GitHub seule : une poignee de main reservee");
+    check(gh >= PEAK_GITHUB + FRAG_MARGIN, "T1 verification GitHub seule : couvre le pic mesure (15 724 o) et 1 Ko de morcellement");
     check(tls_pool_need(true, false, false, false) == loc, "T2 HA mqtts sans GitHub auto : meme besoin (une poignee de main de toute facon)");
     check(loc > gh && locm > loc, "T3 une session HA s'ajoute, plus grosse avec certificat client");
-    check(cloud >= PEAK_CLOUD, "T4 cloud seul : couvre le pic mesure (20 212 o)");
-    check(both >= PEAK_LOCAL_CLOUD, "T5 HA mqtts + cloud : couvre le pic mesure (21 696 o)");
+    check(cloud >= PEAK_CLOUD + FRAG_MARGIN, "T4 cloud seul : couvre le pic mesure (20 212 o)");
+    check(both >= PEAK_LOCAL_CLOUD + FRAG_MARGIN, "T5 HA mqtts + cloud : couvre le pic mesure (21 696 o)");
     check(both - cloud == loc - gh, "T6 les sessions s'additionnent (une poignee de main a la fois)");
     printf(g_fail ? "ECHEC : %d\n" : "TOUT OK\n", g_fail);
     return g_fail ? 1 : 0;
