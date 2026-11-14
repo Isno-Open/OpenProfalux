@@ -21,6 +21,10 @@ static char s_avail_topic[64];   /* topic de disponibilite HA (LWT) : openprofal
 
 /* Certificats TLS charges sur le tas quand mqtts:// est actif, gardes vivants le temps de
  * la connexion (esp-mqtt peut les referencer), liberes au stop. NULL = absent. */
+/* Pile de la tache esp-mqtt. Marge minimale mesuree au pire cas sur l'ATOM Lite le
+ * 2026-11-14 : 2948 o jamais touches sur les 6144 par defaut, poignee de main TLS mutuelle
+ * et commandes comprises. 5120 en gardent ~1,9 Ko. */
+#define MQTT_TASK_STACK 5120
 static char *s_tls_ca = NULL, *s_tls_cert = NULL, *s_tls_key = NULL;
 
 /* Reconnexion espacee : 10 s, puis 20, 40, 80, et 2 min au plus ; 10 s des qu'une
@@ -214,6 +218,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
     else
         snprintf(s_uri, sizeof(s_uri), "%s", broker_uri ? broker_uri : "");
     esp_mqtt_client_config_t cfg = {
+        .task.stack_size = MQTT_TASK_STACK,
         .broker.address.uri = s_uri,
         .credentials.client_id = client_id,
         .credentials.username = user,
