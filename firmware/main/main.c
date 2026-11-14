@@ -196,8 +196,6 @@ void app_main(void) {
 #if CONFIG_HEAP_TASK_TRACKING
     heap_caps_register_failed_alloc_callback(on_alloc_failed);
 #endif
-    tls_pool_init();   /* reserve TLS prise d'un bloc, avant que le demarrage ne morcelle la memoire */
-    memprobe("boot-reserve-tls");
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║ OpenProfalux v%s : target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
@@ -217,6 +215,16 @@ void app_main(void) {
 
     /* 2. Config */
     load_config();
+    /* Reserve TLS prise d'un bloc des la configuration connue, avant que le reste du demarrage
+     * ne morcelle la memoire, et a la taille de CE boitier (tls_pool_need). Un cloud appaire ou
+     * un mqtts choisi en cours de route deborde sur le tas jusqu'au redemarrage, et se compte. */
+    {
+        bool local_tls  = strncmp(s_mqtt_uri, "mqtts://", 8) == 0;
+        bool local_mtls = local_tls && mqtt_cert_len("cert") && mqtt_cert_len("key");
+        bool cloud      = s_mqtt_cloud_uri[0] && s_cloud_on;
+        tls_pool_init(tls_pool_need(local_tls, local_mtls, cloud, s_upd_auto));
+    }
+    memprobe("boot-reserve-tls");
     /* Nom mDNS (mdns_name.h), decide AVANT le Wi-Fi : un boitier neuf demarre sans Wi-Fi (point
      * d'acces), et c'est a ce premier demarrage que son nom a suffixe doit etre fige. Nom choisi
      * par l'utilisateur, sinon le nom fige (cfg/mdns_host) : openprofalux pour un boitier deja

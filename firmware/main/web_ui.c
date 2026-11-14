@@ -1948,16 +1948,23 @@ void web_ui_start(void) {
      * connexion au lieu de recycler -> port 80 en connection-refused (MQTT non touche).
      * On recycle la socket la moins recente + un peu plus de sockets. */
     cfg.lru_purge_enable = true;
-    /* Sessions = sockets lwIP - 5 : 3 internes au httpd, 1 pour MQTT (permanent), 1 pour le TLS
-     * de la verification GitHub / l'OTA par URL. Soit 5 avec les 10 sockets par defaut, et pas le
-     * maximum 7 (sockets - 3) : a 7, six sessions navigateur + MQTT epuisaient les 10 sockets,
-     * accept() echouait (errno 23, ENFILE) AVANT la purge LRU, qui n'agit qu'a 7 sessions pleines
-     * -> interface et OTA injoignables tant qu'une page ouverte gardait ses sessions vivantes.
-     * Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne des sessions d'elle-meme. */
-#if CONFIG_LWIP_MAX_SOCKETS < 7
-#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des 5 sockets reserves"
+    /* Sessions = sockets lwIP moins ceux des autres : 3 internes au httpd, 1 par connexion MQTT
+     * (locale et cloud, permanentes), 1 pour le client TLS ponctuel (verification GitHub, OTA par
+     * URL, appairage). Soit 4 avec les 10 sockets par defaut, et pas le maximum 7 (sockets - 3) :
+     * a 7, six sessions navigateur + MQTT epuisaient les 10 sockets, accept() echouait (errno 23,
+     * ENFILE) AVANT la purge LRU, qui n'agit qu'a sessions pleines -> interface et OTA
+     * injoignables tant qu'une page ouverte gardait ses sessions vivantes. La reserve comptait une
+     * seule connexion MQTT : avec le cloud, l'errno 23 est revenu au chevauchement HA + cloud +
+     * GitHub (mesure du 2026-11-14 sur l'ATOM). Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne
+     * des sessions d'elle-meme. */
+#define HTTPD_INTERNAL_SOCKETS 3
+#define MQTT_SOCKETS           2   /* broker local + broker cloud */
+#define TLS_CLIENT_SOCKETS     1   /* GitHub, OTA par URL, appairage : un a la fois (tour TLS) */
+#define RESERVED_SOCKETS (HTTPD_INTERNAL_SOCKETS + MQTT_SOCKETS + TLS_CLIENT_SOCKETS)
+#if CONFIG_LWIP_MAX_SOCKETS < RESERVED_SOCKETS + 2
+#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des sockets reserves"
 #endif
-    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - 5;
+    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - RESERVED_SOCKETS;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }

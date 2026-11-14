@@ -7,7 +7,7 @@
  * memoire libre de 27 a 8 Ko, ecriture TLS du cloud en echec, puis poignee de main impossible
  * (alloc(4437) failed) en boucle. Ici, le TLS a SA zone, que rien d'autre ne peut prendre.
  *
- * Sa taille est un besoin MESURE du firmware (voir TLS_POOL_BYTES dans tls_pool.c). Une demande qui ne tient plus dans la reserve deborde sur la memoire generale : le TLS ne
+ * Sa taille est le besoin MESURE de la configuration du boitier (voir tls_pool_need dans tls_budget.c). Une demande qui ne tient plus dans la reserve deborde sur la memoire generale : le TLS ne
  * casse pas, mais chaque debordement est compte (tls_pool_stats) pour redimensionner la reserve.
  */
 #ifndef TLS_POOL_H
@@ -16,8 +16,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* A appeler en TOUT premier dans app_main, avant toute connexion. */
-void tls_pool_init(void);
+#include <stdbool.h>
+#include "tls_budget.h"   /* tls_pool_need : la taille selon la configuration */
+/* A appeler des la configuration lue, avant toute connexion et avant que le demarrage ne
+ * morcelle la memoire. bytes = tls_pool_need(...) ; 0 = pas de reserve. */
+void tls_pool_init(size_t bytes);
 
 typedef struct {
     uint32_t size;        /* taille de la reserve (0 = pas de reserve) */

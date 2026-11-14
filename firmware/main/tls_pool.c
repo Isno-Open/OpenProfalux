@@ -5,14 +5,7 @@
  * reserve aurait ete prise pour rien. */
 #include "tls_pool.h"
 
-/* Taille de la reserve : un BESOIN du firmware (mTLS du cloud, RSA 2048 + paquet d'autorites,
- * tampons dynamiques de mbedTLS), pas une propriete de la carte. Mesure le 2026-11-13 sur
- * l'ATOM en 0.2.16-cloudtest3 avec une reserve de 24 Ko : 4 364 o libres au plus bas, soit
- * 20,2 Ko de pic (poignee de main du cloud, connexion GitHub ensuite), et 0 debordement.
- * Avec 21 Ko (cloudtest5, une heure dont une commande) : 1 224 o libres au plus bas, 0
- * debordement. 22 Ko donnent ~2 Ko de marge. tls_min et tls_spills, publies avec le
- * battement, disent s'il faut la revoir. */
-#define TLS_POOL_BYTES (22 * 1024)
+/* Taille de la reserve : tls_pool_need (tls_budget.c, unite pure testee sur PC). */
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -53,15 +46,16 @@ static void tls_free(void *ptr) {
     else free(ptr);
 }
 
-void tls_pool_init(void) {
+void tls_pool_init(size_t bytes) {
     if (s_heap) return;
+    if (!bytes) { ESP_LOGI(TAG, "aucune connexion TLS attendue : pas de reserve"); return; }
     /* Memoire interne (le TLS y touche octet par octet) prise d'un seul bloc, avant que le reste
      * du demarrage ne la morcelle. */
-    uint8_t *base = heap_caps_malloc(TLS_POOL_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!base) { ESP_LOGE(TAG, "reserve de %d o impossible : TLS dans la memoire generale", TLS_POOL_BYTES); return; }
-    multi_heap_handle_t h = multi_heap_register(base, TLS_POOL_BYTES);
+    uint8_t *base = heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!base) { ESP_LOGE(TAG, "reserve de %u o impossible : TLS dans la memoire generale", (unsigned)bytes); return; }
+    multi_heap_handle_t h = multi_heap_register(base, bytes);
     if (!h) { heap_caps_free(base); ESP_LOGE(TAG, "reserve non initialisee"); return; }
-    s_base = base; s_size = TLS_POOL_BYTES; s_heap = h;
+    s_base = base; s_size = bytes; s_heap = h;
     /* A partir d'ici, toute allocation de mbedTLS passe par la reserve. */
     if (mbedtls_platform_set_calloc_free(tls_calloc, tls_free) != 0) {
         ESP_LOGE(TAG, "allocateur TLS non branche : reserve inutilisee");

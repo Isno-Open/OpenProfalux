@@ -10,6 +10,7 @@
 #include "esp_app_desc.h"
 #include "esp_https_ota.h"
 #include "tls_pool.h"
+#include "memprobe.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_system.h"
@@ -266,6 +267,7 @@ esp_err_t ota_check_github(void)
         .timeout_ms = 10000, .buffer_size = 1024, .buffer_size_tx = 512,
         .user_agent = "OpenProfalux-OTA",   /* l'API GitHub exige un User-Agent */
     };
+    memtrace_window("github", 6000, false);   /* build de diagnostic seulement (memprobe.h) */
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
     /* Tour de poignee de main (tls_pool.h), tenu toute la verification (quelques secondes). */

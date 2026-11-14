@@ -176,6 +176,23 @@ jobs:
              -o remote_battery_host_test
           ./remote_battery_host_test
 
+  # La taille de la reserve TLS selon la configuration (tls_budget.c) : elle doit couvrir les pics
+  # mesures sur l'ATOM. Voir firmware/test/tls-budget. Pur, gcc suffit.
+  banc-tls-budget:
+    name: Banc de test de la reserve TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: tls_budget (gcc + AddressSanitizer)
+        working-directory: firmware/test/tls-budget
+        run: |
+          cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
+             -I ../../main main/test_main.c ../../main/tls_budget.c \
+             -o tls_budget_host_test
+          ./tls_budget_host_test
+
   # La recherche de "tag_name" par morceaux dans la reponse de l'API GitHub (github_tag.c), coupee
   # a toutes les positions. Voir firmware/test/github-tag. Pur, gcc suffit.
   banc-github-tag:
