@@ -90,11 +90,15 @@ void memtrace_poll(void) {
         if (heap_trace_get(i, &r) != ESP_OK) break;
         if (r.size < MEMTRACE_LOG_MIN) { small_n++; small_b += r.size; continue; }
         big_b += r.size;
-        char who[16 * CONFIG_HEAP_TRACING_STACK_DEPTH] = "";
+#if CONFIG_HEAP_TRACING_STACK_DEPTH > 0
+        char who[16 * CONFIG_HEAP_TRACING_STACK_DEPTH + 1] = "";
         size_t w = 0;
         for (int k = 0; k < CONFIG_HEAP_TRACING_STACK_DEPTH && r.alloced_by[k] && w < sizeof(who); k++)
             w += snprintf(who + w, sizeof(who) - w, "%s%p", k ? ":" : "", r.alloced_by[k]);
         ESP_LOGW(TAG, "%u o caller %s%s", (unsigned)r.size, who, r.freed_by[0] ? " freed" : "");
+#else   /* RISC-V (C3, C6...) : pas d'appelants, la profondeur est forcee a 0 */
+        ESP_LOGW(TAG, "%u o a %p", (unsigned)r.size, r.address);
+#endif
         vTaskDelay(1);   /* laisse respirer la console et les autres taches */
     }
     ESP_LOGW(TAG, "MEMTRACE fin %s : %u o en allocations >= %u o, %u petites (%u o)", s_why ? s_why : "?",
