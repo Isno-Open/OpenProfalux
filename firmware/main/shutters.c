@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "memprobe.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_spiffs.h"
@@ -36,9 +37,13 @@
 #include "wifi_bridge.h"
 #include "esp_netif.h"
 
+#include <esp_heap_caps.h>   /* plus grand bloc libre (shutters_size_from_ram) */
+#include <esp_system.h>      /* esp_get_free_heap_size */
+
 static const char *TAG = "shutters";
 #define TICK_MS 150
-#define SH_MAX_HOPS 1024   /* set de hops distincts memorises par serial (4 Ko/serial max) */
+#define SH_HOPS_MAX 1024   /* plafond du set de hops distincts par serial (12 Ko/serial) */
+#define SH_HOPS_MIN   32   /* plancher : de quoi reconnaitre une telecommande meme a court de RAM */
 
 /* volet_t et remote_t : definis dans cfg_model.h (modele persistant + serialisation). */
 typedef struct { uint32_t t; char serial[SH_SERIAL_LEN]; uint8_t button; uint32_t hop; int8_t rssi; } rfrec_t;
@@ -49,9 +54,22 @@ static volet_t  s_volets[SH_MAX_VOLETS];
 static int      s_nvolets = 0;
 static remote_t s_remotes[SH_MAX_REMOTES];
 static int      s_nremotes = 0;
-#define RF_RING 1000          /* trames a l'affichage (paginees) ; l'export /api/frames = l'ensemble du dataset */
+/* Ring RF et sets de hops : leur taille se DEDUIT de la RAM libre, mesuree quand tout tourne
+ * (shutters_size_from_ram, au premier battement). Avant, ring de 1000 fixe (24 Ko) et sets de
+ * 1024 hops par telecommande : mesure le 2026-11-13, l'ATOM tombait a 16 o libres au plus bas
+ * sous l'usage (cloud + capture permanente), alors qu'une Super a de la marge. */
+#define RF_RING_MAX  1000     /* plafond : trames a l'affichage (paginees) ; l'export /api/frames = l'ensemble du dataset */
+#define RF_RING_BOOT   64     /* avant le calcul : les trames recues au demarrage seulement */
+/* Memoire laissee au reste du firmware quand ring et sets ont pris leur part : pics du serveur web,
+ * rafales MQTT, verification GitHub. A valider avec min_heap, publie avec le battement. */
+#define WORK_FLOOR_BYTES (16 * 1024)
+/* Telecommandes en plus de celles connues au calcul, pour qu'un ajout ait encore sa place. */
+#define HOPS_SPARE_REMOTES 2
 #define STATUS_RF_SHOW 20     /* nb de trames recentes mises dans /api/status (leger, poll 3 s) ; l'onglet RF pagine via /api/rf */
-static rfrec_t  s_rf[RF_RING];
+static rfrec_t *s_rf = NULL;
+static int      s_rf_n = 0;            /* taille du ring : RF_RING_BOOT, puis deduite de la RAM */
+static bool     s_ring_sized = false;  /* taille calculee, ring recharge depuis la flash */
+static uint16_t s_hops_cap = SH_HOPS_MAX;   /* plafond des sets de hops, deduit de la RAM */
 static int      s_rfhead = 0;
 static SemaphoreHandle_t s_lock;
 static char     s_device[32] = "op";   /* nom appareil (prefixe topics HA) */
@@ -342,8 +360,8 @@ static bool load_frames(void) {
          * et une telecommande supprimee ne doit pas revenir par son jeu de trames. */
         remote_t *rm = remote_find(shex);
         if (!rm) continue;
-        if (rm->nhops >= rm->caphops && rm->caphops < SH_MAX_HOPS) {
-            uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32; if (nc > SH_MAX_HOPS) nc = SH_MAX_HOPS;
+        if (rm->nhops >= rm->caphops && rm->caphops < s_hops_cap) {
+            uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32; if (nc > s_hops_cap) nc = s_hops_cap;
             dframe_t *np = realloc(rm->hops, (size_t)nc * sizeof(dframe_t));
             if (np) { rm->hops = np; rm->caphops = nc; }
         }
@@ -368,7 +386,7 @@ static void build_frame_bits(char *out, uint32_t serial, uint8_t button, uint32_
 typedef struct { uint32_t serial, hop, t; uint8_t button; int8_t rssi; uint16_t _pad; } ringrec_t;
 #define RING_FILE "/spiffs/rfring.bin"
 /* Conversion par blocs de RING_CHUNK, meme format de fichier qu'avant (int head, puis
- * RF_RING enregistrements) : un tampon du ring entier immobilisait 16 Ko de RAM pour
+ * s_rf_n enregistrements) : un tampon du ring entier immobilisait 16 Ko de RAM pour
  * une sauvegarde par minute au plus. Partage sans risque : load_ring tourne au
  * demarrage, avant la tache tick_task, seule a appeler save_ring. */
 #define RING_CHUNK 64
@@ -381,11 +399,14 @@ static void spiffs_mount(void) {   /* la NVS (16 Ko) ne tient pas le ring 300 ->
 /* Le (serial, hop) est-il deja dans le ring ? (dedup : une pression = ~10 repetitions du meme hop).
  * Le hop encode le bouton -> (serial, hop) identique => meme bouton. Caller detient le LOCK (ou boot). */
 static bool ring_contains(const char *shex, uint32_t hop) {
-    for (int k = 0; k < RF_RING; k++)
+    for (int k = 0; k < s_rf_n; k++)
         if (s_rf[k].serial[0] && s_rf[k].hop == hop && !strcmp(s_rf[k].serial, shex)) return true;
     return false;
 }
 static void save_ring(void) {
+    /* Avant le calcul, le ring ne tient que les trames du demarrage : l'ecrire effacerait celles
+     * de la flash, qui n'ont pas encore ete rechargees. */
+    if (!s_ring_sized) return;
     FILE *f = fopen(RING_FILE, "wb");
     if (!f) { ESP_LOGW(TAG, "save_ring: fopen KO"); return; }
     int head;
@@ -395,9 +416,9 @@ static void save_ring(void) {
     UNLOCK();
     fwrite(&head, sizeof(head), 1, f);
     size_t w = 0;
-    for (int i0 = 0; i0 < RF_RING; i0 += RING_CHUNK) {
-        int m = RF_RING - i0 < RING_CHUNK ? RF_RING - i0 : RING_CHUNK;
-        LOCK();   /* par bloc : le LOCK n'est plus tenu sur les RF_RING conversions */
+    for (int i0 = 0; i0 < s_rf_n; i0 += RING_CHUNK) {
+        int m = s_rf_n - i0 < RING_CHUNK ? s_rf_n - i0 : RING_CHUNK;
+        LOCK();   /* par bloc : le LOCK n'est plus tenu sur les s_rf_n conversions */
         for (int j = 0; j < m; j++) {
             rfrec_t *r = &s_rf[i0 + j];
             ringrec_t *o = &s_ringchunk[j];
@@ -418,11 +439,11 @@ static void load_ring(void) {   /* boot : restaure le ring + reconstruit les bit
     (void)head;
     size_t r = 0;
     int loaded = 0;   /* on compacte + on deduplique (nettoie d'eventuels doublons deja en SPIFFS) */
-    for (int i0 = 0; i0 < RF_RING && loaded < RF_RING; i0 += RING_CHUNK) {
-        size_t want = RF_RING - i0 < RING_CHUNK ? (size_t)(RF_RING - i0) : RING_CHUNK;
+    for (int i0 = 0; i0 < s_rf_n && loaded < s_rf_n; i0 += RING_CHUNK) {
+        size_t want = s_rf_n - i0 < RING_CHUNK ? (size_t)(s_rf_n - i0) : RING_CHUNK;
         size_t got = fread(s_ringchunk, sizeof(ringrec_t), want, f);   /* enregistrements entiers */
         r += got * sizeof(ringrec_t);
-        for (size_t j = 0; j < got && loaded < RF_RING; j++) {
+        for (size_t j = 0; j < got && loaded < s_rf_n; j++) {
             ringrec_t *c = &s_ringchunk[j];
             if (!c->serial && !c->hop) continue;
             char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)c->serial);
@@ -435,14 +456,14 @@ static void load_ring(void) {   /* boot : restaure le ring + reconstruit les bit
         if (got < want) break;
     }
     fclose(f);
-    s_rfhead = loaded % RF_RING;   /* prochaine place libre apres compactage */
+    s_rfhead = loaded % s_rf_n;   /* prochaine place libre apres compactage */
     ESP_LOGI(TAG, "load_ring: %d trames rechargees/dedupliquees (%d o)", loaded, (int)r);
 }
 
 /* Repeuplement depuis MQTT (frames/log/<slot>) : remplit le slot UNIQUEMENT s'il est vide (NVS vide)
  * -> restaure affichage RF + rejeu + dataset slide. Ne republie rien. Reconcilie aussi la NVS. */
 static void ring_fill_from_mqtt(int slot, const char *ser, uint8_t button, uint32_t hop, uint32_t t, int8_t rssi) {
-    if (slot < 0 || slot >= RF_RING || !ser || !ser[0]) return;
+    if (slot < 0 || slot >= s_rf_n || !ser || !ser[0]) return;
     LOCK();
     rfrec_t *r = &s_rf[slot];
     if (!r->serial[0] && !ring_contains(ser, hop)) {   /* slot vide ET pas deja present ailleurs (dedup) */
@@ -454,8 +475,8 @@ static void ring_fill_from_mqtt(int slot, const char *ser, uint8_t button, uint3
             bool isnew = true;
             for (int i = 0; i < rm->nhops; i++) if (rm->hops[i].hop == hop) { isnew = false; break; }
             if (isnew) {
-                if (rm->nhops >= rm->caphops && rm->caphops < SH_MAX_HOPS) {
-                    uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32; if (nc > SH_MAX_HOPS) nc = SH_MAX_HOPS;
+                if (rm->nhops >= rm->caphops && rm->caphops < s_hops_cap) {
+                    uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32; if (nc > s_hops_cap) nc = s_hops_cap;
                     dframe_t *np = realloc(rm->hops, (size_t)nc * sizeof(dframe_t)); if (np) { rm->hops = np; rm->caphops = nc; }
                 }
                 if (rm->nhops < rm->caphops) { rm->hops[rm->nhops++] = (dframe_t){ .hop = hop, .t = t, .button = button }; s_frames_dirty = true; }
@@ -608,7 +629,7 @@ int shutters_replay_frame(const char *serial, uint32_t hop) {
     if (!serial || !serial[0]) return -1;
     char bits[SH_BITS_LEN] = {0};
     LOCK();
-    for (int k = 0; k < RF_RING; k++) {
+    for (int k = 0; k < s_rf_n; k++) {
         rfrec_t *r = &s_rf[k];
         if (r->serial[0] && !strcmp(r->serial, serial) && r->hop == hop) {   /* reconstruit les 66 bits a la demande */
             build_frame_bits(bits, (uint32_t)strtoul(serial, NULL, 16), r->button, hop); break;
@@ -621,7 +642,7 @@ int shutters_replay_frame(const char *serial, uint32_t hop) {
 }
 /* Page de /api/rf, triee par date (recentes d'abord). Sous UN seul LOCK : on trie les
  * (date, place) des trames presentes (8 o chacune, sur le tas le temps de l'appel) et
- * on ne copie que la page. Avant, l'appelant copiait les RF_RING trames dans un tableau
+ * on ne copie que la page. Avant, l'appelant copiait les s_rf_n trames dans un tableau
  * statique de 24 Ko (un LOCK par trame), le triait, et n'en renvoyait que 100 au plus.
  * Meme ordre qu'avant, egalites comprises : memes trames, dans le meme ordre de depart
  * (k = 0 la plus recente), meme qsort et meme comparaison (la date seule). */
@@ -632,12 +653,12 @@ static int rfkey_cmp(const void *a, const void *b) {   /* t decroissant */
 }
 int shutters_rf_page(int offset, int limit, shutters_rf_item_t *out, int *nout) {
     *nout = 0;
-    rfkey_t *keys = malloc(RF_RING * sizeof(rfkey_t));
+    rfkey_t *keys = malloc(s_rf_n * sizeof(rfkey_t));
     if (!keys) return -1;
     LOCK();
     int n = 0;
-    for (int k = 0; k < RF_RING; k++) {
-        int idx = (s_rfhead - 1 - k + 2 * RF_RING) % RF_RING;
+    for (int k = 0; k < s_rf_n; k++) {
+        int idx = (s_rfhead - 1 - k + 2 * s_rf_n) % s_rf_n;
         if (s_rf[idx].serial[0]) keys[n++] = (rfkey_t){ .t = s_rf[idx].t, .idx = (uint16_t)idx };
     }
     qsort(keys, n, sizeof(rfkey_t), rfkey_cmp);
@@ -1075,6 +1096,7 @@ static int sync_idx_by_serial(uint32_t serial) {
  * verrou (busy=1) AVANT d'emettre, puis publie le compteur et leve le verrou APRES. Refuse
  * (SH_CMD_BUSY) si une emission du meme serial est deja en cours ici ou sur l'autre carte. */
 int shutters_cmd_synced(const char *id, const char *cmd, int value) {
+    memtrace_window("volet", 6000, false);
     uint32_t serial = 0; int idx = -1;
     LOCK();
     volet_t *v = find_volet(id);
@@ -1083,7 +1105,9 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
     if (idx >= 0 && !s_self_emit[idx] && s_busy_until[idx] && sync_now_ms() < s_busy_until[idx])
         return SH_CMD_BUSY;                              /* une emission de ce serial est deja en cours */
     if (idx >= 0) { s_self_emit[idx] = true; s_busy_until[idx] = sync_now_ms() + SYNC_LOCK_MS; sync_pub_busy(serial, true); }
+    memprobe("volet-avant-cmd");
     int rc = shutters_cmd(id, cmd, value);               /* prend le LOCK, emet, avance virt_counter */
+    memprobe("volet-apres-cmd");
     if (idx >= 0) {
         uint16_t cnt = 0;
         LOCK(); if (idx < s_nvolets && s_volets[idx].virt) cnt = s_volets[idx].virt_counter; UNLOCK();
@@ -1091,6 +1115,7 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
         sync_pub_busy(serial, false);
         s_busy_until[idx] = 0; s_self_emit[idx] = false;
     }
+    memprobe("volet-apres-sync");
     return rc;
 }
 
@@ -1405,7 +1430,7 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
     if (!id || !action || !serial) return -1;
     char bits[SH_BITS_LEN] = {0};
     LOCK();
-    for (int k = 0; k < RF_RING; k++) {
+    for (int k = 0; k < s_rf_n; k++) {
         rfrec_t *r = &s_rf[k];
         if (r->serial[0] && !strcmp(r->serial, serial) && r->hop == hop) {   /* reconstruit les 66 bits */
             build_frame_bits(bits, (uint32_t)strtoul(serial, NULL, 16), r->button, hop); break;
@@ -1430,8 +1455,8 @@ int shutters_create_volet_from_remote(const char *id, const char *serial, char *
     LOCK();
     if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
     /* du plus recent au plus ancien : s_rfhead est la prochaine place libre de l'anneau */
-    for (int k = 1; k <= RF_RING; k++) {
-        rfrec_t *r = &s_rf[(s_rfhead - k + RF_RING) % RF_RING];
+    for (int k = 1; k <= s_rf_n; k++) {
+        rfrec_t *r = &s_rf[(s_rfhead - k + s_rf_n) % s_rf_n];
         if (!r->serial[0] || strcmp(r->serial, serial)) continue;
         for (int c = 0; c < 3; c++)
             if (!bits[c][0] && r->button == CMD[c].btn)
@@ -1672,10 +1697,10 @@ static void dataset_log_frame(const char *shex, uint8_t button, uint32_t hop, in
     else for (int i = 0; i < rm->nhops; i++) if (rm->hops[i].hop == hop) { is_new = false; break; }
     rm->last_hop = hop;
     if (!is_new) return;                                                       /* deja enregistre -> rien */
-    /* ajoute au set (croissance bornee a SH_MAX_HOPS) */
-    if (rm->nhops >= rm->caphops && rm->caphops < SH_MAX_HOPS) {
+    /* ajoute au set (croissance bornee a s_hops_cap) */
+    if (rm->nhops >= rm->caphops && rm->caphops < s_hops_cap) {
         uint16_t nc = rm->caphops ? (uint16_t)(rm->caphops * 2) : 32;
-        if (nc > SH_MAX_HOPS) nc = SH_MAX_HOPS;
+        if (nc > s_hops_cap) nc = s_hops_cap;
         dframe_t *np = realloc(rm->hops, (size_t)nc * sizeof(dframe_t));
         if (np) { rm->hops = np; rm->caphops = nc; }
     }
@@ -1731,7 +1756,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
         uint32_t t = (now > 1600000000) ? (uint32_t)now : 0;   /* epoch si SNTP synchro, sinon 0 */
         r->t = t; r->button = button; r->hop = hop; r->rssi = rssi;
         strlcpy(r->serial, shex, SH_SERIAL_LEN);
-        s_rfhead = (s_rfhead + 1) % RF_RING;
+        s_rfhead = (s_rfhead + 1) % s_rf_n;
         s_ring_dirty = true;
         /* auto-enregistre le serial vu (nom vide) */
         if (!ignored(shex)) remote_add(shex);   /* trame confirmee (radio.c) ; liste pleine -> signale a l'UI ; ignoree -> rien */
@@ -1865,7 +1890,7 @@ char *shutters_status_json(void) {
     }
     cJSON *rf = cJSON_AddArrayToObject(root, "rf");   /* recentes seulement ; les 300 via /api/rf */
     for (int k = 0; k < STATUS_RF_SHOW; k++) {
-        int idx = (s_rfhead - 1 - k + 2 * RF_RING) % RF_RING;
+        int idx = (s_rfhead - 1 - k + 2 * s_rf_n) % s_rf_n;
         rfrec_t *r = &s_rf[idx];
         if (!r->serial[0]) continue;
         cJSON *f = cJSON_CreateObject();
@@ -2252,6 +2277,75 @@ static bool migrate_strip_virt_serial(void) {
     return changed;
 }
 
+/* Les sets de hops au-dela du plafond gardent leurs hops les plus recents. Caller detient le LOCK. */
+static void hops_shrink_to_cap(void) {
+    for (int i = 0; i < s_nremotes; i++) {
+        remote_t *rm = &s_remotes[i];
+        if (rm->caphops <= s_hops_cap) continue;
+        if (rm->nhops > s_hops_cap) {
+            memmove(rm->hops, rm->hops + (rm->nhops - s_hops_cap), (size_t)s_hops_cap * sizeof(dframe_t));
+            rm->nhops = s_hops_cap;
+        }
+        dframe_t *np = realloc(rm->hops, (size_t)s_hops_cap * sizeof(dframe_t));
+        if (np) { rm->hops = np; rm->caphops = s_hops_cap; }
+    }
+}
+
+void shutters_size_from_ram(void) {
+    if (s_ring_sized) return;
+    /* Ce qu'on peut donner : la memoire libre a l'instant (tout tourne : reseau, MQTT, serveur web,
+     * reserve TLS), plus ce que ring et sets tiennent deja et qu'on redistribue, moins le plancher
+     * du reste du firmware. Moitie au ring, moitie aux sets de hops. */
+    size_t hops_now = 0;
+    LOCK();
+    for (int i = 0; i < s_nremotes; i++) hops_now += (size_t)s_remotes[i].caphops * sizeof(dframe_t);
+    UNLOCK();
+    size_t pool = esp_get_free_heap_size() + hops_now + (size_t)s_rf_n * sizeof(rfrec_t);
+    size_t spare = pool > WORK_FLOOR_BYTES ? pool - WORK_FLOOR_BYTES : 0;
+    size_t ring_bytes = spare / 2;
+    /* le ring est un seul bloc : il doit tenir dans le plus grand bloc libre */
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (ring_bytes > largest) ring_bytes = largest;
+    int n = (int)(ring_bytes / sizeof(rfrec_t));
+    if (n > RF_RING_MAX) n = RF_RING_MAX;
+    if (n < RF_RING_BOOT) n = RF_RING_BOOT;
+    size_t hops_budget = spare - (size_t)n * sizeof(rfrec_t);
+    size_t per_remote = hops_budget / ((size_t)(s_nremotes + HOPS_SPARE_REMOTES) * sizeof(dframe_t));
+    uint16_t cap = per_remote > SH_HOPS_MAX ? SH_HOPS_MAX : per_remote < SH_HOPS_MIN ? SH_HOPS_MIN : (uint16_t)per_remote;
+
+    rfrec_t *big = (n > s_rf_n) ? calloc((size_t)n, sizeof(rfrec_t)) : NULL;
+    LOCK();
+    s_hops_cap = cap;
+    hops_shrink_to_cap();
+    rfrec_t *old = NULL; int oldn = 0, oldhead = 0;
+    if (big) {
+        old = s_rf; oldn = s_rf_n; oldhead = s_rfhead;
+        s_rf = big; s_rf_n = n; s_rfhead = 0;
+    } else {
+        n = s_rf_n;   /* agrandissement impossible : on garde le ring de demarrage */
+    }
+    s_ring_sized = true;
+    load_ring();   /* trames de la flash dans le ring a sa taille (sous LOCK : la radio y ecrit aussi) */
+    /* puis celles recues depuis le demarrage, des plus anciennes aux plus recentes, sans doublon */
+    for (int k = 0; old && k < oldn; k++) {
+        rfrec_t *r = &old[(oldhead + k) % oldn];
+        if (!r->serial[0] || ring_contains(r->serial, r->hop)) continue;
+        s_rf[s_rfhead] = *r;
+        s_rfhead = (s_rfhead + 1) % s_rf_n;
+        s_ring_dirty = true;
+    }
+    UNLOCK();
+    free(old);
+    ESP_LOGI(TAG, "RAM : ring de %d trames (%u o), %u hops max par telecommande ; libre %u o (plancher %u)",
+             n, (unsigned)((size_t)n * sizeof(rfrec_t)), (unsigned)cap,
+             (unsigned)esp_get_free_heap_size(), (unsigned)WORK_FLOOR_BYTES);
+}
+
+void shutters_mem_sizes(int *ring, int *hops_cap) {
+    if (ring) *ring = s_rf_n;
+    if (hops_cap) *hops_cap = s_hops_cap;
+}
+
 void shutters_init(void) {
     s_lock = xSemaphoreCreateMutex();
     /* L'ORDRE compte sur une NVS de 16 Ko saturee : le dataset de trames doit
@@ -2266,7 +2360,10 @@ void shutters_init(void) {
     if (mig != ESP_OK) ESP_LOGE(TAG, "migration config : ecriture KO (%s), ancien format conserve", esp_err_to_name(mig));
     else if (lay == CFG_LAYOUT_LEGACY) ESP_LOGI(TAG, "migration config : %d volets, une cle NVS par volet", s_nvolets);
     if (migrate_strip_virt_serial()) { save_cfg(); ESP_LOGI(TAG, "migration : identite 0x067 retiree de la liste des vraies telecommandes"); }
-    load_ring();     /* restaure les trames recentes rejouables (bits reconstruits) apres reboot */
+    /* Ring de demarrage : les trames recues avant le calcul. Le ring de la flash est recharge
+     * par shutters_size_from_ram, a la taille deduite de la RAM. */
+    s_rf = calloc(RF_RING_BOOT, sizeof(rfrec_t));
+    s_rf_n = s_rf ? RF_RING_BOOT : 0;
     ignore_load();
     purge_ghost_remotes_once();   /* une fois : fantomes d'avant la confirmation des trames (#39) */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);

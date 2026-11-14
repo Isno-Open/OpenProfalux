@@ -313,6 +313,23 @@ jobs:
              -o virt_counter_host_test
           ./virt_counter_host_test
 
+  # La taille de la reserve TLS selon la configuration (tls_budget.c) : elle doit couvrir les pics
+  # mesures sur l'ATOM. Voir firmware/test/tls-budget. Pur, gcc suffit.
+  banc-tls-budget:
+    name: Banc de test de la reserve TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: tls_budget (gcc + AddressSanitizer)
+        working-directory: firmware/test/tls-budget
+        run: |
+          cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
+             -I ../../main main/test_main.c ../../main/tls_budget.c \
+             -o tls_budget_host_test
+          ./tls_budget_host_test
+
   # La confirmation d'une trame recue par une seconde identique (rx_confirm.c) :
   # voir firmware/test/rx-confirm/README.md. Pure, un simple gcc suffit (issue #39).
   banc-rx-confirm:
