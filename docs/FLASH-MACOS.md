@@ -62,7 +62,7 @@ build dédié. La compilation est longue et se termine sur `Project build comple
 cd ~/esp
 git clone https://github.com/Isno-Open/OpenProfalux.git
 cd OpenProfalux/firmware
-idf.py -B build-m5-atom-lite set-target esp32
+idf.py -B build-m5-atom-lite -DBOARD=m5-atom-lite set-target esp32
 idf.py -B build-m5-atom-lite -DBOARD=m5-atom-lite build
 ```
 

@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "github_tag.h"
 
 _Static_assert(ORB_NEW == ESP_OTA_IMG_NEW && ORB_PENDING_VERIFY == ESP_OTA_IMG_PENDING_VERIFY &&
                ORB_VALID == ESP_OTA_IMG_VALID && ORB_INVALID == ESP_OTA_IMG_INVALID &&

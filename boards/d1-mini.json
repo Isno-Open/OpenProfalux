@@ -13,6 +13,7 @@
   "name": "D1 mini ESP32 + CC1101 externe",
   "ap_slug": "OpenProfalux",
   "mcu": "esp32",
+  "psram": false,
   "spi_freq_hz": 1000000,
   "radios": [
     { "chip": "CC1101", "band": "868", "module": "breakout CC1101 868",

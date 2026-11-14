@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Engendre board_pins.h depuis une declaration de carte.
+"""Engendre board_pins.h depuis une declaration de carte, et son fragment sdkconfig.
 
     python3 tools/gen_board.py boards/isno-super.json build/board/board_pins.h
+    python3 tools/gen_board.py --sdkconfig boards/isno-super.json build/board.sdkconfig
+
+Le fragment porte ce que la memoire de la carte decide (budgets reseau, voir
+NET_BUDGET_INTERNAL_RAM) ; CMakeLists.txt l'ajoute a sdkconfig.defaults avant project().
 
 Meme format de declaration que isno-launcher et OpenRFTest : les broches, les
 radios et, par radio, la plage autorisee. Le firmware LIT ces valeurs, il n'en
@@ -187,7 +191,56 @@ def header(d):
     return "\n".join(L) + "\n"
 
 
+# ── Budgets memoire, deduits de la RAM que la carte declare ──
+# Le firmware n'active pas la PSRAM : toute la memoire utilisable est la RAM INTERNE de la
+# puce. Au demarrage, il en reste 186 Ko sur ESP32, 150 Ko sur ESP32-S3 et 130 Ko sur ESP32-C3
+# (idf.py size et sonde au demarrage, 2026-11-14). Les valeurs par defaut d'ESP-IDF laissent au
+# pire 32 tampons Wi-Fi de reception (~54 Ko), 32 d'emission (~51 Ko) et 5 760 o d'envoi plus
+# 5 760 o de fenetre par socket TCP : plus que tout le tas libre une fois le Wi-Fi, le web, le
+# TLS et la radio en route. Mesure du 2026-11-13 sur l'ATOM (HA en mqtts, cloud, ecoute RF
+# permanente, journal web suivi toutes les 2 s) : defaut = 1 937 refus de tampons Wi-Fi, web
+# sourd 8 min ; borne = 0 refus, 28 a 40 Ko libres. Les enregistrements TLS sortants sont
+# ramenes a 2 Ko pour tenir dans le tampon d'envoi TCP borne (sinon l'ecriture restait bloquee
+# 10 s et la connexion se refaisait en boucle).
+NET_BUDGET_INTERNAL_RAM = {
+    "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM": 16,
+    "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM": 16,
+    "CONFIG_LWIP_TCP_SND_BUF_DEFAULT": 2880,   # 2 segments de 1 440 o
+    "CONFIG_LWIP_TCP_WND_DEFAULT": 2880,
+    "CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN": 2048,
+}
+
+
+def sdkconfig_lines(d, src):
+    """Fragment sdkconfig de la carte, ajoute a sdkconfig.defaults par CMakeLists.txt."""
+    if not isinstance(d.get("psram"), bool):
+        raise SystemExit("psram (true ou false) non declare dans %s : la memoire de la carte "
+                         "decide de ses budgets reseau" % d["id"])
+    L = ["# Engendre par tools/gen_board.py depuis %s : ne pas editer." % src,
+         "# Budgets reseau bornes a la RAM interne (voir NET_BUDGET_INTERNAL_RAM)."]
+    if d["psram"]:
+        L.append("# PSRAM presente sur la carte mais pas activee par le firmware : la RAM "
+                 "interne seule compte. L'activer (mode quad ou octal du module) est a valider "
+                 "sur la carte avant d'elargir ces budgets.")
+    L += ["%s=%d" % (k, v) for k, v in NET_BUDGET_INTERNAL_RAM.items()]
+    return "\n".join(L) + "\n"
+
+
+def write_if_changed(path, text):
+    try:
+        if open(path, encoding="utf-8").read() == text:
+            return  # inchange : ne pas toucher au fichier, sinon tout recompile
+    except FileNotFoundError:
+        pass
+    open(path, "w", encoding="utf-8").write(text)
+
+
 if __name__ == "__main__":
+    # gen_board.py <carte.json> <board_pins.h>           (composant main, a la configuration)
+    # gen_board.py --sdkconfig <carte.json> <fragment>   (CMakeLists.txt racine, avant project())
+    if len(sys.argv) == 4 and sys.argv[1] == "--sdkconfig":
+        write_if_changed(sys.argv[3], sdkconfig_lines(json.load(open(sys.argv[2], encoding="utf-8")), sys.argv[2]))
+        sys.exit(0)
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
     d = json.load(open(sys.argv[1], encoding="utf-8"))

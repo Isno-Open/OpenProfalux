@@ -10,6 +10,7 @@
   "name": "Simulation QEMU (ESP32)",
   "ap_slug": "OpenProfalux",
   "mcu": "esp32",
+  "psram": false,
   "flash_mb": 4,
   "radios": [
     {
