@@ -1,0 +1,3 @@
+[submodule "cloud-plugin/opencloudapp"]
+	path = cloud-plugin/opencloudapp
+	url = https://github.com/Isno-Open/OpenCloudApp.git
