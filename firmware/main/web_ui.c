@@ -304,9 +304,25 @@ static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/
 static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
+/* Une reponse construite d'un bloc (cJSON) peut tomber pendant un pic de memoire passager :
+ * la verification GitHub (connexion TLS de plus) prend ~15 Ko pendant 2 a 3 s. Mesure sur
+ * l'ATOM Lite le 2026-11-14 : un 500 "mem" sur /api/status par verification. On reessaie
+ * donc le temps que le pic passe, en restant sous les 4 s apres lesquelles l'UI abandonne
+ * (app.js, loadStatus) et compte le boitier comme injoignable. */
+#define BUILD_RETRIES   10    /* 10 x 250 ms = 2,5 s au plus */
+#define BUILD_RETRY_MS  250
+static char *build_with_retry(char *(*build)(void)) {
+    char *js = build();
+    for (int t = 0; !js && t < BUILD_RETRIES; t++) {
+        vTaskDelay(pdMS_TO_TICKS(BUILD_RETRY_MS));
+        js = build();
+    }
+    return js;
+}
+
 /* ── /api/status ── */
 static esp_err_t h_status(httpd_req_t *r) {
-    char *js = shutters_status_json();
+    char *js = build_with_retry(shutters_status_json);
     if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
     httpd_resp_set_type(r, "application/json");
     esp_err_t e = httpd_resp_send(r, js, HTTPD_RESP_USE_STRLEN);
@@ -834,6 +850,10 @@ static esp_err_t h_rf(httpd_req_t *req) {
      * seule la page demandee est copiee : shutters_rf_page. Plus de tableau statique de
      * 24 Ko pour les 1000 trames, dont 100 au plus etaient renvoyees. */
     shutters_rf_item_t *items = malloc((size_t)limit * sizeof(*items));
+    for (int t = 0; !items && t < BUILD_RETRIES; t++) {   /* meme pic passager que /api/status */
+        vTaskDelay(pdMS_TO_TICKS(BUILD_RETRY_MS));
+        items = malloc((size_t)limit * sizeof(*items));
+    }
     int c = 0, n = items ? shutters_rf_page(offset, limit, items, &c) : -1;
     if (n < 0) { free(items); return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "mem"); }
     httpd_resp_set_type(req, "application/json");
@@ -872,7 +892,7 @@ static esp_err_t h_log(httpd_req_t *r) {
 
 /* ── /api/backup (export) + /api/restore (import) : telecommandes + trames de reference ── */
 static esp_err_t h_backup(httpd_req_t *r) {
-    char *js = shutters_export_json();
+    char *js = build_with_retry(shutters_export_json);
     if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
     httpd_resp_set_type(r, "application/json");
     httpd_resp_set_hdr(r, "Content-Disposition", "attachment; filename=openprofalux-backup.json");
