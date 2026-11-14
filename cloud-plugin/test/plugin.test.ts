@@ -6,10 +6,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import plugin, { family, read, command, ACTION_PAYLOAD } from "../src/index.js";
+import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
 import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
 import { FACT } from "../opencloudapp/server/src/family-contract.js";
-import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, familyById } from "../opencloudapp/server/src/device-families.js";
+import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById } from "../opencloudapp/server/src/device-families.js";
 
 const ROOT = "openprofalux";
 const BOX = "opf-2d5efba03f";
@@ -120,4 +120,28 @@ test("types engendres : un type sans libelles anglais, ou une icone SVG a plusie
 test("le moteur de plugins est a la meme version que celle d'OpenCloudApp (une seule version)", () => {
   const dep = (p: string): string => (JSON.parse(readFileSync(join(here, p), "utf8")) as { dependencies: Record<string, string> }).dependencies["@isno-open/plugin-host"]!;
   assert.equal(dep("../../package.json"), dep("../../opencloudapp/server/package.json"));
+});
+
+test("etalonnage : temps de course lus dans la description, envoyes en millisecondes sur config", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":true,"name":"Chambre Parents","travel_up_s":19,"travel_down_s":18}', true, 1);
+  const d = boxState("openprofalux", BOX)!.devices.get("Chambre_Parents")!;
+  assert.deepEqual([d.settings.get("travel_up_s"), d.settings.get("travel_down_s")], [19, 18]);
+  const f = familyById("openprofalux")!;
+  assert.deepEqual(buildConfigure(f, { box: BOX, device: "Chambre_Parents" }, { travel_up_s: 19, travel_down_s: 17 }),
+    { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/config`, payload: '{"travel_up_ms":19000,"travel_down_ms":17000}', retain: false });
+  assert.ok("error" in buildConfigure(f, { box: BOX, device: "Chambre_Parents" }, { travel_up_s: 0, travel_down_s: 17 }), "sous la borne de profiles.json");
+  assert.ok("error" in buildConfigure(f, { box: BOX, device: "Chambre_Parents" }, { travel_up_s: 19, travel_down_s: 181 }), "au-dessus");
+  assert.equal(configure({ box: BOX, device: "x" }, { travel_up_s: 19 }), null, "un seul des deux : rien n'est envoye");
+});
+
+test("etalonnage : un volet non etalonne n'a pas de valeurs ; un portail n'a pas de reglages", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":false,"name":"Chambre Parents"}', true, 1);
+  assert.equal(boxState("openprofalux", BOX)!.devices.get("Chambre_Parents")!.settings.size, 0);
+  assert.equal(family.kinds.find((k) => k.id === "portail")!.settings, undefined);
+  const volet = family.kinds.find((k) => k.id === "volet")!;
+  assert.deepEqual(volet.settings!.map((x) => [x.key, "min" in x ? x.min : null, "max" in x ? x.max : null]), [["travel_up_s", 1, 180], ["travel_down_s", 1, 180]], "bornes de profiles.json");
 });

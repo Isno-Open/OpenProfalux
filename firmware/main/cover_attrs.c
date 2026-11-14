@@ -37,13 +37,22 @@ static bool put_json_string(char *out, size_t cap, size_t *w, const char *s) {
     return put(out, cap, w, "\"", 1);
 }
 
-int cover_attrs_json(uint8_t type, bool positional, const char *name, char *out, size_t cap) {
+bool cover_travel_ok(uint32_t ms) { return ms >= COVER_TRAVEL_MIN_MS && ms <= COVER_TRAVEL_MAX_MS; }
+
+int cover_attrs_json(uint8_t type, bool positional, const char *name, uint32_t up_ms, uint32_t down_ms,
+                     char *out, size_t cap) {
     const char *tname = dev_type_name(type);
     if (!tname || !out || cap == 0) return -1;
     int n = snprintf(out, cap, "{\"type\":\"%s\",\"positional\":%s", tname, positional ? "true" : "false");
     if (n < 0 || (size_t)n >= cap) { out[0] = 0; return -1; }
     size_t w = (size_t)n;
     if (name && name[0] && !(put(out, cap, &w, ",\"name\":", 8) && put_json_string(out, cap, &w, name))) { out[0] = 0; return -1; }
+    if (cover_travel_ok(up_ms) && cover_travel_ok(down_ms)) {
+        char t[64];
+        int k = snprintf(t, sizeof t, ",\"travel_up_s\":%u,\"travel_down_s\":%u",
+                         (unsigned)((up_ms + 500) / 1000), (unsigned)((down_ms + 500) / 1000));
+        if (k < 0 || !put(out, cap, &w, t, (size_t)k)) { out[0] = 0; return -1; }
+    }
     if (!put(out, cap, &w, "}", 1)) { out[0] = 0; return -1; }
     return (int)w;
 }

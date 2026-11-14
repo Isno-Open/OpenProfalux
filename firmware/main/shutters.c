@@ -810,6 +810,16 @@ static void ha_state_str(const volet_t *v, char *out) {
     else if (v->position >= 99)   strcpy(out, "closed");    /* fermeture 100 = ferme (bas) */
     else                          strcpy(out, "stopped");
 }
+/* Un volet est POSITIONNEL (position publiee, reglable depuis HA et le portail) si son etat se suit :
+ * ecoute permanente active (sinon un coup de vraie telecommande desynchronise l'estimation), ni
+ * centrale ni zone (leur position ne serait celle d'aucun volet), et ETALONNE (sans temps de course,
+ * le pourcentage serait une supposition ; decide le 2026-11-14). Une seule regle pour la description
+ * cloud, la position publiee et la decouverte HA. */
+static bool volet_positional(const volet_t *v) {
+    return s_log_frames && !v->central && !is_zone(v)
+        && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
+}
+
 /* Publie description + position + etat du volet (retained). Appele sous LOCK. La description
  * (attrs : type, positionnel) sert au portail cloud pour choisir la carte ; elle part avec l'etat,
  * donc a chaque changement et a chaque resynchronisation. Publie des que le MQTT local OU le cloud
@@ -820,11 +830,11 @@ static void publish_volet_state(volet_t *v) {
     char topic[96], pl[16], st[10], slug[SH_ID_LEN], attrs[64 + 6 * SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
     /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
-    if (cover_attrs_json(v->type, s_log_frames && !v->central && !is_zone(v), v->id, attrs, sizeof(attrs)) > 0) {
+    if (cover_attrs_json(v->type, volet_positional(v), v->id, v->travel_up_ms, v->travel_down_ms, attrs, sizeof(attrs)) > 0) {
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
         pub_defer(topic, attrs, 1, 1);
     }
-    if (s_log_frames) {   /* position publiee seulement si suivi actif (coherent avec la decouverte + l'UI) */
+    if (volet_positional(v)) {   /* position publiee seulement si elle se suit (meme regle que la decouverte) */
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
         snprintf(pl, sizeof(pl), "%d", 100 - (int)(v->position + 0.5f));   /* HA = % d'OUVERTURE (100=ouvert) ; interne = fermeture */
         pub_defer(topic, pl, 0, 1);
@@ -925,7 +935,7 @@ static void announce_one(volet_t *v) {
     char pos[240] = "";
     /* Ni centrale ni zone n'ont de position (juste ouvrir/fermer/stop) : la leur ne
      * serait celle d'aucun volet, et un seul STOP arrete des volets de vitesses differentes. */
-    if (s_log_frames && !v->central && !is_zone(v))
+    if (volet_positional(v))
         snprintf(pos, sizeof(pos),
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
@@ -2172,6 +2182,27 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     volet_t *v = find_volet_by_slug(slug);
     if (!v) { ESP_LOGW(TAG, "MQTT cmd : volet slug '%s' inconnu", slug); return; }
     char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof(id));
+    /* Reglages d'un appareil (portail cloud, docs/CLOUD.md) : {"travel_up_ms":N,"travel_down_ms":N}.
+     * Valides contre les bornes declarees (cover_travel_ok), sinon refuses en entier. Puis description
+     * et decouverte republiees : le volet peut devenir positionnel. */
+    if (!strcmp(sub, "config")) {
+        if (len <= 0 || len > 256) { ESP_LOGW(TAG, "config '%s' : taille %d refusee", id, len); return; }
+        char *js = strndup(data, (size_t)len);
+        cJSON *j = js ? cJSON_Parse(js) : NULL;
+        free(js);
+        cJSON *u = j ? cJSON_GetObjectItem(j, "travel_up_ms") : NULL, *d = j ? cJSON_GetObjectItem(j, "travel_down_ms") : NULL;
+        uint32_t up = cJSON_IsNumber(u) ? (uint32_t)cJSON_GetNumberValue(u) : 0, down = cJSON_IsNumber(d) ? (uint32_t)cJSON_GetNumberValue(d) : 0;
+        cJSON_Delete(j);
+        if (!cover_travel_ok(up) || !cover_travel_ok(down)) { ESP_LOGW(TAG, "config '%s' : temps de course refuses (%u / %u ms)", id, (unsigned)up, (unsigned)down); return; }
+        if (shutters_calibrate(id, up, down) != 0) return;
+        ESP_LOGI(TAG, "config '%s' : montee %u ms, descente %u ms", id, (unsigned)up, (unsigned)down);
+        LOCK();
+        volet_t *cv = find_volet(id);
+        if (cv) { publish_volet_state(cv); announce_one(cv); }
+        UNLOCK();
+        pub_flush();   /* hors LOCK (anti-deadlock), comme a la connexion */
+        return;
+    }
     char payload[16]; int m = len < 15 ? len : 15; memcpy(payload, data, m); payload[m] = 0;
     if (!s_mqtt_obey) { ESP_LOGW(TAG, "MQTT cmd ignoree (obey=OFF) pour '%s'", id); return; }   /* carte secondaire : une seule carte emet un volet partage */
     if (!strcmp(sub, "set")) {

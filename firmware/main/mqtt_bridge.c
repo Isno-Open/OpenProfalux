@@ -328,6 +328,7 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/listen/#", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/cover/+/set", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/cover/+/set_position", 1);
+            esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/cover/+/config", 1);   /* reglages (etalonnage) */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/counter/#", 1);   /* synchro compteur inter-cartes */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/busy/#", 1);      /* verrou d'emission inter-cartes */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/ota/pull", 1);
@@ -581,6 +582,7 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             char sub[96];
             snprintf(sub, sizeof(sub), "%s/cover/+/set", s_cloud_base);          esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/cover/+/set_position", s_cloud_base); esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/cover/+/config", s_cloud_base);       esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* reglages du portail */
             snprintf(sub, sizeof(sub), "%s/listen/#", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/ota/pull", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/update/install", s_cloud_base);       esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);

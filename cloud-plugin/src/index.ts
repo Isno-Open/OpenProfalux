@@ -4,19 +4,21 @@
 //
 // Ce que publie le boitier sous `openprofalux/<boitier>/` (relai cloud du firmware, cloud_topic.c) :
 //   status                    online, testament offline (retenu)              -> presence
-//   cover/<id>/attrs          {"type":"volet","positional":true,"name":"Séjour"} (retenu) -> appareil
+//   cover/<id>/attrs          {"type":"volet","positional":true,"name":"Séjour",
+//                              "travel_up_s":19,"travel_down_s":18} (retenu)        -> appareil, reglages
 //   cover/<id>/position       0..100 (retenu)                                  -> position
 //   remote/<tel>/battery      ON si la pile est faible (retenu)               -> alerte
 //   system/status             {"fw":"0.2.16","target":"m5-atom-lite",...}      -> version
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
 // Le reste (battement, ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
 // Commandes, sous le meme prefixe : cover/<id>/set (OPEN|STOP|CLOSE), cover/<id>/set_position (0..100),
-// update/install (INSTALL) pour le boitier entier.
+// update/install (INSTALL) pour le boitier entier. Reglages (etalonnage) : cover/<id>/config
+// {"travel_up_ms":N,"travel_down_ms":N}, valides par le firmware contre les memes bornes (profiles.json).
 import type { Plugin } from "../opencloudapp/server/src/plugin-types.js";
 import { PLUGIN_CATEGORY } from "../opencloudapp/server/src/plugin-contract.js";
 import { FACT, EVENT_LEVEL, FAMILY_CONTRACT, type Fact, type FamilyDecl, type FamilyMessage } from "../opencloudapp/server/src/family-contract.js";
 import { KINDS } from "./kinds.generated.js";
-import { CONTROL_ID } from "./ids.js";
+import { CONTROL_ID, SETTING_ID } from "./ids.js";
 
 /** Actions de la carte -> charge que le firmware attend sur cover/<id>/set. */
 export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE" };
@@ -50,7 +52,11 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     }
     const a = json(payload);
     if (!a) return [];
-    return [{ fact: FACT.device, device, kind: typeof a.type === "string" ? a.type : "", name: nameOf(a.name, device), hidden: a.positional === true ? [] : [CONTROL_ID.position] }];
+    const up = a[SETTING_ID.travelUp], down = a[SETTING_ID.travelDown];
+    // temps de course publies seulement si le volet est etalonne (les deux) : sinon, pas de valeur
+    const settings = typeof up === "number" && typeof down === "number" ? { settings: { [SETTING_ID.travelUp]: up, [SETTING_ID.travelDown]: down } } : {};
+    return [{ fact: FACT.device, device, kind: typeof a.type === "string" ? a.type : "", name: nameOf(a.name, device),
+      hidden: a.positional === true ? [] : [CONTROL_ID.position], ...settings }];
   }
   m = /^remote\/([^/]+)\/battery$/.exec(path);
   // une alerte par passage a « pile faible » vu en direct ; le retenu resservi au branchement n'en est pas un
@@ -78,6 +84,14 @@ export const command: FamilyDecl["command"] = ({ device }, control, value) => {
   return p ? { path: `cover/${device}/set`, payload: p } : null;
 };
 
+/** Etalonnage depuis le portail : le firmware attend les DEUX temps de course, en millisecondes (le
+ *  formulaire envoie ses deux champs). S'il en manque un, rien n'est envoye. */
+export const configure: NonNullable<FamilyDecl["configure"]> = ({ device }, values) => {
+  const up = values[SETTING_ID.travelUp], down = values[SETTING_ID.travelDown];
+  if (typeof up !== "number" || typeof down !== "number") return null;
+  return { path: `cover/${device}/config`, payload: JSON.stringify({ travel_up_ms: Math.round(up * 1000), travel_down_ms: Math.round(down * 1000) }) };
+};
+
 export const family: FamilyDecl = {
   id: "openprofalux",
   label: { fr: "OpenProfalux", en: "OpenProfalux" },
@@ -87,6 +101,7 @@ export const family: FamilyDecl = {
   kinds: KINDS,
   read,
   command,
+  configure,
 };
 
 const plugin: Plugin = {

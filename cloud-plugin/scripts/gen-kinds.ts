@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { CONTROL } from "../opencloudapp/server/src/family-contract.ts";
-import { CONTROL_ID, ACTION_IDS } from "../src/ids.ts";
+import { CONTROL_ID, ACTION_IDS, SETTING_ID } from "../src/ids.ts";
+import { SETTING_KIND } from "../opencloudapp/server/src/plugin-contract.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = process.argv[2] ?? join(here, "../../firmware/main/web/profiles.json");
@@ -42,7 +43,17 @@ export function kindsOf(profiles: unknown): unknown[] {
     }));
     // un type positionnel a une position, reglable (decide le 2026-11-14) ; chaque appareil peut la masquer
     if (t.positional === true) controls.push({ kind: CONTROL.position, id: CONTROL_ID.position, label: text("Position", "Position"), settable: true });
-    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls };
+    // etalonnage : un type qui declare ses bornes de temps de course (travel_s) se regle depuis le portail
+    const travel = t.travel_s;
+    let settings: unknown[] | undefined;
+    if (travel !== undefined) {
+      if (!isObj(travel) || typeof travel.min !== "number" || typeof travel.max !== "number" || travel.min >= travel.max)
+        throw new Error(`type ${id} : travel_s {min, max} en secondes, min < max`);
+      const field = (key: string, fr: string, e: string): unknown => ({ kind: SETTING_KIND.number, key, label: text(fr, e), min: travel.min, max: travel.max,
+        hint: text("Chronométré sur le volet, en secondes.", "Timed on the shutter, in seconds.") });
+      settings = [field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)")];
+    }
+    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, ...(settings ? { settings } : {}) };
   });
 }
 
