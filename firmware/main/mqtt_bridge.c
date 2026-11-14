@@ -14,6 +14,13 @@
 #include <nvs.h>
 #include <cJSON.h>
 #include <esp_timer.h>
+#include <esp_system.h>    /* esp_reset_reason (etat systeme) */
+#include <esp_wifi.h>      /* SSID du reseau rejoint (etat systeme) */
+#include "wifi_bridge.h"
+#include "cover_attrs.h"   /* json_string : SSID et hote echappes pour JSON */
+
+/* Adresse du broker local, au niveau du fichier : mqtt_bridge_start la pose, l'etat systeme en lit l'hote. */
+static char s_uri[160];
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -465,7 +472,6 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
     snprintf(s_avail_topic, sizeof(s_avail_topic), TOPIC_BASE "/%s/status", client_id);
     /* Le client MQTT exige une URI avec schema (mqtt://host[:port]). Si l'utilisateur a saisi
      * une IP nue, on prefixe mqtt:// automatiquement (sinon "Error parse uri" -> jamais connecte). */
-    static char s_uri[160];
     if (broker_uri && *broker_uri && !strstr(broker_uri, "://"))
         snprintf(s_uri, sizeof(s_uri), "mqtt://%s", broker_uri);
     else
@@ -549,13 +555,50 @@ int mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain) {
     return outbox_send(&s_out_local, topic, payload, qos, retain);
 }
 
+/* Cause du dernier redemarrage, en mot stable (le portail la traduit) : ce que dit esp_reset_reason. */
+static const char *reset_word(esp_reset_reason_t r) {
+    switch (r) {
+        case ESP_RST_POWERON:  return "poweron";
+        case ESP_RST_EXT:      return "external";
+        case ESP_RST_SW:       return "software";
+        case ESP_RST_PANIC:    return "panic";
+        case ESP_RST_INT_WDT:
+        case ESP_RST_TASK_WDT:
+        case ESP_RST_WDT:      return "watchdog";
+        case ESP_RST_DEEPSLEEP:return "deepsleep";
+        case ESP_RST_BROWNOUT: return "brownout";
+        default:               return "unknown";
+    }
+}
+
+/* Hote:port du broker local, SANS identifiants (mqtt://user:pass@hote:1883 -> hote:1883) : affiche
+ * en lecture seule dans le portail. */
+static void broker_host(char *out, size_t cap) {
+    const char *p = strstr(s_uri, "://");
+    p = p ? p + 3 : s_uri;
+    const char *at = strrchr(p, '@');
+    if (at) p = at + 1;
+    strlcpy(out, p, cap);   /* affichage seulement : tronque si trop long, sans consequence */
+}
+
+/* Etat systeme publie au portail et a HA : version, cible, memoire, et pour information le reseau
+ * (SSID, IP), le broker local et la cause du dernier redemarrage. Le SSID et l'hote viennent de
+ * l'utilisateur : echappes pour JSON. */
 static void system_status_json(char *buf, size_t len) {
-    snprintf(buf, len, "{\"fw\":\"%s\",\"target\":\"" TARGET_NAME "\",\"free_heap\":%u}",
-             esp_app_get_description()->version, (unsigned)esp_get_free_heap_size());
+    char ip[20] = "", ssid_js[3 * 33 + 8] = "\"\"", host[96] = "", host_js[3 * 96 + 8] = "\"\"";
+    wifi_bridge_get_ip(ip, sizeof(ip));
+    wifi_ap_record_t ap;
+    if (wifi_bridge_is_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) json_string((const char *)ap.ssid, ssid_js, sizeof(ssid_js));
+    broker_host(host, sizeof(host));
+    json_string(host, host_js, sizeof(host_js));
+    snprintf(buf, len, "{\"fw\":\"%s\",\"target\":\"" TARGET_NAME "\",\"free_heap\":%u,"
+             "\"ssid\":%s,\"ip\":\"%s\",\"mqtt\":%s,\"reset\":\"%s\"}",
+             esp_app_get_description()->version, (unsigned)esp_get_free_heap_size(),
+             ssid_js, ip, host_js, reset_word(esp_reset_reason()));
 }
 
 int mqtt_pub_system_status(void) {
-    char payload[256];
+    char payload[640];
     system_status_json(payload, sizeof(payload));
     cloud_pub(TOPIC_BASE "/system/status", payload, 0, 1);
     return outbox_send(&s_out_local, TOPIC_BASE "/system/status", payload, 1, 1);

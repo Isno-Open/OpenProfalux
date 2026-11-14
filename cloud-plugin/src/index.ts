@@ -8,9 +8,11 @@
 //                              "travel_up_s":19,"travel_down_s":18} (retenu)        -> appareil, reglages
 //   cover/<id>/position       0..100 (retenu)                                  -> position
 //   remote/<tel>/battery      ON si la pile est faible (retenu)               -> alerte
-//   system/status             {"fw":"0.2.16","target":"m5-atom-lite",...}      -> version
+//   system/status             {"fw":"0.2.16","target":"m5-atom-lite","ssid":"...","ip":"...",
+//                              "mqtt":"hote:1883","reset":"software",...}      -> version, reseau, redemarrage
+//   <nom>/state               battement ~60 s {"rssi":-67,"free_heap":...,"min_heap":...,"up_s":...} -> sante
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
-// Le reste (battement, ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
+// Le reste (ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
 // Commandes, sous le meme prefixe : cover/<id>/set (OPEN|STOP|CLOSE), cover/<id>/set_position (0..100),
 // update/install (INSTALL) pour le boitier entier. Reglages (etalonnage) : cover/<id>/config
 // {"travel_up_ms":N,"travel_down_ms":N}, valides par le firmware contre les memes bornes (profiles.json).
@@ -28,6 +30,20 @@ export const PRESENCE = { online: "online", offline: "offline" } as const;
 export const UPDATE_INSTALL = { control: "update", path: "update/install", payload: "INSTALL" } as const;
 /** Etat de pile d'une telecommande (binary_sensor HA : ON = pile faible). */
 const BATTERY_LOW = "ON";
+
+/** Cause du dernier redemarrage, telle que le firmware la nomme (mqtt_bridge.c reset_word). */
+const RESET_TEXT: Readonly<Record<string, { fr: string; en: string }>> = {
+  poweron: { fr: "Mise sous tension", en: "Power on" },
+  external: { fr: "Bouton de remise à zéro", en: "Reset button" },
+  software: { fr: "Redémarrage logiciel (mise à jour, réglage)", en: "Software restart (update, setting)" },
+  panic: { fr: "Plantage du firmware", en: "Firmware crash" },
+  watchdog: { fr: "Chien de garde (blocage)", en: "Watchdog (hang)" },
+  deepsleep: { fr: "Réveil de veille", en: "Wake from sleep" },
+  brownout: { fr: "Baisse de tension", en: "Brownout" },
+  unknown: { fr: "Inconnue", en: "Unknown" },
+};
+const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const str = (v: unknown): v is string => typeof v === "string" && v !== "";
 
 const json = (s: string): Record<string, unknown> | null => {
   try { const v: unknown = JSON.parse(s); return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null; }
@@ -65,7 +81,22 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     : [];
   if (path === "system/status") {
     const s = json(payload);
-    return s && typeof s.fw === "string" ? [{ fact: FACT.box, firmware: s.fw }] : [];
+    if (!s || typeof s.fw !== "string") return [];
+    const reset = str(s.reset) ? RESET_TEXT[s.reset] ?? RESET_TEXT.unknown : undefined;
+    return [{ fact: FACT.box, firmware: s.fw,
+      ...(reset ? { health: { lastReset: reset } } : {}),
+      network: { ...(str(s.ssid) ? { ssid: s.ssid } : {}), ...(str(s.ip) ? { ip: s.ip } : {}), ...(str(s.mqtt) ? { broker: s.mqtt } : {}) } }];
+  }
+  m = /^([^/]+)\/state$/.exec(path);
+  if (m && m[1] !== "listen" && m[1] !== "update") {
+    // battement : seulement s'il en a la forme (signal), sinon ce n'est pas lui
+    const h = json(payload);
+    if (!h || !num(h.rssi)) return [];
+    return [{ fact: FACT.box, health: {
+      ...(h.rssi < 0 ? { rssiDbm: h.rssi } : {}),
+      ...(num(h.up_s) ? { uptimeS: h.up_s } : {}),
+      ...(num(h.free_heap) ? { freeHeap: h.free_heap } : {}),
+      ...(num(h.min_heap) ? { minFreeHeap: h.min_heap } : {}) } }];
   }
   if (path === "update/state") {
     const u = json(payload);

@@ -53,6 +53,12 @@ int main(int argc, char **argv) {
     check(cover_travel_ok(COVER_TRAVEL_MIN_MS) && cover_travel_ok(COVER_TRAVEL_MAX_MS) && !cover_travel_ok(COVER_TRAVEL_MIN_MS - 1)
           && !cover_travel_ok(COVER_TRAVEL_MAX_MS + 1) && !cover_travel_ok(0), "T13 bornes du temps de course");
 
+    /* json_string : texte choisi par l'utilisateur (SSID) en chaine JSON */
+    char js[64];
+    check(json_string("Box \"Maison\"", js, sizeof js) > 0 && !strcmp(js, "\"Box \\\"Maison\\\"\""), "T15 json_string : guillemets echappes");
+    check(json_string(NULL, js, sizeof js) == 2 && !strcmp(js, "\"\""), "T16 json_string : NULL donne une chaine vide");
+    check(json_string("abcdefghij", js, 8) == -1 && js[0] == 0, "T17 json_string : trop long, refuse");
+
     /* Coherence avec profiles.json : chaque type de l'enum y est declare sous ce nom et ce code. */
     const char *path = argc > 1 ? argv[1] : "../../main/web/profiles.json";
     FILE *f = fopen(path, "rb");

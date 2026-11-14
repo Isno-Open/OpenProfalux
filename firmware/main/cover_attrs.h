@@ -25,3 +25,8 @@ bool cover_travel_ok(uint32_t ms);
  * si le tampon est trop petit (rien n'est alors ecrit). */
 int cover_attrs_json(uint8_t type, bool positional, const char *name, uint32_t up_ms, uint32_t down_ms,
                      char *out, size_t cap);
+
+/* Ecrit s en chaine JSON (guillemets compris, caracteres speciaux echappes, UTF-8 intact) dans out.
+ * Rend la longueur, ou -1 si ca ne tient pas (out vide). Sert aux textes choisis par l'utilisateur
+ * (nom d'un appareil, SSID). */
+int json_string(const char *s, char *out, size_t cap);

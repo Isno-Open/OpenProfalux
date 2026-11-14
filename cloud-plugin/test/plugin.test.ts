@@ -145,3 +145,17 @@ test("etalonnage : un volet non etalonne n'a pas de valeurs ; un portail n'a pas
   const volet = family.kinds.find((k) => k.id === "volet")!;
   assert.deepEqual(volet.settings!.map((x) => [x.key, "min" in x ? x.min : null, "max" in x ? x.max : null]), [["travel_up_s", 1, 180], ["travel_down_s", 1, 180]], "bornes de profiles.json");
 });
+
+test("sante : battement et etat systeme reels du M5 (signal, memoire, reseau, redemarrage)", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  // releve reel apres la mise a jour 0.2.16-santetest, 2026-11-14
+  applyMessage(`${ROOT}/${BOX}/system/status`, '{"fw":"0.2.16-santetest","target":"m5-atom-lite","free_heap":46128,"ssid":"Isno","ip":"192.168.20.12","mqtt":"192.168.50.7:1883","reset":"software"}', true, 1);
+  applyMessage(`${ROOT}/${BOX}/openprofalux/state`, '{"last_cmd":"HEARTBEAT","rssi":-67,"free_heap":33324,"min_heap":21820,"tls_pool":23552,"up_s":9908}', true, 1);
+  const s = boxState("openprofalux", BOX)!;
+  assert.deepEqual(s.network, { ssid: "Isno", ip: "192.168.20.12", broker: "192.168.50.7:1883" });
+  assert.deepEqual([s.health.rssiDbm, s.health.freeHeap, s.health.minFreeHeap, s.health.uptimeS], [-67, 33324, 21820, 9908]);
+  assert.match(s.health.lastReset!.fr, /logiciel/);
+  assert.deepEqual(read({ box: BOX, path: "listen/state", payload: "ON", retained: true }), [], "l'ecoute radio n'est pas un battement");
+  assert.deepEqual(read({ box: BOX, path: "openprofalux/state", payload: '{"last_cmd":"X"}', retained: true }), [], "sans signal, ce n'est pas un battement");
+});

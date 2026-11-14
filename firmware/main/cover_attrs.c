@@ -56,3 +56,11 @@ int cover_attrs_json(uint8_t type, bool positional, const char *name, uint32_t u
     if (!put(out, cap, &w, "}", 1)) { out[0] = 0; return -1; }
     return (int)w;
 }
+
+int json_string(const char *s, char *out, size_t cap) {
+    if (!out || cap == 0) return -1;
+    size_t w = 0;
+    out[0] = 0;
+    if (!put_json_string(out, cap, &w, s ? s : "")) { out[0] = 0; return -1; }
+    return (int)w;
+}
