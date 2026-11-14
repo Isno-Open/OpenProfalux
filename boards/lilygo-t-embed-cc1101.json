@@ -11,6 +11,7 @@
   "name": "LILYGO T-Embed CC1101",
   "ap_slug": "OpenProfalux",
   "mcu": "esp32s3",
+  "psram": true,
   "radios": [
     {
       "chip": "CC1101",

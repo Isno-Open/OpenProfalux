@@ -77,6 +77,7 @@ idf_component_register(
         "rf_capture.c"
         "radio_profile.c"
         "log_ring.c"
+        "github_tag.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"

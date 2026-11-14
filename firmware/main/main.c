@@ -93,8 +93,9 @@ static void load_config(void) {
 static void publish_state(const char *last_cmd) {
     char json[192];
     snprintf(json, sizeof(json),
-        "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u}",
-        last_cmd, wifi_bridge_rssi(), (unsigned)esp_get_free_heap_size());
+        "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u,\"min_heap\":%u,\"pub_drops\":%u}",
+        last_cmd, wifi_bridge_rssi(), (unsigned)esp_get_free_heap_size(),
+        (unsigned)esp_get_minimum_free_heap_size(), (unsigned)shutters_pub_dropped());
     mqtt_pub_state(s_device_name, json);
 }
 

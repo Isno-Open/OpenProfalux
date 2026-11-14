@@ -2,6 +2,7 @@
 #include "log_ring.h"
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
@@ -9,8 +10,7 @@
 #include "freertos/semphr.h"
 
 static char s_ring[LOG_RING_SIZE];
-static size_t s_head;        /* prochaine ecriture */
-static bool s_full;          /* l'anneau a deja fait le tour */
+static uint32_t s_total;     /* octets ecrits depuis le demarrage : l'octet t est en s_ring[t % taille] */
 static unsigned s_dropped;   /* messages non conserves (journal occupe a ce moment-la) */
 static char s_line[256];     /* mise en forme d'un message, sous s_mx */
 static SemaphoreHandle_t s_mx;
@@ -23,8 +23,7 @@ static void ring_put(const char *p, size_t n) {
             while (i < n && !((p[i] >= 'A' && p[i] <= 'Z') || (p[i] >= 'a' && p[i] <= 'z'))) i++;
             continue;
         }
-        s_ring[s_head++] = p[i];
-        if (s_head == LOG_RING_SIZE) { s_head = 0; s_full = true; }
+        s_ring[s_total++ % LOG_RING_SIZE] = p[i];
     }
 }
 
@@ -60,18 +59,29 @@ void log_ring_init(void) {
     s_prev = esp_log_set_vprintf(log_vprintf);
 }
 
-size_t log_ring_copy(char *out, size_t cap) {
-    if (!s_mx || !cap || xSemaphoreTake(s_mx, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
-    size_t len = s_full ? LOG_RING_SIZE : s_head;
-    size_t start = s_full ? s_head : 0;
-    size_t skip = 0;
-    if (s_full) {   /* le plus ancien message est coupe : on repart a la ligne suivante */
-        while (skip < len && s_ring[(start + skip) % LOG_RING_SIZE] != '\n') skip++;
-        if (skip < len) skip++;
+/* Premier octet encore present (anneau verrouille). */
+static uint32_t oldest(void) { return s_total > LOG_RING_SIZE ? s_total - LOG_RING_SIZE : 0; }
+
+uint32_t log_ring_span(uint32_t *begin) {
+    *begin = 0;
+    if (!s_mx || xSemaphoreTake(s_mx, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    uint32_t b = oldest(), end = s_total;
+    if (b) {   /* le plus ancien message est coupe : on repart a la ligne suivante */
+        while (b < end && s_ring[b % LOG_RING_SIZE] != '\n') b++;
+        if (b < end) b++;
     }
-    size_t n = len - skip;
-    if (n > cap) { skip += n - cap; n = cap; }
-    for (size_t i = 0; i < n; i++) out[i] = s_ring[(start + skip + i) % LOG_RING_SIZE];
     xSemaphoreGive(s_mx);
+    *begin = b;
+    return end;
+}
+
+size_t log_ring_read(uint32_t *pos, uint32_t end, char *out, size_t cap) {
+    if (!s_mx || !cap || xSemaphoreTake(s_mx, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    if (*pos < oldest()) *pos = oldest();   /* ecrase pendant l'envoi : on saute au plus ancien restant */
+    size_t n = *pos < end ? end - *pos : 0;
+    if (n > cap) n = cap;
+    for (size_t i = 0; i < n; i++) out[i] = s_ring[(*pos + i) % LOG_RING_SIZE];
+    xSemaphoreGive(s_mx);
+    *pos += n;
     return n;
 }

@@ -50,7 +50,8 @@ for f in ../boards/*.json; do
   bdir="build-test-$board"
   echo ">> build $board ($target)"
   rm -rf "$bdir"
-  idf.py -B "$bdir" set-target "$target" >/dev/null
+  # -DBOARD des set-target : le sdkconfig nait avec le fragment de CETTE carte (gen_board.py --sdkconfig).
+  idf.py -B "$bdir" -DBOARD="$board" set-target "$target" >/dev/null
   idf.py -B "$bdir" -DBOARD="$board" build >/dev/null
   cp "$bdir/openprofalux.bin" "$REL/openprofalux-$board-$LABEL.bin"
   idf.py -B "$bdir" merge-bin -o "$REL/openprofalux-$board-$LABEL-full.bin" >/dev/null
