@@ -2178,7 +2178,7 @@ static volatile bool s_upd_auto = true;
 static TaskHandle_t  s_upd_task = NULL;        /* non NULL = une verification tourne */
 static portMUX_TYPE  s_upd_mux = portMUX_INITIALIZER_UNLOCKED;
 static esp_timer_handle_t s_upd_timer = NULL;
-#define UPD_STACK       6144                    /* client HTTPS + lecture par morceaux (ota.c) */
+#define UPD_STACK       5120                    /* client HTTPS + lecture par morceaux (ota.c) : 4480 o mesures sur l'ATOM le 2026-11-14 */
 #define UPD_FIRST_US    (30LL * 1000000)        /* laisse WiFi + MQTT monter */
 #define UPD_PERIOD_US   (6LL * 3600 * 1000000)  /* 6 h (64 bits : pas le piege de pdMS_TO_TICKS) */
 void shutters_set_update_auto(bool on) { s_upd_auto = on; ESP_LOGI(TAG, "verification MAJ auto %s", on ? "ON" : "OFF"); }
@@ -2191,6 +2191,9 @@ static void update_check_task(void *arg) {
     (void)arg;
     ota_check_github();
     if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
+    /* Pile reellement consommee : UPD_STACK se regle sur ce releve (une ligne toutes les 6 h). */
+    ESP_LOGI(TAG, "verification MAJ : pile %u/%u o utilises", (unsigned)(UPD_STACK - uxTaskGetStackHighWaterMark(NULL)),
+             (unsigned)UPD_STACK);
     taskENTER_CRITICAL(&s_upd_mux);
     s_upd_task = NULL;
     taskEXIT_CRITICAL(&s_upd_mux);
