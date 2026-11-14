@@ -12,6 +12,7 @@
 #include <nvs.h>
 #include <cJSON.h>
 #include <esp_timer.h>
+#include "tls_pool.h"
 
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_mqtt = NULL;
@@ -26,6 +27,19 @@ static char s_avail_topic[64];   /* topic de disponibilite HA (LWT) : openprofal
  * et commandes comprises. 5120 en gardent ~1,9 Ko. */
 #define MQTT_TASK_STACK 5120
 static char *s_tls_ca = NULL, *s_tls_cert = NULL, *s_tls_key = NULL;
+
+/* Tour de poignee de main TLS (tls_pool.h) : pris juste avant la connexion (BEFORE_CONNECT,
+ * distribue dans la tache du client, avant la connexion TCP et TLS), rendu une seule fois au
+ * premier evenement qui la conclut (CONNECTED, ERROR ou DISCONNECTED) ou a l'arret du client.
+ * Seulement en mqtts:// : la verification GitHub ne negocie alors pas en meme temps. */
+static bool s_local_tls = false, s_turn = false;
+static void turn_take(void) { if (s_local_tls && !s_turn) s_turn = tls_turn_take(TLS_TURN_WAIT_MS); }
+static void turn_give(void) { if (s_turn) { s_turn = false; tls_turn_give(); } }
+
+/* File interne d'esp-mqtt (QoS 1 en attente d'accuse, et tout ce qui est publie broker coupe)
+ * bornee : sans limite, une coupure longue l'entasse jusqu'a epuiser la memoire. Au-dela,
+ * esp_mqtt_client_publish rend -2 et le message est perdu, ce qui vaut mieux qu'un boitier muet. */
+#define OUTBOX_BUDGET 6144
 
 /* Reconnexion espacee : 10 s, puis 20, 40, 80, et 2 min au plus ; 10 s des qu'une
  * connexion reussit. La reconnexion automatique d'esp-mqtt retentait toutes les 10 s
@@ -89,7 +103,11 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
     (void)arg; (void)base;
     esp_mqtt_event_handle_t evt = event_data;
     switch (evt->event_id) {
+        case MQTT_EVENT_BEFORE_CONNECT:
+            turn_take();
+            break;
         case MQTT_EVENT_CONNECTED:
+            turn_give();
             ESP_LOGI(TAG, "Connected to broker");
             s_connected = true;
             s_retry_ms = MQTT_RETRY_MIN_MS;
@@ -110,6 +128,7 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             if (s_hdl.on_connected) s_hdl.on_connected();   /* -> publie la decouverte HA (vraie connexion) */
             break;
         case MQTT_EVENT_DISCONNECTED:
+            turn_give();
             s_connected = false;
             if (s_retry_timer) {
                 ESP_LOGW(TAG, "MQTT deconnecte : nouvel essai dans %u s", (unsigned)(s_retry_ms / 1000));
@@ -125,6 +144,7 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             handle_incoming(evt->topic, evt->topic_len, evt->data, evt->data_len);
             break;
         case MQTT_EVENT_ERROR:
+            turn_give();
             /* Sur un echec de transport/TLS, on remonte la cause exacte du handshake :
              * esp_tls_cert_verify_flags (certificat refuse) et esp_tls_stack_err (mbedTLS). */
             if (evt->error_handle && evt->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
@@ -219,6 +239,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
         snprintf(s_uri, sizeof(s_uri), "%s", broker_uri ? broker_uri : "");
     esp_mqtt_client_config_t cfg = {
         .task.stack_size = MQTT_TASK_STACK,
+        .outbox.limit = OUTBOX_BUDGET,
         .broker.address.uri = s_uri,
         .credentials.client_id = client_id,
         .credentials.username = user,
@@ -243,7 +264,8 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
      * client (TLS mutuel). Les PEM vivent en NVS, charges ici sur le tas et gardes
      * vivants jusqu'au stop (esp-mqtt peut les referencer apres l'init). */
     free_tls_certs();
-    if (strncmp(s_uri, "mqtts://", 8) == 0) {
+    s_local_tls = strncmp(s_uri, "mqtts://", 8) == 0;
+    if (s_local_tls) {
         s_tls_ca   = read_cert_nvs("ca");
         s_tls_cert = read_cert_nvs("cert");
         s_tls_key  = read_cert_nvs("key");
@@ -274,6 +296,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
 void mqtt_bridge_stop(void) {
     if (s_retry_timer) esp_timer_stop(s_retry_timer);   /* plus de relance d'un client detruit */
     if (s_mqtt) { esp_mqtt_client_stop(s_mqtt); esp_mqtt_client_destroy(s_mqtt); s_mqtt = NULL; }
+    turn_give();   /* client arrete en pleine poignee de main : le tour ne reste pas pris */
     free_tls_certs();
 }
 

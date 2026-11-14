@@ -22,6 +22,8 @@
 #include "radio_profile.h"
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
+#include "tls_pool.h"
+#include "tls_budget.h"
 #include "shutters.h"
 #include "pfx_enrol.h"
 #include "web_ui.h"
@@ -32,8 +34,28 @@
 #include "mdns_name.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
 #include "log_ring.h"
+#include "memprobe.h"
+#include "memprobe.h"
 #include <esp_attr.h>     /* RTC_NOINIT_ATTR */
 #include <esp_system.h>   /* esp_reset_reason */
+#if CONFIG_HEAP_TASK_TRACKING
+#include <esp_heap_task_info.h>   /* build de diagnostic : test/heapdiag/sdkconfig.heapdiag */
+#include <esp_rom_sys.h>
+/* Chaque allocation refusee : taille, fonction et tache, notees ici (contexte de l'allocateur,
+ * donc rien qui alloue), puis le bilan par tache est ecrit par la boucle de fond. Un releve
+ * toutes les 20 s rate les creux de quelques secondes ; celui-ci tombe sur l'instant meme. */
+static volatile uint32_t s_fail_n, s_fail_size;
+static const char *volatile s_fail_fn;
+static char s_fail_task[16];
+static void on_alloc_failed(size_t size, uint32_t caps, const char *fn) {
+    s_fail_n++; s_fail_size = size; s_fail_fn = fn;
+    const char *t = pcTaskGetName(NULL);
+    strlcpy(s_fail_task, t ? t : "?", sizeof(s_fail_task));
+    esp_rom_printf("ALLOCFAIL n=%u size=%u caps=0x%x fn=%s task=%s libre=%u bloc=%u\n", (unsigned)s_fail_n,
+                   (unsigned)size, (unsigned)caps, fn ? fn : "?", s_fail_task,
+                   (unsigned)esp_get_free_heap_size(), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+#endif
 
 static const char *TAG = "main";
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
@@ -91,11 +113,18 @@ static void load_config(void) {
 
 /* Publish state JSON (heartbeat : etat liaison + heap libre) */
 static void publish_state(const char *last_cmd) {
-    char json[192];
+    char json[320];
+    /* reserve TLS : libre, plus bas atteint, debordements (voir tls_pool.h) ; sert a la dimensionner */
+    tls_pool_stats_t tp; tls_pool_stats(&tp);
+    int ring = 0, hops = 0; shutters_mem_sizes(&ring, &hops);   /* tailles deduites de la RAM */
     snprintf(json, sizeof(json),
-        "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u,\"min_heap\":%u,\"pub_drops\":%u}",
+        "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u,\"min_heap\":%u,"
+        "\"tls_pool\":%u,\"tls_free\":%u,\"tls_min\":%u,\"tls_spills\":%u,\"tls_offturn\":%u,"
+        "\"ring\":%d,\"hops_cap\":%d,\"pub_drops\":%u,\"up_s\":%u}",
         last_cmd, wifi_bridge_rssi(), (unsigned)esp_get_free_heap_size(),
-        (unsigned)esp_get_minimum_free_heap_size(), (unsigned)shutters_pub_dropped());
+        (unsigned)esp_get_minimum_free_heap_size(),
+        (unsigned)tp.size, (unsigned)tp.free_now, (unsigned)tp.free_min, (unsigned)tp.spills, (unsigned)tls_turn_misses(),
+        ring, hops, (unsigned)shutters_pub_dropped(), (unsigned)(esp_timer_get_time() / 1000000));
     mqtt_pub_state(s_device_name, json);
 }
 
@@ -156,6 +185,10 @@ static void on_wifi_back(void) {   /* appele depuis la tache d'evenements : on n
 
 void app_main(void) {
     log_ring_init();   /* journal de l'interface web : avant le premier message */
+    memprobe("boot-debut");
+#if CONFIG_HEAP_TASK_TRACKING
+    heap_caps_register_failed_alloc_callback(on_alloc_failed);
+#endif
     ESP_LOGI(TAG, "╔══════════════════════════════════════════╗");
     ESP_LOGI(TAG, "║ OpenProfalux v%s : target=" TARGET_NAME, esp_app_get_description()->version);
     ESP_LOGI(TAG, "╚══════════════════════════════════════════╝");
@@ -171,9 +204,19 @@ void app_main(void) {
 
     /* 1b. OTA (retour automatique : l'image en essai est validee plus bas apres ~60 s) */
     ota_init();
+    memprobe("boot-nvs-ota");
 
     /* 2. Config */
     load_config();
+    /* Reserve TLS prise d'un bloc des la configuration connue, avant que le reste du demarrage
+     * ne morcelle la memoire, et a la taille de CE boitier (tls_pool_need). Un mqtts choisi en
+     * cours de route deborde sur le tas jusqu'au redemarrage, et se compte. */
+    {
+        bool local_tls  = strncmp(s_mqtt_uri, "mqtts://", 8) == 0;
+        bool local_mtls = local_tls && mqtt_cert_len("cert") && mqtt_cert_len("key");
+        tls_pool_init(tls_pool_need(local_tls, local_mtls, false, s_upd_auto));
+    }
+    memprobe("boot-reserve-tls");
     /* Nom mDNS (mdns_name.h), decide AVANT le Wi-Fi : un boitier neuf demarre sans Wi-Fi (point
      * d'acces), et c'est a ce premier demarrage que son nom a suffixe doit etre fige. Nom choisi
      * par l'utilisateur, sinon le nom fige (cfg/mdns_host) : openprofalux pour un boitier deja
@@ -221,8 +264,10 @@ void app_main(void) {
     cc1101_rx_probe();   /* sonde de bruit RX au boot (comparaison module/antenne) */
 
     /* 4c. Modele cover + arbitre radio (RX permanent gere en interne) */
+    memprobe("boot-radio");
     shutters_set_update_auto(s_upd_auto);   /* avant shutters_init : la 1re verification en tient compte */
     shutters_init();
+    memprobe("boot-volets");
     pfx_enrol_init();   /* identite virtuelle 0x067 (apprentissage sans telecommande, experimental) */
     if (s_log_frames) shutters_set_log_frames(true);
     shutters_set_mqtt_obey(s_mqtt_obey);   /* obeir aux ordres MQTT (defaut oui ; coupe = carte secondaire) */
@@ -270,6 +315,7 @@ void app_main(void) {
     }
 
     /* 5. Reseau : Ethernet filaire d'abord (si la carte en declare), sinon Wi-Fi. */
+    memprobe("boot-avant-wifi");
     wifi_bridge_init();
 #if BOARD_HAS_ETHERNET
     wifi_bridge_start_eth();
@@ -298,6 +344,7 @@ void app_main(void) {
     }
 
     /* 5b. mDNS (pour l'auto-decouverte du broker MQTT depuis l'UI) */
+    memprobe("boot-wifi");
     if (wifi_bridge_is_connected()) {
         if (mdns_init() == ESP_OK) {
             mdns_hostname_set(wifi_bridge_hostname());
@@ -320,7 +367,9 @@ void app_main(void) {
     }
 
     /* 5c. UI web embarquee (config Wi-Fi/MQTT, apprentissage, OTA...) */
+    memprobe("boot-mdns");
     web_ui_start();
+    memprobe("boot-web");
 
     /* 6. MQTT */
     if (wifi_bridge_is_connected() && strlen(s_mqtt_uri) > 0) {
@@ -338,6 +387,7 @@ void app_main(void) {
                           strlen(s_mqtt_pass) ? s_mqtt_pass : NULL);
     }
 
+    memprobe("boot-mqtt");
     ESP_LOGI(TAG, "PRET (%s). Pilotage via HA/MQTT + UI web. Capture/replay actif.", TARGET_NAME);
 
     /* Boucle de fond : heartbeat MQTT (~60 s) + validation de l'image OTA apres ~60 s sans
@@ -346,9 +396,35 @@ void app_main(void) {
      * module radio et la tache shutters. */
     uint32_t hb = 0; bool ota_marked = false;
     while (1) {
-        if (++hb >= 1200) { hb = 0; publish_state("HEARTBEAT");
+        if (++hb >= 1200) { hb = 0;
+            /* Premier battement (~60 s) : tout tourne, la RAM libre est representative. Le ring RF
+             * et les sets de hops prennent leur taille d'apres elle (shutters_size_from_ram). */
+            memprobe("battement-avant");
+            shutters_size_from_ram();
+            memprobe("battement-anneau");
+            publish_state("HEARTBEAT");
             if (!ota_marked) { ota_mark_valid(); ota_marked = true; }
         }
+#if CONFIG_HEAP_TASK_TRACKING
+        /* Build de diagnostic : ce que chaque tache tient sur le tas, toutes les 20 s, sur la
+         * console (pas sur le reseau, qui est justement ce qui tombe quand la memoire manque). */
+        static uint32_t fail_seen;
+        if (s_fail_n != fail_seen) {   /* un refus depuis le dernier tour : bilan de l'instant */
+            fail_seen = s_fail_n;
+            printf("HEAPDIAG refus n=%u size=%u fn=%s task=%s\n", (unsigned)s_fail_n, (unsigned)s_fail_size,
+                   s_fail_fn ? s_fail_fn : "?", s_fail_task);
+            heap_caps_print_all_task_stat_overview(stdout);
+        }
+        if (hb % 400 == 0) {
+            printf("HEAPDIAG t=%u libre=%u min=%u bloc=%u\n", (unsigned)(esp_timer_get_time() / 1000000),
+                   (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
+                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+            heap_caps_print_all_task_stat_overview(stdout);
+        }
+#endif
+        memprobe_watch();
+        memtrace_poll();
+        memprobe_stacks();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

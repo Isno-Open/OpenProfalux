@@ -23,7 +23,8 @@
 #include <driver/rmt_encoder.h>
 #include <esp_rom_gpio.h>      /* rendre GDO0 au GPIO apres une emission RMT */
 #include "soc/gpio_sig_map.h"  /* SIG_GPIO_OUT_IDX */
-#include <esp_heap_caps.h>   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
+#include <esp_heap_caps.h>
+#include "memprobe.h"   /* heap_caps_aligned_alloc : buffer RX DMA-capable aligne (S3) */
 #include "keeloq_decode.h"   /* decodeur OOK HCS/KeeLoq, unite pure testable sur hote */
 #include <math.h>            /* fabs/lround : mapping debit/bande passante -> registres */
 
@@ -628,12 +629,14 @@ out:
     esp_rom_gpio_connect_out_signal(CC1101_PIN_GDO0, SIG_GPIO_OUT_IDX, false, false);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
     if (cc1101_capture_init() != 0) ESP_LOGE(TAG, "TX RMT : reception non recreee");
+    memprobe("tx-rmt-fin");
     return rc == -2 ? 0 : rc;
 }
 
 /* Rejoue une trame brute (chaine de bits '0'/'1' en ordre du fil) en OOK :
  * preambule + entete + symboles HCS30x. Sert au replay d'une trame captee. */
 int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
+    memprobe("tx-debut");
     /* UNE seule session TX (un STX, FS_AUTOCAL calibre le PLL), puis `repeats` trames dos-a-dos
      * = une vraie rafale de telecommande. Evite un STX/calibration par trame et rend l'emission
      * plus fiable (le bit-bang reste sensible a la preemption, d'ou plusieurs trames). */

@@ -23,6 +23,12 @@
 
 /* Charge la config NVS + demarre la tache de suivi position. */
 void shutters_init(void);
+/* Tailles du ring RF et des sets de hops, DEDUITES de la RAM libre quand tout tourne (reseau,
+ * MQTT, serveur web) : a appeler une fois, au premier battement. Recharge alors le ring de la
+ * flash a sa taille. Avant cet appel, un petit ring garde les trames du demarrage. */
+void shutters_size_from_ram(void);
+/* Tailles retenues (publiees avec le battement). */
+void shutters_mem_sizes(int *ring, int *hops_cap);
 
 /* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
