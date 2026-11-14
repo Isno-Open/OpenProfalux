@@ -286,7 +286,8 @@ static void handle_incoming(const char *topic, int tlen, const char *data, int d
         || strncmp(t, TOPIC_BASE "/listen/", strlen(TOPIC_BASE "/listen/")) == 0   /* set + state (restauration au boot) */
         || strncmp(t, TOPIC_BASE "/counter/", strlen(TOPIC_BASE "/counter/")) == 0   /* synchro compteur inter-cartes */
         || strncmp(t, TOPIC_BASE "/busy/", strlen(TOPIC_BASE "/busy/")) == 0         /* verrou d'emission inter-cartes */
-        || strncmp(t, TOPIC_BASE "/update/", strlen(TOPIC_BASE "/update/")) == 0) {  /* install MAJ via HA */
+        || strncmp(t, TOPIC_BASE "/update/", strlen(TOPIC_BASE "/update/")) == 0     /* install MAJ via HA */
+        || strcmp(t, TOPIC_BASE "/ota/rollback") == 0) {                              /* retour arriere (portail) */
         if (s_hdl.on_message) s_hdl.on_message(t, data, dlen);
         return;
     }
