@@ -1,0 +1,6 @@
+# Build de diagnostic par tracage des allocations (voir main/memprobe.h, build-test.sh
+# OPF_SDKCONFIG_EXTRA). Contrairement a sdkconfig.heapdiag, le tas garde sa taille normale :
+# seul le tableau d'enregistrements (statique) et les sondes coutent, et seulement pendant
+# une fenetre de tracage. Les appelants (6 niveaux : les 3 premiers sont heap_caps_malloc, heap_caps_malloc_default et malloc) se traduisent avec addr2line.
+CONFIG_HEAP_TRACING_STANDALONE=y
+CONFIG_HEAP_TRACING_STACK_DEPTH=6

@@ -23,6 +23,12 @@
 
 /* Charge la config NVS + demarre la tache de suivi position. */
 void shutters_init(void);
+/* Tailles du ring RF et des sets de hops, DEDUITES de la RAM libre quand tout tourne (reseau,
+ * MQTT, serveur web) : a appeler une fois, au premier battement. Recharge alors le ring de la
+ * flash a sa taille. Avant cet appel, un petit ring garde les trames du demarrage. */
+void shutters_size_from_ram(void);
+/* Tailles retenues (publiees avec le battement). */
+void shutters_mem_sizes(int *ring, int *hops_cap);
 
 /* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
@@ -95,6 +101,7 @@ char *shutters_status_json(void);
 /* Publie la discovery HA (1 cover par volet) + l'etat courant. A appeler apres connexion MQTT. */
 void shutters_mqtt_announce(const char *device);
 void shutters_mqtt_lost(void);   /* broker perdu -> statut hors ligne */
+void shutters_cloud_resync(void);   /* cloud (re)connecte : republie description + etat de chaque appareil */
 /* Export dataset slide : par telecommande, ses trames distinctes {hop, bouton, t} (tout brut). */
 typedef struct { uint32_t hop; uint32_t t; uint8_t button; } dframe_t;
 int  shutters_remote_count(void);

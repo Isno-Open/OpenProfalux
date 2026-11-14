@@ -6,6 +6,11 @@
 # ESP-IDF lit ce fichier une premiere fois en « expansion precoce » dans un autre
 # processus CMake : on n'engendre qu'a la vraie configuration.
 set(BOARD_JSON "${CMAKE_CURRENT_LIST_DIR}/../../boards/${BOARD}.json")
+# BOARD_FILE : une carte HORS de boards/, que ni la CI ni les releases ne voient. Sert a la
+# carte de simulation QEMU (firmware/test/qemu/board.json), qui ne doit jamais etre publiee.
+if(DEFINED BOARD_FILE AND NOT "${BOARD_FILE}" STREQUAL "")
+    set(BOARD_JSON "${BOARD_FILE}")
+endif()
 set(BOARD_HDR_DIR "${CMAKE_BINARY_DIR}/board")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(NOT EXISTS "${BOARD_JSON}")
@@ -51,6 +56,10 @@ idf_component_register(
         "cc1101.c"
         "wifi_bridge.c"
         "mqtt_bridge.c"
+        "tls_pool.c"
+        "tls_budget.c"
+        "memprobe.c"
+        "github_tag.c"
         "mqtt_tls_policy.c"
         "shutters.c"
         "remote_battery.c"
@@ -73,11 +82,13 @@ idf_component_register(
         "req_guard.c"
         "ota.c"
         "ota_rollback.c"
+        "cloud_topic.c"
+        "cover_attrs.c"
+        "cloud_enroll.c"
         "radio.c"
         "rf_capture.c"
         "radio_profile.c"
         "log_ring.c"
-        "github_tag.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"

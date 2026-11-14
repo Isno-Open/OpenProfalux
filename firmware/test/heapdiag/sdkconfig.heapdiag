@@ -1,0 +1,5 @@
+# Build de diagnostic memoire (voir build-test.sh, OPF_SDKCONFIG_EXTRA).
+# Chaque allocation retient la tache qui l'a faite : main.c ecrit alors sur la console, toutes
+# les 20 s, ce que chaque tache tient sur le tas. Sert a trouver qui prend la memoire quand un
+# broker est injoignable. Cout : quelques octets par allocation, donc pas pour une release.
+CONFIG_HEAP_TASK_TRACKING=y

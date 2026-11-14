@@ -7,7 +7,8 @@
 # devient "<prochaine release>-<label>", ex. 0.2.12-test9, affichee au boot et dans l'UI.
 #
 # Usage :
-#   ./build-test.sh <label>        # le label doit contenir "test", ex. test9
+#   ./build-test.sh <label>                # toutes les cartes ; le label doit contenir "test", ex. test9
+#   ./build-test.sh <label> <carte>...     # seulement ces cartes (noms de boards/), ex. m5-atom-lite
 #
 # Produit dans ./release-test/ :
 #   openprofalux-<carte>-<label>.bin        app seule, pour l'onglet OTA du boitier / HA
@@ -38,20 +39,41 @@ if ! command -v idf.py >/dev/null; then
   command -v docker >/dev/null || { echo "ni idf.py ni docker : active l'environnement ESP-IDF v6.1"; exit 1; }
   echo ">> idf.py absent, on passe par ${IDF_IMAGE:-espressif/idf:v6.1}"
   exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_VERSION="$FULL" \
+    -e OPF_SDKCONFIG_EXTRA="${OPF_SDKCONFIG_EXTRA:-}" \
     -v "$(cd .. && pwd)":/project -w /project/firmware \
     "${IDF_IMAGE:-espressif/idf:v6.1}" bash build-test.sh "$@"
 fi
 
 REL="$(pwd)/release-test"; mkdir -p "$REL"
 echo ">> version embarquee : $FULL"
-for f in ../boards/*.json; do
+# Cartes demandees apres le label, sinon toutes : un essai sur UN boitier ne construit que lui.
+shift
+if [ "$#" -gt 0 ]; then
+  BOARDS=()
+  for b in "$@"; do
+    [ -f "../boards/$b.json" ] || { echo "carte inconnue : $b (voir ../boards/)"; exit 1; }
+    BOARDS+=("../boards/$b.json")
+  done
+else
+  BOARDS=(../boards/*.json)
+fi
+# Fragment de configuration en plus de sdkconfig.defaults, pour une build de diagnostic
+# (ex. OPF_SDKCONFIG_EXTRA=test/heapdiag/sdkconfig.heapdiag, ou plusieurs : a;b). Vide = build normale.
+DEFAULTS_ARG=""
+if [ -n "${OPF_SDKCONFIG_EXTRA:-}" ]; then
+  IFS=';' read -ra FRAGS <<< "$OPF_SDKCONFIG_EXTRA"   # plusieurs fragments : a;b
+  for frag in "${FRAGS[@]}"; do [ -f "$frag" ] || { echo "fragment introuvable : $frag"; exit 1; }; done
+  DEFAULTS_ARG="-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;$OPF_SDKCONFIG_EXTRA"
+  echo ">> configuration en plus : $OPF_SDKCONFIG_EXTRA"
+fi
+for f in "${BOARDS[@]}"; do
   board="$(basename "$f" .json)"
   target="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcu'])" "$f")"
   bdir="build-test-$board"
   echo ">> build $board ($target)"
   rm -rf "$bdir"
   # -DBOARD des set-target : le sdkconfig nait avec le fragment de CETTE carte (gen_board.py --sdkconfig).
-  idf.py -B "$bdir" -DBOARD="$board" set-target "$target" >/dev/null
+  idf.py -B "$bdir" -DBOARD="$board" ${DEFAULTS_ARG:+"$DEFAULTS_ARG"} set-target "$target" >/dev/null
   idf.py -B "$bdir" -DBOARD="$board" build >/dev/null
   cp "$bdir/openprofalux.bin" "$REL/openprofalux-$board-$LABEL.bin"
   idf.py -B "$bdir" merge-bin -o "$REL/openprofalux-$board-$LABEL-full.bin" >/dev/null

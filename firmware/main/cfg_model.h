@@ -29,15 +29,7 @@ typedef enum {
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
 } volet_proto_t;
 
-/* Type d'appareil : ce qu'on PILOTE, orthogonal au protocole d'emission. Il decide le vocabulaire
- * de commande et les libelles de l'UI (un volet monte/descend, un portail ouvre/ferme), pas la
- * facon d'emettre. 0 = volet par defaut : les appareils deja persistes, sans ce champ, restent des
- * volets. On ne declare QUE les types qu'on pilote : l'eclairage s'ajoutera le jour ou on commande
- * une lumiere (ajout seul, sans casser le NVS). */
-typedef enum {
-    TYPE_VOLET   = 0,
-    TYPE_PORTAIL = 1,
-} dev_type_t;
+#include "dev_type.h"   /* dev_type_t : type d'appareil (en-tete sans dependance, teste sur PC) */
 
 /* Tri-etat d'une option d'emission PAR APPAREIL (bit de repetition, RMT). 0 = heriter du defaut
  * (profil, puis firmware) ; on force explicitement ensuite. La valeur 0 est la sentinelle "heriter"

@@ -61,6 +61,7 @@
     <button class="tab" data-t="remotes"><span>📱</span>Appareils</button>
     <button class="tab" data-t="wifi"><span>📶</span>Wi-Fi</button>
     <button class="tab" data-t="mqtt"><span>📡</span>MQTT</button>
+    <button class="tab" data-t="cloud"><span>☁️</span>Cloud</button>
     <button class="tab" data-t="ota"><span>⬆️</span>OTA<b class="tab-badge" id="ota-badge" title="Mise à jour disponible" aria-label="mise à jour disponible" hidden></b></button>
     <button class="tab" data-t="sys"><span>⚙️</span>Système</button>
     <button class="tab" data-t="support"><span>📨</span>Support</button>
@@ -299,6 +300,22 @@
       </div>
     </section>
 
+    <!-- Cloud -->
+    <section class="panel" data-p="cloud">
+      <div class="card">
+        <h2>Cloud</h2>
+        <p class="sub">Pilotage à distance via le cloud ISNO, <b>en plus</b> du MQTT local (qui n'est pas touché). Le certificat est récupéré à l'appairage, rien à coller à la main.</p>
+        <div class="statline" id="cloud-status"><span class="dot"></span><b>…</b></div>
+        <div class="field"><label>Serveur</label><input id="cloud-server" placeholder="https://app.isno.fr"></div>
+        <div class="field"><label>Code d'appairage</label><input id="cloud-code" placeholder="depuis votre compte sur app.isno.fr"></div>
+        <div class="row end"><button id="cloud-pair" class="btn primary">Appairer</button></div>
+        <div class="row" id="cloud-actions" style="margin-top:12px;gap:8px;justify-content:flex-end" hidden>
+          <button id="cloud-toggle" class="btn ghost">Couper</button>
+          <button id="cloud-forget" class="btn ghost">Oublier</button>
+        </div>
+      </div>
+    </section>
+
     <!-- OTA -->
     <section class="panel" data-p="ota">
       <div class="card">
@@ -465,8 +482,8 @@
     <!-- Support : rapport de capture radio. Onglet a part entiere, sorti des sous-onglets Systeme. -->
     <section class="panel" data-p="support">
       <div class="card">
-        <h2>Rapport de capture radio</h2>
-        <p class="sub">Envoie-nous une capture : pour un <b>debug</b> (ça ne pilote pas), ou pour faire <b>ajouter une nouvelle marque</b>. Ton email sert au suivi, il <b>n'apparaît jamais</b> dans le rapport public.</p>
+        <h2>Capturer et envoyer un rapport</h2>
+        <p class="sub">Presse ta télécommande plusieurs fois pendant 15 s pour m'envoyer quelques trames, et j'essaierai de faire supporter ta marque (ou de comprendre ton bug). La capture <b>ne pilote rien</b>. Ton email sert juste au suivi, il <b>n'apparaît jamais</b> dans le rapport public.</p>
         <div class="field"><label>Capter ta télécommande</label>
           <div class="row" id="rep-cap-btns"></div>
           <p class="hint" id="rep-cap-status">Choisis la bande, puis presse ta télécommande une ou plusieurs fois pendant 15 s. Chaque pression distincte est captée ici, sans passer par l'onglet RF.</p>

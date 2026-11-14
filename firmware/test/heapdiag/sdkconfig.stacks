@@ -1,0 +1,2 @@
+# Build de diagnostic : marge de pile de chaque tache (main/memprobe.c, memprobe_stacks).
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y

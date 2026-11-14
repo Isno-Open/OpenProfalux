@@ -24,6 +24,22 @@
 int  mqtt_bridge_start(const char *broker_uri, const char *client_id, const char *user, const char *pass);
 void mqtt_bridge_stop(void);
 
+/* ── Connexion CLOUD additive (broker ISNO en mqtts mTLS), EN PLUS du local, qui reste INTACT. ──
+ * Un 2e client MQTT. Les topics cloud sont prefixes par le device_id (openprofalux/{device_id}/...)
+ * pour coller a l'ACL du broker. La publication des volets (mqtt_pub_*) part automatiquement sur les
+ * DEUX connexions, avec le prefixe pose cote cloud ; les commandes cloud recues sont ramenees a la
+ * forme locale et traitees par le meme chemin. cloud_uri vide => cloud non demarre (local seul).
+ * Certificats cloud via mqtt_cert_write avec which = "cloud_ca" | "cloud_cert" | "cloud_key". */
+int  mqtt_cloud_start(const char *cloud_uri, const char *device_id);
+void mqtt_cloud_stop(void);
+bool mqtt_cloud_is_connected(void);
+/* Demandes faites depuis le serveur web : executees par une tache dediee, jamais dans le
+ * gestionnaire HTTP (l'arret d'un client y figeait le serveur). false = demande refusee. */
+bool mqtt_cloud_request_start(const char *cloud_uri, const char *device_id);
+bool mqtt_cloud_request_stop(void);
+/* Republie « online » sur les connexions etablies (battement : filet contre un ancien testament). */
+void mqtt_pub_presence(void);
+
 /* Certificats TLS pour mqtts, stockes en SPIFFS (partition storage, 960 Ko) et non en
  * NVS : la NVS de 16 Ko est deja trop juste pour la config des volets, exactement comme
  * pour le ring de trames. which = "ca" (autorite du broker) | "cert" (client) | "key"
@@ -37,6 +53,11 @@ int  mqtt_pub_state(const char *device_name, const char *json);
 int  mqtt_pub_system_status(void);
 /* Publish générique (topic libre). qos/retain passés tels quels. */
 int  mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain);
+/* Pile restee libre au plus bas (octets) des taches d'envoi par file. */
+uint32_t mqtt_outbox_stack_free(void);
+/* Coupures du cloud (connecte -> deconnecte) et erreurs de connexion, depuis le demarrage. */
+uint32_t mqtt_cloud_drops(void);
+uint32_t mqtt_cloud_errors(void);
 
 /* Callback registered by main - dispatched based on topic */
 typedef struct {
@@ -44,6 +65,7 @@ typedef struct {
     void (*on_ota_pull)(const char *url);                             /* openprofalux/ota/pull */
     void (*on_connected)(void);                                       /* broker connecte : publier la decouverte */
     void (*on_disconnected)(void);                                    /* broker perdu : statut hors ligne */
+    void (*on_cloud_connected)(void);                                 /* cloud connecte : republier l'etat des appareils */
 } mqtt_handlers_t;
 
 int  mqtt_bridge_set_handlers(const mqtt_handlers_t *h);

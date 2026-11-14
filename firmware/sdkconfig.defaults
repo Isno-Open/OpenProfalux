@@ -56,9 +56,14 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+# Taille des enregistrements TLS sortants et budgets reseau : selon la memoire de la carte,
+# dans le fragment engendre depuis boards/<carte>.json (tools/gen_board.py --sdkconfig).
+# Allocateur de mbedTLS fourni par le firmware (main/tls_pool.c) : reserve TLS prise d'un bloc
+# au demarrage (TLS_POOL_BYTES) ; ce qui la depasse retombe sur le tas, et se compte.
+CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC=y
 
-# Pile de mDNS, reglee sur la marge mesuree au pire cas sur l'ATOM Lite le 2026-11-14 (HA
-# mqtts + ecoute permanente + journal web toutes les 2 s + verification GitHub + commandes
-# STOP) : 2372 o jamais touches sur 4096. La pile du client MQTT, elle, se regle dans
-# main/mqtt_bridge.c (MQTT_TASK_STACK).
+# Pile de mDNS, reglee sur la marge mesuree au pire cas sur l'ATOM Lite le 2026-11-14 (build
+# test/heapdiag/sdkconfig.stacks : HA mqtts + cloud + ecoute permanente + journal web toutes
+# les 2 s + verification GitHub + commandes STOP) : 2372 o jamais touches sur 4096. Les piles
+# des clients MQTT, elles, se reglent dans main/mqtt_bridge.c (MQTT_TASK_STACK).
 CONFIG_MDNS_TASK_STACK_SIZE=3072

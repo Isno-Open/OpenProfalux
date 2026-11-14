@@ -11,6 +11,7 @@
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
+#include "cloud_enroll.h"      /* cloud_bundle_ok : validation du bundle d'appairage (testée) */
 #include "wifi_bridge.h"
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
@@ -1704,7 +1705,7 @@ static esp_err_t h_session(httpd_req_t *r) {
  * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
-#define MAX_ROUTES      64
+#define MAX_ROUTES      72
 #define MAX_OPEN_ROUTES 12
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
@@ -1798,6 +1799,140 @@ static esp_err_t h_report(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* ─── Controle cloud (app.isno.fr) : pairing, statut, toggle, oubli. ────────────────────────────
+ * Le pairing appelle le serveur cloud /api/enroll avec un CODE, recoit le bundle (cert device signe
+ * par la CA du broker), ECRIT les certs cloud (jamais colles a la main), pose cloud_uri/cloud_dev en
+ * NVS et demarre le pont cloud. Le MQTT LOCAL n'est JAMAIS touche (pont additif). Re-pairer apres un
+ * reflash : le cert vit dans le compte, pas dans le boitier. */
+#ifndef CLOUD_DEFAULT_SERVER
+#define CLOUD_DEFAULT_SERVER "https://app.isno.fr"
+#endif
+
+static esp_err_t h_cloud_status(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char uri[160] = "", dev[40] = ""; uint8_t on = 1;
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = sizeof uri; nvs_get_str(h, "cloud_uri", uri, &sz);
+        sz = sizeof dev; nvs_get_str(h, "cloud_dev", dev, &sz);
+        nvs_get_u8(h, "cloud_on", &on);
+        nvs_close(h);
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddBoolToObject(o, "paired", uri[0] != 0);
+    cJSON_AddBoolToObject(o, "enabled", on != 0);
+    cJSON_AddBoolToObject(o, "connected", mqtt_cloud_is_connected());
+    cJSON_AddStringToObject(o, "server", uri);
+    cJSON_AddStringToObject(o, "device_id", dev);
+    char *s = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+    httpd_resp_sendstr(r, s ? s : "{\"ok\":0}"); free(s);
+    return ESP_OK;
+}
+
+/* POST {code, server?} : echange le code de pairing contre le bundle et provisionne le cloud. */
+static esp_err_t h_cloud_pair(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (!body) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"body\"}");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"json\"}");
+    const char *code = jstr(j, "code"), *server = jstr(j, "server");
+    if (!code || !code[0]) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"code\"}"); }
+    char url[200], payload[80];
+    snprintf(url, sizeof url, "%s/api/enroll", (server && server[0]) ? server : CLOUD_DEFAULT_SERVER);
+    snprintf(payload, sizeof payload, "{\"code\":\"%s\"}", code);
+    cJSON_Delete(j);
+
+    esp_http_client_config_t cfg = {
+        .url = url, .method = HTTP_METHOD_POST,
+        .crt_bundle_attach = esp_crt_bundle_attach, .timeout_ms = 15000,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"init\"}");
+    esp_http_client_set_header(c, "Content-Type", "application/json");
+    char *resp = NULL; int status = 0;
+    esp_err_t err = esp_http_client_open(c, (int)strlen(payload));
+    if (err == ESP_OK && esp_http_client_write(c, payload, strlen(payload)) >= 0) {
+        esp_http_client_fetch_headers(c);
+        status = esp_http_client_get_status_code(c);
+        resp = malloc(8192);
+        if (resp) {
+            int total = 0, rd;
+            while (total < 8191 && (rd = esp_http_client_read(c, resp + total, 8191 - total)) > 0) total += rd;
+            resp[total] = 0;
+        }
+    }
+    esp_http_client_close(c); esp_http_client_cleanup(c);
+    if (status < 200 || status >= 300 || !resp) {
+        free(resp);
+        char o[64]; snprintf(o, sizeof o, "{\"ok\":0,\"status\":%d,\"err\":\"enroll\"}", status);
+        return httpd_resp_sendstr(r, o);
+    }
+    cJSON *b = cJSON_Parse(resp); free(resp);
+    if (!b) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"resp\"}");
+    const char *dev = jstr(b, "device_id"), *broker = jstr(b, "broker_url");
+    const char *ca = jstr(b, "ca"), *cert = jstr(b, "cert"), *key = jstr(b, "key");
+    if (!cloud_bundle_ok(dev, broker, ca, cert, key)) { cJSON_Delete(b); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"bundle\"}"); }
+    mqtt_cert_write("cloud_ca", ca);
+    mqtt_cert_write("cloud_cert", cert);
+    mqtt_cert_write("cloud_key", key);
+    char devb[40], brob[160];
+    snprintf(devb, sizeof devb, "%s", dev);
+    snprintf(brob, sizeof brob, "%s", broker);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "cloud_uri", brob);
+        nvs_set_str(h, "cloud_dev", devb);
+        nvs_set_u8(h, "cloud_on", 1);
+        nvs_commit(h); nvs_close(h);
+    }
+    cJSON_Delete(b);
+    mqtt_cloud_request_start(brob, devb);   /* redemarre le client avec le nouveau certificat, hors du serveur web */
+    char o[96]; snprintf(o, sizeof o, "{\"ok\":1,\"device_id\":\"%s\"}", devb);
+    return httpd_resp_sendstr(r, o);
+}
+
+/* POST {on} : active ou coupe le cloud sans perdre le cert (le pairing reste). */
+static esp_err_t h_cloud_toggle(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
+    /* « on » est OBLIGATOIRE et booleen : un corps vide ou sans « on » valait « off » et coupait le
+     * cloud sans le vouloir (constate le 2026-11-13). */
+    cJSON *onj = j ? cJSON_GetObjectItem(j, "on") : NULL;
+    if (!cJSON_IsBool(onj)) {
+        if (j) cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "on attendu : true ou false");
+    }
+    int on = cJSON_IsTrue(onj);
+    cJSON_Delete(j);
+    char uri[160] = "", dev[40] = "";
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        size_t sz = sizeof uri; nvs_get_str(h, "cloud_uri", uri, &sz);
+        sz = sizeof dev; nvs_get_str(h, "cloud_dev", dev, &sz);
+        nvs_set_u8(h, "cloud_on", on ? 1 : 0); nvs_commit(h); nvs_close(h);
+    }
+    /* demarrage ou arret faits par la tache de commande du cloud, pas ici */
+    bool queued = (on && uri[0] && dev[0]) ? mqtt_cloud_request_start(uri, dev) : mqtt_cloud_request_stop();
+    char o[64]; snprintf(o, sizeof o, "{\"ok\":%d,\"enabled\":%d}", queued ? 1 : 0, on ? 1 : 0);
+    return httpd_resp_sendstr(r, o);
+}
+
+/* POST : oublie le cloud (stoppe, efface certs + cloud_uri/cloud_dev). */
+static esp_err_t h_cloud_forget(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    mqtt_cloud_request_stop();   /* le client garde ses certificats en memoire : les effacer ici ne le gene pas */
+    mqtt_cert_write("cloud_ca", ""); mqtt_cert_write("cloud_cert", ""); mqtt_cert_write("cloud_key", "");
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, "cloud_uri"); nvs_erase_key(h, "cloud_dev"); nvs_erase_key(h, "cloud_on");
+        nvs_commit(h); nvs_close(h);
+    }
+    return httpd_resp_sendstr(r, "{\"ok\":1}");
+}
+
 /* Enregistre une route PROTEGEE (toutes les routes sous "/api/"). */
 static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
     if (s_nroutes >= MAX_ROUTES) { ESP_LOGE(TAG, "route NON enregistree: %s (table pleine)", uri); return; }
@@ -1833,16 +1968,23 @@ void web_ui_start(void) {
      * connexion au lieu de recycler -> port 80 en connection-refused (MQTT non touche).
      * On recycle la socket la moins recente + un peu plus de sockets. */
     cfg.lru_purge_enable = true;
-    /* Sessions = sockets lwIP - 5 : 3 internes au httpd, 1 pour MQTT (permanent), 1 pour le TLS
-     * de la verification GitHub / l'OTA par URL. Soit 5 avec les 10 sockets par defaut, et pas le
-     * maximum 7 (sockets - 3) : a 7, six sessions navigateur + MQTT epuisaient les 10 sockets,
-     * accept() echouait (errno 23, ENFILE) AVANT la purge LRU, qui n'agit qu'a 7 sessions pleines
-     * -> interface et OTA injoignables tant qu'une page ouverte gardait ses sessions vivantes.
-     * Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne des sessions d'elle-meme. */
-#if CONFIG_LWIP_MAX_SOCKETS < 7
-#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des 5 sockets reserves"
+    /* Sessions = sockets lwIP moins ceux des autres : 3 internes au httpd, 1 par connexion MQTT
+     * (locale et cloud, permanentes), 1 pour le client TLS ponctuel (verification GitHub, OTA par
+     * URL, appairage). Soit 4 avec les 10 sockets par defaut, et pas le maximum 7 (sockets - 3) :
+     * a 7, six sessions navigateur + MQTT epuisaient les 10 sockets, accept() echouait (errno 23,
+     * ENFILE) AVANT la purge LRU, qui n'agit qu'a sessions pleines -> interface et OTA
+     * injoignables tant qu'une page ouverte gardait ses sessions vivantes. La reserve comptait une
+     * seule connexion MQTT : avec le cloud, l'errno 23 est revenu au chevauchement HA + cloud +
+     * GitHub (mesure du 2026-11-14 sur l'ATOM). Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne
+     * des sessions d'elle-meme. */
+#define HTTPD_INTERNAL_SOCKETS 3
+#define MQTT_SOCKETS           2   /* broker local + broker cloud */
+#define TLS_CLIENT_SOCKETS     1   /* GitHub, OTA par URL, appairage : un a la fois (tour TLS) */
+#define RESERVED_SOCKETS (HTTPD_INTERNAL_SOCKETS + MQTT_SOCKETS + TLS_CLIENT_SOCKETS)
+#if CONFIG_LWIP_MAX_SOCKETS < RESERVED_SOCKETS + 2
+#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des sockets reserves"
 #endif
-    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - 5;
+    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - RESERVED_SOCKETS;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }
@@ -1924,5 +2066,9 @@ void web_ui_start(void) {
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
     reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
+    reg(s, "/api/cloud/status", HTTP_GET,  h_cloud_status);   /* controle cloud app.isno.fr */
+    reg(s, "/api/cloud/pair",   HTTP_POST, h_cloud_pair);     /* code de pairing -> bundle + demarrage */
+    reg(s, "/api/cloud/toggle", HTTP_POST, h_cloud_toggle);   /* active/coupe sans perdre le cert */
+    reg(s, "/api/cloud/forget", HTTP_POST, h_cloud_forget);   /* oubli complet */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

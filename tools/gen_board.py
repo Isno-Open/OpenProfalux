@@ -40,6 +40,10 @@ def pick_radio(d):
 # genere l'horloge 50 MHz et la sort (cartes Olimex POE). "ext_in" : horloge
 # fournie par un oscillateur externe (ESP32-GATEWAY/EVB).
 _ETH_CLK_MODE = {"out": "EMAC_CLK_OUT", "ext_in": "EMAC_CLK_EXT_IN"}
+# PHY reconnus. "openeth" : le MAC OpenCores que QEMU emule, pour la carte de simulation
+# (firmware/test/qemu), jamais une carte reelle.
+ETH_PHY_OPENETH = "openeth"
+_ETH_PHYS = ("LAN8720", ETH_PHY_OPENETH)
 
 
 def ethernet_lines(d):
@@ -48,6 +52,18 @@ def ethernet_lines(d):
     eth = d.get("ethernet")
     if not eth:
         return ["", "#define BOARD_HAS_ETHERNET   0"]
+    phy = str(eth.get("phy", "LAN8720"))
+    if phy not in _ETH_PHYS:
+        raise SystemExit("ethernet.phy %r inconnu dans %s (attendu %s)" % (phy, d["id"], "|".join(_ETH_PHYS)))
+    if phy == ETH_PHY_OPENETH:
+        # MAC emule par QEMU : ni broches, ni horloge, ni alimentation de PHY
+        return [
+            "",
+            "/* Ethernet EMULE par QEMU (carte de simulation %s), pas de broche. */" % d["id"],
+            "#define BOARD_HAS_ETHERNET   1",
+            "#define ETH_IS_OPENETH       1",
+            '#define ETH_PHY_MODEL        "%s"' % phy,
+        ]
     mode = str(eth.get("clk_mode", "out"))
     if mode not in _ETH_CLK_MODE:
         raise SystemExit("ethernet.clk_mode %r inconnu dans %s (attendu out|ext_in)" % (mode, d["id"]))
@@ -55,7 +71,8 @@ def ethernet_lines(d):
         "",
         "/* Ethernet filaire (voir boards/%s.json). BOARD_HAS_ETHERNET garde le code reseau. */" % d["id"],
         "#define BOARD_HAS_ETHERNET   1",
-        '#define ETH_PHY_MODEL        "%s"' % eth.get("phy", "LAN8720"),
+        "#define ETH_IS_OPENETH       0",
+        '#define ETH_PHY_MODEL        "%s"' % phy,
         "#define ETH_MDC_GPIO         %d" % int(eth.get("mdc", 23)),
         "#define ETH_MDIO_GPIO        %d" % int(eth.get("mdio", 18)),
         "#define ETH_PHY_POWER_GPIO   %d" % int(eth.get("phy_power", -1)),
@@ -194,12 +211,12 @@ NET_BUDGET_INTERNAL_RAM = {
 }
 
 
-def sdkconfig_lines(d):
+def sdkconfig_lines(d, src):
     """Fragment sdkconfig de la carte, ajoute a sdkconfig.defaults par CMakeLists.txt."""
     if not isinstance(d.get("psram"), bool):
         raise SystemExit("psram (true ou false) non declare dans %s : la memoire de la carte "
                          "decide de ses budgets reseau" % d["id"])
-    L = ["# Engendre par tools/gen_board.py depuis boards/%s.json : ne pas editer." % d["id"],
+    L = ["# Engendre par tools/gen_board.py depuis %s : ne pas editer." % src,
          "# Budgets reseau bornes a la RAM interne (voir NET_BUDGET_INTERNAL_RAM)."]
     if d["psram"]:
         L.append("# PSRAM presente sur la carte mais pas activee par le firmware : la RAM "
@@ -222,7 +239,7 @@ if __name__ == "__main__":
     # gen_board.py <carte.json> <board_pins.h>           (composant main, a la configuration)
     # gen_board.py --sdkconfig <carte.json> <fragment>   (CMakeLists.txt racine, avant project())
     if len(sys.argv) == 4 and sys.argv[1] == "--sdkconfig":
-        write_if_changed(sys.argv[3], sdkconfig_lines(json.load(open(sys.argv[2], encoding="utf-8"))))
+        write_if_changed(sys.argv[3], sdkconfig_lines(json.load(open(sys.argv[2], encoding="utf-8")), sys.argv[2]))
         sys.exit(0)
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
