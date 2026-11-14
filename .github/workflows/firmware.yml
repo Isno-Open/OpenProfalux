@@ -87,9 +87,25 @@ jobs:
             -v "$PWD":/project -w /project/firmware \
             "$IDF_IMAGE" bash -c "
               set -e
-              idf.py -B build-ci set-target ${{ matrix.carte.target }}
+              # -DBOARD des set-target : le sdkconfig nait avec le fragment de CETTE carte
+              # (tools/gen_board.py --sdkconfig), qu'un build ulterieur ne reecrirait pas.
+              idf.py -B build-ci -DBOARD=${{ matrix.carte.board }} set-target ${{ matrix.carte.target }}
               idf.py -B build-ci -DBOARD=${{ matrix.carte.board }} build
             "
+
+      - name: Budgets memoire de la carte appliques
+        run: |
+          # Chaque ligne du fragment engendre depuis boards/<carte>.json (budgets reseau bornes a
+          # la RAM, voir tools/gen_board.py) doit se retrouver dans le sdkconfig du build : sinon
+          # le fragment n'a pas ete branche (CMakeLists.txt) ou il a ete pris d'une autre carte.
+          python3 tools/gen_board.py --sdkconfig boards/${{ matrix.carte.board }}.json /tmp/carte.sdkconfig
+          manque=0
+          while IFS= read -r l; do
+            case "$l" in ''|'#'*) continue ;; esac
+            grep -qxF "$l" firmware/build-ci/sdkconfig 2>/dev/null || grep -qxF "$l" firmware/sdkconfig \
+              || { echo "::error title=${{ matrix.carte.board }}::$l absent du sdkconfig du build"; manque=1; }
+          done < /tmp/carte.sdkconfig
+          exit $manque
 
       - name: Versions des composants figees
         run: |
@@ -159,6 +175,23 @@ jobs:
              -I main -I ../../main main/test_main.c ../../main/remote_battery.c \
              -o remote_battery_host_test
           ./remote_battery_host_test
+
+  # La recherche de "tag_name" par morceaux dans la reponse de l'API GitHub (github_tag.c), coupee
+  # a toutes les positions. Voir firmware/test/github-tag. Pur, gcc suffit.
+  banc-github-tag:
+    name: Banc de test de la lecture de version GitHub
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: github_tag (gcc + AddressSanitizer)
+        working-directory: firmware/test/github-tag
+        run: |
+          cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
+             -I ../../main main/test_main.c ../../main/github_tag.c \
+             -o github_tag_host_test
+          ./github_tag_host_test
 
   # Le decodeur OOK HCS30x/KeeLoq (keeloq_decode.c) sur des trames en bouchon :
   # voir firmware/test/keeloq/README.md. Il est PUR, donc un simple gcc suffit,

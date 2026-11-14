@@ -13,6 +13,23 @@ endif()
 # m5-atom-lite (ESP32). Chacune a sa cible IDF (champ mcu), voir BUILD.md. board_pins.h en
 # est engendre a la config.
 set(BOARD "isno-super" CACHE STRING "carte visee : boards/<BOARD>.json")
+# Ce que la memoire de la carte decide (budgets reseau) : un fragment sdkconfig engendre depuis
+# sa declaration (champ psram, voir tools/gen_board.py), insere juste apres sdkconfig.defaults.
+# Il doit exister avant project(), qui lit les valeurs par defaut ; une carte inconnue est
+# refusee plus tard par main/CMakeLists.txt, avec la liste des cartes.
+set(BOARD_SDKCONFIG "${CMAKE_BINARY_DIR}/board.sdkconfig")
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../boards/${BOARD}.json")
+  execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../tools/gen_board.py" --sdkconfig
+                          "${CMAKE_CURRENT_LIST_DIR}/../boards/${BOARD}.json" "${BOARD_SDKCONFIG}"
+                  RESULT_VARIABLE board_sdk_rc)
+  if(NOT board_sdk_rc EQUAL 0)
+    message(FATAL_ERROR "gen_board.py --sdkconfig a refuse boards/${BOARD}.json")
+  endif()
+  if(NOT DEFINED SDKCONFIG_DEFAULTS)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+  endif()
+  list(INSERT SDKCONFIG_DEFAULTS 1 "${BOARD_SDKCONFIG}")
+endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # Versions des composants du registre (mdns, mqtt, cjson, lan87xx) figees dans un fichier
 # COMMIS par puce : deux builds du meme commit embarquent les memes composants. Un seul

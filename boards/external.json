@@ -8,6 +8,7 @@
   "name": "ESP32 DevKit + CC1101 externe",
   "ap_slug": "OpenProfalux",
   "mcu": "esp32",
+  "psram": false,
   "spi_freq_hz": 6000000,
   "radios": [
     { "chip": "CC1101", "band": "868", "module": "E07-900M10S",

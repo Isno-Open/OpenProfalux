@@ -11,6 +11,7 @@
   "name": "M5Stack ATOM Lite + CC1101",
   "ap_slug": "Atom",
   "mcu": "esp32",
+  "psram": false,
   "flash_mb": 4,
   "radios": [
     {

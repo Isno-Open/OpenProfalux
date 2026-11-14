@@ -854,16 +854,20 @@ static esp_err_t h_rf(httpd_req_t *req) {
 }
 
 /* ── /api/log : journal du firmware (Systeme > Journal), texte brut ──
- * Une copie le temps de la requete : le journal continue de s'ecrire pendant l'envoi. */
+ * Envoye par morceaux depuis l'anneau, avec un tampon sur la pile. Une copie entiere
+ * (LOG_RING_SIZE = 8 Ko d'un bloc) a chaque lecture, soit toutes les 2 s quand la page suit le
+ * journal, morcelait le tas : mesure le 2026-11-13 sur l'ATOM, 135 refus de 8 Ko en 10 min, et
+ * le Wi-Fi ne trouvait plus ses tampons de reception (1 937 refus de 1 696 o), reseau mort. */
+#define LOG_CHUNK 512
 static esp_err_t h_log(httpd_req_t *r) {
-    char *buf = malloc(LOG_RING_SIZE);
-    if (!buf) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
-    size_t n = log_ring_copy(buf, LOG_RING_SIZE);
     httpd_resp_set_type(r, "text/plain; charset=utf-8");
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    esp_err_t e = httpd_resp_send(r, buf, (ssize_t)n);
-    free(buf);
-    return e;
+    uint32_t pos, end = log_ring_span(&pos);
+    char chunk[LOG_CHUNK];
+    size_t n;
+    while ((n = log_ring_read(&pos, end, chunk, sizeof(chunk))) > 0)
+        if (httpd_resp_send_chunk(r, chunk, (ssize_t)n) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(r, NULL, 0);
 }
 
 /* ── /api/backup (export) + /api/restore (import) : telecommandes + trames de reference ── */

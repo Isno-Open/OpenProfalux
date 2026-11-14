@@ -15,13 +15,21 @@ inconnue fait échouer la configuration, elle ne compile pas avec de mauvaises b
 | `arduino-nano-esp32` | Arduino Nano ESP32 + CC1101 externe (SPI sur D10-D13, GDO0 sur D2) | `esp32s3` |
 | `xiao-esp32c3` | Seeed XIAO ESP32C3 + CC1101 868 externe (module M115 soudé) | `esp32c3` |
 
+La mémoire de la carte décide aussi de ses budgets réseau (tampons Wi-Fi, tampons TCP,
+taille des enregistrements TLS) : chaque carte déclare `psram`, et `tools/gen_board.py
+--sdkconfig` en engendre un fragment ajouté à `sdkconfig.defaults` avant la configuration.
+Le firmware n'active pas la PSRAM : toutes les cartes ont aujourd'hui les budgets de la RAM
+interne, mesurés sur l'ATOM. Passer `-DBOARD` **dès le `set-target`** : c'est là que le
+`sdkconfig` naît, et un build ultérieur ne réécrit pas ces valeurs. La CI vérifie que le
+fragment de chaque carte se retrouve dans son `sdkconfig`.
+
 ## Compiler
 
 ESP-IDF **v6.1** : depuis la migration du 2026-09-27, le dépôt ne compile plus en v5.
 
 ```bash
 docker run --rm -v "$PWD":/project -w /project/firmware espressif/idf:v6.1 bash -c "
-    idf.py -B build-isno-super set-target esp32s3
+    idf.py -B build-isno-super -DBOARD=isno-super set-target esp32s3
     idf.py -B build-isno-super -DBOARD=isno-super build
 "
 ```
@@ -33,7 +41,7 @@ Ou via docker compose, qui construit l'image depuis `Dockerfile.esp-idf` :
 
 ```bash
 docker compose run --rm esp-idf bash -c "
-    idf.py -B build-isno-super set-target esp32s3
+    idf.py -B build-isno-super -DBOARD=isno-super set-target esp32s3
     idf.py -B build-isno-super -DBOARD=isno-super build
 "
 ```

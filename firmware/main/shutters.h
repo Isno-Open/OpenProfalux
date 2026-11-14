@@ -142,3 +142,5 @@ bool     shutters_virt_name_for_serial(uint32_t serial, char *out, size_t cap); 
 uint16_t shutters_virt_counter_for_serial(uint32_t serial); /* compteur du volet de ce serial (0 si aucun) */
 
 #endif
+/* Publications perdues faute de place dans la file differee (voir PUB_DEFER_BUDGET). */
+uint32_t shutters_pub_dropped(void);

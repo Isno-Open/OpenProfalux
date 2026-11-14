@@ -25,7 +25,7 @@ Brochage : voir `boards/<carte>.json`. **CC1101 = 3.3 V max, jamais 5 V.**
 ```bash
 # via Docker ESP-IDF v6.1 (un repertoire de build par carte)
 docker run --rm -v "$PWD/..":/project -w /project/firmware espressif/idf:v6.1 bash -c "
-  idf.py -B build-isno-super set-target esp32s3
+  idf.py -B build-isno-super -DBOARD=isno-super set-target esp32s3
   idf.py -B build-isno-super -DBOARD=isno-super build"
 # autres cartes : -DBOARD=<fichier de boards/>, cible = son champ mcu (tableau dans BUILD.md)
 # ou en local si ESP-IDF v6.1 est installe :
