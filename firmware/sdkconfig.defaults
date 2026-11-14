@@ -56,7 +56,31 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
-# Allocateur de mbedTLS fourni par le firmware (main/tls_pool.c) : reserve TLS prise au
-# demarrage, taille declaree par la carte (tls_pool_kb). Sans reserve declaree, meme
-# comportement qu'avant (calloc).
+# Enregistrements TLS SORTANTS de 2 Ko au plus (defaut 4 Ko) : ils doivent tenir dans le tampon
+# d'envoi TCP borne plus bas (2 880 o). Un enregistrement de 4 Ko n'y entrait pas d'un coup ; sous
+# charge Wi-Fi, l'ecriture restait bloquee 10 s (« Writing didn't complete in specified timeout »)
+# et la connexion HA en mqtts se refaisait toutes les 30 a 60 s (mesure du 2026-11-14 sur l'ATOM).
+# Rien a negocier : c'est ce que le boitier emet, et son plus gros message est le certificat
+# client du cloud (~1 Ko). Le tampon d'emission de mbedTLS en est d'autant plus petit.
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048
+# Allocateur de mbedTLS fourni par le firmware (main/tls_pool.c) : reserve TLS prise d'un bloc
+# au demarrage (TLS_POOL_BYTES) ; ce qui la depasse retombe sur le tas, et se compte.
 CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC=y
+
+# ── Budgets reseau bornes a la RAM interne ──
+# Valables pour toutes les cartes actuelles : aucune n'active la PSRAM, et le tas disponible
+# au demarrage est de 186 Ko sur ESP32, 150 Ko sur ESP32-S3, 130 Ko sur ESP32-C3 (idf.py size
+# et sonde au demarrage, 2026-11-14). Une carte qui activerait la PSRAM y logerait ces tampons
+# (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP) et aurait son propre fragment.
+# Les valeurs par defaut d'ESP-IDF laissent au pire 32 tampons Wi-Fi de reception (~54 Ko), 32
+# d'emission (~51 Ko) et 5 760 o d'envoi plus 5 760 o de fenetre par socket TCP : plus que tout
+# le tas libre une fois le Wi-Fi, le web, deux connexions TLS et la radio en route (~40 Ko sur
+# l'ATOM). Mesure du 2026-11-13 sur l'ATOM, broker local injoignable, cloud actif, journal web
+# suivi toutes les 2 s, volet commande :
+#   defaut : 1 937 refus de tampons Wi-Fi, 52 « Failed to initialize », web sourd 8 min ;
+#   borne  : 0 refus, 0 « Failed to initialize », web 98 % des releves, 18 a 32 Ko libres.
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# 2 segments de 1 440 o : le minimum qui garde un debit correct.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=2880
+CONFIG_LWIP_TCP_WND_DEFAULT=2880

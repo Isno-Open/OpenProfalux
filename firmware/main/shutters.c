@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "memprobe.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_spiffs.h"
@@ -187,23 +188,45 @@ static void remote_remove(int i) {
  * pub_flush(). Voir aussi shutters_on_rx (meme principe, deja applique). */
 typedef struct pubmsg { struct pubmsg *next; int qos, retain; char *topic; char *payload; } pubmsg_t;
 static pubmsg_t *s_pub_head, *s_pub_tail;   /* file simple, touchee UNIQUEMENT sous LOCK */
+/* File BORNEE, comme celle de mqtt_bridge.c : un message retenu (etat, attributs, annonce) ne
+ * vaut que par sa derniere valeur, il remplace donc celui du meme topic encore en attente ; le
+ * reste s'empile dans la limite de PUB_DEFER_BUDGET octets, puis est compte perdu (publie avec
+ * le battement). Sans borne, un chemin qui empile sans vider (pub_flush) faisait grossir la
+ * liste au rythme du volet ou de l'ecoute RF. */
+#define PUB_DEFER_BUDGET 6144
+static size_t   s_pub_bytes;
+static uint32_t s_pub_dropped;
+uint32_t shutters_pub_dropped(void) { return s_pub_dropped; }
 
 /* Empile une publication. Appele SOUS LOCK. Copie topic+payload sur le tas. */
 static void pub_defer(const char *topic, const char *payload, int qos, int retain) {
+    if (retain) {
+        for (pubmsg_t *e = s_pub_head; e; e = e->next) {
+            if (!e->retain || strcmp(e->topic, topic)) continue;
+            char *p = strdup(payload);
+            if (!p) { s_pub_dropped++; return; }
+            s_pub_bytes = s_pub_bytes - strlen(e->payload) + strlen(p);
+            free(e->payload); e->payload = p; e->qos = qos;
+            return;
+        }
+    }
+    size_t need = strlen(topic) + strlen(payload) + 2 + sizeof(pubmsg_t);
+    if (s_pub_bytes + need > PUB_DEFER_BUDGET) { s_pub_dropped++; return; }
     pubmsg_t *m = malloc(sizeof(*m));
-    if (!m) return;
+    if (!m) { s_pub_dropped++; return; }
     m->next = NULL; m->qos = qos; m->retain = retain;
     m->topic = strdup(topic); m->payload = strdup(payload);
-    if (!m->topic || !m->payload) { free(m->topic); free(m->payload); free(m); return; }
+    if (!m->topic || !m->payload) { free(m->topic); free(m->payload); free(m); s_pub_dropped++; return; }
     if (s_pub_tail) s_pub_tail->next = m; else s_pub_head = m;
     s_pub_tail = m;
+    s_pub_bytes += need;
 }
 
 /* Vide la file en publiant HORS LOCK. A appeler APRES chaque UNLOCK qui a empile
  * (jamais en tenant le LOCK : pub_flush reprend le LOCK pour detacher la file). */
 static void pub_flush(void) {
     if (!s_pub_head) return;                 /* rapide : rien a publier (course benigne) */
-    LOCK(); pubmsg_t *m = s_pub_head; s_pub_head = s_pub_tail = NULL; UNLOCK();
+    LOCK(); pubmsg_t *m = s_pub_head; s_pub_head = s_pub_tail = NULL; s_pub_bytes = 0; UNLOCK();
     while (m) {
         pubmsg_t *n = m->next;
         mqtt_pub_raw(m->topic, m->payload, m->qos, m->retain);
@@ -1083,6 +1106,7 @@ static int sync_idx_by_serial(uint32_t serial) {
  * verrou (busy=1) AVANT d'emettre, puis publie le compteur et leve le verrou APRES. Refuse
  * (SH_CMD_BUSY) si une emission du meme serial est deja en cours ici ou sur l'autre carte. */
 int shutters_cmd_synced(const char *id, const char *cmd, int value) {
+    memtrace_window("volet", 6000, false);
     uint32_t serial = 0; int idx = -1;
     LOCK();
     volet_t *v = find_volet(id);
@@ -1091,7 +1115,9 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
     if (idx >= 0 && !s_self_emit[idx] && s_busy_until[idx] && sync_now_ms() < s_busy_until[idx])
         return SH_CMD_BUSY;                              /* une emission de ce serial est deja en cours */
     if (idx >= 0) { s_self_emit[idx] = true; s_busy_until[idx] = sync_now_ms() + SYNC_LOCK_MS; sync_pub_busy(serial, true); }
+    memprobe("volet-avant-cmd");
     int rc = shutters_cmd(id, cmd, value);               /* prend le LOCK, emet, avance virt_counter */
+    memprobe("volet-apres-cmd");
     if (idx >= 0) {
         uint16_t cnt = 0;
         LOCK(); if (idx < s_nvolets && s_volets[idx].virt) cnt = s_volets[idx].virt_counter; UNLOCK();
@@ -1099,6 +1125,7 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
         sync_pub_busy(serial, false);
         s_busy_until[idx] = 0; s_self_emit[idx] = false;
     }
+    memprobe("volet-apres-sync");
     return rc;
 }
 
@@ -2195,23 +2222,58 @@ static void on_air(const char *bits, uint32_t serial, uint8_t button, uint32_t h
  * (projdefs.h), et 6 h = 21 600 000 ms x 1000 Hz depasse 2^32. Le delai retombait a
  * ~125 s : une connexion TLS vers GitHub toutes les ~2 min au lieu de 4 par jour. */
 static volatile bool s_upd_auto = true;
-static TaskHandle_t  s_upd_task = NULL;
+static TaskHandle_t  s_upd_task = NULL;        /* non NULL = une verification tourne */
+static portMUX_TYPE  s_upd_mux = portMUX_INITIALIZER_UNLOCKED;
+static esp_timer_handle_t s_upd_timer = NULL;
+#define UPD_STACK       6144                    /* client HTTPS + lecture par morceaux (ota.c) */
+#define UPD_FIRST_US    (30LL * 1000000)        /* laisse WiFi + MQTT monter */
+#define UPD_PERIOD_US   (6LL * 3600 * 1000000)  /* 6 h (64 bits : pas le piege de pdMS_TO_TICKS) */
 void shutters_set_update_auto(bool on) { s_upd_auto = on; ESP_LOGI(TAG, "verification MAJ auto %s", on ? "ON" : "OFF"); }
 bool shutters_get_update_auto(void)    { return s_upd_auto; }
-void shutters_update_check_now(void)   { if (s_upd_task) xTaskNotifyGive(s_upd_task); }
 
+/* Tache NEE A LA DEMANDE : elle verifie, publie, puis se supprime et rend sa pile. Permanente,
+ * elle tenait 6 Ko pour un travail de quelques secondes toutes les 6 h ; mesure le 2026-11-13
+ * sur l'ATOM, la memoire manquait justement au Wi-Fi et a TLS (voir mqtt_bridge.c, file d'envoi). */
 static void update_check_task(void *arg) {
     (void)arg;
-    const TickType_t six_h = (TickType_t)6 * 3600 * configTICK_RATE_HZ;
-    /* laisse WiFi + MQTT monter ; une demande explicite passe tout de suite */
-    bool demande = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000)) > 0;
-    while (1) {
-        if (demande || s_upd_auto) {
-            ota_check_github();
-            if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
-        }
-        demande = ulTaskNotifyTake(pdTRUE, six_h) > 0;
+    ota_check_github();
+    if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
+    taskENTER_CRITICAL(&s_upd_mux);
+    s_upd_task = NULL;
+    taskEXIT_CRITICAL(&s_upd_mux);
+    vTaskDelete(NULL);
+}
+
+/* Lance une verification si aucune ne tourne. false = deja en cours ou pas de memoire (la
+ * suivante, 6 h plus tard ou a la demande, reessaiera). */
+static bool update_check_spawn(void) {
+    taskENTER_CRITICAL(&s_upd_mux);
+    bool busy = s_upd_task != NULL;
+    if (!busy) s_upd_task = (TaskHandle_t)1;   /* reserve la place avant de creer, hors section */
+    taskEXIT_CRITICAL(&s_upd_mux);
+    if (busy) return false;
+    TaskHandle_t t = NULL;
+    if (xTaskCreate(update_check_task, "sh_upd", UPD_STACK, NULL, 4, &t) != pdPASS) {
+        ESP_LOGW(TAG, "verification MAJ : tache non creee (memoire), reessai a la prochaine echeance");
+        taskENTER_CRITICAL(&s_upd_mux);
+        s_upd_task = NULL;
+        taskEXIT_CRITICAL(&s_upd_mux);
+        return false;
     }
+    taskENTER_CRITICAL(&s_upd_mux);
+    if (s_upd_task == (TaskHandle_t)1) s_upd_task = t;   /* deja finie : elle a remis NULL */
+    taskEXIT_CRITICAL(&s_upd_mux);
+    return true;
+}
+
+void shutters_update_check_now(void) { update_check_spawn(); }
+
+/* Echeances : la premiere 30 s apres le demarrage, puis toutes les 6 h. */
+static void update_timer_cb(void *arg) {
+    (void)arg;
+    static bool first = true;
+    if (first) { first = false; esp_timer_start_periodic(s_upd_timer, UPD_PERIOD_US); }
+    if (s_upd_auto) update_check_spawn();
 }
 
 /* Migration : les anciens firmwares rangeaient l'identite d'emission 0x067 dans `serials`
@@ -2324,7 +2386,11 @@ void shutters_init(void) {
     ignore_load();
     purge_ghost_remotes_once();   /* une fois : fantomes d'avant la confirmation des trames (#39) */
     xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
-    xTaskCreate(update_check_task, "sh_upd", 6144, NULL, 4, &s_upd_task);   /* check GitHub -> entite update HA */
+    {   /* check GitHub -> entite update HA : minuterie, la tache nait a chaque echeance */
+        const esp_timer_create_args_t ta = { .callback = update_timer_cb, .name = "sh_upd" };
+        if (esp_timer_create(&ta, &s_upd_timer) == ESP_OK) esp_timer_start_once(s_upd_timer, UPD_FIRST_US);
+        else ESP_LOGE(TAG, "verification MAJ : minuterie non creee");
+    }
     radio_init();
     radio_start(on_air);   /* tache radio prete (arbitre TX) */
     update_listening();    /* ecoute si des volets sont deja appris (suivi position) ou si capture ON */

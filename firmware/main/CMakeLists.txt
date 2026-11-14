@@ -57,6 +57,7 @@ idf_component_register(
         "wifi_bridge.c"
         "mqtt_bridge.c"
         "tls_pool.c"
+        "memprobe.c"
         "github_tag.c"
         "mqtt_tls_policy.c"
         "shutters.c"

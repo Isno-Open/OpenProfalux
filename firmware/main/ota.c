@@ -9,6 +9,7 @@
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include "esp_https_ota.h"
+#include "tls_pool.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_system.h"
@@ -216,15 +217,18 @@ esp_err_t ota_pull_from_url(const char *url)
     esp_https_ota_handle_t handle = NULL;
     validate_if_on_trial("nouvelle mise a jour");   /* comme ota_upload_begin */
     previous_erased();
+    /* Tour de poignee de main (tls_pool.h), tenu tout le telechargement : en cas de succes, le
+     * boitier redemarre ; chaque sortie en echec le rend. */
+    bool turn = tls_turn_take(TLS_TURN_WAIT_MS);
     esp_err_t err = esp_https_ota_begin(&ota_cfg, &handle);
-    if (err != ESP_OK) { status.state = OTA_STATE_FAILED; return err; }
+    if (err != ESP_OK) { if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; return err; }
     status.state = OTA_STATE_RECEIVING;
     status.total_bytes = esp_https_ota_get_image_size(handle);
     while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS)
         status.written_bytes = esp_https_ota_get_image_len_read(handle);
-    if (!esp_https_ota_is_complete_data_received(handle)) { esp_https_ota_abort(handle); status.state = OTA_STATE_FAILED; return err; }
+    if (!esp_https_ota_is_complete_data_received(handle)) { esp_https_ota_abort(handle); if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; return err; }
     err = esp_https_ota_finish(handle);
-    if (err != ESP_OK) { status.state = OTA_STATE_FAILED; return err; }
+    if (err != ESP_OK) { if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; return err; }
     status.state = OTA_STATE_REBOOTING;
     vTaskDelay(pdMS_TO_TICKS(3000));
     esp_restart();
@@ -263,8 +267,10 @@ esp_err_t ota_check_github(void)
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
+    /* Tour de poignee de main (tls_pool.h), tenu toute la verification (quelques secondes). */
+    bool turn = tls_turn_take(TLS_TURN_WAIT_MS);
     esp_err_t err = esp_http_client_open(c, 0);
-    if (err != ESP_OK) { esp_http_client_cleanup(c); s_check_n++; return err; }
+    if (err != ESP_OK) { esp_http_client_cleanup(c); if (turn) tls_turn_give(); s_check_n++; return err; }
     esp_http_client_fetch_headers(c);
     github_tag_t st; github_tag_init(&st);
     char chunk[256];
@@ -277,6 +283,7 @@ esp_err_t ota_check_github(void)
     }
     const char *tag = st.tag;
     esp_http_client_close(c); esp_http_client_cleanup(c);
+    if (turn) tls_turn_give();
     esp_err_t rc = ESP_FAIL;
     if (tag[0]) {
         {   /* bloc garde tel quel : meme construction de l'adresse qu'avant */

@@ -9,9 +9,10 @@
  * tampons dynamiques de mbedTLS), pas une propriete de la carte. Mesure le 2026-11-13 sur
  * l'ATOM en 0.2.16-cloudtest3 avec une reserve de 24 Ko : 4 364 o libres au plus bas, soit
  * 20,2 Ko de pic (poignee de main du cloud, connexion GitHub ensuite), et 0 debordement.
- * 21 Ko = ce pic et un peu de marge ; tls_min et tls_spills, publies avec le battement,
- * disent s'il faut la revoir. */
-#define TLS_POOL_BYTES (21 * 1024)
+ * Avec 21 Ko (cloudtest5, une heure dont une commande) : 1 224 o libres au plus bas, 0
+ * debordement. 22 Ko donnent ~2 Ko de marge. tls_min et tls_spills, publies avec le
+ * battement, disent s'il faut la revoir. */
+#define TLS_POOL_BYTES (22 * 1024)
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -19,6 +20,8 @@
 #include <multi_heap.h>
 #include <esp_log.h>
 #include <mbedtls/platform.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 static const char *TAG = "tls_pool";
 
@@ -75,3 +78,34 @@ void tls_pool_stats(tls_pool_stats_t *out) {
     out->free_min = (uint32_t)multi_heap_minimum_free_size(s_heap);
     out->spills = s_spills;
 }
+
+/* ── Tour de poignee de main (voir tls_pool.h) ── */
+static SemaphoreHandle_t s_turn = NULL;
+static portMUX_TYPE s_turn_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t s_turn_misses = 0;
+
+static SemaphoreHandle_t turn(void) {
+    if (s_turn) return s_turn;
+    SemaphoreHandle_t t = xSemaphoreCreateBinary();
+    if (!t) return NULL;
+    xSemaphoreGive(t);
+    taskENTER_CRITICAL(&s_turn_mux);
+    bool won = s_turn == NULL;
+    if (won) s_turn = t;
+    taskEXIT_CRITICAL(&s_turn_mux);
+    if (!won) vSemaphoreDelete(t);
+    return s_turn;
+}
+
+bool tls_turn_take(uint32_t wait_ms) {
+    SemaphoreHandle_t t = turn();
+    if (t && xSemaphoreTake(t, pdMS_TO_TICKS(wait_ms)) == pdTRUE) return true;
+    s_turn_misses++;
+    ESP_LOGW(TAG, "poignee de main hors tour (attente > %u ms), %u depuis le demarrage",
+             (unsigned)wait_ms, (unsigned)s_turn_misses);
+    return false;
+}
+
+void tls_turn_give(void) { if (s_turn) xSemaphoreGive(s_turn); }
+
+uint32_t tls_turn_misses(void) { return s_turn_misses; }

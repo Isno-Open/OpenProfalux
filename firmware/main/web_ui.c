@@ -855,16 +855,20 @@ static esp_err_t h_rf(httpd_req_t *req) {
 }
 
 /* ── /api/log : journal du firmware (Systeme > Journal), texte brut ──
- * Une copie le temps de la requete : le journal continue de s'ecrire pendant l'envoi. */
+ * Envoye par morceaux depuis l'anneau, avec un tampon sur la pile. Une copie entiere
+ * (LOG_RING_SIZE = 8 Ko d'un bloc) a chaque lecture, soit toutes les 2 s quand la page suit le
+ * journal, morcelait le tas : mesure le 2026-11-13 sur l'ATOM, 135 refus de 8 Ko en 10 min, et
+ * le Wi-Fi ne trouvait plus ses tampons de reception (1 937 refus de 1 696 o), reseau mort. */
+#define LOG_CHUNK 512
 static esp_err_t h_log(httpd_req_t *r) {
-    char *buf = malloc(LOG_RING_SIZE);
-    if (!buf) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
-    size_t n = log_ring_copy(buf, LOG_RING_SIZE);
     httpd_resp_set_type(r, "text/plain; charset=utf-8");
     httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    esp_err_t e = httpd_resp_send(r, buf, (ssize_t)n);
-    free(buf);
-    return e;
+    uint32_t pos, end = log_ring_span(&pos);
+    char chunk[LOG_CHUNK];
+    size_t n;
+    while ((n = log_ring_read(&pos, end, chunk, sizeof(chunk))) > 0)
+        if (httpd_resp_send_chunk(r, chunk, (ssize_t)n) != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(r, NULL, 0);
 }
 
 /* ── /api/backup (export) + /api/restore (import) : telecommandes + trames de reference ── */
@@ -1864,8 +1868,7 @@ static esp_err_t h_cloud_pair(httpd_req_t *r) {
         nvs_commit(h); nvs_close(h);
     }
     cJSON_Delete(b);
-    mqtt_cloud_stop();
-    mqtt_cloud_start(brob, devb);
+    mqtt_cloud_request_start(brob, devb);   /* redemarre le client avec le nouveau certificat, hors du serveur web */
     char o[96]; snprintf(o, sizeof o, "{\"ok\":1,\"device_id\":\"%s\"}", devb);
     return httpd_resp_sendstr(r, o);
 }
@@ -1875,8 +1878,15 @@ static esp_err_t h_cloud_toggle(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
     char *body = read_body(r);
     cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
-    int on = j ? cJSON_IsTrue(cJSON_GetObjectItem(j, "on")) : 0;
-    if (j) cJSON_Delete(j);
+    /* « on » est OBLIGATOIRE et booleen : un corps vide ou sans « on » valait « off » et coupait le
+     * cloud sans le vouloir (constate le 2026-11-13). */
+    cJSON *onj = j ? cJSON_GetObjectItem(j, "on") : NULL;
+    if (!cJSON_IsBool(onj)) {
+        if (j) cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "on attendu : true ou false");
+    }
+    int on = cJSON_IsTrue(onj);
+    cJSON_Delete(j);
     char uri[160] = "", dev[40] = "";
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
@@ -1884,16 +1894,16 @@ static esp_err_t h_cloud_toggle(httpd_req_t *r) {
         sz = sizeof dev; nvs_get_str(h, "cloud_dev", dev, &sz);
         nvs_set_u8(h, "cloud_on", on ? 1 : 0); nvs_commit(h); nvs_close(h);
     }
-    if (on && uri[0] && dev[0]) mqtt_cloud_start(uri, dev);
-    else mqtt_cloud_stop();
-    char o[48]; snprintf(o, sizeof o, "{\"ok\":1,\"enabled\":%d}", on ? 1 : 0);
+    /* demarrage ou arret faits par la tache de commande du cloud, pas ici */
+    bool queued = (on && uri[0] && dev[0]) ? mqtt_cloud_request_start(uri, dev) : mqtt_cloud_request_stop();
+    char o[64]; snprintf(o, sizeof o, "{\"ok\":%d,\"enabled\":%d}", queued ? 1 : 0, on ? 1 : 0);
     return httpd_resp_sendstr(r, o);
 }
 
 /* POST : oublie le cloud (stoppe, efface certs + cloud_uri/cloud_dev). */
 static esp_err_t h_cloud_forget(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
-    mqtt_cloud_stop();
+    mqtt_cloud_request_stop();   /* le client garde ses certificats en memoire : les effacer ici ne le gene pas */
     mqtt_cert_write("cloud_ca", ""); mqtt_cert_write("cloud_cert", ""); mqtt_cert_write("cloud_key", "");
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {

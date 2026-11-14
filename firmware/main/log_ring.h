@@ -8,11 +8,16 @@
  * demarrage, tout debut de l'application) restent seulement sur le port serie.
  */
 #include <stddef.h>
+#include <stdint.h>
 
 #define LOG_RING_SIZE 8192
 
 /* Branche le journal sur ESP_LOGx (le port serie continue de tout recevoir). */
 void   log_ring_init(void);
-/* Copie le journal dans out, du plus ancien au plus recent, en commencant a un
- * debut de ligne. Renvoie le nombre d'octets copies (0 si vide). */
-size_t log_ring_copy(char *out, size_t cap);
+/* Lecture par morceaux, sans copie du journal entier (8 Ko d'un bloc a chaque lecture de la
+ * page Journal morcelaient le tas : mesure du 2026-11-13, voir web_ui.c h_log).
+ * log_ring_span rend la fin du journal (position absolue) et met dans *begin le debut d'une
+ * ligne entiere ; log_ring_read copie au plus cap octets a partir de *pos, sans depasser end,
+ * et avance *pos. Ce qui a ete ecrase entre deux morceaux est saute. 0 = fini (ou occupe). */
+uint32_t log_ring_span(uint32_t *begin);
+size_t   log_ring_read(uint32_t *pos, uint32_t end, char *out, size_t cap);

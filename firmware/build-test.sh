@@ -39,6 +39,7 @@ if ! command -v idf.py >/dev/null; then
   command -v docker >/dev/null || { echo "ni idf.py ni docker : active l'environnement ESP-IDF v6.1"; exit 1; }
   echo ">> idf.py absent, on passe par ${IDF_IMAGE:-espressif/idf:v6.1}"
   exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_VERSION="$FULL" \
+    -e OPF_SDKCONFIG_EXTRA="${OPF_SDKCONFIG_EXTRA:-}" \
     -v "$(cd .. && pwd)":/project -w /project/firmware \
     "${IDF_IMAGE:-espressif/idf:v6.1}" bash build-test.sh "$@"
 fi
@@ -56,13 +57,22 @@ if [ "$#" -gt 0 ]; then
 else
   BOARDS=(../boards/*.json)
 fi
+# Fragment de configuration en plus de sdkconfig.defaults, pour une build de diagnostic
+# (ex. OPF_SDKCONFIG_EXTRA=test/heapdiag/sdkconfig.heapdiag, ou plusieurs : a;b). Vide = build normale.
+DEFAULTS_ARG=""
+if [ -n "${OPF_SDKCONFIG_EXTRA:-}" ]; then
+  IFS=';' read -ra FRAGS <<< "$OPF_SDKCONFIG_EXTRA"   # plusieurs fragments : a;b
+  for frag in "${FRAGS[@]}"; do [ -f "$frag" ] || { echo "fragment introuvable : $frag"; exit 1; }; done
+  DEFAULTS_ARG="-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;$OPF_SDKCONFIG_EXTRA"
+  echo ">> configuration en plus : $OPF_SDKCONFIG_EXTRA"
+fi
 for f in "${BOARDS[@]}"; do
   board="$(basename "$f" .json)"
   target="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcu'])" "$f")"
   bdir="build-test-$board"
   echo ">> build $board ($target)"
   rm -rf "$bdir"
-  idf.py -B "$bdir" set-target "$target" >/dev/null
+  idf.py -B "$bdir" ${DEFAULTS_ARG:+"$DEFAULTS_ARG"} set-target "$target" >/dev/null
   idf.py -B "$bdir" -DBOARD="$board" build >/dev/null
   cp "$bdir/openprofalux.bin" "$REL/openprofalux-$board-$LABEL.bin"
   idf.py -B "$bdir" merge-bin -o "$REL/openprofalux-$board-$LABEL-full.bin" >/dev/null

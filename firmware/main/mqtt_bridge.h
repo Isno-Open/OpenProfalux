@@ -33,6 +33,12 @@ void mqtt_bridge_stop(void);
 int  mqtt_cloud_start(const char *cloud_uri, const char *device_id);
 void mqtt_cloud_stop(void);
 bool mqtt_cloud_is_connected(void);
+/* Demandes faites depuis le serveur web : executees par une tache dediee, jamais dans le
+ * gestionnaire HTTP (l'arret d'un client y figeait le serveur). false = demande refusee. */
+bool mqtt_cloud_request_start(const char *cloud_uri, const char *device_id);
+bool mqtt_cloud_request_stop(void);
+/* Republie « online » sur les connexions etablies (battement : filet contre un ancien testament). */
+void mqtt_pub_presence(void);
 
 /* Certificats TLS pour mqtts, stockes en SPIFFS (partition storage, 960 Ko) et non en
  * NVS : la NVS de 16 Ko est deja trop juste pour la config des volets, exactement comme

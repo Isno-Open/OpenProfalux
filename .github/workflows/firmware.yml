@@ -246,6 +246,23 @@ jobs:
              -o cloud_topic_host_test
           ./cloud_topic_host_test
 
+  # La recherche de "tag_name" par morceaux dans la reponse de l'API GitHub (github_tag.c), coupee
+  # a toutes les positions. Voir firmware/test/github-tag. Pur, gcc suffit.
+  banc-github-tag:
+    name: Banc de test de la lecture de version GitHub
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: github_tag (gcc + AddressSanitizer)
+        working-directory: firmware/test/github-tag
+        run: |
+          cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
+             -I ../../main main/test_main.c ../../main/github_tag.c \
+             -o github_tag_host_test
+          ./github_tag_host_test
+
   # Les decisions du cloud (cloud_enroll.c) : validation du bundle d'appairage et gate d'activation
   # (handlers /api/cloud/pair et /toggle, et le boot). Voir firmware/test/cloud-enroll. Pur, gcc suffit.
   banc-cloud-enroll:

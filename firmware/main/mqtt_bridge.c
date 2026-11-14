@@ -1,6 +1,8 @@
 #include "mqtt_bridge.h"
 #include "hardware_config.h"
-#include "mqtt_tls_policy.h"   /* TARGET_NAME, utilise ligne 130 */
+#include "mqtt_tls_policy.h"
+#include "memprobe.h"
+#include "tls_pool.h"   /* TARGET_NAME, utilise ligne 130 */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +17,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_mqtt = NULL;
@@ -41,6 +44,15 @@ uint32_t mqtt_cloud_drops(void)  { return s_cloud_drops; }
 uint32_t mqtt_cloud_errors(void) { return s_cloud_errors; }
 static volatile bool s_connected = false;         /* client local connecte (lu par sa file) */
 
+/* Tour de poignee de main TLS (tls_pool.h) : pris juste avant la connexion (BEFORE_CONNECT,
+ * distribue dans la tache du client, avant la connexion TCP et TLS), rendu une seule fois au
+ * premier evenement qui la conclut (CONNECTED, ERROR ou DISCONNECTED) ou a l'arret du client.
+ * Le local ne le prend qu'en mqtts://. */
+static bool s_local_tls = false;
+static bool s_turn_local = false, s_turn_cloud = false;
+static void turn_take(bool *held) { if (!*held) *held = tls_turn_take(TLS_TURN_WAIT_MS); }
+static void turn_give(bool *held) { if (*held) { *held = false; tls_turn_give(); } }
+
 /* ── Envoi par FILE, une par connexion ──
  * esp-mqtt tient le verrou d'un client pendant que sa tache traite un evenement (connexion,
  * message recu) et pendant qu'elle se connecte. Publier DIRECTEMENT sur un client depuis la
@@ -53,44 +65,93 @@ static volatile bool s_connected = false;         /* client local connecte (lu p
  * parallele, et un broker injoignable ne retarde plus l'autre. L'ordre est garde par client.
  * Seules les publications d'un client DEPUIS SA PROPRE tache (disponibilite a la connexion)
  * restent directes : meme tache, meme verrou, rien a croiser. */
-#define OUTBOX_DEPTH     32   /* la tache vide la file au fil de l'eau : 32 suffisent en rafale */
+#define OUTBOX_DEPTH     32   /* emplacements : la tache vide la file au fil de l'eau */
+/* Plafond des copies en attente, par connexion. Mesure le 2026-11-13 sur l'ATOM (broker local
+ * injoignable, volet en mouvement) : la file cloud s'est remplie de 32 copies d'etat (~400 o
+ * chacune, plus de 12 Ko) pendant une ecriture TLS lente, le tas est tombe a 16 o et tout a
+ * echoue ensuite (web en 500, cloud incapable de se reconnecter). 6 Ko laissent passer une
+ * annonce HA complete au fil de l'eau (l'emetteur attend la place, voir OUTBOX_WAIT_MS). */
+#define OUTBOX_BUDGET  6144
+#define OUTBOX_FULL_RETRIES 20   /* file interne esp-mqtt pleine : 20 x 50 ms = 1 s au plus */
+#define OUTBOX_FULL_WAIT_MS 50
 #define OUTBOX_WAIT_MS  200   /* file pleine : attente bornee, puis le message est compte perdu */
-#define OUTBOX_STACK   3072
+/* Pile : 1 552 o utilises au plus haut sur l'ATOM (cloudtest5, out_stack = 1 520 o libres sur
+ * 3 072). 2 304 o laissent ~750 o de marge. out_stack, publie avec le battement, le surveille. */
+#define OUTBOX_STACK   2304
 #define OUTBOX_PRIO       5   /* celle des taches esp-mqtt */
 typedef struct { char *topic; char *payload; int qos; int retain; } outmsg_t;
 typedef struct {
     const char *task_name;
     esp_mqtt_client_handle_t *client;   /* &s_mqtt ou &s_mqtt_cloud : NULL = connexion absente */
     volatile bool *connected;           /* &s_connected ou &s_cloud_connected */
-    QueueHandle_t q;
+    outmsg_t slot[OUTBOX_DEPTH];        /* anneau : head = le plus ancien */
+    int head, count;
+    size_t bytes;                       /* octets des copies en attente (topic + contenu) */
+    SemaphoreHandle_t lock;             /* protege l'anneau, jamais tenu pendant une publication */
+    SemaphoreHandle_t room;             /* donne a chaque sortie : reveille un emetteur qui attend */
     TaskHandle_t task;
+    SemaphoreHandle_t use;              /* tenu pendant une publication : l'arret attend qu'elle finisse */
     uint32_t dropped;
 } outbox_t;
 static outbox_t s_out_local = { .task_name = "mqtt_out_local", .client = &s_mqtt, .connected = &s_connected };
 static outbox_t s_out_cloud = { .task_name = "mqtt_out_cloud", .client = &s_mqtt_cloud, .connected = &s_cloud_connected };
 
+static size_t outmsg_size(const outmsg_t *m) { return strlen(m->topic) + strlen(m->payload) + 2; }
+
+/* Retire le plus ancien message (anneau verrouille). false = file vide. */
+static bool outbox_pop(outbox_t *o, outmsg_t *m) {
+    if (!o->count) return false;
+    *m = o->slot[o->head];
+    o->head = (o->head + 1) % OUTBOX_DEPTH;
+    o->count--;
+    o->bytes -= outmsg_size(m);
+    return true;
+}
+
 static void outbox_task(void *arg) {
     outbox_t *o = arg;
-    outmsg_t m;
     for (;;) {
-        if (xQueueReceive(o->q, &m, portMAX_DELAY) != pdTRUE) continue;
-        esp_mqtt_client_handle_t c = *o->client;
-        if (c) esp_mqtt_client_publish(c, m.topic, m.payload, 0, m.qos, m.retain);
-        free(m.topic); free(m.payload);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        for (;;) {
+            outmsg_t m;
+            xSemaphoreTake(o->lock, portMAX_DELAY);
+            bool got = outbox_pop(o, &m);
+            xSemaphoreGive(o->lock);
+            if (!got) break;
+            xSemaphoreGive(o->room);
+            xSemaphoreTake(o->use, portMAX_DELAY);   /* le client ne peut pas etre detruit pendant ce temps */
+            esp_mqtt_client_handle_t c = *o->client;
+            /* Coupee depuis le depot : on jette. Publie sur un client deconnecte, un message QoS 1
+             * irait dans la file interne d'esp-mqtt attendre la reconnexion ; or chaque client
+             * republie l'etat complet a la connexion (voir plus bas). */
+            /* -2 = file interne pleine (OUTBOX_BUDGET) : les accuses du broker la videront, on
+             * laisse passer un peu de temps plutot que de perdre une annonce en rafale. */
+            for (int t = 0; c && *o->connected && t < OUTBOX_FULL_RETRIES; t++) {
+                if (esp_mqtt_client_publish(c, m.topic, m.payload, 0, m.qos, m.retain) != -2) break;
+                vTaskDelay(pdMS_TO_TICKS(OUTBOX_FULL_WAIT_MS));
+            }
+            xSemaphoreGive(o->use);
+            free(m.topic); free(m.payload);
+        }
     }
 }
 
-/* Cree la file et sa tache au premier demarrage du client ; elles vivent ensuite pour toujours
+/* Cree l'anneau et sa tache au premier demarrage du client ; ils vivent ensuite pour toujours
  * (un client arrete puis relance retrouve la meme file). */
 static void outbox_open(outbox_t *o) {
-    if (o->q) return;
-    QueueHandle_t q = xQueueCreate(OUTBOX_DEPTH, sizeof(outmsg_t));
-    if (!q) { ESP_LOGE(TAG, "%s : file non creee (memoire)", o->task_name); return; }
-    o->q = q;
-    if (xTaskCreate(outbox_task, o->task_name, OUTBOX_STACK, o, OUTBOX_PRIO, &o->task) != pdPASS) {
-        ESP_LOGE(TAG, "%s : tache non creee (memoire)", o->task_name);
-        vQueueDelete(q); o->q = NULL;
+    if (o->lock) return;
+    SemaphoreHandle_t lock = xSemaphoreCreateMutex(), use = xSemaphoreCreateMutex();
+    SemaphoreHandle_t room = xSemaphoreCreateBinary();
+    if (!lock || !use || !room
+        || xTaskCreate(outbox_task, o->task_name, OUTBOX_STACK, o, OUTBOX_PRIO, &o->task) != pdPASS) {
+        ESP_LOGE(TAG, "%s : file non creee (memoire)", o->task_name);
+        if (lock) vSemaphoreDelete(lock);
+        if (use) vSemaphoreDelete(use);
+        if (room) vSemaphoreDelete(room);
+        return;
     }
+    o->use = use; o->room = room;
+    o->lock = lock;   /* en dernier : outbox_send ne depose rien avant que tout existe */
 }
 
 /* Rien n'entre dans la file d'une connexion coupee. Mesure le 2026-11-13 sur l'ATOM : pendant
@@ -112,12 +173,59 @@ uint32_t mqtt_outbox_stack_free(void) {
     return m;
 }
 
+/* Rend le client a detruire, apres l'avoir retire de sa file (qui ne le touchera plus). */
+static esp_mqtt_client_handle_t outbox_detach(outbox_t *o) {
+    if (o->use) xSemaphoreTake(o->use, portMAX_DELAY);
+    esp_mqtt_client_handle_t c = *o->client;
+    *o->client = NULL;
+    if (o->use) xSemaphoreGive(o->use);
+    return c;
+}
+
+/* Un message retenu (etat, position, attributs) ne vaut que par sa DERNIERE valeur : s'il en
+ * attend deja un pour le meme topic, on remplace son contenu au lieu d'empiler une copie. Un
+ * volet en mouvement (une publication toutes les 150 ms) ne tient alors qu'un emplacement par
+ * topic, quelle que soit la lenteur de la connexion. Le reste attend sa place (OUTBOX_WAIT_MS)
+ * dans la limite de OUTBOX_DEPTH messages et OUTBOX_BUDGET octets, puis est compte perdu. */
 static int outbox_send(outbox_t *o, const char *topic, const char *payload, int qos, int retain) {
-    if (!o->q || !*o->client || !*o->connected) return -1;
-    outmsg_t m = { strdup(topic), strdup(payload ? payload : ""), qos, retain };
-    if (m.topic && m.payload && xQueueSend(o->q, &m, pdMS_TO_TICKS(OUTBOX_WAIT_MS)) == pdTRUE) return 0;
-    free(m.topic); free(m.payload);
-    o->dropped++;
+    if (!o->lock || !*o->client || !*o->connected) return -1;
+    if (!payload) payload = "";
+    size_t need = strlen(topic) + strlen(payload) + 2;
+    TickType_t until = xTaskGetTickCount() + pdMS_TO_TICKS(OUTBOX_WAIT_MS);
+    for (;;) {
+        xSemaphoreTake(o->lock, portMAX_DELAY);
+        if (retain) {
+            for (int i = 0; i < o->count; i++) {
+                outmsg_t *s = &o->slot[(o->head + i) % OUTBOX_DEPTH];
+                if (!s->retain || strcmp(s->topic, topic)) continue;
+                char *p = strdup(payload);
+                if (p) {
+                    o->bytes = o->bytes - strlen(s->payload) + strlen(p);
+                    free(s->payload); s->payload = p; s->qos = qos;
+                }
+                xSemaphoreGive(o->lock);
+                if (!p) break;
+                xTaskNotifyGive(o->task);
+                return 0;
+            }
+        }
+        if (o->count < OUTBOX_DEPTH && o->bytes + need <= OUTBOX_BUDGET) {
+            outmsg_t m = { strdup(topic), strdup(payload), qos, retain };
+            bool ok = m.topic && m.payload;
+            if (ok) {
+                o->slot[(o->head + o->count) % OUTBOX_DEPTH] = m;
+                o->count++; o->bytes += need;
+            }
+            xSemaphoreGive(o->lock);
+            if (ok) { xTaskNotifyGive(o->task); return 0; }
+            free(m.topic); free(m.payload);
+            break;
+        }
+        xSemaphoreGive(o->lock);
+        TickType_t now = xTaskGetTickCount();
+        if ((int32_t)(until - now) <= 0 || xSemaphoreTake(o->room, until - now) != pdTRUE) break;
+    }
+    o->dropped++;   /* journal hors verrou : il peut republier (publish_log) dans cette file */
     ESP_LOGW(TAG, "%s : message perdu (%s), %u depuis le demarrage", o->task_name, topic, (unsigned)o->dropped);
     return -1;
 }
@@ -179,15 +287,40 @@ static void handle_incoming(const char *topic, int tlen, const char *data, int d
     }
 }
 
+/* ── Presence ──
+ * Apres un redemarrage, le broker garde l'ancienne session jusqu'a l'expiration de son keepalive,
+ * puis publie son testament « offline », retenu, PAR-DESSUS le « online » que la nouvelle session
+ * vient de publier : le boitier connecte parait hors ligne (constate le 2026-11-13 sur le cloud et
+ * sur HA). Chaque client s'abonne donc a sa propre presence et republie « online » s'il y lit
+ * « offline » alors qu'il est connecte ; le battement la republie aussi, en filet. */
+#define PRESENCE_ONLINE  "online"
+#define PRESENCE_OFFLINE "offline"
+static bool is_own_offline(const char *topic, int tlen, const char *data, int dlen, const char *own) {
+    return own[0] && tlen == (int)strlen(own) && !strncmp(topic, own, (size_t)tlen)
+        && dlen == (int)strlen(PRESENCE_OFFLINE) && !strncmp(data, PRESENCE_OFFLINE, (size_t)dlen);
+}
+
+void mqtt_pub_presence(void) {
+    outbox_send(&s_out_local, s_avail_topic, PRESENCE_ONLINE, 1, 1);
+    outbox_send(&s_out_cloud, s_cloud_avail, PRESENCE_ONLINE, 1, 1);
+}
+
 static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
     (void)arg; (void)base;
     esp_mqtt_event_handle_t evt = event_data;
     switch (evt->event_id) {
+        case MQTT_EVENT_BEFORE_CONNECT:
+            memprobe("local-avant-connexion");
+            if (s_local_tls) turn_take(&s_turn_local);
+            break;
         case MQTT_EVENT_CONNECTED:
+            turn_give(&s_turn_local);
+            memprobe("local-connecte");
             ESP_LOGI(TAG, "Connected to broker");
             s_connected = true;
             s_retry_ms = MQTT_RETRY_MIN_MS;
-            esp_mqtt_client_publish(s_mqtt, s_avail_topic, "online", 0, 1, 1);   /* disponibilite HA */
+            esp_mqtt_client_publish(s_mqtt, s_avail_topic, PRESENCE_ONLINE, 0, 1, 1);   /* disponibilite HA */
+            esp_mqtt_client_subscribe(s_mqtt, s_avail_topic, 1);   /* testament d'une ancienne session : voir Presence */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/listen/#", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/cover/+/set", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/cover/+/set_position", 1);
@@ -204,6 +337,7 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             if (s_hdl.on_connected) s_hdl.on_connected();   /* -> publie la decouverte HA (vraie connexion) */
             break;
         case MQTT_EVENT_DISCONNECTED:
+            turn_give(&s_turn_local);
             s_connected = false;
             if (s_retry_timer) {
                 ESP_LOGW(TAG, "MQTT deconnecte : nouvel essai dans %u s", (unsigned)(s_retry_ms / 1000));
@@ -216,9 +350,15 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             if (s_hdl.on_disconnected) s_hdl.on_disconnected();
             break;
         case MQTT_EVENT_DATA:
+            if (is_own_offline(evt->topic, evt->topic_len, evt->data, evt->data_len, s_avail_topic)) {
+                ESP_LOGW(TAG, "presence locale ecrasee par un ancien testament : republiee");
+                esp_mqtt_client_publish(s_mqtt, s_avail_topic, PRESENCE_ONLINE, 0, 1, 1);
+                break;
+            }
             handle_incoming(evt->topic, evt->topic_len, evt->data, evt->data_len);
             break;
         case MQTT_EVENT_ERROR:
+            turn_give(&s_turn_local);
             /* Sur un echec de transport/TLS, on remonte la cause exacte du handshake :
              * esp_tls_cert_verify_flags (certificat refuse) et esp_tls_stack_err (mbedTLS). */
             if (evt->error_handle && evt->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
@@ -326,6 +466,7 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
     else
         snprintf(s_uri, sizeof(s_uri), "%s", broker_uri ? broker_uri : "");
     esp_mqtt_client_config_t cfg = {
+        .outbox.limit = OUTBOX_BUDGET,   /* file interne d'esp-mqtt (QoS 1 en attente d'accuse) bornee aussi */
         .broker.address.uri = s_uri,
         .credentials.client_id = client_id,
         .credentials.username = user,
@@ -333,8 +474,8 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
         /* Last Will : le broker publie "offline" (retain) si le boitier tombe sans se
          * deconnecter proprement -> HA grise les entites. On republie "online" a la connexion. */
         .session.last_will.topic = s_avail_topic,
-        .session.last_will.msg = "offline",
-        .session.last_will.msg_len = 7,
+        .session.last_will.msg = PRESENCE_OFFLINE,
+        .session.last_will.msg_len = sizeof(PRESENCE_OFFLINE) - 1,
         .session.last_will.qos = 1,
         .session.last_will.retain = 1,
     };
@@ -350,7 +491,8 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
      * client (TLS mutuel). Les PEM vivent en NVS, charges ici sur le tas et gardes
      * vivants jusqu'au stop (esp-mqtt peut les referencer apres l'init). */
     free_tls_certs();
-    if (strncmp(s_uri, "mqtts://", 8) == 0) {
+    s_local_tls = strncmp(s_uri, "mqtts://", 8) == 0;
+    if (s_local_tls) {
         s_tls_ca   = read_cert_nvs("ca");
         s_tls_cert = read_cert_nvs("cert");
         s_tls_key  = read_cert_nvs("key");
@@ -381,8 +523,10 @@ int mqtt_bridge_start(const char *broker_uri, const char *client_id, const char 
 
 void mqtt_bridge_stop(void) {
     if (s_retry_timer) esp_timer_stop(s_retry_timer);   /* plus de relance d'un client detruit */
-    /* handle oublie AVANT l'arret : la file locale cesse aussitot de publier sur ce client */
-    if (s_mqtt) { esp_mqtt_client_handle_t c = s_mqtt; s_mqtt = NULL; esp_mqtt_client_stop(c); esp_mqtt_client_destroy(c); }
+    /* retire de sa file AVANT l'arret : une publication en cours se termine, la suivante ne part plus */
+    esp_mqtt_client_handle_t c = outbox_detach(&s_out_local);
+    if (c) { esp_mqtt_client_stop(c); esp_mqtt_client_destroy(c); }
+    turn_give(&s_turn_local);   /* arrete en pleine attente ou poignee de main */
     free_tls_certs();
 }
 
@@ -416,9 +560,16 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
     (void)arg; (void)base; (void)id;
     esp_mqtt_event_handle_t evt = event_data;
     switch (evt->event_id) {
+        case MQTT_EVENT_BEFORE_CONNECT:
+            memprobe("cloud-avant-connexion");
+            turn_take(&s_turn_cloud);
+            break;
         case MQTT_EVENT_CONNECTED: {
+            turn_give(&s_turn_cloud);
+            memprobe("cloud-connecte");
             s_cloud_connected = true;
-            esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, "online", 0, 1, 1);
+            esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, PRESENCE_ONLINE, 0, 1, 1);
+            esp_mqtt_client_subscribe(s_mqtt_cloud, s_cloud_avail, 1);   /* testament d'une ancienne session */
             /* La version part aussi a la connexion du cloud : sinon elle ne partait qu'a celle du
              * broker local, et un cloud connecte apres lui ne la recevait jamais (vu dans QEMU). */
             { char st[256]; system_status_json(st, sizeof(st)); cloud_pub(TOPIC_BASE "/system/status", st, 0, 1); }
@@ -433,16 +584,24 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             break;
         }
         case MQTT_EVENT_DISCONNECTED:
+            turn_give(&s_turn_cloud);
             if (s_cloud_connected) s_cloud_drops++;
             s_cloud_connected = false;
             break;
         case MQTT_EVENT_DATA: {
+            if (is_own_offline(evt->topic, evt->topic_len, evt->data, evt->data_len, s_cloud_avail)) {
+                ESP_LOGW(TAG, "presence cloud ecrasee par un ancien testament : republiee");
+                esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, PRESENCE_ONLINE, 0, 1, 1);
+                break;
+            }
             char lt[192];
             if (local_topic_from_cloud(evt->topic, evt->topic_len, s_cloud_base, lt, sizeof(lt)))
                 handle_incoming(lt, (int)strlen(lt), evt->data, evt->data_len);
             break;
         }
         case MQTT_EVENT_ERROR:
+            turn_give(&s_turn_cloud);
+            memprobe("cloud-erreur");
             s_cloud_errors++;
             if (evt->error_handle && evt->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
                 ESP_LOGE(TAG, "cloud TLS : tls_stack=0x%x cert_flags=0x%08x",
@@ -456,12 +615,59 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
 }
 
 void mqtt_cloud_stop(void) {
-    /* handle oublie AVANT l'arret : la file cloud cesse aussitot de publier sur ce client */
-    if (s_mqtt_cloud) { esp_mqtt_client_handle_t c = s_mqtt_cloud; s_mqtt_cloud = NULL; esp_mqtt_client_stop(c); esp_mqtt_client_destroy(c); }
+    /* retire de sa file AVANT l'arret : une publication en cours se termine, la suivante ne part plus */
+    esp_mqtt_client_handle_t c = outbox_detach(&s_out_cloud);
+    if (c) { esp_mqtt_client_stop(c); esp_mqtt_client_destroy(c); }
+    turn_give(&s_turn_cloud);   /* arrete en pleine attente ou poignee de main */
     free(s_cloud_ca);   s_cloud_ca   = NULL;
     free(s_cloud_cert); s_cloud_cert = NULL;
     free(s_cloud_key);  s_cloud_key  = NULL;
     s_cloud_connected = false;
+}
+
+/* ── Demarrer ou arreter le cloud HORS du serveur web ──
+ * esp_mqtt_client_stop attend la fin de la tache du client ; appele depuis un gestionnaire HTTP,
+ * il figeait le serveur web (constate le 2026-11-13 avec POST /api/cloud/toggle). Le serveur web
+ * depose la demande ici et repond tout de suite ; une tache dediee l'execute. */
+typedef enum { CLOUD_CTL_START, CLOUD_CTL_STOP } cloud_ctl_op_t;
+typedef struct { cloud_ctl_op_t op; char uri[160]; char dev[40]; } cloud_ctl_t;
+#define CLOUD_CTL_DEPTH 4
+#define CLOUD_CTL_STACK 4096   /* demarrage : lecture des certificats et configuration TLS */
+static QueueHandle_t s_cloud_ctl_q = NULL;
+
+static void cloud_ctl_task(void *arg) {
+    (void)arg;
+    cloud_ctl_t c;
+    for (;;) {
+        if (xQueueReceive(s_cloud_ctl_q, &c, portMAX_DELAY) != pdTRUE) continue;
+        if (c.op == CLOUD_CTL_START) mqtt_cloud_start(c.uri, c.dev);   /* arrete l'ancien client d'abord */
+        else mqtt_cloud_stop();
+    }
+}
+
+static bool cloud_ctl_post(const cloud_ctl_t *c) {
+    if (!s_cloud_ctl_q) {
+        QueueHandle_t q = xQueueCreate(CLOUD_CTL_DEPTH, sizeof(cloud_ctl_t));
+        if (!q) return false;
+        if (xTaskCreate(cloud_ctl_task, "mqtt_cloud_ctl", CLOUD_CTL_STACK, NULL, OUTBOX_PRIO, NULL) != pdPASS) {
+            vQueueDelete(q); return false;
+        }
+        s_cloud_ctl_q = q;
+    }
+    return xQueueSend(s_cloud_ctl_q, c, 0) == pdTRUE;
+}
+
+bool mqtt_cloud_request_start(const char *cloud_uri, const char *device_id) {
+    if (!cloud_uri || !*cloud_uri || !device_id || !*device_id) return false;
+    cloud_ctl_t c = { .op = CLOUD_CTL_START };
+    strlcpy(c.uri, cloud_uri, sizeof(c.uri));
+    strlcpy(c.dev, device_id, sizeof(c.dev));
+    return cloud_ctl_post(&c);
+}
+
+bool mqtt_cloud_request_stop(void) {
+    cloud_ctl_t c = { .op = CLOUD_CTL_STOP };
+    return cloud_ctl_post(&c);
 }
 
 int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
@@ -473,11 +679,12 @@ int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
     static char s_curi[160];
     snprintf(s_curi, sizeof(s_curi), "%s", cloud_uri);
     esp_mqtt_client_config_t cfg = {
+        .outbox.limit = OUTBOX_BUDGET,   /* file interne d'esp-mqtt (QoS 1 en attente d'accuse) bornee aussi */
         .broker.address.uri = s_curi,
         .credentials.client_id = s_cloud_id,
         .session.last_will.topic = s_cloud_avail,
-        .session.last_will.msg = "offline",
-        .session.last_will.msg_len = 7,
+        .session.last_will.msg = PRESENCE_OFFLINE,
+        .session.last_will.msg_len = sizeof(PRESENCE_OFFLINE) - 1,
         .session.last_will.qos = 1,
         .session.last_will.retain = 1,
     };
