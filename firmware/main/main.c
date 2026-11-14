@@ -423,7 +423,7 @@ void app_main(void) {
             memprobe("battement-anneau");
             publish_state("HEARTBEAT");
             mqtt_pub_presence();   /* filet contre le testament d'une ancienne session (voir mqtt_bridge.c) */
-            if (!ota_marked) { ota_mark_valid(); ota_marked = true; }
+            if (!ota_marked) { ota_mark_valid(); ota_marked = true; mqtt_pub_system_status(); }   /* fin de l'essai : le portail le voit */
         }
 #if CONFIG_HEAP_TASK_TRACKING
         /* Build de diagnostic : ce que chaque tache tient sur le tas, toutes les 20 s, sur la

@@ -72,7 +72,7 @@ test("commandes : celles que le firmware attend, sous le prefixe du boitier", ()
   assert.deepEqual(buildCommand(f, target, "stop", null), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set`, payload: "STOP", retain: false });
   assert.deepEqual(buildCommand(f, target, "up", null), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set`, payload: "OPEN", retain: false });
   assert.deepEqual(buildCommand(f, target, "position", 42), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set_position`, payload: "42", retain: false });
-  assert.deepEqual(buildCommand(f, { box: BOX }, "update", null), { topic: `${ROOT}/${BOX}/update/install`, payload: "INSTALL", retain: false });
+  // la mise a jour du boitier entier : voir le test « mises a jour » (seulement quand elle est possible)
   assert.deepEqual(Object.keys(ACTION_PAYLOAD).sort(), ["down", "stop", "up"]);
 });
 
@@ -158,4 +158,22 @@ test("sante : battement et etat systeme reels du M5 (signal, memoire, reseau, re
   assert.match(s.health.lastReset!.fr, /logiciel/);
   assert.deepEqual(read({ box: BOX, path: "listen/state", payload: "ON", retained: true }), [], "l'ecoute radio n'est pas un battement");
   assert.deepEqual(read({ box: BOX, path: "openprofalux/state", payload: '{"last_cmd":"X"}', retained: true }), [], "sans signal, ce n'est pas un battement");
+});
+
+test("mises a jour : installer seulement vers plus recent ; retour arriere quand le boitier le permet", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  const f = familyById("openprofalux")!;
+  // releve reel : version de test plus recente que la publiee -> pas d'installation proposee
+  applyMessage(`${ROOT}/${BOX}/update/state`, '{"installed_version":"0.2.16-otatest","latest_version":"0.2.15"}', true, 1);
+  applyMessage(`${ROOT}/${BOX}/system/ota`, '{"trial":false,"previous":"0.2.16-santetest","rollback":true}', true, 1);
+  const s = boxState("openprofalux", BOX)!;
+  assert.deepEqual([s.actions.get("update"), s.actions.get("rollback"), s.trial, s.previous], [false, true, false, "0.2.16-santetest"]);
+  assert.ok("error" in buildCommand(f, { box: BOX }, "update", null), "rien a installer : refuse");
+  assert.deepEqual(buildCommand(f, { box: BOX }, "rollback", null), { topic: `${ROOT}/${BOX}/ota/rollback`, payload: "ROLLBACK", retain: false });
+  applyMessage(`${ROOT}/${BOX}/update/state`, '{"installed_version":"0.2.15","latest_version":"0.2.16"}', true, 1);
+  assert.deepEqual(buildCommand(f, { box: BOX }, "update", null), { topic: `${ROOT}/${BOX}/update/install`, payload: "INSTALL", retain: false });
+  applyMessage(`${ROOT}/${BOX}/system/ota`, '{"trial":true,"previous":"","rollback":false}', true, 1);
+  assert.ok("error" in buildCommand(f, { box: BOX }, "rollback", null), "pas de version precedente valide : refuse");
+  assert.equal(boxState("openprofalux", BOX)!.previous, null);
 });

@@ -10,6 +10,7 @@
 //   remote/<tel>/battery      ON si la pile est faible (retenu)               -> alerte
 //   system/status             {"fw":"0.2.16","target":"m5-atom-lite","ssid":"...","ip":"...",
 //                              "mqtt":"hote:1883","reset":"software",...}      -> version, reseau, redemarrage
+//   system/ota                {"trial":false,"previous":"0.2.16","rollback":true} (retenu) -> essai, retour arriere
 //   <nom>/state               battement ~60 s {"rssi":-67,"free_heap":...,"min_heap":...,"up_s":...} -> sante
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
 // Le reste (ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
@@ -19,6 +20,7 @@
 import type { Plugin } from "../opencloudapp/server/src/plugin-types.js";
 import { PLUGIN_CATEGORY } from "../opencloudapp/server/src/plugin-contract.js";
 import { FACT, EVENT_LEVEL, FAMILY_CONTRACT, type Fact, type FamilyDecl, type FamilyMessage } from "../opencloudapp/server/src/family-contract.js";
+import { isNewerVersion } from "../opencloudapp/server/src/version.js";
 import { KINDS } from "./kinds.generated.js";
 import { CONTROL_ID, SETTING_ID } from "./ids.js";
 
@@ -26,8 +28,10 @@ import { CONTROL_ID, SETTING_ID } from "./ids.js";
 export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE" };
 /** Presence telle que le firmware l'annonce (mqtt_bridge.c, PRESENCE_ONLINE / PRESENCE_OFFLINE). */
 export const PRESENCE = { online: "online", offline: "offline" } as const;
-/** Commande de mise a jour du boitier entier (entite update de HA, payload_install). */
+/** Actions sur le boitier entier : installer la derniere version (entite update de HA, payload_install),
+ *  revenir a la version precedente (firmware, ota/rollback). */
 export const UPDATE_INSTALL = { control: "update", path: "update/install", payload: "INSTALL" } as const;
+export const ROLLBACK = { control: "rollback", path: "ota/rollback", payload: "ROLLBACK" } as const;
 /** Etat de pile d'une telecommande (binary_sensor HA : ON = pile faible). */
 const BATTERY_LOW = "ON";
 
@@ -101,15 +105,29 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
   if (path === "update/state") {
     const u = json(payload);
     if (!u) return [];
+    const inst = u.installed_version, latest = u.latest_version;
     return [{ fact: FACT.box,
-      ...(typeof u.installed_version === "string" ? { firmware: u.installed_version } : {}),
-      ...(typeof u.latest_version === "string" ? { latest: u.latest_version } : {}) }];
+      ...(typeof inst === "string" ? { firmware: inst } : {}),
+      ...(typeof latest === "string" ? { latest } : {}),
+      // la meme regle que le portail : seulement vers plus recent
+      actions: { [UPDATE_INSTALL.control]: typeof inst === "string" && typeof latest === "string" && isNewerVersion(latest, inst) } }];
+  }
+  if (path === "system/ota") {
+    const o = json(payload);
+    if (!o) return [];
+    return [{ fact: FACT.box,
+      ...(typeof o.trial === "boolean" ? { trial: o.trial } : {}),
+      ...(typeof o.previous === "string" ? { previous: o.previous } : {}),
+      actions: { [ROLLBACK.control]: o.rollback === true } }];
   }
   return [];
 }
 
 export const command: FamilyDecl["command"] = ({ device }, control, value) => {
-  if (!device) return control === UPDATE_INSTALL.control ? { path: UPDATE_INSTALL.path, payload: UPDATE_INSTALL.payload } : null;
+  if (!device) {
+    const a = [UPDATE_INSTALL, ROLLBACK].find((x) => x.control === control);
+    return a ? { path: a.path, payload: a.payload } : null;
+  }
   if (control === CONTROL_ID.position) return typeof value === "number" ? { path: `cover/${device}/set_position`, payload: String(Math.round(value)) } : null;
   const p = ACTION_PAYLOAD[control];
   return p ? { path: `cover/${device}/set`, payload: p } : null;
@@ -130,6 +148,13 @@ export const family: FamilyDecl = {
   contract: FAMILY_CONTRACT,
   topicRoot: "openprofalux",
   kinds: KINDS,
+  boxControls: [
+    { id: UPDATE_INSTALL.control, label: { fr: "Installer la dernière version", en: "Install the latest version" },
+      confirm: { fr: "Le boîtier va télécharger la nouvelle version et redémarrer (environ une minute). En cas de problème, il revient seul à la version actuelle.",
+        en: "The box will download the new version and restart (about a minute). If anything goes wrong, it returns to the current version on its own." } },
+    { id: ROLLBACK.control, label: { fr: "Revenir à la version précédente", en: "Go back to the previous version" },
+      confirm: { fr: "Le boîtier va redémarrer sur la version précédente.", en: "The box will restart on the previous version." } },
+  ],
   read,
   command,
   configure,

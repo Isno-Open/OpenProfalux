@@ -18,6 +18,7 @@
 #include <esp_wifi.h>      /* SSID du reseau rejoint (etat systeme) */
 #include "wifi_bridge.h"
 #include "cover_attrs.h"   /* json_string : SSID et hote echappes pour JSON */
+#include "ota.h"           /* etat de la version (essai, precedente) pour le portail */
 
 /* Adresse du broker local, au niveau du fichier : mqtt_bridge_start la pose, l'etat systeme en lit l'hote. */
 static char s_uri[160];
@@ -340,6 +341,7 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/busy/#", 1);      /* verrou d'emission inter-cartes */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/ota/pull", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/update/install", 1);   /* entite update HA */
+            esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/ota/rollback", 1);     /* retour a la version precedente */
             /* PAS d'abonnement a frames/log/# : le ring est deja persiste en SPIFFS (load_ring au boot).
              * S'y abonner = l'ESP s'auto-inonde de ses propres trames retained (jeu qui grossit sans fin)
              * au boot -> la tache MQTT traite ce flot en prenant le LOCK pendant que la discovery publie
@@ -597,8 +599,22 @@ static void system_status_json(char *buf, size_t len) {
              ssid_js, ip, host_js, reset_word(esp_reset_reason()));
 }
 
+/* Etat de la version pour le portail : en essai (pas encore validee), version precedente et retour
+ * possible. Sujet a part (system/ota) : update/state est lu par l'entite update de HA, qu'on laisse
+ * a son format. */
+static void ota_state_json(char *buf, size_t len) {
+    ota_rb_info_t rb; ota_rb_info(&rb);
+    char prev[3 * 32 + 8] = "\"\"";
+    json_string(rb.previous, prev, sizeof(prev));
+    snprintf(buf, len, "{\"trial\":%s,\"previous\":%s,\"rollback\":%s}",
+             rb.on_trial ? "true" : "false", prev, rb.rb_possible ? "true" : "false");
+}
+
 int mqtt_pub_system_status(void) {
     char payload[640];
+    ota_state_json(payload, sizeof(payload));
+    cloud_pub(TOPIC_BASE "/system/ota", payload, 0, 1);
+    outbox_send(&s_out_local, TOPIC_BASE "/system/ota", payload, 1, 1);
     system_status_json(payload, sizeof(payload));
     cloud_pub(TOPIC_BASE "/system/status", payload, 0, 1);
     return outbox_send(&s_out_local, TOPIC_BASE "/system/status", payload, 1, 1);
@@ -629,6 +645,7 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             snprintf(sub, sizeof(sub), "%s/listen/#", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/ota/pull", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/update/install", s_cloud_base);       esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/ota/rollback", s_cloud_base);         esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* portail */
             ESP_LOGI(TAG, "cloud connecté, base=%s", s_cloud_base);
             if (s_hdl.on_cloud_connected) s_hdl.on_cloud_connected();   /* -> republie description + etat */
             break;

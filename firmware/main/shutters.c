@@ -2119,6 +2119,17 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         }
         return;
     }
+    /* Retour a la version precedente (portail, avec confirmation cote utilisateur) : seulement si une
+     * version valide attend dans l'autre partition ; redemarre aussitot. */
+    if (!strcmp(topic, "openprofalux/ota/rollback")) {
+        if (len == 8 && !memcmp(data, "ROLLBACK", 8) && ota_rollback_possible()) {
+            ESP_LOGW(TAG, "portail -> retour a la version precedente");
+            ota_rollback();   /* reboote, ou echoue s'il n'y a pas d'image precedente valide */
+        } else {
+            ESP_LOGW(TAG, "retour a la version precedente refuse (commande ou image precedente)");
+        }
+        return;
+    }
     /* Switch HA "Ecoute RF permanente" (commande) */
     if (!strcmp(topic, "openprofalux/listen/set")) {
         shutters_set_log_frames(len >= 2 && !strncasecmp(data, "ON", 2));   /* publie l'etat + re-annonce */

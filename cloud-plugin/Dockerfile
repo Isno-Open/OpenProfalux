@@ -15,9 +15,9 @@ COPY cloud-plugin ./cloud-plugin
 RUN cd cloud-plugin && npm test \
   && mkdir -p /out && cp package.json /out/package.json \
   && cp dist/src/index.js dist/src/ids.js dist/src/kinds.generated.js /out/ \
-  && cp dist/opencloudapp/server/src/family-contract.js dist/opencloudapp/server/src/plugin-contract.js /out/ \
+  && cp dist/opencloudapp/server/src/family-contract.js dist/opencloudapp/server/src/plugin-contract.js dist/opencloudapp/server/src/version.js /out/ \
   && cp node_modules/@isno-open/plugin-host/dist/contract.js /out/contract.js \
-  && sed -i 's#"../opencloudapp/server/src/family-contract.js"#"./family-contract.js"#; s#"../opencloudapp/server/src/plugin-contract.js"#"./plugin-contract.js"#' /out/index.js \
+  && sed -i 's#"../opencloudapp/server/src/family-contract.js"#"./family-contract.js"#; s#"../opencloudapp/server/src/plugin-contract.js"#"./plugin-contract.js"#; s#"../opencloudapp/server/src/version.js"#"./version.js"#' /out/index.js \
   && sed -i 's#"@isno-open/plugin-host/contract"#"./contract.js"#' /out/plugin-contract.js \
   && ! grep -nE "from \"[^.]" /out/*.js
 
