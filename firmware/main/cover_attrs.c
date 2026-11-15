@@ -3,6 +3,7 @@
 #include "dev_type.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Noms des types : MIROIR des cles de profiles.json "types" (source de verite du vocabulaire),
  * comme les codes de dev_type_t le sont de ses "code". Le banc test/cover-attrs refuse toute
@@ -11,6 +12,17 @@ static const char *const DEV_TYPE_NAMES[] = {
     [TYPE_VOLET]   = "volet",
     [TYPE_PORTAIL] = "portail",
 };
+
+/* Noms des roles : MIROIR des cles de profiles.json "roles" (banc test/cover-attrs). */
+static const char *const COVER_ROLE_NAMES[COVER_ROLE_COUNT] = {
+    [COVER_ROLE_SIMPLE]  = NULL,
+    [COVER_ROLE_CENTRAL] = "central",
+    [COVER_ROLE_ZONE]    = "zone",
+};
+
+const char *cover_role_name(cover_role_t role) {
+    return (unsigned)role < COVER_ROLE_COUNT ? COVER_ROLE_NAMES[role] : NULL;
+}
 
 const char *dev_type_name(uint8_t type) {
     return type < sizeof(DEV_TYPE_NAMES) / sizeof(DEV_TYPE_NAMES[0]) ? DEV_TYPE_NAMES[type] : NULL;
@@ -62,6 +74,26 @@ int cover_attrs_json(const cover_attrs_t *a, char *out, size_t cap) {
     if (a->orientation >= 0 && a->orientation <= COVER_ORIENTATION_MAX) {
         int k = snprintf(t2, sizeof t2, ",\"orientation\":%d", a->orientation);
         if (k < 0 || !put(out, cap, &w, t2, (size_t)k)) { out[0] = 0; return -1; }
+    }
+    const char *role = cover_role_name(a->role);
+    if (role) {
+        /* les slugs sont des identifiants de topic (lettres, chiffres, _ et -) : rien a echapper, mais on
+         * passe par put_json_string pour ne jamais produire un JSON invalide */
+        if (!put(out, cap, &w, ",\"role\":", 8) || !put_json_string(out, cap, &w, role) || !put(out, cap, &w, ",\"members\":[", 12)) { out[0] = 0; return -1; }
+        bool first = true;
+        for (const char *p = a->members; p && *p; ) {
+            const char *e = strchr(p, ',');
+            size_t n = e ? (size_t)(e - p) : strlen(p);
+            if (n > 0) {
+                char one[64];
+                if (n >= sizeof one) { out[0] = 0; return -1; }
+                memcpy(one, p, n); one[n] = 0;
+                if ((!first && !put(out, cap, &w, ",", 1)) || !put_json_string(out, cap, &w, one)) { out[0] = 0; return -1; }
+                first = false;
+            }
+            p = e ? e + 1 : p + n;
+        }
+        if (!put(out, cap, &w, "]", 1)) { out[0] = 0; return -1; }
     }
     if (!put(out, cap, &w, "}", 1)) { out[0] = 0; return -1; }
     return (int)w;

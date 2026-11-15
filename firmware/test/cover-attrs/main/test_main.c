@@ -61,6 +61,19 @@ int main(int argc, char **argv) {
     check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .rank = COVER_DEVICES_MAX + 1, .orientation = 360 }, out, sizeof out) > 0
           && !strstr(out, "rank") && !strstr(out, "orientation"), "T20 hors bornes : rien de publie");
 
+    /* role et membres : seulement pour une centrale ou une zone, membres toujours presents (meme vides) */
+    char big[256];
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .name = "Tout", .orientation = -1, .role = COVER_ROLE_CENTRAL, .members = "Salon,Chambre_Parents" }, big, sizeof big) > 0
+          && !strcmp(big, "{\"type\":\"volet\",\"positional\":false,\"name\":\"Tout\",\"role\":\"central\",\"members\":[\"Salon\",\"Chambre_Parents\"]}"), "T22 centrale : role et membres");
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .orientation = -1, .role = COVER_ROLE_ZONE, .members = NULL }, big, sizeof big) > 0
+          && strstr(big, "\"role\":\"zone\",\"members\":[]}"), "T23 zone sans suiveur : liste vide");
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .orientation = -1, .role = COVER_ROLE_SIMPLE, .members = "x" }, big, sizeof big) > 0
+          && !strstr(big, "role") && !strstr(big, "members"), "T24 appareil simple : ni role ni membres");
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .orientation = -1, .role = COVER_ROLE_CENTRAL, .members = "a,,b," }, big, sizeof big) > 0
+          && strstr(big, "\"members\":[\"a\",\"b\"]}"), "T25 membres : vides ignores");
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .orientation = -1, .role = COVER_ROLE_CENTRAL, .members = "Salon,Chambre" }, big, 60) == -1 && big[0] == 0, "T26 membres qui ne tiennent pas : refuse, chaine vide");
+    check(cover_role_name(COVER_ROLE_SIMPLE) == NULL && cover_role_name(COVER_ROLE_COUNT) == NULL, "T27 role simple ou inconnu : pas de nom");
+
     /* json_string : texte choisi par l'utilisateur (SSID) en chaine JSON */
     char js[64];
     check(json_string("Box \"Maison\"", js, sizeof js) > 0 && !strcmp(js, "\"Box \\\"Maison\\\"\""), "T15 json_string : guillemets echappes");
@@ -83,6 +96,16 @@ int main(int argc, char **argv) {
         unsigned mn = 0, mx = 0;
         check(ts && sscanf(ts, "\"travel_s\": { \"min\": %u, \"max\": %u", &mn, &mx) == 2
               && mn * 1000u == COVER_TRAVEL_MIN_MS && mx * 1000u == COVER_TRAVEL_MAX_MS, "T14 bornes du temps de course : celles de profiles.json");
+        /* roles : chaque role nomme est une cle de profiles.json "roles" (et le portail en tire ses cartes) */
+        const char *roles = strstr(json, "\"roles\"");
+        for (int r = COVER_ROLE_SIMPLE + 1; r < COVER_ROLE_COUNT; r++) {
+            char key[48], name[80];
+            snprintf(key, sizeof key, "\"%s\":", cover_role_name((cover_role_t)r) ? cover_role_name((cover_role_t)r) : "?");
+            snprintf(name, sizeof name, "T28 role %d : declare dans profiles.json roles", r);
+            const char *k = roles ? strstr(roles, key) : NULL;
+            const char *types = strstr(json, "\"types\"");
+            check(k && (!types || types < roles || k < types), name);
+        }
         const char *dm = strstr(json, "\"devices_max\"");
         unsigned dmax = 0;
         check(dm && sscanf(dm, "\"devices_max\": %u", &dmax) == 1 && dmax == COVER_DEVICES_MAX, "T21 nombre maximal d'appareils : celui de profiles.json");

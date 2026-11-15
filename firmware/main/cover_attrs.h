@@ -23,6 +23,13 @@ bool cover_travel_ok(uint32_t ms);
 /* Orientation d'une facade : azimut en degres, 0 (nord) a 359 ; -1 = non definie. */
 #define COVER_ORIENTATION_MAX 359
 
+/* Role d'un appareil : simple, CENTRALE (commande diffusee a ses membres) ou ZONE (telecommande de
+ * piece, ses suiveurs reproduisent ses mouvements). Noms MIROIR des cles de profiles.json "roles" : le
+ * banc test/cover-attrs refuse toute divergence. */
+typedef enum { COVER_ROLE_SIMPLE = 0, COVER_ROLE_CENTRAL, COVER_ROLE_ZONE, COVER_ROLE_COUNT } cover_role_t;
+/* Nom d'un role tel que profiles.json le declare, NULL pour un appareil simple ou un role inconnu. */
+const char *cover_role_name(cover_role_t role);
+
 /* Description d'un appareil pour le portail. name NULL ou vide : pas de champ name ; temps de course
  * publies seulement si les deux sont dans les bornes (etalonne) ; rank publie si >= 1 ; orientation
  * publiee si 0..359. */
@@ -33,10 +40,13 @@ typedef struct {
     uint32_t    up_ms, down_ms;
     int         rank;          /* 1..COVER_DEVICES_MAX, 0 = non range */
     int         orientation;   /* 0..359, -1 = non definie */
+    cover_role_t role;
+    const char  *members;      /* centrale ou zone : SLUGS de ses membres separes par des virgules (NULL = aucun) */
 } cover_attrs_t;
 
 /* Ecrit {"type":"<nom>","positional":true|false,"name":"...","travel_up_s":N,"travel_down_s":N,
- * "rank":N,"orientation":N} dans out (champs facultatifs selon cover_attrs_t). Le nom est celui que
+ * "rank":N,"orientation":N,"role":"central|zone","members":["slug",...]} dans out (role et members
+ * seulement pour une centrale ou une zone, members toujours present alors, meme vide) (champs facultatifs selon cover_attrs_t). Le nom est celui que
  * l'utilisateur a donne (accents compris, en UTF-8), echappe pour JSON. Rend la longueur, ou -1 si le
  * type est inconnu ou si le tampon est trop petit (rien n'est alors ecrit). */
 int cover_attrs_json(const cover_attrs_t *a, char *out, size_t cap);

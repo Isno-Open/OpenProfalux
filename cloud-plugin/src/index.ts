@@ -15,14 +15,15 @@
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
 // Le reste (ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
 // Commandes, sous le meme prefixe : cover/<id>/set (OPEN|STOP|CLOSE), cover/<id>/set_position (0..100, % d'ouverture),
-// update/install (INSTALL) pour le boitier entier. Reglages (etalonnage) : cover/<id>/config
-// {"travel_up_ms":N,"travel_down_ms":N}, valides par le firmware contre les memes bornes (profiles.json).
+// update/install (INSTALL) pour le boitier entier. Reglages : cover/<id>/config {"travel_up_ms":N,
+// "travel_down_ms":N,"rank":N,"orientation":N,"members":["slug",...]}, valides par le firmware contre les
+// memes bornes (profiles.json). Une centrale ou une zone publie aussi "role" et "members" dans attrs.
 import type { Plugin } from "../opencloudapp/server/src/plugin-types.js";
 import { PLUGIN_CATEGORY } from "../opencloudapp/server/src/plugin-contract.js";
 import { FACT, EVENT_LEVEL, FAMILY_CONTRACT, type Fact, type FamilyDecl, type FamilyMessage } from "../opencloudapp/server/src/family-contract.js";
 import { isNewerVersion } from "../opencloudapp/server/src/version.js";
 import { KINDS } from "./kinds.generated.js";
-import { CONTROL_ID, SETTING_ID } from "./ids.js";
+import { CONTROL_ID, SETTING_ID, roleKindId } from "./ids.js";
 
 /** Actions de la carte -> charge que le firmware attend sur cover/<id>/set. */
 export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE" };
@@ -81,12 +82,16 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     if (!a) return [];
     const up = a[SETTING_ID.travelUp], down = a[SETTING_ID.travelDown], rank = a[SETTING_ID.rank], ori = a[SETTING_ID.orientation];
     // valeurs publiees seulement si definies (temps de course : volet etalonne, les deux)
-    const settings: Record<string, number> = {
+    // centrale ou zone : son type a elle (« volet-central »), et ses membres (slugs des appareils)
+    const role = str(a.role) ? a.role : null, members = a[SETTING_ID.members];
+    const settings: Record<string, number | readonly string[]> = {
       ...(num(up) && num(down) ? { [SETTING_ID.travelUp]: up, [SETTING_ID.travelDown]: down } : {}),
       ...(num(rank) ? { [SETTING_ID.rank]: rank } : {}),
       ...(num(ori) ? { [SETTING_ID.orientation]: ori } : {}),
+      ...(role && Array.isArray(members) && members.every((x) => typeof x === "string") ? { [SETTING_ID.members]: members as string[] } : {}),
     };
-    return [{ fact: FACT.device, device, kind: typeof a.type === "string" ? a.type : "", name: nameOf(a.name, device),
+    const type = typeof a.type === "string" ? a.type : "";
+    return [{ fact: FACT.device, device, kind: role ? roleKindId(type, role) : type, name: nameOf(a.name, device),
       hidden: a.positional === true ? [] : [CONTROL_ID.position], settings, ...(num(rank) ? { rank } : {}) }];
   }
   m = /^remote\/([^/]+)\/battery$/.exec(path);
@@ -149,11 +154,13 @@ export const command: FamilyDecl["command"] = ({ device }, control, value) => {
  *  Rang et orientation passent tels quels. Rien a envoyer : null. */
 export const configure: NonNullable<FamilyDecl["configure"]> = ({ device }, values) => {
   const up = values[SETTING_ID.travelUp], down = values[SETTING_ID.travelDown];
-  const rank = values[SETTING_ID.rank], ori = values[SETTING_ID.orientation];
-  const out: Record<string, number> = {
+  const rank = values[SETTING_ID.rank], ori = values[SETTING_ID.orientation], members = values[SETTING_ID.members];
+  const out: Record<string, number | readonly string[]> = {
     ...(num(up) && num(down) ? { travel_up_ms: Math.round(up * 1000), travel_down_ms: Math.round(down * 1000) } : {}),
     ...(num(rank) ? { rank: Math.round(rank) } : {}),
     ...(num(ori) ? { orientation: Math.round(ori) } : {}),
+    // membres d'une centrale ou d'une zone : les slugs tels quels (le portail a verifie qu'ils existent)
+    ...(Array.isArray(members) ? { [SETTING_ID.members]: members } : {}),
   };
   return Object.keys(out).length ? { path: `cover/${device}/config`, payload: JSON.stringify(out) } : null;
 };

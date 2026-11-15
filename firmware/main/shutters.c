@@ -831,12 +831,28 @@ static bool volet_positional(const volet_t *v) {
  * est la : un boitier pilote seulement par le cloud doit aussi montrer ses appareils. */
 static void publish_volet_state(volet_t *v) {
     if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;
-    /* attrs : type et positionnel (~40 o) + le nom echappe (SH_ID_LEN octets, au pire x6 en \\u00XX) */
-    char topic[96], pl[16], st[10], slug[SH_ID_LEN], attrs[64 + 6 * SH_ID_LEN];
+    /* attrs : type, positionnel, reglages (~120 o) + le nom echappe (SH_ID_LEN octets, au pire x6 en
+     * \\u00XX) + pour une centrale ou une zone, ses membres (slugs entre guillemets). STATIQUES : trop gros
+     * pour la pile de la tache appelante, et on est sous LOCK (un seul appelant a la fois). */
+    static char attrs[160 + 6 * SH_ID_LEN + SH_MAX_VOLETS * (SH_ID_LEN + 3)], member_slugs[SH_MEMBERS_LEN];
+    char topic[96], pl[16], st[10], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
+    /* membres d'une centrale ou d'une zone, en SLUGS : l'identifiant de l'appareil dans le portail */
+    const cover_role_t role = v->central ? COVER_ROLE_CENTRAL : is_zone(v) ? COVER_ROLE_ZONE : COVER_ROLE_SIMPLE;
+    member_slugs[0] = 0;
+    if (role != COVER_ROLE_SIMPLE) {
+        char mid[SH_ID_LEN], ms[SH_ID_LEN]; size_t w = 0;
+        for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
+            slugify(ms, sizeof(ms), mid);
+            int k = snprintf(member_slugs + w, sizeof(member_slugs) - w, "%s%s", w ? "," : "", ms);
+            if (k < 0 || (size_t)k >= sizeof(member_slugs) - w) break;   /* ne peut pas arriver : meme borne que members */
+            w += (size_t)k;
+        }
+    }
     /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
     const cover_attrs_t ca = { .type = v->type, .positional = volet_positional(v), .name = v->id, .up_ms = v->travel_up_ms,
-                               .down_ms = v->travel_down_ms, .rank = volet_rank(v), .orientation = v->orientation };
+                               .down_ms = v->travel_down_ms, .rank = volet_rank(v), .orientation = v->orientation,
+                               .role = role, .members = member_slugs };
     if (cover_attrs_json(&ca, attrs, sizeof(attrs)) > 0) {
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
         pub_defer(topic, attrs, 1, 1);
@@ -1395,6 +1411,34 @@ int shutters_set_followers(const char *id, const char *members_csv, const char *
     ESP_LOGW(TAG, "zone '%s' : suiveurs=[%s]", id, v->members ? v->members : "");
     UNLOCK();
     pub_flush();
+    return 0;
+}
+
+/* Change les MEMBRES d'une centrale existante (portail cloud) : chacun existe, n'est ni elle-meme ni une
+ * centrale (une centrale ne diffuse pas a une autre). Rien d'autre ne change (position, nom...). *why
+ * recoit la raison d'un refus. */
+int shutters_set_central_members(const char *id, const char *members_csv, const char **why) {
+    const char *err = NULL;
+    LOCK();
+    volet_t *v = id ? find_volet(id) : NULL;
+    char mid[SH_ID_LEN];
+    if (!v || !v->central) err = "centrale inconnue";
+    else for (const char *p = cfg_members_next(members_csv, mid); p && !err; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (!m) err = "membre inconnu";
+        else if (m == v) err = "une centrale ne peut pas se contenir";
+        else if (m->central) err = "une centrale ne peut pas etre membre";
+    }
+    if (!err && cfg_volet_set_members(v, members_csv) != 0) err = "trop de membres";
+    if (err) {
+        UNLOCK();
+        ESP_LOGW(TAG, "centrale '%s' refusee : %s", id ? id : "?", err);
+        if (why) *why = err;
+        return -1;
+    }
+    save_cfg();
+    ESP_LOGW(TAG, "centrale '%s' : membres=[%s]", id, v->members ? v->members : "");
+    UNLOCK();
     return 0;
 }
 
@@ -2234,28 +2278,55 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     if (!v) { ESP_LOGW(TAG, "MQTT cmd : volet slug '%s' inconnu", slug); return; }
     char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof(id));
     /* Reglages d'un appareil (portail cloud, docs/CLOUD.md) : {"travel_up_ms":N,"travel_down_ms":N,
-     * "orientation":N,"rank":N}, chaque champ facultatif (les temps de course vont par deux). Tout
+     * "orientation":N,"rank":N,"members":["slug",...]}, chaque champ facultatif (les temps de course vont par deux). Tout
      * champ present est verifie contre ses bornes : un seul faux, et rien n'est applique. Puis
      * description et decouverte republiees (le volet peut devenir positionnel, changer de rang). */
     if (!strcmp(sub, "config")) {
-        if (len <= 0 || len > 256) { ESP_LOGW(TAG, "config '%s' : taille %d refusee", id, len); return; }
+        /* borne : de quoi tenir tous les membres possibles en slugs (centrale de SH_MAX_VOLETS appareils) */
+        if (len <= 0 || len > 64 + SH_MAX_VOLETS * (SH_ID_LEN + 3)) { ESP_LOGW(TAG, "config '%s' : taille %d refusee", id, len); return; }
         char *js = strndup(data, (size_t)len);
         cJSON *j = js ? cJSON_Parse(js) : NULL;
         free(js);
         cJSON *u = cJSON_GetObjectItem(j, "travel_up_ms"), *d = cJSON_GetObjectItem(j, "travel_down_ms");
         cJSON *o = cJSON_GetObjectItem(j, "orientation"), *k = cJSON_GetObjectItem(j, "rank");
+        cJSON *mb = cJSON_GetObjectItem(j, "members");
         bool has_travel = u || d;
+        /* membres (centrale ou zone deja creee sur le boitier) : liste de SLUGS -> ids reels, en CSV ;
+         * un slug inconnu refuse tout. Un appareil simple n'en a pas (le devenir se fait sur le boitier). */
+        /* sur le tas : ce gestionnaire tourne dans la tache MQTT locale ET dans la tache cloud */
+        char *members_csv = mb ? calloc(1, SH_MEMBERS_LEN) : NULL;
+        bool members_ok = !mb;
+        bool central = false;
+        if (mb && members_csv) {
+            LOCK();   /* la liste des volets ne bouge pas pendant la traduction */
+            size_t w = 0; central = v->central; members_ok = cJSON_IsArray(mb) && (central || is_zone(v));
+            cJSON *it;
+            cJSON_ArrayForEach(it, mb) {
+                if (!members_ok) break;
+                volet_t *m = cJSON_IsString(it) ? find_volet_by_slug(it->valuestring) : NULL;
+                int n = m ? snprintf(members_csv + w, SH_MEMBERS_LEN - w, "%s%s", w ? "," : "", m->id) : -1;
+                if (n < 0 || (size_t)n >= SH_MEMBERS_LEN - w) members_ok = false; else w += (size_t)n;
+            }
+            UNLOCK();
+        }
         uint32_t up = cJSON_IsNumber(u) ? (uint32_t)cJSON_GetNumberValue(u) : 0, down = cJSON_IsNumber(d) ? (uint32_t)cJSON_GetNumberValue(d) : 0;
         int ori = cJSON_IsNumber(o) ? (int)cJSON_GetNumberValue(o) : -2, rank = cJSON_IsNumber(k) ? (int)cJSON_GetNumberValue(k) : -2;
-        bool ok = j && (has_travel || o || k)
+        bool ok = j && (has_travel || o || k || mb) && members_ok
             && (!has_travel || (cover_travel_ok(up) && cover_travel_ok(down)))
             && (!o || (ori >= 0 && ori <= COVER_ORIENTATION_MAX))
             && (!k || (rank >= 1 && rank <= COVER_DEVICES_MAX));
         cJSON_Delete(j);
-        if (!ok) { ESP_LOGW(TAG, "config '%s' refusee (champ absent ou hors bornes)", id); return; }
-        if (has_travel && shutters_calibrate(id, up, down) != 0) return;
-        if (ori >= 0 && shutters_set_orientation(id, ori) != 0) return;
-        if (rank >= 1 && shutters_set_rank(id, rank) != 0) return;
+        if (!ok) { ESP_LOGW(TAG, "config '%s' refusee (champ absent ou hors bornes)", id); free(members_csv); return; }
+        if ((has_travel && shutters_calibrate(id, up, down) != 0) || (ori >= 0 && shutters_set_orientation(id, ori) != 0)
+            || (rank >= 1 && shutters_set_rank(id, rank) != 0)) { free(members_csv); return; }
+        if (mb) {
+            /* centrale : sa liste de diffusion ; zone : ses suiveurs, avec les regles de la zone (pas de
+             * centrale ni de zone suiveuse). Une zone videe redevient un volet simple, comme en local. */
+            const char *why = NULL;
+            int rc = central ? shutters_set_central_members(id, members_csv, &why) : shutters_set_followers(id, members_csv, &why);
+            free(members_csv);
+            if (rc != 0) { ESP_LOGW(TAG, "config '%s' : membres refuses (%s)", id, why ? why : "?"); return; }
+        }
         ESP_LOGI(TAG, "config '%s' appliquee", id);
         LOCK();
         /* le rang peut avoir change pour tous : chacun republie le sien */

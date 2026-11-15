@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
 import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
-import { FACT } from "../opencloudapp/server/src/family-contract.js";
+import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
 import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById } from "../opencloudapp/server/src/device-families.js";
 
 const ROOT = "openprofalux";
@@ -194,4 +194,39 @@ test("rang et orientation : lus dans la description reelle, envoyes sur config",
   assert.deepEqual(buildConfigure(familyById("openprofalux")!, { box: BOX, device: "Chambre_Parents" }, { orientation: 270, rank: 1 }),
     { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/config`, payload: '{"rank":1,"orientation":270}', retain: false });
   assert.ok("error" in buildConfigure(familyById("openprofalux")!, { box: BOX, device: "Chambre_Parents" }, { orientation: 360 }), "hors bornes");
+});
+
+test("centrale : releve reel (role et membres), carte sans position, membres choisis parmi les appareils du boitier", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  // releve reel du M5 (0.2.16-rolestest), centrale de test creee sur le boitier avec Chambre Parents
+  applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":true,"name":"Chambre Parents","travel_up_s":19,"travel_down_s":19,"rank":1,"orientation":200}', true, 1);
+  const r = applyMessage(`${ROOT}/${BOX}/cover/Test_centrale/attrs`, '{"type":"volet","positional":false,"name":"Test centrale","role":"central","members":["Chambre_Parents"]}', true, 1)!;
+  assert.deepEqual(r.refused, []);
+  const c = boxState("openprofalux", BOX)!.devices.get("Test_centrale")!;
+  assert.deepEqual([c.kind, c.known, c.name, c.settings.get("members")], ["volet-central", true, "Test centrale", ["Chambre_Parents"]]);
+  const kind = family.kinds.find((k) => k.id === "volet-central")!;
+  assert.ok(!kind.controls.some((x) => x.id === "position"), "une centrale n'a pas de position");
+  const f = familyById("openprofalux")!, t = { box: BOX, device: "Test_centrale" };
+  assert.deepEqual(buildConfigure(f, t, { members: [] }), { topic: `${ROOT}/${BOX}/cover/Test_centrale/config`, payload: '{"members":[]}', retain: false });
+  assert.deepEqual(buildConfigure(f, t, { members: ["Chambre_Parents"] }), { topic: `${ROOT}/${BOX}/cover/Test_centrale/config`, payload: '{"members":["Chambre_Parents"]}', retain: false });
+  assert.ok("error" in buildConfigure(f, t, { members: ["Salon"] }), "absent du boitier");
+  assert.ok("error" in buildConfigure(f, t, { members: ["Test_centrale"] }), "elle-meme");
+  // un volet simple n'a pas de membres a regler (devenir centrale se fait sur le boitier)
+  assert.ok("error" in buildConfigure(f, { box: BOX, device: "Chambre_Parents" }, { members: [] }));
+});
+
+test("zone : ses suiveurs sont des volets simples ; une centrale peut contenir une zone, pas une autre centrale", () => {
+  const byId = (id: string) => family.kinds.find((k) => k.id === id)!;
+  const pick = (id: string): readonly string[] => {
+    const f = byId(id).settings!.find((s) => s.key === "members")!;
+    return f.kind === DEVICE_SETTING.devices ? f.kinds : [];
+  };
+  assert.deepEqual(pick("volet-zone"), ["volet"]);
+  assert.ok(pick("volet-central").includes("volet-zone") && !pick("volet-central").some((k) => k.endsWith("-central")));
+  assert.ok(!family.kinds.some((k) => k.id === "portail-zone"), "pas de zone de portails (role reserve aux types positionnels)");
+  // un role sans libelle anglais, ou un membre qui n'est ni simple ni un role : refuse
+  const p = profiles() as { roles: Record<string, unknown> };
+  assert.throws(() => kindsOf({ ...p, roles: { zone: { label: "Zone", members_label: "x", members: ["simple"] } } }), /anglais/);
+  assert.throws(() => kindsOf({ ...p, roles: { ...p.roles, zone: { ...(p.roles.zone as object), members: ["inconnu"] } } }), /ni simple ni un role/);
 });

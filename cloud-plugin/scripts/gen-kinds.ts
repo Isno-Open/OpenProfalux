@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { CONTROL } from "../opencloudapp/server/src/family-contract.ts";
-import { CONTROL_ID, ACTION_IDS, SETTING_ID, ORIENTATION_MAX } from "../src/ids.ts";
+import { CONTROL_ID, ACTION_IDS, SETTING_ID, ORIENTATION_MAX, ROLE_SIMPLE, roleKindId } from "../src/ids.ts";
+import { DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.ts";
 import { SETTING_KIND } from "../opencloudapp/server/src/plugin-contract.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -14,6 +15,9 @@ const SRC = process.argv[2] ?? join(here, "../../firmware/main/web/profiles.json
 const OUT = process.argv[3] ?? join(here, "../src/kinds.generated.ts");
 
 type Text = { fr: string; en: string };
+type Ctl = { kind: string; id: string; label: Text; icon?: unknown; settable?: boolean };
+/** Un type simple tel que le generateur le construit (positional : pour choisir ceux d'un role). */
+type Simple = { id: string; label: Text; icon: unknown; controls: Ctl[]; settings: unknown[]; positional: boolean };
 type Dpad = { up: string; stop: string; down: string };
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isDpad = (v: unknown): v is Dpad => isObj(v) && typeof v.up === "string" && typeof v.stop === "string" && typeof v.down === "string";
@@ -33,14 +37,14 @@ export function kindsOf(profiles: unknown): unknown[] {
   if (!isObj(profiles) || !isObj(profiles.types)) throw new Error("profiles.json : objet types attendu");
   const devicesMax = profiles.devices_max;
   if (typeof devicesMax !== "number" || devicesMax < 1) throw new Error("profiles.json : devices_max (nombre maximal d'appareils) requis");
-  return Object.entries(profiles.types).map(([id, t]) => {
+  const simple: Simple[] = Object.entries(profiles.types).map(([id, t]) => {
     if (!isObj(t) || typeof t.label !== "string" || !isDpad(t.dpad)) throw new Error(`type ${id} : label et dpad requis`);
     const en = t.en;
     if (!isObj(en) || typeof en.label !== "string" || !en.label || !isDpad(en.dpad)) throw new Error(`type ${id} : libelles anglais requis (en.label, en.dpad)`);
     const dpad = t.dpad, enDpad = en.dpad;
     const text = (fr: string, e: string): Text => ({ fr, en: e });
     const glyphs: Dpad = { up: "▲", stop: "■", down: "▼" };
-    const controls: unknown[] = ACTION_IDS.map((k) => ({
+    const controls: Ctl[] = ACTION_IDS.map((k) => ({
       kind: CONTROL.action, id: k, label: text(dpad[k], enDpad[k]), icon: { glyph: glyphs[k] },
     }));
     // un type positionnel a une position, reglable (decide le 2026-11-14) ; chaque appareil peut la masquer
@@ -59,8 +63,43 @@ export function kindsOf(profiles: unknown): unknown[] {
         hint: text("Chronométré sur le volet, en secondes.", "Timed on the shutter, in seconds.") });
       settings.push(field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)"));
     }
-    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, settings };
+    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, settings, positional: t.positional === true };
   });
+  return [...simple.map(({ positional: _, ...k }) => k), ...roleKindsOf(profiles, simple)];
+}
+
+type Role = { id: string; label: Text; membersLabel: Text; members: readonly string[]; positionalOnly: boolean };
+/** Roles du firmware (profiles.json "roles") : centrale, zone. */
+function rolesOf(profiles: Record<string, unknown>): Role[] {
+  const roles = profiles.roles;
+  if (!isObj(roles)) throw new Error("profiles.json : objet roles attendu");
+  return Object.entries(roles).filter(([k]) => !k.startsWith("_")).map(([id, r]) => {
+    if (!isObj(r) || typeof r.label !== "string" || typeof r.members_label !== "string" || !Array.isArray(r.members)
+      || !isObj(r.en) || typeof r.en.label !== "string" || typeof r.en.members_label !== "string")
+      throw new Error(`role ${id} : label, members_label, members et libelles anglais requis`);
+    const members = r.members.map((m) => {
+      if (typeof m !== "string" || (m !== ROLE_SIMPLE && !(m in roles))) throw new Error(`role ${id} : membre « ${String(m)} » ni simple ni un role`);
+      return m;
+    });
+    return { id, label: { fr: r.label, en: r.en.label }, membersLabel: { fr: r.members_label, en: r.en.members_label }, members, positionalOnly: r.positional_only === true };
+  });
+}
+
+/** Une centrale ou une zone de chaque type permis : les commandes du type, sans position (elle ne serait
+ *  celle d'aucun volet), le rang, et ses membres choisis parmi les appareils du boitier des roles permis. */
+function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[]): unknown[] {
+  const roles = rolesOf(profiles);
+  const typesOf = (r: Role): readonly Simple[] => simple.filter((k) => !r.positionalOnly || k.positional);
+  const kindsFor = (r: Role, member: string): string[] => {
+    if (member === ROLE_SIMPLE) return typesOf(r).map((k) => k.id);
+    const mr = roles.find((x) => x.id === member)!;
+    return typesOf(r).filter((k) => typesOf(mr).includes(k)).map((k) => roleKindId(k.id, mr.id));
+  };
+  return roles.flatMap((r) => typesOf(r).map((k) => ({
+    id: roleKindId(k.id, r.id), label: r.label, icon: k.icon,
+    controls: k.controls.filter((c) => c.kind === CONTROL.action),
+    settings: [k.settings[0], { kind: DEVICE_SETTING.devices, key: SETTING_ID.members, label: r.membersLabel, kinds: r.members.flatMap((m) => kindsFor(r, m)) }],
+  })));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -60,6 +60,8 @@ int  shutters_create_central(const char *id, const char *members_csv);
  * Suiveurs : volets simples seulement (ni zone, ni centrale) ; une zone ne suit rien.
  * Refuse (-1) sinon, *why (peut etre NULL) recevant la raison. */
 int  shutters_set_followers(const char *id, const char *members_csv, const char **why);
+/* Change les membres d'une centrale existante (pas de centrale membre, ni elle-meme). */
+int  shutters_set_central_members(const char *id, const char *members_csv, const char **why);
 int  shutters_reassign(const char *id, const char *from, const char *to);
 
 /* Calibration : temps de course. */

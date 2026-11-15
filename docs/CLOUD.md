@@ -56,7 +56,11 @@ trames, le réglage de la réception radio, l'appairage cloud du boîtier, la d�
 4. **Mises à jour** : installer (fait), revenir à la version précédente (avec confirmation), version
    en essai.
 5. **Ordre d'affichage** et **orientation** de la façade.
-6. **Centrales et zones.**
+6. **Centrales et zones** : le portail les montre comme telles (carte « Centrale » ou « Zone », sans
+   position) et en change les membres (une case par appareil du boîtier). Une centrale contient des
+   volets, des portails ou des zones, jamais une autre centrale ; une zone est suivie par des volets
+   simples. Créer ou supprimer une centrale ou une zone reste sur le boîtier ; une zone vidée de ses
+   suiveurs redevient un volet simple, comme en local.
 7. **Télécommandes connues** : supprimer, ignorer ou réaccepter.
 8. **Sauvegarde** : télécharger ; restaurer plus tard, avec double confirmation.
 9. **Écoute permanente** : modifiable à distance.
