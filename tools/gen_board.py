@@ -185,11 +185,26 @@ def header(d):
 # sourd 8 min ; borne = 0 refus, 28 a 40 Ko libres. Les enregistrements TLS sortants sont
 # ramenes a 2 Ko pour tenir dans le tampon d'envoi TCP borne (sinon l'ecriture restait bloquee
 # 10 s et la connexion se refaisait en boucle).
+# Emission ramenee de 16 a 8 tampons, sans agregation (AMPDU) : mesure du 2026-11-15 sur l'ATOM
+# (deux volets, cloud, points 6 et 7 du portail), un STOP faisait tomber le libre de 27 a 11 Ko,
+# et des commandes enchainees jusqu'a 152 o : les deux liaisons MQTT tombaient. La trace des
+# allocations du creux montre 13 tampons Wi-Fi d'emission de 1 696 o tenus en meme temps
+# (esf_buf_alloc_dynamic), soit 22 Ko. Un tampon refuse n'est pas une perte : TCP reemet.
+# Reception ramenee de 16 a 8 tampons pour la meme raison : la trace en montrait jusqu'a 17
+# tenus en tout, emission et reception comptees ensemble.
+# TCP rendu a 4 segments (envoi et fenetre, la valeur d'ESP-IDF) : avec 2, moins de 4 segments
+# sont en vol, donc jamais 3 accuses en double, donc pas de retransmission rapide. Chaque paquet
+# perdu attend l'expiration (1 s et plus, doublee a chaque perte). Sur le Wi-Fi du VLAN 20 (10 a
+# 20 % de pertes au ping chez les voisins aussi), mesure du 2026-11-15 sur l'ATOM : avec 2
+# segments, chaque abonnement bloquait 10 s, les deux liaisons tombaient pendant 5 tours de
+# commandes simultanees sur 3 volets, et le web ne repondait plus a 2 tours sur 5. Avec 4 : deux
+# passages de 5 tours, aucune coupure, web toujours present, libre au plus bas 10 Ko.
 NET_BUDGET_INTERNAL_RAM = {
-    "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM": 16,
-    "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM": 16,
-    "CONFIG_LWIP_TCP_SND_BUF_DEFAULT": 2880,   # 2 segments de 1 440 o
-    "CONFIG_LWIP_TCP_WND_DEFAULT": 2880,
+    "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM": 8,
+    "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM": 8,
+    "CONFIG_ESP_WIFI_AMPDU_TX_ENABLED": 0,
+    "CONFIG_LWIP_TCP_SND_BUF_DEFAULT": 5760,   # 4 segments de 1 440 o
+    "CONFIG_LWIP_TCP_WND_DEFAULT": 5760,
     "CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN": 2048,
 }
 
@@ -205,7 +220,8 @@ def sdkconfig_lines(d):
         L.append("# PSRAM presente sur la carte mais pas activee par le firmware : la RAM "
                  "interne seule compte. L'activer (mode quad ou octal du module) est a valider "
                  "sur la carte avant d'elargir ces budgets.")
-    L += ["%s=%d" % (k, v) for k, v in NET_BUDGET_INTERNAL_RAM.items()]
+    # 0 = option desactivee : Kconfig l'ecrit « is not set », pas « =0 »
+    L += ["# %s is not set" % k if v == 0 else "%s=%d" % (k, v) for k, v in NET_BUDGET_INTERNAL_RAM.items()]
     return "\n".join(L) + "\n"
 
 
