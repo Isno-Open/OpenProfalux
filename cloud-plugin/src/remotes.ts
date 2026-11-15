@@ -22,6 +22,10 @@ const ICON = { path: "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 
 
 export const REMOTE_KINDS = [
   { id: REMOTE_KIND.known, label: { fr: "Télécommande", en: "Remote" }, icon: ICON, place: KIND_PLACE.box, group: GROUP,
+    hint: {
+      fr: "Les télécommandes que le boîtier connaît : celles appairées à un volet, et celles qu'il a captées à la radio. Une carte sans « Utilisée par » n'est liée à aucun volet, ce peut être celle d'un voisin. Supprimer la retire de la liste (elle revient si le boîtier la capte de nouveau) ; Ignorer fait que le boîtier ne l'enregistre plus. La roue crantée sert à lui donner un nom ; sans nom, elle s'affiche sous son numéro de série.",
+      en: "The remotes the box knows: those paired with a shutter, and those it picked up over the air. A card without “Used by” is linked to no shutter and may be a neighbour's. Delete removes it from the list (it comes back if the box picks it up again); Ignore makes the box stop recording it. The gear gives it a name; without one, it shows its serial number.",
+    },
     controls: [
       { kind: CONTROL.reading, id: REMOTE_CONTROL.usedBy, label: { fr: "Utilisée par", en: "Used by" } },
       { kind: CONTROL.action, id: REMOTE_CONTROL.remove, label: { fr: "Supprimer", en: "Delete" },

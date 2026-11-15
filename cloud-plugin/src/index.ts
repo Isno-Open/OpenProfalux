@@ -9,7 +9,7 @@
 //   cover/<id>/position       0..100, % d'OUVERTURE pour HA (retenu)            -> position, en % de FERMETURE
 //   remote/<tel>/battery      ON si la pile est faible (retenu)               -> alerte
 //   system/status             {"fw":"0.2.16","target":"m5-atom-lite","ssid":"...","ip":"...",
-//                              "mqtt":"hote:1883","reset":"software",...}      -> version, reseau, redemarrage
+//                              "mqtt":"hote:1883","reset":"software",...}      -> version, carte declaree, reseau, redemarrage
 //   system/ota                {"trial":false,"previous":"0.2.16","rollback":true} (retenu) -> essai, retour arriere
 //   <nom>/state               battement ~60 s {"rssi":-67,"free_heap":...,"min_heap":...,"up_s":...} -> sante
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
@@ -124,7 +124,8 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     const s = json(payload);
     if (!s || typeof s.fw !== "string") return [];
     const reset = str(s.reset) ? RESET_TEXT[s.reset] ?? RESET_TEXT.unknown : undefined;
-    return [{ fact: FACT.box, firmware: s.fw,
+    // target : la carte pour laquelle le firmware a ete construit (boards/<id>.json), declaree par lui
+    return [{ fact: FACT.box, firmware: s.fw, ...(str(s.target) ? { board: s.target } : {}),
       ...(reset ? { health: { lastReset: reset } } : {}),
       network: { ...(str(s.ssid) ? { ssid: s.ssid } : {}), ...(str(s.ip) ? { ip: s.ip } : {}), ...(str(s.mqtt) ? { broker: s.mqtt } : {}) } }];
   }

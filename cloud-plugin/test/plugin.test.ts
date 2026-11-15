@@ -315,3 +315,10 @@ test("cloud coupe sur le boitier : presence « disabled » annoncee par le firmw
   assert.deepEqual(read({ box: BOX, path: "status", payload: "disabled", retained: true }), [{ fact: FACT.presence, online: false, disabled: true }]);
   assert.deepEqual(read({ box: BOX, path: "status", payload: "offline", retained: true }), [{ fact: FACT.presence, online: false }]);
 });
+
+test("carte declaree : le target du firmware (releve reel du M5), pour la fiche operateur", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  applyMessage(`${ROOT}/${BOX}/system/status`, '{"fw":"0.2.16-sauvtest","target":"m5-atom-lite","free_heap":30000}', true, 1);
+  assert.equal(boxState("openprofalux", BOX)!.board, "m5-atom-lite");
+});
