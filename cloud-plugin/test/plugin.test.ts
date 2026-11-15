@@ -230,3 +230,15 @@ test("zone : ses suiveurs sont des volets simples ; une centrale peut contenir u
   assert.throws(() => kindsOf({ ...p, roles: { zone: { label: "Zone", members_label: "x", members: ["simple"] } } }), /anglais/);
   assert.throws(() => kindsOf({ ...p, roles: { ...p.roles, zone: { ...(p.roles.zone as object), members: ["inconnu"] } } }), /ni simple ni un role/);
 });
+
+test("ordre : glisser une carte envoie son rang sur config ; sans rang, les centrales d'abord (comme l'interface locale)", async () => {
+  const { buildReorder, compareDevices } = await import("../opencloudapp/server/src/device-families.js");
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":true,"name":"Chambre Parents"}', true, 1);
+  applyMessage(`${ROOT}/${BOX}/cover/Test_centrale/attrs`, '{"type":"volet","positional":false,"name":"Test centrale","role":"central","members":["Chambre_Parents"]}', true, 1);
+  const f = familyById("openprofalux")!;
+  const devs = [...boxState("openprofalux", BOX)!.devices.values()];
+  assert.deepEqual(devs.sort((a, b) => compareDevices(f, a, b)).map((d) => d.name), ["Test centrale", "Chambre Parents"]);
+  assert.deepEqual(buildReorder(f, { box: BOX, device: "Test_centrale" }, 1), { topic: `${ROOT}/${BOX}/cover/Test_centrale/config`, payload: '{"rank":1}', retain: false });
+});

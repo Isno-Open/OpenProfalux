@@ -165,6 +165,11 @@ export const configure: NonNullable<FamilyDecl["configure"]> = ({ device }, valu
   return Object.keys(out).length ? { path: `cover/${device}/config`, payload: JSON.stringify(out) } : null;
 };
 
+/** Deplacer un appareil (glisser sa carte) : le meme message que le reglage du rang, le firmware decale
+ *  les autres (shutters_set_rank). */
+export const reorder: NonNullable<FamilyDecl["reorder"]> = ({ device }, rank) =>
+  ({ path: `cover/${device}/config`, payload: JSON.stringify({ [SETTING_ID.rank]: Math.round(rank) }) });
+
 export const family: FamilyDecl = {
   id: "openprofalux",
   label: { fr: "OpenProfalux", en: "OpenProfalux" },
@@ -180,6 +185,7 @@ export const family: FamilyDecl = {
       confirm: { fr: "Le boîtier va redémarrer sur la version précédente.", en: "The box will restart on the previous version." } },
   ],
   read,
+  reorder,
   command,
   configure,
 };

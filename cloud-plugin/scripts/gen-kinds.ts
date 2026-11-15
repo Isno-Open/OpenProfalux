@@ -65,10 +65,13 @@ export function kindsOf(profiles: unknown): unknown[] {
     }
     return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, settings, positional: t.positional === true };
   });
-  return [...simple.map(({ positional: _, ...k }) => k), ...roleKindsOf(profiles, simple)];
+  // ordre des types = ordre des cartes sans rang : les roles « list_first » (centrales) d'abord
+  const roles = roleKindsOf(profiles, simple);
+  const out = (r: (typeof roles)[number]): unknown => { const { listFirst: _, ...k } = r; return k; };
+  return [...roles.filter((r) => r.listFirst).map(out), ...simple.map(({ positional: _, ...k }) => k), ...roles.filter((r) => !r.listFirst).map(out)];
 }
 
-type Role = { id: string; label: Text; membersLabel: Text; members: readonly string[]; positionalOnly: boolean };
+type Role = { id: string; label: Text; membersLabel: Text; members: readonly string[]; positionalOnly: boolean; listFirst: boolean };
 /** Roles du firmware (profiles.json "roles") : centrale, zone. */
 function rolesOf(profiles: Record<string, unknown>): Role[] {
   const roles = profiles.roles;
@@ -81,13 +84,13 @@ function rolesOf(profiles: Record<string, unknown>): Role[] {
       if (typeof m !== "string" || (m !== ROLE_SIMPLE && !(m in roles))) throw new Error(`role ${id} : membre « ${String(m)} » ni simple ni un role`);
       return m;
     });
-    return { id, label: { fr: r.label, en: r.en.label }, membersLabel: { fr: r.members_label, en: r.en.members_label }, members, positionalOnly: r.positional_only === true };
+    return { id, label: { fr: r.label, en: r.en.label }, membersLabel: { fr: r.members_label, en: r.en.members_label }, members, positionalOnly: r.positional_only === true, listFirst: r.list_first === true };
   });
 }
 
 /** Une centrale ou une zone de chaque type permis : les commandes du type, sans position (elle ne serait
  *  celle d'aucun volet), le rang, et ses membres choisis parmi les appareils du boitier des roles permis. */
-function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[]): unknown[] {
+function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[]): ({ listFirst?: boolean } & Record<string, unknown>)[] {
   const roles = rolesOf(profiles);
   const typesOf = (r: Role): readonly Simple[] => simple.filter((k) => !r.positionalOnly || k.positional);
   const kindsFor = (r: Role, member: string): string[] => {
@@ -96,7 +99,7 @@ function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[
     return typesOf(r).filter((k) => typesOf(mr).includes(k)).map((k) => roleKindId(k.id, mr.id));
   };
   return roles.flatMap((r) => typesOf(r).map((k) => ({
-    id: roleKindId(k.id, r.id), label: r.label, icon: k.icon,
+    id: roleKindId(k.id, r.id), label: r.label, icon: k.icon, listFirst: r.listFirst,
     controls: k.controls.filter((c) => c.kind === CONTROL.action),
     settings: [k.settings[0], { kind: DEVICE_SETTING.devices, key: SETTING_ID.members, label: r.membersLabel, kinds: r.members.flatMap((m) => kindsFor(r, m)) }],
   })));
