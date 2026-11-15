@@ -37,7 +37,7 @@ test("la famille passe la verification du portail, et le plugin la declare", () 
   assert.equal(familyById("openprofalux")?.topicRoot, ROOT);
 });
 
-test("le releve reel d'un boitier donne : en ligne, un volet positionnel a 0 %, sa version", () => {
+test("le releve reel d'un boitier donne : en ligne, un volet positionnel ferme (100 % de fermeture), sa version", () => {
   clearDeviceFamilies();
   registerDeviceFamily(family);
   for (const [path, payload] of REAL) {
@@ -48,7 +48,9 @@ test("le releve reel d'un boitier donne : en ligne, un volet positionnel a 0 %, 
   assert.equal(s.online, true);
   assert.deepEqual([s.firmware, s.latest], ["0.2.16-stacks3test", "0.2.15"]);
   const d = s.devices.get("Chambre_Parents")!;
-  assert.deepEqual([d.kind, d.known, d.name, [...d.hidden], d.values.get("position")], ["volet", true, "Chambre Parents", [], 0]);
+  assert.deepEqual([d.kind, d.known, d.name, [...d.hidden], d.values.get("position")], ["volet", true, "Chambre Parents", [], 100]);
+  // publie 0 (% d'ouverture HA) avec l'etat "closed" : le portail montre 100 % comme l'interface du boitier
+  // (0 % = ouvert), constate sur le vrai volet ferme le 2026-11-15
   assert.equal(s.devices.size, 1, "battement, ecoute radio et etat texte ne creent pas d'appareil");
 });
 
@@ -71,7 +73,8 @@ test("commandes : celles que le firmware attend, sous le prefixe du boitier", ()
   // le STOP a ete verifie sur le vrai M5 : il arrive sur openprofalux/cover/Chambre_Parents/set
   assert.deepEqual(buildCommand(f, target, "stop", null), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set`, payload: "STOP", retain: false });
   assert.deepEqual(buildCommand(f, target, "up", null), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set`, payload: "OPEN", retain: false });
-  assert.deepEqual(buildCommand(f, target, "position", 42), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set_position`, payload: "42", retain: false });
+  assert.deepEqual(buildCommand(f, target, "position", 42), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set_position`, payload: "58", retain: false },
+    "42 % de fermeture = 58 % d'ouverture, ce qu'attend le firmware");
   // la mise a jour du boitier entier : voir le test « mises a jour » (seulement quand elle est possible)
   assert.deepEqual(Object.keys(ACTION_PAYLOAD).sort(), ["down", "stop", "up"]);
 });

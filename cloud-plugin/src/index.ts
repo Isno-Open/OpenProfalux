@@ -6,7 +6,7 @@
 //   status                    online, testament offline (retenu)              -> presence
 //   cover/<id>/attrs          {"type":"volet","positional":true,"name":"Séjour",
 //                              "travel_up_s":19,"travel_down_s":18} (retenu)        -> appareil, reglages
-//   cover/<id>/position       0..100 (retenu)                                  -> position
+//   cover/<id>/position       0..100, % d'OUVERTURE pour HA (retenu)            -> position, en % de FERMETURE
 //   remote/<tel>/battery      ON si la pile est faible (retenu)               -> alerte
 //   system/status             {"fw":"0.2.16","target":"m5-atom-lite","ssid":"...","ip":"...",
 //                              "mqtt":"hote:1883","reset":"software",...}      -> version, reseau, redemarrage
@@ -14,7 +14,7 @@
 //   <nom>/state               battement ~60 s {"rssi":-67,"free_heap":...,"min_heap":...,"up_s":...} -> sante
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
 // Le reste (ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
-// Commandes, sous le meme prefixe : cover/<id>/set (OPEN|STOP|CLOSE), cover/<id>/set_position (0..100),
+// Commandes, sous le meme prefixe : cover/<id>/set (OPEN|STOP|CLOSE), cover/<id>/set_position (0..100, % d'ouverture),
 // update/install (INSTALL) pour le boitier entier. Reglages (etalonnage) : cover/<id>/config
 // {"travel_up_ms":N,"travel_down_ms":N}, valides par le firmware contre les memes bornes (profiles.json).
 import type { Plugin } from "../opencloudapp/server/src/plugin-types.js";
@@ -58,6 +58,13 @@ const json = (s: string): Record<string, unknown> | null => {
 const nameOf = (published: unknown, slug: string): string =>
   typeof published === "string" && published.trim() !== "" ? published : slug.replace(/_/g, " ");
 
+/** Le portail montre la position comme l'interface du boitier : en % de FERMETURE (0 = ouvert en haut,
+ *  100 = ferme en bas), la convention interne du firmware (shutters.c). Le boitier, lui, PUBLIE et RECOIT
+ *  le % d'ouverture que veut Home Assistant (100 = ouvert). La traduction est la meme dans les deux sens. */
+const PERCENT_FULL = 100;
+export const closureFromOpening = (pct: number): number => PERCENT_FULL - pct;
+export const openingFromClosure = closureFromOpening;
+
 export function read({ path, payload, retained }: FamilyMessage): Fact[] {
   if (path === "status") {
     const p = payload.trim();
@@ -68,7 +75,7 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     const device = m[1]!;
     if (m[2] === "position") {
       const n = Number(payload);
-      return payload.trim() !== "" && Number.isFinite(n) ? [{ fact: FACT.state, device, control: CONTROL_ID.position, value: n }] : [];
+      return payload.trim() !== "" && Number.isFinite(n) ? [{ fact: FACT.state, device, control: CONTROL_ID.position, value: closureFromOpening(n) }] : [];
     }
     const a = json(payload);
     if (!a) return [];
@@ -132,7 +139,7 @@ export const command: FamilyDecl["command"] = ({ device }, control, value) => {
     const a = [UPDATE_INSTALL, ROLLBACK].find((x) => x.control === control);
     return a ? { path: a.path, payload: a.payload } : null;
   }
-  if (control === CONTROL_ID.position) return typeof value === "number" ? { path: `cover/${device}/set_position`, payload: String(Math.round(value)) } : null;
+  if (control === CONTROL_ID.position) return typeof value === "number" ? { path: `cover/${device}/set_position`, payload: String(Math.round(openingFromClosure(value))) } : null;
   const p = ACTION_PAYLOAD[control];
   return p ? { path: `cover/${device}/set`, payload: p } : null;
 };
