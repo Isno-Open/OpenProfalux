@@ -1644,8 +1644,12 @@ async function loadCloud() {
   else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud coupé · ' + esc(s.device_id || ''); }
   else if (s.connected) { st.className = 'statline ok'; b.textContent = 'Connecté · ' + esc(s.device_id || ''); }
   else { st.className = 'statline bad'; b.textContent = 'Appairé, hors ligne · ' + esc(s.device_id || ''); }
-  if (s.server) $('#cloud-server').value = s.server;
+  /* s.server est l'adresse du BROKER (mqtts://...) : ce champ attend celle du PORTAIL, on ne le
+     preremplit donc pas avec (le boitier tentait sinon d'appeler le portail en mqtts) */
   $('#cloud-actions').hidden = !s.paired;
+  /* deja appaire : pas de nouvel appairage par-dessus (« Oublier » d'abord) */
+  $('#cloud-pairing').hidden = !!s.paired;
+  if (s.paired) { grantStop(); $('#cloud-qr-wrap').hidden = true; }
   const tg = $('#cloud-toggle'); tg.textContent = s.enabled ? 'Couper' : 'Activer'; tg.dataset.on = s.enabled ? '1' : '0';
 }
 $('#cloud-pair').onclick = async () => {
@@ -1658,6 +1662,37 @@ $('#cloud-pair').onclick = async () => {
     else toast('Échec appairage (' + ((r && r.err) || '?') + ')');
   } catch (e) { toast('Échec appairage'); }
   finally { btn.disabled = false; btn.textContent = 'Appairer'; loadCloud(); }
+};
+/* Appairage par QR code (« a la Netflix ») : le boitier demande un code au portail, on affiche le QR
+   et le code court, puis on suit l'etat jusqu'a la confirmation sur le telephone. */
+const GRANT_POLL_MS = 3000;
+const GRANT_TEXT = { expired: 'Code expiré : relancez l\'appairage.', denied: 'Refusé : ce boîtier appartient déjà à un autre compte.', error: 'Échec de l\'appairage.' };
+let grantTimer = null;
+function grantStop() { if (grantTimer) { clearTimeout(grantTimer); grantTimer = null; } }
+async function grantFollow() {
+  let g;
+  try { g = await api('/api/cloud/grant'); } catch (e) { g = null; }
+  if (g && g.state === 'pending') { grantTimer = setTimeout(grantFollow, GRANT_POLL_MS); return; }
+  grantStop();
+  if (g && g.state === 'ready') { $('#cloud-qr-wrap').hidden = true; toast('Appairé : ' + (g.device_id || '')); loadCloud(); return; }
+  $('#cloud-qr-state').textContent = (g && GRANT_TEXT[g.state]) || GRANT_TEXT.error;
+}
+$('#cloud-grant').onclick = async () => {
+  const btn = $('#cloud-grant'); btn.disabled = true; btn.textContent = 'Demande au portail…';
+  grantStop();
+  try {
+    const r = await api('/api/cloud/grant', { method: 'POST', body: JSON.stringify({ server: $('#cloud-server').value.trim() }) });
+    if (r && r.err === 'paired') { toast('Déjà appairé : « Oublier » d\'abord pour réappairer'); loadCloud(); return; }
+    if (!r || !r.uri) { toast('Portail injoignable (' + ((r && r.status) || '?') + ')'); return; }
+    const qr = qrcode(0, 'M'); qr.addData(r.uri); qr.make();
+    $('#cloud-qr').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 4, scalable: true });
+    $('#cloud-ucode').textContent = r.user_code;
+    try { const u = new URL(r.uri); $('#cloud-qr-host').textContent = u.host + u.pathname; } catch (e) { $('#cloud-qr-host').textContent = r.uri; }
+    $('#cloud-qr-state').textContent = 'En attente de votre confirmation…';
+    $('#cloud-qr-wrap').hidden = false;
+    grantTimer = setTimeout(grantFollow, GRANT_POLL_MS);
+  } catch (e) { toast('Échec de la demande'); }
+  finally { btn.disabled = false; btn.textContent = 'Appairer par QR code'; }
 };
 $('#cloud-toggle').onclick = async () => {
   const on = $('#cloud-toggle').dataset.on !== '1';

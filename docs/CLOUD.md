@@ -30,7 +30,13 @@ l'appairage, puis le conserve. Après un reflash complet, on ré-appaire.
 L'onglet **Cloud** de l'interface web de l'appareil permet de :
 
 - choisir le **serveur** (par défaut `https://app.isno.fr`, ou l'adresse de votre instance) ;
-- **appairer** l'appareil à votre compte ;
+- **appairer** l'appareil à votre compte, **par QR code** (« à la Netflix ») : le boîtier demande un
+  code au portail et affiche un QR code et un code court ; scannez-le avec votre téléphone (ou ouvrez
+  `<serveur>/lier` et saisissez le code), confirmez depuis votre compte, et le boîtier récupère son
+  certificat tout seul (`/api/cloud/grant`, côté portail `/api/device/start`, `poll`, `approve`). Le
+  code expire après dix minutes. Un boîtier déjà appairé ne propose pas d'appairage : « Oublier »
+  d'abord (un nouvel appairage lui donne une nouvelle identité). L'appairage par code obtenu sur le
+  portail reste possible, en second choix ;
 - voir le **statut** (appairé, connecté) ;
 - **activer / couper** la liaison cloud sans perdre le certificat ;
 - **oublier** l'appairage (efface le certificat et la configuration cloud).

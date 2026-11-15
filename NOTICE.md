@@ -31,3 +31,10 @@ Ce logiciel **ne contient ni ne distribue aucune clé secrète de fabricant**. I
 engendre des clés aléatoires par appareil et s'appuie sur les procédures
 d'auto-apprentissage côté récepteur, documentées notamment par le brevet
 Chamberlain US 5686904.
+
+## Composants tiers embarqués
+
+- `firmware/main/web/qrcode.js` : QR Code Generator for JavaScript 2.0.4, Copyright (c) 2009
+  Kazuhiko Arase, licence MIT (https://github.com/kazuhikoarase/qrcode-generator). Embarqué tel
+  quel, avec son en-tête, pour dessiner le QR code de l'appairage cloud dans l'interface du boîtier.
+  « QR Code » est une marque déposée de DENSO WAVE INCORPORATED.

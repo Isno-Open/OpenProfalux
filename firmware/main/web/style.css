@@ -249,3 +249,10 @@ progress::-webkit-progress-value{background:var(--accent)}
 /* Carte de reglages d'une radio secondaire : sous-bloc dans la carte Appareil, demarque */
 .radio-card{margin-top:16px;padding:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:none}
 .radio-card h3{margin:0 0 10px}
+/* Appairage cloud par QR code : modules noirs sur fond blanc dans les deux themes (un QR en negatif
+   ne se lit pas partout), taille fixe lisible a 30 cm */
+.cloud-qr{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:12px 0}
+.cloud-qr #cloud-qr svg{display:block;width:220px;max-width:100%;height:auto;background:#fff;border-radius:8px}
+.cloud-qr p{flex:1 1 220px;margin:0}
+.cloud-alt{margin-top:14px}
+.cloud-alt summary{cursor:pointer;color:var(--muted);font-size:.88rem}

@@ -306,9 +306,19 @@
         <h2>Cloud</h2>
         <p class="sub">Pilotage à distance via le cloud ISNO, <b>en plus</b> du MQTT local (qui n'est pas touché). Le certificat est récupéré à l'appairage, rien à coller à la main.</p>
         <div class="statline" id="cloud-status"><span class="dot"></span><b>…</b></div>
+        <div id="cloud-pairing">
         <div class="field"><label>Serveur</label><input id="cloud-server" placeholder="https://app.isno.fr"></div>
-        <div class="field"><label>Code d'appairage</label><input id="cloud-code" placeholder="depuis votre compte sur app.isno.fr"></div>
-        <div class="row end"><button id="cloud-pair" class="btn primary">Appairer</button></div>
+        <div class="row end"><button id="cloud-grant" class="btn primary">Appairer par QR code</button></div>
+        <div id="cloud-qr-wrap" class="cloud-qr" hidden>
+          <div id="cloud-qr" aria-label="QR code d'appairage"></div>
+          <p>Scannez ce QR code avec votre téléphone et confirmez depuis votre compte. Ou ouvrez <b id="cloud-qr-host"></b> et saisissez le code <b id="cloud-ucode" class="mono"></b>.</p>
+          <p class="sub" id="cloud-qr-state">En attente de votre confirmation…</p>
+        </div>
+        <details class="cloud-alt"><summary>Ou avec un code obtenu sur votre compte</summary>
+          <div class="field"><label>Code d'appairage</label><input id="cloud-code" placeholder="depuis votre compte sur app.isno.fr"></div>
+          <div class="row end"><button id="cloud-pair" class="btn ghost">Appairer</button></div>
+        </details>
+        </div>
         <div class="row" id="cloud-actions" style="margin-top:12px;gap:8px;justify-content:flex-end" hidden>
           <button id="cloud-toggle" class="btn ghost">Couper</button>
           <button id="cloud-forget" class="btn ghost">Oublier</button>
@@ -523,6 +533,7 @@
 
 <div class="toast" id="toast"></div>
 <script src="/pyramid-detect.js"></script>
+<script src="/qrcode.js"></script>
 <script src="/app.js"></script>
 <script src="/app-capture.js"></script>
 </body>

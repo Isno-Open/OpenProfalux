@@ -28,6 +28,7 @@
 #include "cJSON.h"
 #include "log_ring.h"
 #include "crash_trace.h"
+#include "cloud_grant.h"
 #include "cc1101.h"
 #include "radio_profile.h"   /* profil radio (frequence par marque) */
 #include "esp_random.h"
@@ -201,6 +202,8 @@ extern const uint8_t app_capture_js_start[] asm("_binary_app_capture_js_gz_start
 extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end");
 extern const uint8_t pyramid_detect_js_start[] asm("_binary_pyramid_detect_js_gz_start");   /* detection de profil (pyramide, #111) */
 extern const uint8_t pyramid_detect_js_end[]   asm("_binary_pyramid_detect_js_gz_end");
+extern const uint8_t qrcode_js_start[] asm("_binary_qrcode_js_gz_start");   /* QR de l'appairage cloud (qrcode-generator, MIT) */
+extern const uint8_t qrcode_js_end[]   asm("_binary_qrcode_js_gz_end");
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
@@ -302,6 +305,7 @@ static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",     
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
 static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
 static esp_err_t h_js_detect(httpd_req_t *r) { return send_asset(r, "application/javascript", pyramid_detect_js_start, pyramid_detect_js_end, true); }
+static esp_err_t h_js_qrcode(httpd_req_t *r) { return send_asset(r, "application/javascript", qrcode_js_start, qrcode_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
 static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
@@ -1708,7 +1712,7 @@ static esp_err_t h_session(httpd_req_t *r) {
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
 #define MAX_ROUTES      72
-#define MAX_OPEN_ROUTES 12
+#define MAX_OPEN_ROUTES 16
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
 
@@ -1833,6 +1837,13 @@ static esp_err_t h_cloud_status(httpd_req_t *r) {
 }
 
 /* POST {code, server?} : echange le code de pairing contre le bundle et provisionne le cloud. */
+/* Adresse du PORTAIL saisie (https://...), sinon celui par defaut. Une adresse d'un autre schema
+ * (l'adresse mqtts:// du broker, longtemps preremplie dans ce champ) est ecartee : le client HTTP
+ * echouait sur « No transport found ». */
+static const char *portal_or_default(const char *s) {
+    return (s && (!strncmp(s, "https://", 8) || !strncmp(s, "http://", 7))) ? s : CLOUD_DEFAULT_SERVER;
+}
+
 static esp_err_t h_cloud_pair(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
     char *body = read_body(r);
@@ -1842,30 +1853,11 @@ static esp_err_t h_cloud_pair(httpd_req_t *r) {
     const char *code = jstr(j, "code"), *server = jstr(j, "server");
     if (!code || !code[0]) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"code\"}"); }
     char url[200], payload[80];
-    snprintf(url, sizeof url, "%s/api/enroll", (server && server[0]) ? server : CLOUD_DEFAULT_SERVER);
+    snprintf(url, sizeof url, "%s/api/enroll", portal_or_default(server));
     snprintf(payload, sizeof payload, "{\"code\":\"%s\"}", code);
     cJSON_Delete(j);
-
-    esp_http_client_config_t cfg = {
-        .url = url, .method = HTTP_METHOD_POST,
-        .crt_bundle_attach = esp_crt_bundle_attach, .timeout_ms = 15000,
-    };
-    esp_http_client_handle_t c = esp_http_client_init(&cfg);
-    if (!c) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"init\"}");
-    esp_http_client_set_header(c, "Content-Type", "application/json");
-    char *resp = NULL; int status = 0;
-    esp_err_t err = esp_http_client_open(c, (int)strlen(payload));
-    if (err == ESP_OK && esp_http_client_write(c, payload, strlen(payload)) >= 0) {
-        esp_http_client_fetch_headers(c);
-        status = esp_http_client_get_status_code(c);
-        resp = malloc(8192);
-        if (resp) {
-            int total = 0, rd;
-            while (total < 8191 && (rd = esp_http_client_read(c, resp + total, 8191 - total)) > 0) total += rd;
-            resp[total] = 0;
-        }
-    }
-    esp_http_client_close(c); esp_http_client_cleanup(c);
+    char *resp = NULL;
+    int status = cloud_http_post(url, payload, &resp);
     if (status < 200 || status >= 300 || !resp) {
         free(resp);
         char o[64]; snprintf(o, sizeof o, "{\"ok\":0,\"status\":%d,\"err\":\"enroll\"}", status);
@@ -1873,26 +1865,38 @@ static esp_err_t h_cloud_pair(httpd_req_t *r) {
     }
     cJSON *b = cJSON_Parse(resp); free(resp);
     if (!b) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"resp\"}");
-    const char *dev = jstr(b, "device_id"), *broker = jstr(b, "broker_url");
-    const char *ca = jstr(b, "ca"), *cert = jstr(b, "cert"), *key = jstr(b, "key");
-    if (!cloud_bundle_ok(dev, broker, ca, cert, key)) { cJSON_Delete(b); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"bundle\"}"); }
-    mqtt_cert_write("cloud_ca", ca);
-    mqtt_cert_write("cloud_cert", cert);
-    mqtt_cert_write("cloud_key", key);
-    char devb[40], brob[160];
-    snprintf(devb, sizeof devb, "%s", dev);
-    snprintf(brob, sizeof brob, "%s", broker);
-    nvs_handle_t h;
-    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_str(h, "cloud_uri", brob);
-        nvs_set_str(h, "cloud_dev", devb);
-        nvs_set_u8(h, "cloud_on", 1);
-        nvs_commit(h); nvs_close(h);
-    }
+    char devb[40];
+    bool ok = cloud_apply_bundle(b, devb, sizeof devb);
     cJSON_Delete(b);
-    mqtt_cloud_request_start(brob, devb);   /* redemarre le client avec le nouveau certificat, hors du serveur web */
+    if (!ok) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"bundle\"}");
     char o[96]; snprintf(o, sizeof o, "{\"ok\":1,\"device_id\":\"%s\"}", devb);
     return httpd_resp_sendstr(r, o);
+}
+
+/* Appairage par QR code (« a la Netflix », cloud_grant.h). POST {server} : demande un code au
+ * portail et rend {user_code, uri, expires_in} a afficher ; GET : ou en est-on (l'interface
+ * interroge jusqu'a « ready »). */
+static esp_err_t h_cloud_grant_start(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
+    /* deja connecte au cloud : on n'appaire pas par-dessus (une nouvelle identite remplacerait la
+     * premiere, et la liaison TLS en cours plus les interrogations du portail epuisent la memoire,
+     * mesure du 2026-11-15 : 16 o au plus bas). « Oublier » d'abord. */
+    if (mqtt_cloud_is_connected()) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"paired\"}"); }
+    char server[160]; snprintf(server, sizeof server, "%s", portal_or_default(j ? jstr(j, "server") : NULL));
+    cJSON_Delete(j);
+    size_t n = strlen(server);
+    while (n && server[n - 1] == '/') server[--n] = 0;   /* « https://app.isno.fr/ » comme sans barre */
+    char out[400];
+    int rc = cloud_grant_start(server, out, sizeof out);
+    if (rc != 0) { char o[64]; snprintf(o, sizeof o, "{\"ok\":0,\"status\":%d}", rc); return httpd_resp_sendstr(r, o); }
+    return httpd_resp_sendstr(r, out);
+}
+static esp_err_t h_cloud_grant_status(httpd_req_t *r) {
+    char out[400]; cloud_grant_status(out, sizeof out);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
 }
 
 /* POST {on} : active ou coupe le cloud sans perdre le cert (le pairing reste). */
@@ -1999,6 +2003,7 @@ void web_ui_start(void) {
     reg_open(s, "/app.js",    HTTP_GET, h_js);
     reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
     reg_open(s, "/pyramid-detect.js", HTTP_GET, h_js_detect);   /* detection de profil (pyramide, #111) */
+    reg_open(s, "/qrcode.js", HTTP_GET, h_js_qrcode);           /* QR de l'appairage cloud */
     reg(s, "/profiles.json", HTTP_GET, h_profiles);   /* table de profils (protegee, soulage la table ouverte ; l'UI la fetch apres login) */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
@@ -2070,6 +2075,8 @@ void web_ui_start(void) {
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
     reg(s, "/api/cloud/status", HTTP_GET,  h_cloud_status);   /* controle cloud app.isno.fr */
     reg(s, "/api/cloud/pair",   HTTP_POST, h_cloud_pair);     /* code de pairing -> bundle + demarrage */
+    reg(s, "/api/cloud/grant",  HTTP_POST, h_cloud_grant_start);    /* appairage par QR code */
+    reg(s, "/api/cloud/grant",  HTTP_GET,  h_cloud_grant_status);
     reg(s, "/api/cloud/toggle", HTTP_POST, h_cloud_toggle);   /* active/coupe sans perdre le cert */
     reg(s, "/api/cloud/forget", HTTP_POST, h_cloud_forget);   /* oubli complet */
     ESP_LOGI(TAG, "HTTP UI demarree");
