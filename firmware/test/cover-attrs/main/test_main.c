@@ -106,6 +106,9 @@ int main(int argc, char **argv) {
             const char *types = strstr(json, "\"types\"");
             check(k && (!types || types < roles || k < types), name);
         }
+        const char *nm = strstr(json, "\"name_max\"");
+        unsigned nmax = 0;
+        check(nm && sscanf(nm, "\"name_max\": %u", &nmax) == 1 && nmax == COVER_NAME_MAX, "T29 longueur maximale d'un nom : celle de profiles.json");
         const char *dm = strstr(json, "\"devices_max\"");
         unsigned dmax = 0;
         check(dm && sscanf(dm, "\"devices_max\": %u", &dmax) == 1 && dmax == COVER_DEVICES_MAX, "T21 nombre maximal d'appareils : celui de profiles.json");

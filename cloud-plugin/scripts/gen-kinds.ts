@@ -32,6 +32,13 @@ export function iconOf(type: string, icon: unknown): { glyph: string } | { path:
   return { path: paths[0]![1]! };
 }
 
+/** Plus long nom accepte par le firmware (profiles.json name_max). */
+export function nameMaxOf(profiles: unknown): number {
+  const n = isObj(profiles) ? profiles.name_max : undefined;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1) throw new Error("profiles.json : name_max (longueur maximale d'un nom) requis");
+  return n;
+}
+
 /** Les types d'appareils du firmware, dans le vocabulaire du portail. */
 export function kindsOf(profiles: unknown): unknown[] {
   if (!isObj(profiles) || !isObj(profiles.types)) throw new Error("profiles.json : objet types attendu");
@@ -106,10 +113,13 @@ function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const kinds = kindsOf(JSON.parse(readFileSync(SRC, "utf8")));
+  const profiles: unknown = JSON.parse(readFileSync(SRC, "utf8"));
+  const kinds = kindsOf(profiles);
   writeFileSync(OUT, `// ENGENDRE par scripts/gen-kinds.ts depuis firmware/main/web/profiles.json : ne pas editer.
 import type { KindDecl } from "../opencloudapp/server/src/family-contract.js";
 export const KINDS = ${JSON.stringify(kinds, null, 2)} satisfies readonly KindDecl[];
+/** Plus long nom d'un appareil ou d'une telecommande (profiles.json name_max, COVER_NAME_MAX). */
+export const NAME_MAX = ${nameMaxOf(profiles)};
 `);
   console.log(`${kinds.length} type(s) -> ${OUT}`);
 }

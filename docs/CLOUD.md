@@ -61,7 +61,10 @@ trames, le réglage de la réception radio, l'appairage cloud du boîtier, la d�
    volets, des portails ou des zones, jamais une autre centrale ; une zone est suivie par des volets
    simples. Créer ou supprimer une centrale ou une zone reste sur le boîtier ; une zone vidée de ses
    suiveurs redevient un volet simple, comme en local.
-7. **Télécommandes connues** : supprimer, ignorer ou réaccepter.
+7. **Télécommandes connues** : sur la page du boîtier, onglet « Télécommandes » : renommer,
+   supprimer ou ignorer (avec confirmation ; pas une télécommande qu'un volet utilise, le boîtier
+   refuserait), réaccepter une ignorée. Le boîtier publie `remote/<serial>/info` et `ignored/<serial>`
+   (retenus, vides quand elles sont retirées) et ne republie que ce qui a changé (toutes les 5 s).
 8. **Sauvegarde** : télécharger ; restaurer plus tard, avec double confirmation.
 9. **Écoute permanente** : modifiable à distance.
 

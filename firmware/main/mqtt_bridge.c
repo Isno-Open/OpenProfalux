@@ -287,6 +287,8 @@ static void handle_incoming(const char *topic, int tlen, const char *data, int d
         || strncmp(t, TOPIC_BASE "/counter/", strlen(TOPIC_BASE "/counter/")) == 0   /* synchro compteur inter-cartes */
         || strncmp(t, TOPIC_BASE "/busy/", strlen(TOPIC_BASE "/busy/")) == 0         /* verrou d'emission inter-cartes */
         || strncmp(t, TOPIC_BASE "/update/", strlen(TOPIC_BASE "/update/")) == 0     /* install MAJ via HA */
+        || strncmp(t, TOPIC_BASE "/remote/", strlen(TOPIC_BASE "/remote/")) == 0     /* telecommandes connues (portail) */
+        || strncmp(t, TOPIC_BASE "/ignored/", strlen(TOPIC_BASE "/ignored/")) == 0   /* telecommandes ignorees (portail) */
         || strcmp(t, TOPIC_BASE "/ota/rollback") == 0) {                              /* retour arriere (portail) */
         if (s_hdl.on_message) s_hdl.on_message(t, data, dlen);
         return;
@@ -343,6 +345,9 @@ static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *ev
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/ota/pull", 1);
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/update/install", 1);   /* entite update HA */
             esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/ota/rollback", 1);     /* retour a la version precedente */
+            esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/remote/+/set", 1);     /* telecommandes : supprimer, ignorer */
+            esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/remote/+/config", 1);  /* telecommandes : renommer */
+            esp_mqtt_client_subscribe(s_mqtt, TOPIC_BASE "/ignored/+/set", 1);    /* telecommandes ignorees : reaccepter */
             /* PAS d'abonnement a frames/log/# : le ring est deja persiste en SPIFFS (load_ring au boot).
              * S'y abonner = l'ESP s'auto-inonde de ses propres trames retained (jeu qui grossit sans fin)
              * au boot -> la tache MQTT traite ce flot en prenant le LOCK pendant que la discovery publie
@@ -647,6 +652,9 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             snprintf(sub, sizeof(sub), "%s/ota/pull", s_cloud_base);             esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/update/install", s_cloud_base);       esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/ota/rollback", s_cloud_base);         esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* portail */
+            snprintf(sub, sizeof(sub), "%s/remote/+/set", s_cloud_base);         esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* telecommandes */
+            snprintf(sub, sizeof(sub), "%s/remote/+/config", s_cloud_base);      esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/ignored/+/set", s_cloud_base);        esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             ESP_LOGI(TAG, "cloud connecté, base=%s", s_cloud_base);
             if (s_hdl.on_cloud_connected) s_hdl.on_cloud_connected();   /* -> republie description + etat */
             break;

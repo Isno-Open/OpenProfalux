@@ -12,6 +12,7 @@
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
 #include <string.h>
+#include <ctype.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -816,6 +817,7 @@ static void ha_state_str(const volet_t *v, char *out) {
  * le pourcentage serait une supposition ; decide le 2026-11-14). Une seule regle pour la description
  * cloud, la position publiee et la decouverte HA. */
 _Static_assert(COVER_DEVICES_MAX == SH_MAX_VOLETS, "COVER_DEVICES_MAX (profiles.json devices_max) doit egaler SH_MAX_VOLETS");
+_Static_assert(COVER_NAME_MAX == SH_ID_LEN - 1, "COVER_NAME_MAX (profiles.json name_max) doit egaler SH_ID_LEN - 1");
 
 /* Rang d'affichage (1..N) d'un volet range, 0 sinon : l'ordre stocke est 0-base, -1 = non range. */
 static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
@@ -1163,10 +1165,69 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
     return rc;
 }
 
+/* ── Telecommandes connues, pour le portail cloud (docs/CLOUD.md, point 7) ──
+ *   openprofalux/remote/<slug>/info  {"serial":"0x0000813","name":"...","used_by":"Chambre Parents"} (retenu)
+ *   openprofalux/ignored/<slug>      {"serial":"0x0000813"} (retenu)
+ * Message vide retenu = retiree (supprimee, ignoree, reacceptee). Plutot que d'appeler la publication a
+ * chaque endroit qui change la liste ou ses volets (on en oublierait), la tache compare toutes les
+ * REMOTES_SYNC_MS une empreinte de l'ensemble et ne republie que si elle a change. Sous LOCK. */
+#define REMOTES_SYNC_MS 5000
+#define REMOTE_SERIAL_DIGITS 7   /* serial d'une telecommande : 0x + 7 chiffres hexa (0x%07X), son slug = les chiffres */
+static char     s_pub_remotes[SH_MAX_REMOTES][SH_SERIAL_LEN], s_pub_ignored[SH_MAX_IGNORED][SH_SERIAL_LEN];
+static int      s_npub_remotes, s_npub_ignored;
+static uint32_t s_remotes_sig;
+static bool     s_remotes_force = true;
+
+static uint32_t fnv(uint32_t h, const char *p) { for (; p && *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; } return (h ^ 0xff) * 16777619u; }
+
+static void remotes_sync(void) {
+    if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;   /* rien publie : on reessaiera */
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < s_nremotes; i++) { h = fnv(h, s_remotes[i].serial); h = fnv(h, s_remotes[i].name); h = fnv(h, remote_user(s_remotes[i].serial)); }
+    h = fnv(h, "|");
+    for (int i = 0; i < s_nignored; i++) h = fnv(h, s_ignored[i]);
+    if (!s_remotes_force && h == s_remotes_sig) return;
+    s_remotes_force = false; s_remotes_sig = h;
+    char topic[64];
+    for (int i = 0; i < s_npub_remotes; i++) if (!remote_find(s_pub_remotes[i])) {
+        snprintf(topic, sizeof(topic), "openprofalux/remote/%s/info", remote_slug(s_pub_remotes[i]));
+        pub_defer(topic, "", 0, 1);
+    }
+    for (int i = 0; i < s_npub_ignored; i++) if (!ignored(s_pub_ignored[i])) {
+        snprintf(topic, sizeof(topic), "openprofalux/ignored/%s", remote_slug(s_pub_ignored[i]));
+        pub_defer(topic, "", 0, 1);
+    }
+    s_npub_remotes = 0;
+    for (int i = 0; i < s_nremotes; i++) {
+        const remote_t *r = &s_remotes[i];
+        cJSON *o = cJSON_CreateObject();   /* cJSON : un nom avec guillemets ne casse pas le JSON */
+        if (!o) continue;
+        cJSON_AddStringToObject(o, "serial", r->serial);
+        if (r->name[0]) cJSON_AddStringToObject(o, "name", r->name);
+        const char *user = remote_user(r->serial);
+        if (user) cJSON_AddStringToObject(o, "used_by", user);
+        char *js = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        if (!js) continue;
+        snprintf(topic, sizeof(topic), "openprofalux/remote/%s/info", remote_slug(r->serial));
+        pub_defer(topic, js, 0, 1);
+        free(js);
+        strlcpy(s_pub_remotes[s_npub_remotes++], r->serial, SH_SERIAL_LEN);
+    }
+    s_npub_ignored = 0;
+    for (int i = 0; i < s_nignored; i++) {
+        char pl[48];
+        snprintf(pl, sizeof(pl), "{\"serial\":\"%.*s\"}", SH_SERIAL_LEN - 1, s_ignored[i]);   /* serial normalise 0x%07X : rien a echapper */
+        snprintf(topic, sizeof(topic), "openprofalux/ignored/%s", remote_slug(s_ignored[i]));
+        pub_defer(topic, pl, 0, 1);
+        strlcpy(s_pub_ignored[s_npub_ignored++], s_ignored[i], SH_SERIAL_LEN);
+    }
+}
+
 /* ── Tache : suivi position + streaming du maintien ── */
 static void tick_task(void *arg) {
     (void)arg;
-    int save_ticks = 0;
+    int save_ticks = 0, remotes_ticks = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
         LOCK();
@@ -1197,6 +1258,7 @@ static void tick_task(void *arg) {
             if (reached || (int)(v->position + 0.5f) != v->pub_pos || v->dir != v->pub_dir)
                 publish_volet_state(v);
         }
+        if (++remotes_ticks * TICK_MS >= REMOTES_SYNC_MS) { remotes_ticks = 0; remotes_sync(); }   /* telecommandes connues (portail) */
         UNLOCK();
         pub_flush();   /* publie les changements de position/etat HORS LOCK */
         if (s_pos_dirty) { s_pos_dirty = false; LOCK(); save_cfg(); UNLOCK(); }   /* fige la nouvelle position en NVS (retenue au reboot) */
@@ -2178,6 +2240,7 @@ void shutters_cloud_resync(void) {
     LOCK();
     for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
     for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
+    s_remotes_force = true; remotes_sync();                                      /* telecommandes connues et ignorees */
     publish_update_state();                                                      /* version installee / derniere */
     UNLOCK();
     pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
@@ -2264,6 +2327,43 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         if (idx >= 0 && !s_self_emit[idx])   /* pas notre propre echo */
             s_busy_until[idx] = (len >= 1 && data[0] == '1') ? (sync_now_ms() + SYNC_STALE_MS) : 0;
         return;
+    }
+    /* Telecommandes connues (portail cloud, point 7) : la cible est le slug du serial (7 chiffres hexa).
+     *   remote/<slug>/set     DELETE | IGNORE   (refuse si un volet s'en sert, comme en local)
+     *   remote/<slug>/config  {"name":"..."}    (renommer ; vide = sans nom)
+     *   ignored/<slug>/set    ACCEPT            (n'est plus ignoree ; revient a son prochain appui) */
+    {
+        static const char R[] = "openprofalux/remote/", I[] = "openprofalux/ignored/";
+        bool is_r = !strncmp(topic, R, sizeof(R) - 1), is_i = !strncmp(topic, I, sizeof(I) - 1);
+        if (is_r || is_i) {
+            const char *after = topic + (is_r ? sizeof(R) : sizeof(I)) - 1, *slash = strchr(after, '/');
+            char serial[SH_SERIAL_LEN];
+            size_t n = slash ? (size_t)(slash - after) : 0;
+            bool hex = n == REMOTE_SERIAL_DIGITS;
+            for (size_t i = 0; hex && i < n; i++) hex = isxdigit((unsigned char)after[i]);
+            if (!hex) { ESP_LOGW(TAG, "telecommande : cible invalide (%s)", topic); return; }
+            snprintf(serial, sizeof(serial), "0x%.*s", (int)n, after);
+            for (char *c = serial + 2; *c; c++) *c = (char)toupper((unsigned char)*c);
+            const char *sub = slash + 1, *why = NULL;
+            int rc = -1;
+            if (is_r && !strcmp(sub, "set") && len == 6 && !memcmp(data, "DELETE", 6)) rc = shutters_delete_remote(serial, &why);
+            else if (is_r && !strcmp(sub, "set") && len == 6 && !memcmp(data, "IGNORE", 6)) rc = shutters_ignore_remote(serial, &why);
+            else if (is_i && !strcmp(sub, "set") && len == 6 && !memcmp(data, "ACCEPT", 6)) { rc = shutters_unignore_remote(serial); if (rc) why = "pas ignoree"; }
+            else if (is_r && !strcmp(sub, "config") && len > 0 && len < 256) {
+                char *js = strndup(data, (size_t)len);
+                cJSON *j = js ? cJSON_Parse(js) : NULL;
+                free(js);
+                const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(j, "name"));
+                LOCK(); bool known = remote_find(serial) != NULL; UNLOCK();
+                if (!known) why = "telecommande inconnue";
+                else if (!name || strlen(name) > COVER_NAME_MAX) why = "nom absent ou trop long";
+                else rc = shutters_remote_name(serial, name);
+                cJSON_Delete(j);
+            } else why = "commande inconnue";
+            if (rc != 0) ESP_LOGW(TAG, "telecommande %s : %s refuse (%s)", serial, sub, why ? why : "?");
+            else ESP_LOGI(TAG, "telecommande %s : %s applique", serial, sub);
+            return;   /* la tache republie la liste (remotes_sync) */
+        }
     }
     static const char P[] = "openprofalux/cover/";
     if (strncmp(topic, P, sizeof(P) - 1)) return;

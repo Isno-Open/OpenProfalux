@@ -24,6 +24,7 @@ import { FACT, EVENT_LEVEL, FAMILY_CONTRACT, type Fact, type FamilyDecl, type Fa
 import { isNewerVersion } from "../opencloudapp/server/src/version.js";
 import { KINDS } from "./kinds.generated.js";
 import { CONTROL_ID, SETTING_ID, roleKindId } from "./ids.js";
+import { REMOTE_KINDS, REMOTE_NAME, readRemote, remoteCommand, remoteConfigure } from "./remotes.js";
 
 /** Actions de la carte -> charge que le firmware attend sur cover/<id>/set. */
 export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE" };
@@ -71,6 +72,8 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     const p = payload.trim();
     return p === PRESENCE.online || p === PRESENCE.offline ? [{ fact: FACT.presence, online: p === PRESENCE.online }] : [];
   }
+  const remote = readRemote(path, payload);
+  if (remote) return remote;
   let m = /^cover\/([^/]+)\/(attrs|position)$/.exec(path);
   if (m) {
     const device = m[1]!;
@@ -78,6 +81,8 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
       const n = Number(payload);
       return payload.trim() !== "" && Number.isFinite(n) ? [{ fact: FACT.state, device, control: CONTROL_ID.position, value: closureFromOpening(n) }] : [];
     }
+    // description retiree (volet supprime sur le boitier) : sa carte s'en va
+    if (payload.trim() === "") return [{ fact: FACT.gone, device }];
     const a = json(payload);
     if (!a) return [];
     const up = a[SETTING_ID.travelUp], down = a[SETTING_ID.travelDown], rank = a[SETTING_ID.rank], ori = a[SETTING_ID.orientation];
@@ -144,6 +149,8 @@ export const command: FamilyDecl["command"] = ({ device }, control, value) => {
     const a = [UPDATE_INSTALL, ROLLBACK].find((x) => x.control === control);
     return a ? { path: a.path, payload: a.payload } : null;
   }
+  const r = remoteCommand(device, control);
+  if (r) return r;
   if (control === CONTROL_ID.position) return typeof value === "number" ? { path: `cover/${device}/set_position`, payload: String(Math.round(openingFromClosure(value))) } : null;
   const p = ACTION_PAYLOAD[control];
   return p ? { path: `cover/${device}/set`, payload: p } : null;
@@ -153,6 +160,8 @@ export const command: FamilyDecl["command"] = ({ device }, control, value) => {
  *  en millisecondes : un seul des deux n'est pas envoye (le volet garderait un etalonnage boiteux).
  *  Rang et orientation passent tels quels. Rien a envoyer : null. */
 export const configure: NonNullable<FamilyDecl["configure"]> = ({ device }, values) => {
+  const remoteName = values[REMOTE_NAME];
+  if (typeof remoteName === "string") return remoteConfigure(device, remoteName.trim());
   const up = values[SETTING_ID.travelUp], down = values[SETTING_ID.travelDown];
   const rank = values[SETTING_ID.rank], ori = values[SETTING_ID.orientation], members = values[SETTING_ID.members];
   const out: Record<string, number | readonly string[]> = {
@@ -176,7 +185,7 @@ export const family: FamilyDecl = {
   icon: { path: "M4 4h16v16H4zM4 8h16M4 12h16M4 16h16" },
   contract: FAMILY_CONTRACT,
   topicRoot: "openprofalux",
-  kinds: KINDS,
+  kinds: [...KINDS, ...REMOTE_KINDS],
   boxControls: [
     { id: UPDATE_INSTALL.control, label: { fr: "Installer la dernière version", en: "Install the latest version" },
       confirm: { fr: "Le boîtier va télécharger la nouvelle version et redémarrer (environ une minute). En cas de problème, il revient seul à la version actuelle.",

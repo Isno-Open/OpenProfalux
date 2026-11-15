@@ -20,6 +20,9 @@ bool cover_travel_ok(uint32_t ms);
 /* Nombre maximal d'appareils d'un boitier (rang dans la liste : 1..COVER_DEVICES_MAX). MIROIR de
  * SH_MAX_VOLETS et de profiles.json devices_max : le banc test/cover-attrs refuse toute divergence. */
 #define COVER_DEVICES_MAX 24
+/* Plus long nom d'un appareil ou d'une telecommande, en octets. MIROIR de SH_ID_LEN - 1 (assertion dans
+ * shutters.c) et de profiles.json name_max (banc test/cover-attrs), d'ou le portail tire son formulaire. */
+#define COVER_NAME_MAX 23
 /* Orientation d'une facade : azimut en degres, 0 (nord) a 359 ; -1 = non definie. */
 #define COVER_ORIENTATION_MAX 359
 

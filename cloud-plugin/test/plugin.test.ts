@@ -109,7 +109,7 @@ test("types engendres depuis profiles.json : volet positionnel, portail sans pos
   assert.ok(volet.controls.some((c) => c.id === "position"));
   assert.ok(!portail.controls.some((c) => c.id === "position"));
   assert.equal(typeof portail.icon.path, "string", "l'icone SVG du firmware devient un trace");
-  assert.deepEqual(family.kinds.map((k) => k.id), kinds.map((k) => k.id), "le plugin porte les types du firmware");
+  assert.deepEqual(family.kinds.map((k) => k.id), [...kinds.map((k) => k.id), "remote", "remote-ignored"], "le plugin porte les types du firmware, puis ses telecommandes");
 });
 
 test("types engendres : un type sans libelles anglais, ou une icone SVG a plusieurs traces, sont refuses", () => {
@@ -241,4 +241,38 @@ test("ordre : glisser une carte envoie son rang sur config ; sans rang, les cent
   const devs = [...boxState("openprofalux", BOX)!.devices.values()];
   assert.deepEqual(devs.sort((a, b) => compareDevices(f, a, b)).map((d) => d.name), ["Test centrale", "Chambre Parents"]);
   assert.deepEqual(buildReorder(f, { box: BOX, device: "Test_centrale" }, 1), { topic: `${ROOT}/${BOX}/cover/Test_centrale/config`, payload: '{"rank":1}', retain: false });
+});
+
+test("telecommandes : releve reel du M5 (connues, utilisee par un volet), sur la page du boitier ; supprimer, ignorer, reaccepter, renommer", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  // releve reel du M5 (0.2.16-remotestest), 2026-11-15
+  const R = `${ROOT}/${BOX}`;
+  for (const [p, v] of [
+    ["remote/0000813/info", '{"serial":"0x0000813","name":"Chambre Parent"}'],
+    ["remote/0001067/info", '{"serial":"0x0001067","name":"Chambre Parents","used_by":"Chambre Parents"}'],
+    ["remote/1009224/info", '{"serial":"0x1009224"}'],
+  ] as const) assert.deepEqual(applyMessage(`${R}/${p}`, v, true, 1)!.refused, [], p);
+  const devs = boxState("openprofalux", BOX)!.devices, f = familyById("openprofalux")!;
+  const used = devs.get("0001067")!, free = devs.get("0000813")!, bare = devs.get("1009224")!;
+  assert.deepEqual([used.kind, used.name, [...used.hidden].sort(), used.values.get("used_by")], ["remote", "Chambre Parents", ["ignore", "remove"], "Chambre Parents"]);
+  assert.deepEqual([free.name, [...free.hidden], free.settings.get("remote_name")], ["Chambre Parent", ["used_by"], "Chambre Parent"]);
+  assert.deepEqual([bare.name, bare.settings.get("remote_name")], ["0x1009224", ""], "sans nom : son serial");
+  assert.equal(f.kinds.find((k) => k.id === "remote")!.place, "box", "rangee sur la page du boitier");
+  const t = (device: string) => ({ box: BOX, device });
+  assert.deepEqual(buildCommand(f, t("0000813"), "remove", null), { topic: `${R}/remote/0000813/set`, payload: "DELETE", retain: false });
+  assert.deepEqual(buildCommand(f, t("0000813"), "ignore", null), { topic: `${R}/remote/0000813/set`, payload: "IGNORE", retain: false });
+  assert.deepEqual(buildConfigure(f, t("0000813"), { remote_name: "Salon" }), { topic: `${R}/remote/0000813/config`, payload: '{"name":"Salon"}', retain: false });
+  assert.ok("error" in buildConfigure(f, t("0000813"), { remote_name: "x".repeat(24) }), "nom trop long pour le firmware");
+  // ignoree puis reacceptee : sa carte change d'onglet... puis revient
+  assert.deepEqual(applyMessage(`${R}/remote/0000813/info`, "", true, 1)!.refused, []);
+  applyMessage(`${R}/ignored/0000813`, '{"serial":"0x0000813"}', true, 1);
+  assert.ok(!devs.has("0000813") && devs.get("ignored-0000813")!.kind === "remote-ignored");
+  assert.deepEqual(buildCommand(f, t("ignored-0000813"), "accept", null), { topic: `${R}/ignored/0000813/set`, payload: "ACCEPT", retain: false });
+  applyMessage(`${R}/ignored/0000813`, "", true, 1);
+  assert.ok(!devs.has("ignored-0000813"));
+  // un volet supprime sur le boitier (description videe) disparait aussi
+  applyMessage(`${R}/cover/Test_centrale/attrs`, '{"type":"volet","positional":false,"name":"Test centrale","role":"central","members":[]}', true, 1);
+  applyMessage(`${R}/cover/Test_centrale/attrs`, "", true, 1);
+  assert.ok(!devs.has("Test_centrale"));
 });
