@@ -27,6 +27,7 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "log_ring.h"
+#include "crash_trace.h"
 #include "cc1101.h"
 #include "radio_profile.h"   /* profil radio (frequence par marque) */
 #include "esp_random.h"
@@ -1298,17 +1299,18 @@ static esp_err_t h_health(httpd_req_t *r) {
     int nvol = 0; size_t vent = cfg_store_volet_entries(&nvol);
     size_t sp_total = 0, sp_used = 0; esp_spiffs_info("storage", &sp_total, &sp_used);
     const esp_partition_t *run = esp_ota_get_running_partition();
-    char out[760];
+    char crash[CRASH_JSON_MAX]; crash_trace_json(crash, sizeof(crash));
+    char out[760 + CRASH_JSON_MAX];
     snprintf(out, sizeof(out),
              "{\"reset\":%d,\"heap\":%u,\"heap_min\":%u,\"heap_blk\":%u,"
              "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"nvs_used\":%u,\"nvs_ns\":%s,"
              "\"volets\":%d,\"volet_entries\":%u,"
-             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\"}",
+             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\",\"crash\":%s}",
              (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
              (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries,
              (unsigned)nv.used_entries, ns, nvol, (unsigned)vent,
-             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version);
+             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version, crash);
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }

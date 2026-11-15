@@ -34,6 +34,7 @@
 #include "mdns_name.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
 #include "log_ring.h"
+#include "crash_trace.h"
 #include "memprobe.h"
 #include <esp_attr.h>     /* RTC_NOINIT_ATTR */
 #include <esp_system.h>   /* esp_reset_reason */
@@ -202,6 +203,11 @@ void app_main(void) {
     if (s_fb_magic == FALLBACK_MAGIC && esp_reset_reason() == ESP_RST_SW)
         ESP_LOGW(TAG, "redemarre apres le retour du Wi-Fi (%u s en mode secours)", (unsigned)s_fb_secs);
     s_fb_magic = 0;
+    /* dernier plantage garde en memoire RTC : dans le journal, pour qu'un boitier sans liaison serie
+     * dise ou il a plante (crash_trace.h) */
+    { char ct[CRASH_JSON_MAX]; crash_trace_json(ct, sizeof(ct));
+      if (esp_reset_reason() == ESP_RST_PANIC) ESP_LOGE(TAG, "redemarre apres un plantage : %s", ct);
+      else if (strcmp(ct, "null")) ESP_LOGW(TAG, "dernier plantage garde : %s", ct); }
 
     /* 1. NVS */
     esp_err_t err = nvs_flash_init();

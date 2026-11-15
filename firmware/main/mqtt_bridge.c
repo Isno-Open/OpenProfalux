@@ -749,11 +749,15 @@ static void cloud_announce_disabled(void) {
     ESP_LOGI(TAG, "cloud coupe sur le boitier : annonce au portail");
 }
 
+/* La file arrive en ARGUMENT, pas par s_cloud_ctl_q : la tache demarre des sa creation, sur l'autre
+ * coeur, avant que cloud_ctl_post ait range la file dans la variable. Elle attendait alors une file
+ * nulle, et l'assertion de FreeRTOS faisait planter le boitier a la premiere coupure du cloud
+ * (trace capturee le 2026-11-15 sur l'ATOM : xQueueReceive <- cloud_ctl_task). */
 static void cloud_ctl_task(void *arg) {
-    (void)arg;
+    QueueHandle_t q = (QueueHandle_t)arg;
     cloud_ctl_t c;
     for (;;) {
-        if (xQueueReceive(s_cloud_ctl_q, &c, portMAX_DELAY) != pdTRUE) continue;
+        if (xQueueReceive(q, &c, portMAX_DELAY) != pdTRUE) continue;
         if (c.op == CLOUD_CTL_START) mqtt_cloud_start(c.uri, c.dev);   /* arrete l'ancien client d'abord (sans annonce) */
         else { cloud_announce_disabled(); mqtt_cloud_stop(); }        /* coupe voulue : le portail le sait */
     }
@@ -763,7 +767,7 @@ static bool cloud_ctl_post(const cloud_ctl_t *c) {
     if (!s_cloud_ctl_q) {
         QueueHandle_t q = xQueueCreate(CLOUD_CTL_DEPTH, sizeof(cloud_ctl_t));
         if (!q) return false;
-        if (xTaskCreate(cloud_ctl_task, "mqtt_cloud_ctl", CLOUD_CTL_STACK, NULL, OUTBOX_PRIO, NULL) != pdPASS) {
+        if (xTaskCreate(cloud_ctl_task, "mqtt_cloud_ctl", CLOUD_CTL_STACK, q, OUTBOX_PRIO, NULL) != pdPASS) {
             vQueueDelete(q); return false;
         }
         s_cloud_ctl_q = q;

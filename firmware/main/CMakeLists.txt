@@ -89,6 +89,7 @@ idf_component_register(
         "rf_capture.c"
         "radio_profile.c"
         "log_ring.c"
+        "crash_trace.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
@@ -119,3 +120,6 @@ idf_component_register(
         esp-tls
         mbedtls
 )
+# Trace du dernier plantage (crash_trace.c) : l'editeur de liens fait passer l'appel du gestionnaire de
+# panique d'ESP-IDF par __wrap_esp_panic_handler, qui note la trace avant de lui rendre la main.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")
