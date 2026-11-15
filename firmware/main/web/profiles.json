@@ -1,5 +1,6 @@
 {
   "_contract": "Table de profils : SOURCE UNIQUE de l'ecran unifie 'Ajouter un appareil'. PYRAMIDE type -> marque -> profil. ALIGNE sur le schema DEPLOYE (box de Pascal, feat/came) : bloc 'rx' (reglage RX de capture), bloc 'tx' (encoder/short_us/long_us/repeats/gap_us pour le rejeu-encode CAME ; te_us/repeat_bit/rmt pour KeeLoq ; frame_bits pour Somfy). AJOUTS de la session connecteur (Noe) a integrer par Max : 'freq_khz' top-level par profil (la porteuse, deployee aujourd'hui dans tx.freq_khz -> a remonter), section 'params' par trait, profils Profalux/Somfy enrichis (freq + tx), profils Eveno et NeoSol (famille KeeLoq basse, 868330). Les constantes de protocole d'une marque (ex. timing sync Somfy) restent dans SON moteur (somfy_rts.h), pas ici.",
+  "devices_max": 24,
   "params": {
     "modulation":          { "statut": "certain" },
     "band":                { "statut": "certain", "detecte": true },

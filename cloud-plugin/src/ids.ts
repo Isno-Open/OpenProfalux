@@ -4,4 +4,6 @@ export const CONTROL_ID = { up: "up", stop: "stop", down: "down", position: "pos
 export type ActionId = typeof CONTROL_ID.up | typeof CONTROL_ID.stop | typeof CONTROL_ID.down;
 export const ACTION_IDS: readonly ActionId[] = [CONTROL_ID.up, CONTROL_ID.stop, CONTROL_ID.down];
 /** Reglages : cles des champs, et ce que le firmware publie et attend (cover_attrs.c, shutters.c). */
-export const SETTING_ID = { travelUp: "travel_up_s", travelDown: "travel_down_s" } as const;
+export const SETTING_ID = { travelUp: "travel_up_s", travelDown: "travel_down_s", rank: "rank", orientation: "orientation" } as const;
+/** Orientation d'une facade : azimut en degres, 0 (nord) a 359 (cover_attrs.h COVER_ORIENTATION_MAX). */
+export const ORIENTATION_MAX = 359;

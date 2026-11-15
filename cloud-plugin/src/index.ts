@@ -72,11 +72,15 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
     }
     const a = json(payload);
     if (!a) return [];
-    const up = a[SETTING_ID.travelUp], down = a[SETTING_ID.travelDown];
-    // temps de course publies seulement si le volet est etalonne (les deux) : sinon, pas de valeur
-    const settings = typeof up === "number" && typeof down === "number" ? { settings: { [SETTING_ID.travelUp]: up, [SETTING_ID.travelDown]: down } } : {};
+    const up = a[SETTING_ID.travelUp], down = a[SETTING_ID.travelDown], rank = a[SETTING_ID.rank], ori = a[SETTING_ID.orientation];
+    // valeurs publiees seulement si definies (temps de course : volet etalonne, les deux)
+    const settings: Record<string, number> = {
+      ...(num(up) && num(down) ? { [SETTING_ID.travelUp]: up, [SETTING_ID.travelDown]: down } : {}),
+      ...(num(rank) ? { [SETTING_ID.rank]: rank } : {}),
+      ...(num(ori) ? { [SETTING_ID.orientation]: ori } : {}),
+    };
     return [{ fact: FACT.device, device, kind: typeof a.type === "string" ? a.type : "", name: nameOf(a.name, device),
-      hidden: a.positional === true ? [] : [CONTROL_ID.position], ...settings }];
+      hidden: a.positional === true ? [] : [CONTROL_ID.position], settings, ...(num(rank) ? { rank } : {}) }];
   }
   m = /^remote\/([^/]+)\/battery$/.exec(path);
   // une alerte par passage a « pile faible » vu en direct ; le retenu resservi au branchement n'en est pas un
@@ -133,12 +137,18 @@ export const command: FamilyDecl["command"] = ({ device }, control, value) => {
   return p ? { path: `cover/${device}/set`, payload: p } : null;
 };
 
-/** Etalonnage depuis le portail : le firmware attend les DEUX temps de course, en millisecondes (le
- *  formulaire envoie ses deux champs). S'il en manque un, rien n'est envoye. */
+/** Reglages depuis le portail -> cover/<id>/config. Le firmware attend les temps de course PAR DEUX,
+ *  en millisecondes : un seul des deux n'est pas envoye (le volet garderait un etalonnage boiteux).
+ *  Rang et orientation passent tels quels. Rien a envoyer : null. */
 export const configure: NonNullable<FamilyDecl["configure"]> = ({ device }, values) => {
   const up = values[SETTING_ID.travelUp], down = values[SETTING_ID.travelDown];
-  if (typeof up !== "number" || typeof down !== "number") return null;
-  return { path: `cover/${device}/config`, payload: JSON.stringify({ travel_up_ms: Math.round(up * 1000), travel_down_ms: Math.round(down * 1000) }) };
+  const rank = values[SETTING_ID.rank], ori = values[SETTING_ID.orientation];
+  const out: Record<string, number> = {
+    ...(num(up) && num(down) ? { travel_up_ms: Math.round(up * 1000), travel_down_ms: Math.round(down * 1000) } : {}),
+    ...(num(rank) ? { rank: Math.round(rank) } : {}),
+    ...(num(ori) ? { orientation: Math.round(ori) } : {}),
+  };
+  return Object.keys(out).length ? { path: `cover/${device}/config`, payload: JSON.stringify(out) } : null;
 };
 
 export const family: FamilyDecl = {

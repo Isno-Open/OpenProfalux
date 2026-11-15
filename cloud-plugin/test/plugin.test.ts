@@ -134,6 +134,7 @@ test("etalonnage : temps de course lus dans la description, envoyes en milliseco
   assert.ok("error" in buildConfigure(f, { box: BOX, device: "Chambre_Parents" }, { travel_up_s: 0, travel_down_s: 17 }), "sous la borne de profiles.json");
   assert.ok("error" in buildConfigure(f, { box: BOX, device: "Chambre_Parents" }, { travel_up_s: 19, travel_down_s: 181 }), "au-dessus");
   assert.equal(configure({ box: BOX, device: "x" }, { travel_up_s: 19 }), null, "un seul des deux : rien n'est envoye");
+  assert.deepEqual(configure({ box: BOX, device: "x" }, { travel_up_s: 19, rank: 2 }), { path: "cover/x/config", payload: '{"rank":2}' }, "temps de course seul ignore, le rang passe");
 });
 
 test("etalonnage : un volet non etalonne n'a pas de valeurs ; un portail n'a pas de reglages", () => {
@@ -141,9 +142,11 @@ test("etalonnage : un volet non etalonne n'a pas de valeurs ; un portail n'a pas
   registerDeviceFamily(family);
   applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":false,"name":"Chambre Parents"}', true, 1);
   assert.equal(boxState("openprofalux", BOX)!.devices.get("Chambre_Parents")!.settings.size, 0);
-  assert.equal(family.kinds.find((k) => k.id === "portail")!.settings, undefined);
+  const portail = family.kinds.find((k) => k.id === "portail")!;
+  assert.deepEqual(portail.settings!.map((x) => x.key), ["rank"], "un portail : seulement son rang");
   const volet = family.kinds.find((k) => k.id === "volet")!;
-  assert.deepEqual(volet.settings!.map((x) => [x.key, "min" in x ? x.min : null, "max" in x ? x.max : null]), [["travel_up_s", 1, 180], ["travel_down_s", 1, 180]], "bornes de profiles.json");
+  assert.deepEqual(volet.settings!.map((x) => [x.key, "min" in x ? x.min : null, "max" in x ? x.max : null]),
+    [["rank", 1, 24], ["orientation", 0, 359], ["travel_up_s", 1, 180], ["travel_down_s", 1, 180]], "bornes de profiles.json");
 });
 
 test("sante : battement et etat systeme reels du M5 (signal, memoire, reseau, redemarrage)", () => {
@@ -176,4 +179,16 @@ test("mises a jour : installer seulement vers plus recent ; retour arriere quand
   applyMessage(`${ROOT}/${BOX}/system/ota`, '{"trial":true,"previous":"","rollback":false}', true, 1);
   assert.ok("error" in buildCommand(f, { box: BOX }, "rollback", null), "pas de version precedente valide : refuse");
   assert.equal(boxState("openprofalux", BOX)!.previous, null);
+});
+
+test("rang et orientation : lus dans la description reelle, envoyes sur config", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  // releve reel du M5 (0.2.16-ranktest) apres {"orientation":200,"rank":1}
+  applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":true,"name":"Chambre Parents","travel_up_s":19,"travel_down_s":19,"rank":1,"orientation":200}', true, 1);
+  const d = boxState("openprofalux", BOX)!.devices.get("Chambre_Parents")!;
+  assert.deepEqual([d.rank, d.settings.get("rank"), d.settings.get("orientation")], [1, 1, 200]);
+  assert.deepEqual(buildConfigure(familyById("openprofalux")!, { box: BOX, device: "Chambre_Parents" }, { orientation: 270, rank: 1 }),
+    { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/config`, payload: '{"rank":1,"orientation":270}', retain: false });
+  assert.ok("error" in buildConfigure(familyById("openprofalux")!, { box: BOX, device: "Chambre_Parents" }, { orientation: 360 }), "hors bornes");
 });

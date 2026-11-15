@@ -74,6 +74,8 @@ int  shutters_rename_volet(const char *old_id, const char *new_id);
 /* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE
  * l'affichage web (ni radio, ni pilotage, ni decouverte HA). */
 int  shutters_set_order(const char *ids_csv);
+/* Place un volet au rang `rank` (1..N) de l'ordre d'affichage, les autres renumerotes (portail). */
+int  shutters_set_rank(const char *id, int rank);
 
 /* Nommage d'une telecommande (serial -> nom). */
 int  shutters_remote_name(const char *serial, const char *name);

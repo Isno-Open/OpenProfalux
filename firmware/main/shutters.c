@@ -815,6 +815,11 @@ static void ha_state_str(const volet_t *v, char *out) {
  * centrale ni zone (leur position ne serait celle d'aucun volet), et ETALONNE (sans temps de course,
  * le pourcentage serait une supposition ; decide le 2026-11-14). Une seule regle pour la description
  * cloud, la position publiee et la decouverte HA. */
+_Static_assert(COVER_DEVICES_MAX == SH_MAX_VOLETS, "COVER_DEVICES_MAX (profiles.json devices_max) doit egaler SH_MAX_VOLETS");
+
+/* Rang d'affichage (1..N) d'un volet range, 0 sinon : l'ordre stocke est 0-base, -1 = non range. */
+static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
+
 static bool volet_positional(const volet_t *v) {
     return s_log_frames && !v->central && !is_zone(v)
         && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
@@ -830,7 +835,9 @@ static void publish_volet_state(volet_t *v) {
     char topic[96], pl[16], st[10], slug[SH_ID_LEN], attrs[64 + 6 * SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
     /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
-    if (cover_attrs_json(v->type, volet_positional(v), v->id, v->travel_up_ms, v->travel_down_ms, attrs, sizeof(attrs)) > 0) {
+    const cover_attrs_t ca = { .type = v->type, .positional = volet_positional(v), .name = v->id, .up_ms = v->travel_up_ms,
+                               .down_ms = v->travel_down_ms, .rank = volet_rank(v), .orientation = v->orientation };
+    if (cover_attrs_json(&ca, attrs, sizeof(attrs)) > 0) {
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
         pub_defer(topic, attrs, 1, 1);
     }
@@ -1616,6 +1623,39 @@ int shutters_set_order(const char *ids_csv) {
     return 0;
 }
 
+/* Place un volet au rang `rank` (1..N) de l'ordre d'affichage et renumerote les autres, dans l'ordre
+ * qu'ils avaient (les non ranges a la suite, dans leur ordre de creation). Portail : un rang par
+ * appareil, plutot que la liste entiere de l'interface locale. */
+int shutters_set_rank(const char *id, int rank) {
+    if (rank < 1) return -1;
+    LOCK();
+    volet_t *target = find_volet(id);
+    if (!target) { UNLOCK(); return -1; }
+    int idx[SH_MAX_VOLETS], n = 0;
+    for (int i = 0; i < s_nvolets; i++) if (&s_volets[i] != target) idx[n++] = i;
+    /* tri stable par ordre actuel (non ranges en fin) : insertion, n <= SH_MAX_VOLETS */
+    for (int a = 1; a < n; a++) {
+        int k = idx[a], b = a - 1;
+        int ok = s_volets[k].order < 0 ? 1 << 20 : s_volets[k].order;
+        while (b >= 0) {
+            int ob = s_volets[idx[b]].order < 0 ? 1 << 20 : s_volets[idx[b]].order;
+            if (ob <= ok) break;
+            idx[b + 1] = idx[b]; b--;
+        }
+        idx[b + 1] = k;
+    }
+    int pos = rank - 1 > n ? n : rank - 1;
+    int r = 0;
+    for (int i = 0; i <= n; i++) {
+        if (i == pos) target->order = r++;
+        if (i < n) s_volets[idx[i]].order = r++;
+    }
+    save_cfg();
+    UNLOCK();
+    ESP_LOGI(TAG, "'%s' au rang %d", id, pos + 1);
+    return 0;
+}
+
 int shutters_remote_name(const char *serial, const char *name) {
     if (!serial || !*serial) return -1;
     LOCK();
@@ -2193,23 +2233,35 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     volet_t *v = find_volet_by_slug(slug);
     if (!v) { ESP_LOGW(TAG, "MQTT cmd : volet slug '%s' inconnu", slug); return; }
     char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof(id));
-    /* Reglages d'un appareil (portail cloud, docs/CLOUD.md) : {"travel_up_ms":N,"travel_down_ms":N}.
-     * Valides contre les bornes declarees (cover_travel_ok), sinon refuses en entier. Puis description
-     * et decouverte republiees : le volet peut devenir positionnel. */
+    /* Reglages d'un appareil (portail cloud, docs/CLOUD.md) : {"travel_up_ms":N,"travel_down_ms":N,
+     * "orientation":N,"rank":N}, chaque champ facultatif (les temps de course vont par deux). Tout
+     * champ present est verifie contre ses bornes : un seul faux, et rien n'est applique. Puis
+     * description et decouverte republiees (le volet peut devenir positionnel, changer de rang). */
     if (!strcmp(sub, "config")) {
         if (len <= 0 || len > 256) { ESP_LOGW(TAG, "config '%s' : taille %d refusee", id, len); return; }
         char *js = strndup(data, (size_t)len);
         cJSON *j = js ? cJSON_Parse(js) : NULL;
         free(js);
-        cJSON *u = j ? cJSON_GetObjectItem(j, "travel_up_ms") : NULL, *d = j ? cJSON_GetObjectItem(j, "travel_down_ms") : NULL;
+        cJSON *u = cJSON_GetObjectItem(j, "travel_up_ms"), *d = cJSON_GetObjectItem(j, "travel_down_ms");
+        cJSON *o = cJSON_GetObjectItem(j, "orientation"), *k = cJSON_GetObjectItem(j, "rank");
+        bool has_travel = u || d;
         uint32_t up = cJSON_IsNumber(u) ? (uint32_t)cJSON_GetNumberValue(u) : 0, down = cJSON_IsNumber(d) ? (uint32_t)cJSON_GetNumberValue(d) : 0;
+        int ori = cJSON_IsNumber(o) ? (int)cJSON_GetNumberValue(o) : -2, rank = cJSON_IsNumber(k) ? (int)cJSON_GetNumberValue(k) : -2;
+        bool ok = j && (has_travel || o || k)
+            && (!has_travel || (cover_travel_ok(up) && cover_travel_ok(down)))
+            && (!o || (ori >= 0 && ori <= COVER_ORIENTATION_MAX))
+            && (!k || (rank >= 1 && rank <= COVER_DEVICES_MAX));
         cJSON_Delete(j);
-        if (!cover_travel_ok(up) || !cover_travel_ok(down)) { ESP_LOGW(TAG, "config '%s' : temps de course refuses (%u / %u ms)", id, (unsigned)up, (unsigned)down); return; }
-        if (shutters_calibrate(id, up, down) != 0) return;
-        ESP_LOGI(TAG, "config '%s' : montee %u ms, descente %u ms", id, (unsigned)up, (unsigned)down);
+        if (!ok) { ESP_LOGW(TAG, "config '%s' refusee (champ absent ou hors bornes)", id); return; }
+        if (has_travel && shutters_calibrate(id, up, down) != 0) return;
+        if (ori >= 0 && shutters_set_orientation(id, ori) != 0) return;
+        if (rank >= 1 && shutters_set_rank(id, rank) != 0) return;
+        ESP_LOGI(TAG, "config '%s' appliquee", id);
         LOCK();
+        /* le rang peut avoir change pour tous : chacun republie le sien */
+        for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
         volet_t *cv = find_volet(id);
-        if (cv) { publish_volet_state(cv); announce_one(cv); }
+        if (cv) announce_one(cv);
         UNLOCK();
         pub_flush();   /* hors LOCK (anti-deadlock), comme a la connexion */
         return;

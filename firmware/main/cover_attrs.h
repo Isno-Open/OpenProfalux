@@ -17,14 +17,29 @@ const char *dev_type_name(uint8_t type);
 /* Temps de course acceptable (etalonnage) ? 0 ou hors bornes : non. */
 bool cover_travel_ok(uint32_t ms);
 
-/* Ecrit {"type":"<nom>","positional":true|false,"name":"<nom de l'appareil>",
- * "travel_up_s":N,"travel_down_s":N} dans out. Le nom est celui que l'utilisateur a donne (accents
- * compris, en UTF-8), echappe pour JSON : le portail l'affiche tel quel, au lieu du slug des topics ;
- * name NULL ou vide : pas de champ name. Les temps de course (en secondes arrondies) ne partent que si
- * le volet est etalonne (les deux dans les bornes). Rend la longueur, ou -1 si le type est inconnu ou
- * si le tampon est trop petit (rien n'est alors ecrit). */
-int cover_attrs_json(uint8_t type, bool positional, const char *name, uint32_t up_ms, uint32_t down_ms,
-                     char *out, size_t cap);
+/* Nombre maximal d'appareils d'un boitier (rang dans la liste : 1..COVER_DEVICES_MAX). MIROIR de
+ * SH_MAX_VOLETS et de profiles.json devices_max : le banc test/cover-attrs refuse toute divergence. */
+#define COVER_DEVICES_MAX 24
+/* Orientation d'une facade : azimut en degres, 0 (nord) a 359 ; -1 = non definie. */
+#define COVER_ORIENTATION_MAX 359
+
+/* Description d'un appareil pour le portail. name NULL ou vide : pas de champ name ; temps de course
+ * publies seulement si les deux sont dans les bornes (etalonne) ; rank publie si >= 1 ; orientation
+ * publiee si 0..359. */
+typedef struct {
+    uint8_t     type;
+    bool        positional;
+    const char *name;
+    uint32_t    up_ms, down_ms;
+    int         rank;          /* 1..COVER_DEVICES_MAX, 0 = non range */
+    int         orientation;   /* 0..359, -1 = non definie */
+} cover_attrs_t;
+
+/* Ecrit {"type":"<nom>","positional":true|false,"name":"...","travel_up_s":N,"travel_down_s":N,
+ * "rank":N,"orientation":N} dans out (champs facultatifs selon cover_attrs_t). Le nom est celui que
+ * l'utilisateur a donne (accents compris, en UTF-8), echappe pour JSON. Rend la longueur, ou -1 si le
+ * type est inconnu ou si le tampon est trop petit (rien n'est alors ecrit). */
+int cover_attrs_json(const cover_attrs_t *a, char *out, size_t cap);
 
 /* Ecrit s en chaine JSON (guillemets compris, caracteres speciaux echappes, UTF-8 intact) dans out.
  * Rend la longueur, ou -1 si ca ne tient pas (out vide). Sert aux textes choisis par l'utilisateur

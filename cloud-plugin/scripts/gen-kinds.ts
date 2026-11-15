@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { CONTROL } from "../opencloudapp/server/src/family-contract.ts";
-import { CONTROL_ID, ACTION_IDS, SETTING_ID } from "../src/ids.ts";
+import { CONTROL_ID, ACTION_IDS, SETTING_ID, ORIENTATION_MAX } from "../src/ids.ts";
 import { SETTING_KIND } from "../opencloudapp/server/src/plugin-contract.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +31,8 @@ export function iconOf(type: string, icon: unknown): { glyph: string } | { path:
 /** Les types d'appareils du firmware, dans le vocabulaire du portail. */
 export function kindsOf(profiles: unknown): unknown[] {
   if (!isObj(profiles) || !isObj(profiles.types)) throw new Error("profiles.json : objet types attendu");
+  const devicesMax = profiles.devices_max;
+  if (typeof devicesMax !== "number" || devicesMax < 1) throw new Error("profiles.json : devices_max (nombre maximal d'appareils) requis");
   return Object.entries(profiles.types).map(([id, t]) => {
     if (!isObj(t) || typeof t.label !== "string" || !isDpad(t.dpad)) throw new Error(`type ${id} : label et dpad requis`);
     const en = t.en;
@@ -43,17 +45,21 @@ export function kindsOf(profiles: unknown): unknown[] {
     }));
     // un type positionnel a une position, reglable (decide le 2026-11-14) ; chaque appareil peut la masquer
     if (t.positional === true) controls.push({ kind: CONTROL.position, id: CONTROL_ID.position, label: text("Position", "Position"), settable: true });
-    // etalonnage : un type qui declare ses bornes de temps de course (travel_s) se regle depuis le portail
+    // reglages : le rang dans la liste pour tous ; l'orientation de la facade pour un type positionnel
+    // (comme l'interface locale) ; l'etalonnage pour un type qui declare ses bornes (travel_s)
+    const settings: unknown[] = [{ kind: SETTING_KIND.number, key: SETTING_ID.rank, label: text("Rang dans la liste", "Position in the list"), min: 1, max: devicesMax,
+      hint: text("1 = en tête. Les autres appareils se décalent.", "1 = first. The other devices shift.") }];
+    if (t.positional === true) settings.push({ kind: SETTING_KIND.number, key: SETTING_ID.orientation, label: text("Orientation de la façade (°)", "Facade orientation (°)"),
+      min: 0, max: ORIENTATION_MAX, hint: text("Azimut : 0 nord, 90 est, 180 sud, 270 ouest.", "Azimuth: 0 north, 90 east, 180 south, 270 west.") });
     const travel = t.travel_s;
-    let settings: unknown[] | undefined;
     if (travel !== undefined) {
       if (!isObj(travel) || typeof travel.min !== "number" || typeof travel.max !== "number" || travel.min >= travel.max)
         throw new Error(`type ${id} : travel_s {min, max} en secondes, min < max`);
       const field = (key: string, fr: string, e: string): unknown => ({ kind: SETTING_KIND.number, key, label: text(fr, e), min: travel.min, max: travel.max,
         hint: text("Chronométré sur le volet, en secondes.", "Timed on the shutter, in seconds.") });
-      settings = [field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)")];
+      settings.push(field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)"));
     }
-    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, ...(settings ? { settings } : {}) };
+    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, settings };
   });
 }
 
