@@ -11,15 +11,17 @@ COPY firmware/main/web/profiles.json ./firmware/main/web/profiles.json
 COPY cloud-plugin/package.json cloud-plugin/package-lock.json ./cloud-plugin/
 RUN cd cloud-plugin && npm ci --no-audit --no-fund
 COPY cloud-plugin ./cloud-plugin
-# les tests passent avant toute image : un plugin qui lit mal un boitier ne part pas
+# les tests passent avant toute image : un plugin qui lit mal un boitier ne part pas ; tous ses modules
+# partent dans l'image, et chaque import relatif doit y trouver son fichier (oubli constate le 2026-11-15 :
+# remotes.js absent, plugin refuse au chargement)
 RUN cd cloud-plugin && npm test \
   && mkdir -p /out && cp package.json /out/package.json \
-  && cp dist/src/index.js dist/src/ids.js dist/src/kinds.generated.js /out/ \
+  && cp dist/src/*.js /out/ \
   && cp dist/opencloudapp/server/src/family-contract.js dist/opencloudapp/server/src/plugin-contract.js dist/opencloudapp/server/src/version.js /out/ \
   && cp node_modules/@isno-open/plugin-host/dist/contract.js /out/contract.js \
-  && sed -i 's#"../opencloudapp/server/src/family-contract.js"#"./family-contract.js"#; s#"../opencloudapp/server/src/plugin-contract.js"#"./plugin-contract.js"#; s#"../opencloudapp/server/src/version.js"#"./version.js"#' /out/index.js \
-  && sed -i 's#"@isno-open/plugin-host/contract"#"./contract.js"#' /out/plugin-contract.js \
-  && ! grep -nE "from \"[^.]" /out/*.js
+  && sed -i 's#"\.\./opencloudapp/server/src/\([a-z-]*\.js\)"#"./\1"#g; s#"@isno-open/plugin-host/contract"#"./contract.js"#g' /out/*.js \
+  && ! grep -nE "from \"[^.]" /out/*.js \
+  && node -e 'const fs=require("fs");let bad=0;for(const f of fs.readdirSync("/out").filter(x=>x.endsWith(".js")))for(const m of fs.readFileSync("/out/"+f,"utf8").matchAll(/from "\.\/([^"]+)"/g))if(!fs.existsSync("/out/"+m[1])){console.error(f+" importe "+m[1]+", absent de l image");bad=1}process.exit(bad)' 
 
 FROM busybox:1.38.0-musl
 COPY --from=build /out /plugin
