@@ -1015,10 +1015,11 @@ static void announce_extras(void) {
 }
 
 /* Efface la decouverte HA d'un cover : payload retenu vide sur le topic de config (HA
- * retire alors l'entite) + ses topics d'etat/position. Sans ca, un volet supprime reste
- * affiche dans Home Assistant (le discovery retenu survit). Appele sous LOCK. */
+ * retire alors l'entite) + ses topics d'etat/position/attrs. Sans ca, un volet supprime reste
+ * affiche dans Home Assistant (le discovery retenu survit) et sur le portail cloud (attrs retenu,
+ * relu a chaque redemarrage du portail). Pas de condition sur la liaison locale : le cloud peut
+ * etre connecte sans elle (pub_flush publie sur chaque liaison connectee). Sous LOCK. */
 static void clear_one(volet_t *v) {
-    if (!s_mqtt_ready) return;
     char topic[96], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);
     snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
@@ -1027,6 +1028,8 @@ static void clear_one(volet_t *v) {
     pub_defer(topic, "", 0, 1);
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
     pub_defer(topic, "", 0, 1);
+    snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
+    pub_defer(topic, "", 0, 1);   /* vide = appareil retire pour le portail (fait gone) */
 }
 
 /* ── API commande ── */
