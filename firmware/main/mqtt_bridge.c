@@ -626,6 +626,25 @@ int mqtt_pub_system_status(void) {
     return outbox_send(&s_out_local, TOPIC_BASE "/system/status", payload, 1, 1);
 }
 
+/* Sauvegarde demandee par le portail (backup/get) : la meme que /api/backup, publiee sur backup/data,
+ * SUR LE CLOUD SEULEMENT et sans retenue (elle porte les trames de reference des telecommandes : rien
+ * ne doit la garder sur un broker ; le portail la remet au navigateur qui l'attend et n'en garde rien).
+ * Publication DIRECTE, hors file d'envoi : la file est bornee a OUTBOX_BUDGET (6 Ko) et une sauvegarde
+ * de 24 volets n'y entrerait jamais. En QoS 0, esp-mqtt envoie la charge par morceaux depuis le texte,
+ * sans copie : la seule memoire en jeu est le texte JSON, comme pour /api/backup. */
+#define BACKUP_GET_PATH  TOPIC_BASE "/backup/get"
+#define BACKUP_DATA_PATH TOPIC_BASE "/backup/data"
+static void cloud_backup_reply(void) {
+    if (!s_hdl.export_backup || !s_mqtt_cloud) return;
+    char ct[192];
+    if (!cloud_topic_from_local(BACKUP_DATA_PATH, s_cloud_id, s_cloud_base, ct, sizeof(ct))) return;
+    char *js = s_hdl.export_backup();
+    if (!js) { ESP_LOGW(TAG, "sauvegarde demandee par le portail : memoire insuffisante"); return; }
+    int id = esp_mqtt_client_publish(s_mqtt_cloud, ct, js, 0, 0, 0);
+    ESP_LOGI(TAG, "sauvegarde envoyee au portail (%u o, %s)", (unsigned)strlen(js), id < 0 ? "echec" : "ok");
+    free(js);
+}
+
 /* ── Client CLOUD : évènements (LWT + abonnements device-préfixés), démarrage mTLS, arrêt ── */
 static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
     (void)arg; (void)base; (void)id;
@@ -655,6 +674,7 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             snprintf(sub, sizeof(sub), "%s/remote/+/set", s_cloud_base);         esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* telecommandes */
             snprintf(sub, sizeof(sub), "%s/remote/+/config", s_cloud_base);      esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/ignored/+/set", s_cloud_base);        esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
+            snprintf(sub, sizeof(sub), "%s/backup/get", s_cloud_base);           esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* sauvegarde (portail) */
             ESP_LOGI(TAG, "cloud connecté, base=%s", s_cloud_base);
             if (s_hdl.on_cloud_connected) s_hdl.on_cloud_connected();   /* -> republie description + etat */
             break;
@@ -671,8 +691,10 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
                 break;
             }
             char lt[192];
-            if (local_topic_from_cloud(evt->topic, evt->topic_len, s_cloud_base, lt, sizeof(lt)))
-                handle_incoming(lt, (int)strlen(lt), evt->data, evt->data_len);
+            if (!local_topic_from_cloud(evt->topic, evt->topic_len, s_cloud_base, lt, sizeof(lt))) break;
+            /* une demande de sauvegarde retenue sur le broker se rejouerait a chaque connexion : ignoree */
+            if (!strcmp(lt, BACKUP_GET_PATH)) { if (!evt->retain) cloud_backup_reply(); break; }
+            handle_incoming(lt, (int)strlen(lt), evt->data, evt->data_len);
             break;
         }
         case MQTT_EVENT_ERROR:

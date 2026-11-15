@@ -2245,9 +2245,10 @@ void shutters_cloud_resync(void) {
     for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
     s_remotes_force = true; remotes_sync();                                      /* telecommandes connues et ignorees */
     publish_update_state();                                                      /* version installee / derniere */
+    pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);    /* ecoute permanente (portail) */
     UNLOCK();
     pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
-    ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s) et version republies", s_nvolets, s_nremotes);
+    ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s), version et ecoute republies", s_nvolets, s_nremotes);
 }
 
 void shutters_mqtt_lost(void) {
@@ -2469,7 +2470,9 @@ void shutters_set_log_frames(bool on) {
     LOCK();
     save_cfg();                                        /* persiste l'ecoute permanente -> restauree au boot */
     for (int i = 0; i < s_nvolets; i++) announce_one(&s_volets[i]);   /* re-publie la decouverte : position apparait/disparait selon l'option */
-    if (s_mqtt_ready) pub_defer("openprofalux/listen/state", on ? "ON" : "OFF", 0, 1);   /* etat du switch HA */
+    /* etat du switch HA et du portail : sans condition sur la liaison locale, le cloud peut etre
+     * connecte sans elle (pub_defer sert les deux) */
+    pub_defer("openprofalux/listen/state", on ? "ON" : "OFF", 0, 1);
     UNLOCK();
     pub_flush();
     ESP_LOGI(TAG, "log_frames=%d", on);

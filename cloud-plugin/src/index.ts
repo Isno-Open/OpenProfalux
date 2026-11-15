@@ -13,14 +13,16 @@
 //   system/ota                {"trial":false,"previous":"0.2.16","rollback":true} (retenu) -> essai, retour arriere
 //   <nom>/state               battement ~60 s {"rssi":-67,"free_heap":...,"min_heap":...,"up_s":...} -> sante
 //   update/state              {"installed_version","latest_version",...}       -> mise a jour
-// Le reste (ecoute radio, etat texte) n'a pas de fait correspondant : ignore.
+//   listen/state              ON|OFF, ecoute radio permanente (retenu)          -> action possible (couper ou activer)
+//   backup/data               sauvegarde (JSON de /api/backup, NON retenue), en reponse a backup/get -> fichier
+// Le reste (etat texte, trames) n'a pas de fait correspondant : ignore.
 // Commandes, sous le meme prefixe : cover/<id>/set (OPEN|STOP|CLOSE), cover/<id>/set_position (0..100, % d'ouverture),
-// update/install (INSTALL) pour le boitier entier. Reglages : cover/<id>/config {"travel_up_ms":N,
+// update/install (INSTALL), ota/rollback (ROLLBACK) et listen/set (ON|OFF) pour le boitier entier. Reglages : cover/<id>/config {"travel_up_ms":N,
 // "travel_down_ms":N,"rank":N,"orientation":N,"members":["slug",...]}, valides par le firmware contre les
 // memes bornes (profiles.json). Une centrale ou une zone publie aussi "role" et "members" dans attrs.
 import type { Plugin } from "../opencloudapp/server/src/plugin-types.js";
 import { PLUGIN_CATEGORY } from "../opencloudapp/server/src/plugin-contract.js";
-import { FACT, EVENT_LEVEL, FAMILY_CONTRACT, type Fact, type FamilyDecl, type FamilyMessage } from "../opencloudapp/server/src/family-contract.js";
+import { FACT, EVENT_LEVEL, FAMILY_CONTRACT, BOX_FILE_TYPE, type Fact, type FamilyDecl, type FamilyMessage } from "../opencloudapp/server/src/family-contract.js";
 import { isNewerVersion } from "../opencloudapp/server/src/version.js";
 import { KINDS } from "./kinds.generated.js";
 import { CONTROL_ID, SETTING_ID, roleKindId } from "./ids.js";
@@ -34,6 +36,17 @@ export const PRESENCE = { online: "online", offline: "offline" } as const;
  *  revenir a la version precedente (firmware, ota/rollback). */
 export const UPDATE_INSTALL = { control: "update", path: "update/install", payload: "INSTALL" } as const;
 export const ROLLBACK = { control: "rollback", path: "ota/rollback", payload: "ROLLBACK" } as const;
+/** Ecoute radio permanente (interrupteur « Ecoute RF permanente » du firmware, shutters.c) : le boitier
+ *  publie son etat sur listen/state et obeit a listen/set, avec les memes mots. Deux actions du boitier,
+ *  dont une seule est possible a la fois : celle qui change l'etat publie. */
+export const LISTEN_WORD = { on: "ON", off: "OFF" } as const;
+export const LISTEN_STATE_PATH = "listen/state";
+export const LISTEN_ON = { control: "listen-on", path: "listen/set", payload: LISTEN_WORD.on } as const;
+export const LISTEN_OFF = { control: "listen-off", path: "listen/set", payload: LISTEN_WORD.off } as const;
+const BOX_ACTIONS = [UPDATE_INSTALL, ROLLBACK, LISTEN_ON, LISTEN_OFF] as const;
+/** Sauvegarde du boitier, demandee par le portail (firmware mqtt_bridge.c, BACKUP_GET_PATH et
+ *  BACKUP_DATA_PATH) : le boitier repond sur le cloud seulement, sans retenue. */
+export const BACKUP = { file: "backup", requestPath: "backup/get", requestPayload: "GET", dataPath: "backup/data" } as const;
 /** Etat de pile d'une telecommande (binary_sensor HA : ON = pile faible). */
 const BATTERY_LOW = "ON";
 
@@ -68,6 +81,7 @@ export const closureFromOpening = (pct: number): number => PERCENT_FULL - pct;
 export const openingFromClosure = closureFromOpening;
 
 export function read({ path, payload, retained }: FamilyMessage): Fact[] {
+  if (path === BACKUP.dataPath) return [{ fact: FACT.file, file: BACKUP.file, content: payload }];
   if (path === "status") {
     const p = payload.trim();
     return p === PRESENCE.online || p === PRESENCE.offline ? [{ fact: FACT.presence, online: p === PRESENCE.online }] : [];
@@ -112,8 +126,13 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
       ...(reset ? { health: { lastReset: reset } } : {}),
       network: { ...(str(s.ssid) ? { ssid: s.ssid } : {}), ...(str(s.ip) ? { ip: s.ip } : {}), ...(str(s.mqtt) ? { broker: s.mqtt } : {}) } }];
   }
+  if (path === LISTEN_STATE_PATH) {
+    const w = payload.trim();
+    if (w !== LISTEN_WORD.on && w !== LISTEN_WORD.off) return [];
+    return [{ fact: FACT.box, actions: { [LISTEN_ON.control]: w === LISTEN_WORD.off, [LISTEN_OFF.control]: w === LISTEN_WORD.on } }];
+  }
   m = /^([^/]+)\/state$/.exec(path);
-  if (m && m[1] !== "listen" && m[1] !== "update") {
+  if (m && m[1] !== "update") {   // listen/state est lu plus haut
     // battement : seulement s'il en a la forme (signal), sinon ce n'est pas lui
     const h = json(payload);
     if (!h || !num(h.rssi)) return [];
@@ -146,7 +165,7 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
 
 export const command: FamilyDecl["command"] = ({ device }, control, value) => {
   if (!device) {
-    const a = [UPDATE_INSTALL, ROLLBACK].find((x) => x.control === control);
+    const a = BOX_ACTIONS.find((x) => x.control === control);
     return a ? { path: a.path, payload: a.payload } : null;
   }
   const r = remoteCommand(device, control);
@@ -192,7 +211,13 @@ export const family: FamilyDecl = {
         en: "The box will download the new version and restart (about a minute). If anything goes wrong, it returns to the current version on its own." } },
     { id: ROLLBACK.control, label: { fr: "Revenir à la version précédente", en: "Go back to the previous version" },
       confirm: { fr: "Le boîtier va redémarrer sur la version précédente.", en: "The box will restart on the previous version." } },
+    { id: LISTEN_ON.control, label: { fr: "Activer l'écoute permanente", en: "Turn on permanent listening" } },
+    { id: LISTEN_OFF.control, label: { fr: "Couper l'écoute permanente", en: "Turn off permanent listening" },
+      confirm: { fr: "Sans écoute, le boîtier ne suit plus les volets commandés par leur télécommande : leur position affichée peut devenir fausse.",
+        en: "Without listening, the box no longer follows shutters driven by their remote: their displayed position may become wrong." } },
   ],
+  boxFiles: [{ id: BACKUP.file, label: { fr: "Télécharger la sauvegarde", en: "Download the backup" }, type: BOX_FILE_TYPE.json }],
+  requestFile: (_target, file) => (file === BACKUP.file ? { path: BACKUP.requestPath, payload: BACKUP.requestPayload } : null),
   read,
   reorder,
   command,

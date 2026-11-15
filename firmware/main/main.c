@@ -393,6 +393,7 @@ void app_main(void) {
             .on_connected = on_mqtt_connected,        /* -> publie la decouverte HA */
             .on_disconnected = shutters_mqtt_lost,    /* -> statut hors ligne */
             .on_cloud_connected = shutters_cloud_resync,   /* -> le portail voit les appareils des la connexion */
+            .export_backup = shutters_export_json,         /* -> sauvegarde telechargee depuis le portail */
         };
         mqtt_bridge_set_handlers(&h);
     }

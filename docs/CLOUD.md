@@ -65,8 +65,14 @@ trames, le réglage de la réception radio, l'appairage cloud du boîtier, la d�
    supprimer ou ignorer (avec confirmation ; pas une télécommande qu'un volet utilise, le boîtier
    refuserait), réaccepter une ignorée. Le boîtier publie `remote/<serial>/info` et `ignored/<serial>`
    (retenus, vides quand elles sont retirées) et ne republie que ce qui a changé (toutes les 5 s).
-8. **Sauvegarde** : télécharger ; restaurer plus tard, avec double confirmation.
-9. **Écoute permanente** : modifiable à distance.
+8. **Sauvegarde** : télécharger, depuis le panneau « Sauvegarde » de la page du boîtier. Le portail
+   publie `backup/get` ; le boîtier répond par `backup/data` (la même sauvegarde que `/api/backup`),
+   sur le cloud seulement et jamais retenue, et le portail la remet au navigateur sans en garder de
+   copie : elle contient les trames de référence des télécommandes. La restauration reste dans
+   l'interface locale ; à distance, plus tard, avec double confirmation.
+9. **Écoute permanente** : activer ou couper, depuis la page du boîtier (`listen/set`, état publié sur
+   `listen/state`, republié à chaque connexion du cloud). Couper demande confirmation : sans écoute,
+   le boîtier ne suit plus les volets commandés par leur télécommande.
 
 **En lecture seule dans le portail :** le profil radio d'un volet (personnalisé ou non, fréquence),
 le Wi-Fi et la connexion MQTT locale du boîtier (on ne coupe pas à distance le lien qui le relie),

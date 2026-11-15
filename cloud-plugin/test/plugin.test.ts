@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
 import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
 import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
-import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById } from "../opencloudapp/server/src/device-families.js";
+import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById, buildFileRequest, awaitBoxFile } from "../opencloudapp/server/src/device-families.js";
 
 const ROOT = "openprofalux";
 const BOX = "opf-2d5efba03f";
@@ -162,7 +162,7 @@ test("sante : battement et etat systeme reels du M5 (signal, memoire, reseau, re
   assert.deepEqual(s.network, { ssid: "Isno", ip: "192.168.20.12", broker: "192.168.50.7:1883" });
   assert.deepEqual([s.health.rssiDbm, s.health.freeHeap, s.health.minFreeHeap, s.health.uptimeS], [-67, 33324, 21820, 9908]);
   assert.match(s.health.lastReset!.fr, /logiciel/);
-  assert.deepEqual(read({ box: BOX, path: "listen/state", payload: "ON", retained: true }), [], "l'ecoute radio n'est pas un battement");
+  assert.ok(read({ box: BOX, path: "listen/state", payload: "ON", retained: true }).every((x) => x.fact !== FACT.box || !("health" in x)), "l'ecoute radio n'est pas un battement");
   assert.deepEqual(read({ box: BOX, path: "openprofalux/state", payload: '{"last_cmd":"X"}', retained: true }), [], "sans signal, ce n'est pas un battement");
 });
 
@@ -182,6 +182,27 @@ test("mises a jour : installer seulement vers plus recent ; retour arriere quand
   applyMessage(`${ROOT}/${BOX}/system/ota`, '{"trial":true,"previous":"","rollback":false}', true, 1);
   assert.ok("error" in buildCommand(f, { box: BOX }, "rollback", null), "pas de version precedente valide : refuse");
   assert.equal(boxState("openprofalux", BOX)!.previous, null);
+});
+
+test("ecoute permanente : etat reel lu sur listen/state, seule l'action qui le change est possible", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  const f = familyById("openprofalux")!;
+  // releve reel du M5 : ecoute active -> on peut la couper, pas l'activer
+  applyMessage(`${ROOT}/${BOX}/listen/state`, "ON", true, 1);
+  let s = boxState("openprofalux", BOX)!;
+  assert.deepEqual([s.actions.get("listen-on"), s.actions.get("listen-off")], [false, true]);
+  assert.deepEqual(buildCommand(f, { box: BOX }, "listen-off", null), { topic: `${ROOT}/${BOX}/listen/set`, payload: "OFF", retain: false });
+  assert.ok("error" in buildCommand(f, { box: BOX }, "listen-on", null), "deja active : refuse");
+  applyMessage(`${ROOT}/${BOX}/listen/state`, "OFF", true, 1);
+  s = boxState("openprofalux", BOX)!;
+  assert.deepEqual([s.actions.get("listen-on"), s.actions.get("listen-off")], [true, false]);
+  assert.deepEqual(buildCommand(f, { box: BOX }, "listen-on", null), { topic: `${ROOT}/${BOX}/listen/set`, payload: "ON", retain: false });
+  // un mot inconnu ne change rien (pas d'etat invente)
+  assert.deepEqual(read({ box: BOX, path: "listen/state", payload: "peut-etre", retained: true }), []);
+  // couper demande confirmation (les positions ne sont plus suivies), activer non
+  const ctl = (id: string) => family.boxControls!.find((c) => c.id === id)!;
+  assert.ok(ctl("listen-off").confirm && !ctl("listen-on").confirm);
 });
 
 test("rang et orientation : lus dans la description reelle, envoyes sur config", () => {
@@ -275,4 +296,17 @@ test("telecommandes : releve reel du M5 (connues, utilisee par un volet), sur la
   applyMessage(`${R}/cover/Test_centrale/attrs`, '{"type":"volet","positional":false,"name":"Test centrale","role":"central","members":[]}', true, 1);
   applyMessage(`${R}/cover/Test_centrale/attrs`, "", true, 1);
   assert.ok(!devs.has("Test_centrale"));
+});
+
+test("sauvegarde : demandee sur backup/get, la reponse du boitier (backup/data) remise a qui l'attend ; retenue, refusee", async () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  const f = familyById("openprofalux")!;
+  assert.deepEqual(buildFileRequest(f, BOX, "backup"), { topic: `${ROOT}/${BOX}/backup/get`, payload: "GET", retain: false });
+  // forme reelle de /api/backup du M5 (2026-11-15), valeurs d'essai
+  const sauv = '{"log_frames":true,"remotes":{"0x0001067":"Chambre Parents"},"volets":[{"id":"Chambre Parents","serials":[],"cmd":{"up":"","down":"","stop":""},"virt":true}],"pfx_enrol":[{"remote":"0x0001067","slot":1,"counter":12}]}';
+  const attente = awaitBoxFile("openprofalux", BOX, "backup", 1000);
+  assert.match(applyMessage(`${ROOT}/${BOX}/backup/data`, sauv, true, 1)!.refused.join(), /retenu/);
+  assert.deepEqual(applyMessage(`${ROOT}/${BOX}/backup/data`, sauv, false, 1)!.refused, []);
+  assert.equal(await attente, sauv);
 });
