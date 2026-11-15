@@ -310,3 +310,8 @@ test("sauvegarde : demandee sur backup/get, la reponse du boitier (backup/data) 
   assert.deepEqual(applyMessage(`${ROOT}/${BOX}/backup/data`, sauv, false, 1)!.refused, []);
   assert.equal(await attente, sauv);
 });
+
+test("cloud coupe sur le boitier : presence « disabled » annoncee par le firmware, distincte d'une panne", () => {
+  assert.deepEqual(read({ box: BOX, path: "status", payload: "disabled", retained: true }), [{ fact: FACT.presence, online: false, disabled: true }]);
+  assert.deepEqual(read({ box: BOX, path: "status", payload: "offline", retained: true }), [{ fact: FACT.presence, online: false }]);
+});

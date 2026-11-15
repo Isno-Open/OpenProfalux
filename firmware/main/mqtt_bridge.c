@@ -310,6 +310,9 @@ static void handle_incoming(const char *topic, int tlen, const char *data, int d
  * « offline » alors qu'il est connecte ; le battement la republie aussi, en filet. */
 #define PRESENCE_ONLINE  "online"
 #define PRESENCE_OFFLINE "offline"
+/* Cloud coupe SUR le boitier (interface locale : interrupteur ou oubli) : annonce au portail avant de
+ * partir, pour qu'il dise « cloud desactive sur le boitier » et non une panne (docs/CLOUD.md). */
+#define PRESENCE_DISABLED "disabled"
 static bool is_own_offline(const char *topic, int tlen, const char *data, int dlen, const char *own) {
     return own[0] && tlen == (int)strlen(own) && !strncmp(topic, own, (size_t)tlen)
         && dlen == (int)strlen(PRESENCE_OFFLINE) && !strncmp(data, PRESENCE_OFFLINE, (size_t)dlen);
@@ -733,13 +736,26 @@ typedef struct { cloud_ctl_op_t op; char uri[160]; char dev[40]; } cloud_ctl_t;
 #define CLOUD_CTL_STACK 4096   /* demarrage : lecture des certificats et configuration TLS */
 static QueueHandle_t s_cloud_ctl_q = NULL;
 
+/* Annonce « disabled » (retenue, QoS 1), puis deconnexion PROPRE : un DISCONNECT annule le testament
+ * « offline », qui sinon ecraserait l'annonce. Le delai laisse partir les deux paquets avant l'arret du
+ * client (esp_mqtt_client_stop ferme la socket sans attendre). Sans connexion, rien a annoncer : le
+ * portail voit deja le boitier hors ligne. */
+#define CLOUD_BYE_MS 500
+static void cloud_announce_disabled(void) {
+    if (!s_mqtt_cloud || !s_cloud_connected) return;
+    esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, PRESENCE_DISABLED, 0, 1, 1);
+    esp_mqtt_client_disconnect(s_mqtt_cloud);
+    vTaskDelay(pdMS_TO_TICKS(CLOUD_BYE_MS));
+    ESP_LOGI(TAG, "cloud coupe sur le boitier : annonce au portail");
+}
+
 static void cloud_ctl_task(void *arg) {
     (void)arg;
     cloud_ctl_t c;
     for (;;) {
         if (xQueueReceive(s_cloud_ctl_q, &c, portMAX_DELAY) != pdTRUE) continue;
-        if (c.op == CLOUD_CTL_START) mqtt_cloud_start(c.uri, c.dev);   /* arrete l'ancien client d'abord */
-        else mqtt_cloud_stop();
+        if (c.op == CLOUD_CTL_START) mqtt_cloud_start(c.uri, c.dev);   /* arrete l'ancien client d'abord (sans annonce) */
+        else { cloud_announce_disabled(); mqtt_cloud_stop(); }        /* coupe voulue : le portail le sait */
     }
 }
 

@@ -151,5 +151,15 @@ check "battement sur le broker cloud"  "grep -q '$HEARTBEAT' $SIM/cloud.txt"
 check "boitier en ligne sur le cloud"  "grep -q '^openprofalux/$DEVICE_ID/status online' $SIM/cloud.txt"
 check "version publiee au cloud"       "grep -q '^openprofalux/$DEVICE_ID/system/status ' $SIM/cloud.txt"
 check "aucune trame radio vers le cloud" "! grep -E -q '$LOCAL_ONLY_RE' <(awk '{print \$1}' $SIM/cloud.txt)"
+echo ">> couper le cloud SUR le boitier (interface locale) : il l'annonce au portail, sans planter"
+LOG_BEFORE=$(docker logs "$C_QEMU" 2>&1 | wc -l)
+curl -s -m10 -X POST "$WEB/api/cloud/toggle" -H 'Content-Type: application/json' -d '{"on":false}'; echo
+sleep 8
+docker logs "$C_QEMU" 2>&1 | tail -n +"$((LOG_BEFORE + 1))" > "$SIM/coupure.log"
+grep -E "Guru|abort|panic|Backtrace|cloud" "$SIM/coupure.log" | cut -c1-200 | head -20
+STATUS=$(docker run --rm --network host -v "$FW/$SIM":/sim:ro "$MQTT_IMAGE" mosquitto_sub -h 127.0.0.1 -p "$PORT_CLOUD" \
+  --cafile /sim/ca.crt --cert /sim/relay.crt --key /sim/relay.key -t "openprofalux/$DEVICE_ID/status" -C 1 -W 5 2>/dev/null)
+check "cloud coupe : le boitier ne plante pas" "! grep -E -q 'Guru|abort\\(|Backtrace' $SIM/coupure.log"
+check "cloud coupe : annonce retenue « disabled » (pas « online », pas le testament)" "[ '$STATUS' = disabled ]"
 [ "$FAIL" = 0 ] && echo "RESULTAT : OK" || echo "RESULTAT : KO"
 exit "$FAIL"

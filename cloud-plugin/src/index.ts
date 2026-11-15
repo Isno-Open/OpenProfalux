@@ -3,7 +3,7 @@
 // ceux du firmware (profiles.json, engendres dans kinds.generated.ts).
 //
 // Ce que publie le boitier sous `openprofalux/<boitier>/` (relai cloud du firmware, cloud_topic.c) :
-//   status                    online, testament offline (retenu)              -> presence
+//   status                    online, testament offline, disabled (cloud coupe sur le boitier) (retenu) -> presence
 //   cover/<id>/attrs          {"type":"volet","positional":true,"name":"Séjour",
 //                              "travel_up_s":19,"travel_down_s":18} (retenu)        -> appareil, reglages
 //   cover/<id>/position       0..100, % d'OUVERTURE pour HA (retenu)            -> position, en % de FERMETURE
@@ -30,8 +30,9 @@ import { REMOTE_KINDS, REMOTE_NAME, readRemote, remoteCommand, remoteConfigure }
 
 /** Actions de la carte -> charge que le firmware attend sur cover/<id>/set. */
 export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE" };
-/** Presence telle que le firmware l'annonce (mqtt_bridge.c, PRESENCE_ONLINE / PRESENCE_OFFLINE). */
-export const PRESENCE = { online: "online", offline: "offline" } as const;
+/** Presence telle que le firmware l'annonce (mqtt_bridge.c, PRESENCE_ONLINE / PRESENCE_OFFLINE /
+ *  PRESENCE_DISABLED : cloud coupe sur le boitier, annonce avant de partir). */
+export const PRESENCE = { online: "online", offline: "offline", disabled: "disabled" } as const;
 /** Actions sur le boitier entier : installer la derniere version (entite update de HA, payload_install),
  *  revenir a la version precedente (firmware, ota/rollback). */
 export const UPDATE_INSTALL = { control: "update", path: "update/install", payload: "INSTALL" } as const;
@@ -84,6 +85,7 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
   if (path === BACKUP.dataPath) return [{ fact: FACT.file, file: BACKUP.file, content: payload }];
   if (path === "status") {
     const p = payload.trim();
+    if (p === PRESENCE.disabled) return [{ fact: FACT.presence, online: false, disabled: true }];
     return p === PRESENCE.online || p === PRESENCE.offline ? [{ fact: FACT.presence, online: p === PRESENCE.online }] : [];
   }
   const remote = readRemote(path, payload);
