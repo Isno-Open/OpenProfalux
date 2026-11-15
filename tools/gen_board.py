@@ -207,12 +207,21 @@ def header(d):
 # et des commandes enchainees jusqu'a 152 o : les deux liaisons MQTT tombaient. La trace des
 # allocations du creux montre 13 tampons Wi-Fi d'emission de 1 696 o tenus en meme temps
 # (esf_buf_alloc_dynamic), soit 22 Ko. Un tampon refuse n'est pas une perte : TCP reemet.
+# Reception ramenee de 16 a 8 tampons pour la meme raison : la trace en montrait jusqu'a 17
+# tenus en tout, emission et reception comptees ensemble.
+# TCP rendu a 4 segments (envoi et fenetre, la valeur d'ESP-IDF) : avec 2, moins de 4 segments
+# sont en vol, donc jamais 3 accuses en double, donc pas de retransmission rapide. Chaque paquet
+# perdu attend l'expiration (1 s et plus, doublee a chaque perte). Sur le Wi-Fi du VLAN 20 (10 a
+# 20 % de pertes au ping chez les voisins aussi), mesure du 2026-11-15 sur l'ATOM : avec 2
+# segments, chaque abonnement bloquait 10 s, les deux liaisons tombaient pendant 5 tours de
+# commandes simultanees sur 3 volets, et le web ne repondait plus a 2 tours sur 5. Avec 4 : deux
+# passages de 5 tours, aucune coupure, web toujours present, libre au plus bas 10 Ko.
 NET_BUDGET_INTERNAL_RAM = {
-    "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM": 16,
+    "CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM": 8,
     "CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM": 8,
     "CONFIG_ESP_WIFI_AMPDU_TX_ENABLED": 0,
-    "CONFIG_LWIP_TCP_SND_BUF_DEFAULT": 2880,   # 2 segments de 1 440 o
-    "CONFIG_LWIP_TCP_WND_DEFAULT": 2880,
+    "CONFIG_LWIP_TCP_SND_BUF_DEFAULT": 5760,   # 4 segments de 1 440 o
+    "CONFIG_LWIP_TCP_WND_DEFAULT": 5760,
     "CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN": 2048,
 }
 
