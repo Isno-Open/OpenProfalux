@@ -60,6 +60,9 @@ jobs:
       # Une route de trop n'est pas enregistree (404) : /api/central dehors depuis #42, en v0.2.12.
       - name: Places des tables de routes (web_ui.c)
         run: python3 tools/check_routes.py
+      # Pas de alert/confirm/prompt : bloques en silence par certains navigateurs integres (2026-11-16).
+      - name: Aucune boite du navigateur dans l'interface
+        run: python3 tools/check_web_dialogs.py
 
   build:
     needs: cartes

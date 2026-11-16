@@ -224,6 +224,17 @@ labelSymbols();
 if ($('#volets')) new MutationObserver(labelSymbols).observe($('#volets'), { childList: true });
 
 /* ── Helpers ── */
+/* Confirmation DANS la page, jamais par les boites confirm et alert du navigateur : ces boites sortent du
+ * style de l'interface, et certains navigateurs integres (application, cadre) les bloquent sans un
+ * mot. Rend une promesse : true si l'utilisateur confirme, false s'il annule ou ferme (Echap). */
+function ask(msg) {
+  const d = $('#ask');
+  $('#ask-msg').textContent = msg;
+  d.returnValue = '';
+  d.showModal();
+  return new Promise(res => { d.onclose = () => res(d.returnValue === ASK_OK); });
+}
+const ASK_OK = 'ok';
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1600); }
 function savedBtn(b, label) { const o = b.textContent; b.textContent = '✓ Enregistré'; setTimeout(() => b.textContent = label || o, 1500); }
 const sigLvl = d => d >= -55 ? 4 : d >= -68 ? 3 : d >= -80 ? 2 : 1;
@@ -867,7 +878,7 @@ const delVoletBtn = $('#del-volet');
 if (delVoletBtn) delVoletBtn.onclick = async () => {
   const id = activeVolet;
   if (!id) return;
-  if (!confirm(`Supprimer le volet « ${id} » et toutes ses commandes apprises ?`)) return;
+  if (!await ask(`Supprimer le volet « ${id} » et toutes ses commandes apprises ?`)) return;
   await api('/api/volet/delete', { method: 'POST', body: JSON.stringify({ id }) });
   activeVolet = '';
   const nr = $('#new-volet-row'); if (nr) { nr.hidden = true; $('#new-volet').value = ''; }
@@ -1416,7 +1427,7 @@ $('#sys-save').onclick = async () => {
 };
 /* Desactivation EXPLICITE : envoie ui_pass:"" (le firmware efface alors la cle NVS). */
 if ($('#sys-uipass-clear')) $('#sys-uipass-clear').onclick = async () => {
-  if (!confirm('Retirer le mot de passe ?\n\nL\'interface et l\'API redeviendront accessibles à tout appareil du réseau, y compris pour envoyer un firmware.')) return;
+  if (!await ask('Retirer le mot de passe ?\n\nL\'interface et l\'API redeviendront accessibles à tout appareil du réseau, y compris pour envoyer un firmware.')) return;
   await api('/api/config', { method: 'POST', body: JSON.stringify({ ui_pass: '' }) }).catch(() => {});
   /* Le firmware a invalide toutes les sessions (y compris la notre) en changeant
      le mot de passe. Sans protection il n'en faut plus, mais l'ecran de login
@@ -1700,7 +1711,7 @@ $('#cloud-toggle').onclick = async () => {
   loadCloud();
 };
 $('#cloud-forget').onclick = async () => {
-  if (!confirm('Oublier le cloud sur ce boîtier ? (le compte garde le device, ré-appairage possible)')) return;
+  if (!await ask('Oublier le cloud sur ce boîtier ? (le compte garde le device, ré-appairage possible)')) return;
   try { await api('/api/cloud/forget', { method: 'POST' }); toast('Cloud oublié'); } catch (e) {}
   loadCloud();
 };
@@ -1716,8 +1727,8 @@ $('#mqtt-detect').onclick = async () => {
 
 /* ── OTA ── */
 $('#ota-btn').onclick = async () => {
-  const f = $('#ota-file').files[0]; if (!f) return alert('Choisis un fichier .bin');
-  if (/full/i.test(f.name) && !confirm(`« ${f.name} » ressemble à un binaire COMPLET (flash série à 0x0), pas à une image OTA - l'OTA le refusera. Prends plutôt le fichier « -ota.bin ». Continuer quand même ?`)) return;
+  const f = $('#ota-file').files[0]; if (!f) return toast('Choisis un fichier .bin');
+  if (/full/i.test(f.name) && !await ask(`« ${f.name} » ressemble à un binaire COMPLET (flash série à 0x0), pas à une image OTA - l'OTA le refusera. Prends plutôt le fichier « -ota.bin ». Continuer quand même ?`)) return;
   $('#ota-prog').hidden = false; $('#ota-btn').disabled = true; $('#ota-bar').value = 0;
   /* Le httpd de l'ESP est mono-tache : pendant l'upload il ne peut PAS repondre a /api/ota/status.
      On pilote donc la barre cote navigateur (octets reellement pousses vers l'ESP) via XHR. */
@@ -1768,7 +1779,7 @@ function otaRetour(st) {
   }
 }
 $('#ota-rollback').onclick = async () => {
-  if (!confirm(otaPrecedente ? `Revenir à la version ${otaPrecedente} et redémarrer ?` : 'Revenir à la version précédente et redémarrer ?')) return;
+  if (!await ask(otaPrecedente ? `Revenir à la version ${otaPrecedente} et redémarrer ?` : 'Revenir à la version précédente et redémarrer ?')) return;
   await api('/api/ota/rollback', { method: 'POST' }).catch(e => {
     if (e !== 409) return;   /* refus : aucune version precedente valide (le boitier ne redemarre pas) */
     $('#ota-rollback').disabled = true;
@@ -1857,8 +1868,8 @@ $('#ota-github').onclick = () => {
 /* ── Restauration ── */
 $('#restore-btn').onclick = async () => {
   const f = $('#restore-file').files[0];
-  if (!f) return alert('Choisis un fichier de sauvegarde .json');
-  if (!confirm('Remplacer toute la config actuelle par cette sauvegarde ?')) return;
+  if (!f) return toast('Choisis un fichier de sauvegarde .json');
+  if (!await ask('Remplacer toute la config actuelle par cette sauvegarde ?')) return;
   const text = await f.text();
   const r = await fetch('/api/restore', { method: 'POST', body: text }).then(x => x.json()).catch(() => ({}));
   restoreDone(r, 'Sauvegarde restaurée');
@@ -1871,7 +1882,7 @@ const RESTORE_ERR = {
   nvs: 'Config restaurée mais pas enregistrée (mémoire pleine) : elle sera perdue au redémarrage.',
   absente: "Aucune config d'avant à restaurer." };
 function restoreDone(r, okMsg) {
-  if (r.ok) { toast(okMsg); loadStatus(); } else alert(RESTORE_ERR[r.err] || 'Échec de la restauration');
+  if (r.ok) { toast(okMsg); loadStatus(); } else toast(RESTORE_ERR[r.err] || 'Échec de la restauration');
   loadPrevCfg();
 }
 async function loadPrevCfg() {
@@ -1881,7 +1892,7 @@ async function loadPrevCfg() {
   const when = p.t > 1600000000 ? ' du ' + new Date(p.t * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   el.innerHTML = `Config d'avant la dernière restauration${when} : <button id="restore-undo" class="btn" type="button">↩ Revenir à cette config</button>`;
   $('#restore-undo').onclick = async () => {
-    if (!confirm("Revenir à la config d'avant la dernière restauration ? La config actuelle sera gardée à sa place.")) return;
+    if (!await ask("Revenir à la config d'avant la dernière restauration ? La config actuelle sera gardée à sa place.")) return;
     restoreDone(await fetch('/api/restore/undo', { method: 'POST' }).then(x => x.json()).catch(() => ({})), "Config d'avant restaurée");
   };
 }
@@ -1953,7 +1964,7 @@ function renderCentralsList() {
   });
   box.querySelectorAll('.cd').forEach(b => b.onclick = async (e) => {
     e.stopPropagation();
-    if (!confirm(`Supprimer la centrale « ${b.dataset.id} » ? (les volets ne sont pas touchés)`)) return;
+    if (!await ask(`Supprimer la centrale « ${b.dataset.id} » ? (les volets ne sont pas touchés)`)) return;
     await api('/api/volet/delete', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }).catch(() => {});
     toast('Centrale supprimée'); await loadStatus();
   });

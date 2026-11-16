@@ -262,3 +262,8 @@ progress::-webkit-progress-value{background:var(--accent)}
 .cloud-qr p{flex:1 1 220px;margin:0}
 .cloud-alt{margin-top:14px}
 .cloud-alt summary{cursor:pointer;color:var(--muted);font-size:.88rem}
+
+/* Fenetre de confirmation (remplace la boite confirm du navigateur) */
+.ask{max-width:min(440px,calc(100vw - 32px));border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);padding:20px;box-shadow:var(--shadow)}
+.ask::backdrop{background:rgb(0 0 0 / .45)}
+.ask p{margin:0 0 16px;white-space:pre-line;line-height:1.45}
