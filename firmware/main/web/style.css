@@ -47,15 +47,21 @@ a{color:var(--accent)}
 .icon-btn{width:36px;height:36px;flex:none;display:grid;place-items:center;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:10px;cursor:pointer;font-size:1rem}
 .icon-btn:hover{border-color:var(--accent-line)}
 
-.tabs{display:flex;flex-wrap:wrap;gap:6px;padding:14px 0 4px}
+/* Menu sur UNE ligne, a toute largeur : neuf colonnes egales, jamais de retour a la ligne. Sous
+ * 640 px, les icones seules (le nom reste dans title et aria-label). */
+.tabs{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:4px;padding:14px 0 4px}
 .links{list-style:none;margin:14px 0;padding:0;display:grid;gap:10px}
 .links a{color:var(--accent);text-decoration:none;font-weight:550}
 .links a:hover{text-decoration:underline}
-.tab{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font:inherit;font-weight:550;font-size:.86rem;cursor:pointer;white-space:nowrap;transition:.14s}
+.tab{position:relative;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:7px 2px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font:inherit;font-weight:550;font-size:.86rem;cursor:pointer;white-space:nowrap;transition:.14s}
+.tab-ico{font-size:1.05rem;line-height:1}
+.tab-label{max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:.74rem}
+.tab .tab-badge{position:absolute;top:5px;right:calc(50% - 16px)}
+@media(max-width:640px){.tab-label{display:none}.tab{padding:9px 0}.tab-ico{font-size:1.15rem}}
 .tab:hover{color:var(--text);border-color:var(--accent-line)}
 .tab.active{color:var(--accent-fg);background:var(--accent);border-color:var(--accent)}
-.subtabs{display:flex;flex-wrap:wrap;gap:2px;margin-bottom:16px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px}
-.subtab{flex:1;padding:7px 10px;border:none;background:transparent;color:var(--muted);font:inherit;font-weight:600;font-size:.85rem;border-radius:7px;cursor:pointer}
+.subtabs{display:flex;overflow-x:auto;scrollbar-width:none;gap:2px;margin-bottom:16px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px}
+.subtab{flex:1 0 auto;white-space:nowrap;padding:7px 10px;border:none;background:transparent;color:var(--muted);font:inherit;font-weight:600;font-size:.85rem;border-radius:7px;cursor:pointer}
 .subtab:hover{color:var(--text)}
 .subtab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
 .subpanel{display:none}.subpanel.active{display:block}
