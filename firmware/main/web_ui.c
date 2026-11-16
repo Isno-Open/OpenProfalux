@@ -1929,7 +1929,7 @@ static esp_err_t h_cloud_toggle(httpd_req_t *r) {
 /* POST : oublie le cloud (stoppe, efface certs + cloud_uri/cloud_dev). */
 static esp_err_t h_cloud_forget(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
-    mqtt_cloud_request_stop();   /* le client garde ses certificats en memoire : les effacer ici ne le gene pas */
+    mqtt_cloud_request_forget();   /* le client garde ses certificats en memoire : les effacer ici ne le gene pas */
     mqtt_cert_write("cloud_ca", ""); mqtt_cert_write("cloud_cert", ""); mqtt_cert_write("cloud_key", "");
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {

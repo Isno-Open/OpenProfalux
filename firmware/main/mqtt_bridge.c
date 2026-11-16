@@ -313,6 +313,8 @@ static void handle_incoming(const char *topic, int tlen, const char *data, int d
 /* Cloud coupe SUR le boitier (interface locale : interrupteur ou oubli) : annonce au portail avant de
  * partir, pour qu'il dise « cloud desactive sur le boitier » et non une panne (docs/CLOUD.md). */
 #define PRESENCE_DISABLED "disabled"
+/* oublie sur le boitier (certificat efface) : le portail le retire du compte au lieu de le griser */
+#define PRESENCE_FORGOTTEN "forgotten"
 static bool is_own_offline(const char *topic, int tlen, const char *data, int dlen, const char *own) {
     return own[0] && tlen == (int)strlen(own) && !strncmp(topic, own, (size_t)tlen)
         && dlen == (int)strlen(PRESENCE_OFFLINE) && !strncmp(data, PRESENCE_OFFLINE, (size_t)dlen);
@@ -730,7 +732,7 @@ void mqtt_cloud_stop(void) {
  * esp_mqtt_client_stop attend la fin de la tache du client ; appele depuis un gestionnaire HTTP,
  * il figeait le serveur web (constate le 2026-11-13 avec POST /api/cloud/toggle). Le serveur web
  * depose la demande ici et repond tout de suite ; une tache dediee l'execute. */
-typedef enum { CLOUD_CTL_START, CLOUD_CTL_STOP } cloud_ctl_op_t;
+typedef enum { CLOUD_CTL_START, CLOUD_CTL_STOP, CLOUD_CTL_FORGET } cloud_ctl_op_t;
 typedef struct { cloud_ctl_op_t op; char uri[160]; char dev[40]; } cloud_ctl_t;
 #define CLOUD_CTL_DEPTH 4
 #define CLOUD_CTL_STACK 4096   /* demarrage : lecture des certificats et configuration TLS */
@@ -741,12 +743,12 @@ static QueueHandle_t s_cloud_ctl_q = NULL;
  * client (esp_mqtt_client_stop ferme la socket sans attendre). Sans connexion, rien a annoncer : le
  * portail voit deja le boitier hors ligne. */
 #define CLOUD_BYE_MS 500
-static void cloud_announce_disabled(void) {
+static void cloud_announce_leave(const char *presence) {
     if (!s_mqtt_cloud || !s_cloud_connected) return;
-    esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, PRESENCE_DISABLED, 0, 1, 1);
+    esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, presence, 0, 1, 1);
     esp_mqtt_client_disconnect(s_mqtt_cloud);
     vTaskDelay(pdMS_TO_TICKS(CLOUD_BYE_MS));
-    ESP_LOGI(TAG, "cloud coupe sur le boitier : annonce au portail");
+    ESP_LOGI(TAG, "cloud coupe sur le boitier : annonce « %s » au portail", presence);
 }
 
 /* La file arrive en ARGUMENT, pas par s_cloud_ctl_q : la tache demarre des sa creation, sur l'autre
@@ -759,7 +761,10 @@ static void cloud_ctl_task(void *arg) {
     for (;;) {
         if (xQueueReceive(q, &c, portMAX_DELAY) != pdTRUE) continue;
         if (c.op == CLOUD_CTL_START) mqtt_cloud_start(c.uri, c.dev);   /* arrete l'ancien client d'abord (sans annonce) */
-        else { cloud_announce_disabled(); mqtt_cloud_stop(); }        /* coupe voulue : le portail le sait */
+        else {   /* coupe voulue : le portail le sait (desactive : grise ; oublie : retire du compte) */
+            cloud_announce_leave(c.op == CLOUD_CTL_FORGET ? PRESENCE_FORGOTTEN : PRESENCE_DISABLED);
+            mqtt_cloud_stop();
+        }
     }
 }
 
@@ -785,6 +790,11 @@ bool mqtt_cloud_request_start(const char *cloud_uri, const char *device_id) {
 
 bool mqtt_cloud_request_stop(void) {
     cloud_ctl_t c = { .op = CLOUD_CTL_STOP };
+    return cloud_ctl_post(&c);
+}
+
+bool mqtt_cloud_request_forget(void) {
+    cloud_ctl_t c = { .op = CLOUD_CTL_FORGET };
     return cloud_ctl_post(&c);
 }
 

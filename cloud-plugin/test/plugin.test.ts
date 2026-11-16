@@ -315,6 +315,10 @@ test("cloud coupe sur le boitier : presence « disabled » annoncee par le firmw
   assert.deepEqual(read({ box: BOX, path: "status", payload: "disabled", retained: true }), [{ fact: FACT.presence, online: false, disabled: true }]);
   assert.deepEqual(read({ box: BOX, path: "status", payload: "offline", retained: true }), [{ fact: FACT.presence, online: false }]);
 });
+test("boitier oublie sur lui-meme : presence « forgotten », le portail le retire du compte", () => {
+  assert.deepEqual(read({ box: BOX, path: "status", payload: "forgotten", retained: true }), [{ fact: FACT.presence, online: false, forgotten: true }]);
+});
+
 
 test("carte declaree : le target du firmware (releve reel du M5), pour la fiche operateur", () => {
   clearDeviceFamilies();
