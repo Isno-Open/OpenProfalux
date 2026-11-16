@@ -1,0 +1,19 @@
+{
+  "name": "openprofalux-cloud-plugin",
+  "private": true,
+  "type": "module",
+  "description": "Plugin de la famille OpenProfalux pour OpenCloudApp (docs/FAMILLES.md d'OpenCloudApp).",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "gen": "node scripts/gen-kinds.ts",
+    "build": "npm run gen && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@isno-open/plugin-host": "github:Isno-Open/OpenPluginHost#v0.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  }
+}

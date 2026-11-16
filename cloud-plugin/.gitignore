@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# engendre depuis firmware/main/web/profiles.json (scripts/gen-kinds.ts)
+src/kinds.generated.ts

@@ -60,6 +60,8 @@ int  shutters_create_central(const char *id, const char *members_csv);
  * Suiveurs : volets simples seulement (ni zone, ni centrale) ; une zone ne suit rien.
  * Refuse (-1) sinon, *why (peut etre NULL) recevant la raison. */
 int  shutters_set_followers(const char *id, const char *members_csv, const char **why);
+/* Change les membres d'une centrale existante (pas de centrale membre, ni elle-meme). */
+int  shutters_set_central_members(const char *id, const char *members_csv, const char **why);
 int  shutters_reassign(const char *id, const char *from, const char *to);
 
 /* Calibration : temps de course. */
@@ -74,6 +76,8 @@ int  shutters_rename_volet(const char *old_id, const char *new_id);
 /* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE
  * l'affichage web (ni radio, ni pilotage, ni decouverte HA). */
 int  shutters_set_order(const char *ids_csv);
+/* Place un volet au rang `rank` (1..N) de l'ordre d'affichage, les autres renumerotes (portail). */
+int  shutters_set_rank(const char *id, int rank);
 
 /* Nommage d'une telecommande (serial -> nom). */
 int  shutters_remote_name(const char *serial, const char *name);
@@ -101,6 +105,7 @@ char *shutters_status_json(void);
 /* Publie la discovery HA (1 cover par volet) + l'etat courant. A appeler apres connexion MQTT. */
 void shutters_mqtt_announce(const char *device);
 void shutters_mqtt_lost(void);   /* broker perdu -> statut hors ligne */
+void shutters_cloud_resync(void);   /* cloud (re)connecte : republie description + etat de chaque appareil */
 /* Export dataset slide : par telecommande, ses trames distinctes {hop, bouton, t} (tout brut). */
 typedef struct { uint32_t hop; uint32_t t; uint8_t button; } dframe_t;
 int  shutters_remote_count(void);

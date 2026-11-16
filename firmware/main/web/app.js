@@ -87,6 +87,7 @@ function applyRoute() {
   if (sub === 'enrol' && typeof loadPfx === 'function') loadPfx();
   if (sub === 'radio' && typeof loadDiag === 'function') loadDiag();
   if (sub === 'log' && typeof loadLog === 'function') loadLog(true);
+  if (main === 'cloud' && typeof loadCloud === 'function') loadCloud();
   if (main === 'remotes' && (!sub || sub === 'add') && typeof loadAddPyramid === 'function') loadAddPyramid();
   if (main === 'remotes' && sub === 'devices' && typeof renderDevices === 'function') renderDevices();
   if (main === 'remotes' && sub === 'learn' && typeof setupCaptureScreen === 'function') setupCaptureScreen();
@@ -223,6 +224,17 @@ labelSymbols();
 if ($('#volets')) new MutationObserver(labelSymbols).observe($('#volets'), { childList: true });
 
 /* ── Helpers ── */
+/* Confirmation DANS la page, jamais par les boites confirm et alert du navigateur : ces boites sortent du
+ * style de l'interface, et certains navigateurs integres (application, cadre) les bloquent sans un
+ * mot. Rend une promesse : true si l'utilisateur confirme, false s'il annule ou ferme (Echap). */
+function ask(msg) {
+  const d = $('#ask');
+  $('#ask-msg').textContent = msg;
+  d.returnValue = '';
+  d.showModal();
+  return new Promise(res => { d.onclose = () => res(d.returnValue === ASK_OK); });
+}
+const ASK_OK = 'ok';
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1600); }
 function savedBtn(b, label) { const o = b.textContent; b.textContent = '✓ Enregistré'; setTimeout(() => b.textContent = label || o, 1500); }
 const sigLvl = d => d >= -55 ? 4 : d >= -68 ? 3 : d >= -80 ? 2 : 1;
@@ -866,7 +878,7 @@ const delVoletBtn = $('#del-volet');
 if (delVoletBtn) delVoletBtn.onclick = async () => {
   const id = activeVolet;
   if (!id) return;
-  if (!confirm(`Supprimer le volet « ${id} » et toutes ses commandes apprises ?`)) return;
+  if (!await ask(`Supprimer le volet « ${id} » et toutes ses commandes apprises ?`)) return;
   await api('/api/volet/delete', { method: 'POST', body: JSON.stringify({ id }) });
   activeVolet = '';
   const nr = $('#new-volet-row'); if (nr) { nr.hidden = true; $('#new-volet').value = ''; }
@@ -1415,7 +1427,7 @@ $('#sys-save').onclick = async () => {
 };
 /* Desactivation EXPLICITE : envoie ui_pass:"" (le firmware efface alors la cle NVS). */
 if ($('#sys-uipass-clear')) $('#sys-uipass-clear').onclick = async () => {
-  if (!confirm('Retirer le mot de passe ?\n\nL\'interface et l\'API redeviendront accessibles à tout appareil du réseau, y compris pour envoyer un firmware.')) return;
+  if (!await ask('Retirer le mot de passe ?\n\nL\'interface et l\'API redeviendront accessibles à tout appareil du réseau, y compris pour envoyer un firmware.')) return;
   await api('/api/config', { method: 'POST', body: JSON.stringify({ ui_pass: '' }) }).catch(() => {});
   /* Le firmware a invalide toutes les sessions (y compris la notre) en changeant
      le mot de passe. Sans protection il n'en faut plus, mais l'ecran de login
@@ -1633,6 +1645,90 @@ async function runRxTest(idx, band, btn) {
   else st.innerHTML = `❌ Rien capté en 15 s sur ${where}. Ce test lit les télécommandes Profalux/KeeLoq (à code tournant) : une Somfy RTS ou un portail CAME ne s'y verront pas, même reçus. Sinon vérifie l'antenne, la distance < 1 m, et le gain RX.`;
 }
 loadDiag();
+/* ── Cloud (app.isno.fr) : appairage, statut, toggle, oubli ── */
+/* Appaire mais pas encore connecte (juste apres l'appairage, ou liaison tombee) : on relit l'etat
+   tant que l'onglet Cloud est affiche, sinon il restait « hors ligne » alors que le boitier s'etait
+   connecte quelques secondes plus tard (constate le 2026-11-16). */
+const CLOUD_RECHECK_MS = 4000;
+let cloudRecheck = null;
+async function loadCloud() {
+  if (cloudRecheck) { clearTimeout(cloudRecheck); cloudRecheck = null; }
+  let s;
+  try { s = await api('/api/cloud/status'); } catch (e) { return; }
+  if (s.paired && s.enabled && !s.connected)
+    cloudRecheck = setTimeout(() => { if (!document.hidden && (location.hash || '').includes('cloud')) loadCloud(); else cloudRecheck = null; }, CLOUD_RECHECK_MS);
+  const st = $('#cloud-status'); if (!st) return;
+  const b = st.querySelector('b');
+  if (!s.paired) { st.className = 'statline'; b.textContent = 'Non appairé'; }
+  else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud désactivé'; }
+  else if (s.connected) { st.className = 'statline ok'; b.textContent = 'Connecté au cloud ISNO'; }
+  else { st.className = 'statline bad'; b.textContent = 'Appairé, hors ligne'; }
+  /* textContent : le nom vient du portail, il n'est jamais interprete comme du HTML */
+  $('#cloud-ident').hidden = !s.paired;
+  $('#cloud-name').textContent = s.name || '';
+  $('#cloud-name').hidden = !s.name;
+  $('#cloud-devid').textContent = s.device_id ? 'identifiant cloud : ' + s.device_id : '';
+  /* s.server est l'adresse du BROKER (mqtts://...) : ce champ attend celle du PORTAIL, on ne le
+     preremplit donc pas avec (le boitier tentait sinon d'appeler le portail en mqtts) */
+  $('#cloud-actions').hidden = !s.paired;
+  /* deja appaire : pas de nouvel appairage par-dessus (« Oublier » d'abord) */
+  $('#cloud-pairing').hidden = !!s.paired;
+  if (s.paired) { grantStop(); $('#cloud-qr-wrap').hidden = true; }
+  const tg = $('#cloud-toggle'); tg.textContent = s.enabled ? 'Désactiver' : 'Activer'; tg.dataset.on = s.enabled ? '1' : '0';
+}
+$('#cloud-pair').onclick = async () => {
+  const code = $('#cloud-code').value.trim(), server = $('#cloud-server').value.trim();
+  if (!code) { toast('Entre le code d\'appairage'); return; }
+  const btn = $('#cloud-pair'); btn.disabled = true; btn.textContent = 'Appairage…';
+  try {
+    const r = await api('/api/cloud/pair', { method: 'POST', body: JSON.stringify({ code, server }) });
+    if (r && r.ok) { toast('Appairé : ' + (r.device_id || '')); $('#cloud-code').value = ''; }
+    else toast('Échec appairage (' + ((r && r.err) || '?') + ')');
+  } catch (e) { toast('Échec appairage'); }
+  finally { btn.disabled = false; btn.textContent = 'Appairer'; loadCloud(); }
+};
+/* Appairage par QR code (« a la Netflix ») : le boitier demande un code au portail, on affiche le QR
+   et le code court, puis on suit l'etat jusqu'a la confirmation sur le telephone. */
+const GRANT_POLL_MS = 3000;
+const GRANT_TEXT = { expired: 'Code expiré : relancez l\'appairage.', denied: 'Refusé : ce boîtier appartient déjà à un autre compte.', error: 'Échec de l\'appairage.' };
+let grantTimer = null;
+function grantStop() { if (grantTimer) { clearTimeout(grantTimer); grantTimer = null; } }
+async function grantFollow() {
+  let g;
+  try { g = await api('/api/cloud/grant'); } catch (e) { g = null; }
+  if (g && g.state === 'pending') { grantTimer = setTimeout(grantFollow, GRANT_POLL_MS); return; }
+  grantStop();
+  if (g && g.state === 'ready') { $('#cloud-qr-wrap').hidden = true; toast('Appairé : ' + (g.device_id || '')); loadCloud(); return; }
+  $('#cloud-qr-state').textContent = (g && GRANT_TEXT[g.state]) || GRANT_TEXT.error;
+}
+$('#cloud-grant').onclick = async () => {
+  const btn = $('#cloud-grant'); btn.disabled = true; btn.textContent = 'Demande au portail…';
+  grantStop();
+  try {
+    const r = await api('/api/cloud/grant', { method: 'POST', body: JSON.stringify({ server: $('#cloud-server').value.trim() }) });
+    if (r && r.err === 'paired') { toast('Déjà appairé : « Oublier » d\'abord pour réappairer'); loadCloud(); return; }
+    if (!r || !r.uri) { toast('Portail injoignable (' + ((r && r.status) || '?') + ')'); return; }
+    const qr = qrcode(0, 'M'); qr.addData(r.uri); qr.make();
+    $('#cloud-qr').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 4, scalable: true });
+    $('#cloud-ucode').textContent = r.user_code;
+    try { const u = new URL(r.uri); $('#cloud-qr-host').textContent = u.host + u.pathname; } catch (e) { $('#cloud-qr-host').textContent = r.uri; }
+    $('#cloud-qr-state').textContent = 'En attente de votre confirmation…';
+    $('#cloud-qr-wrap').hidden = false;
+    grantTimer = setTimeout(grantFollow, GRANT_POLL_MS);
+  } catch (e) { toast('Échec de la demande'); }
+  finally { btn.disabled = false; btn.textContent = 'Appairer par QR code'; }
+};
+$('#cloud-toggle').onclick = async () => {
+  const on = $('#cloud-toggle').dataset.on !== '1';
+  try { await api('/api/cloud/toggle', { method: 'POST', body: JSON.stringify({ on }) }); } catch (e) {}
+  loadCloud();
+};
+$('#cloud-forget').onclick = async () => {
+  if (!await ask('Oublier le cloud sur ce boîtier ? (le compte garde le device, ré-appairage possible)')) return;
+  try { await api('/api/cloud/forget', { method: 'POST' }); toast('Cloud oublié'); } catch (e) {}
+  loadCloud();
+};
+
 $('#mqtt-detect').onclick = async () => {
   const b = $('#mqtt-detect'); b.textContent = 'Recherche…'; b.disabled = true;
   const r = await api('/api/mqtt/discover').catch(() => ({}));
@@ -1644,8 +1740,8 @@ $('#mqtt-detect').onclick = async () => {
 
 /* ── OTA ── */
 $('#ota-btn').onclick = async () => {
-  const f = $('#ota-file').files[0]; if (!f) return alert('Choisis un fichier .bin');
-  if (/full/i.test(f.name) && !confirm(`« ${f.name} » ressemble à un binaire COMPLET (flash série à 0x0), pas à une image OTA - l'OTA le refusera. Prends plutôt le fichier « -ota.bin ». Continuer quand même ?`)) return;
+  const f = $('#ota-file').files[0]; if (!f) return toast('Choisis un fichier .bin');
+  if (/full/i.test(f.name) && !await ask(`« ${f.name} » ressemble à un binaire COMPLET (flash série à 0x0), pas à une image OTA - l'OTA le refusera. Prends plutôt le fichier « -ota.bin ». Continuer quand même ?`)) return;
   $('#ota-prog').hidden = false; $('#ota-btn').disabled = true; $('#ota-bar').value = 0;
   /* Le httpd de l'ESP est mono-tache : pendant l'upload il ne peut PAS repondre a /api/ota/status.
      On pilote donc la barre cote navigateur (octets reellement pousses vers l'ESP) via XHR. */
@@ -1696,7 +1792,7 @@ function otaRetour(st) {
   }
 }
 $('#ota-rollback').onclick = async () => {
-  if (!confirm(otaPrecedente ? `Revenir à la version ${otaPrecedente} et redémarrer ?` : 'Revenir à la version précédente et redémarrer ?')) return;
+  if (!await ask(otaPrecedente ? `Revenir à la version ${otaPrecedente} et redémarrer ?` : 'Revenir à la version précédente et redémarrer ?')) return;
   await api('/api/ota/rollback', { method: 'POST' }).catch(e => {
     if (e !== 409) return;   /* refus : aucune version precedente valide (le boitier ne redemarre pas) */
     $('#ota-rollback').disabled = true;
@@ -1785,8 +1881,8 @@ $('#ota-github').onclick = () => {
 /* ── Restauration ── */
 $('#restore-btn').onclick = async () => {
   const f = $('#restore-file').files[0];
-  if (!f) return alert('Choisis un fichier de sauvegarde .json');
-  if (!confirm('Remplacer toute la config actuelle par cette sauvegarde ?')) return;
+  if (!f) return toast('Choisis un fichier de sauvegarde .json');
+  if (!await ask('Remplacer toute la config actuelle par cette sauvegarde ?')) return;
   const text = await f.text();
   const r = await fetch('/api/restore', { method: 'POST', body: text }).then(x => x.json()).catch(() => ({}));
   restoreDone(r, 'Sauvegarde restaurée');
@@ -1799,7 +1895,7 @@ const RESTORE_ERR = {
   nvs: 'Config restaurée mais pas enregistrée (mémoire pleine) : elle sera perdue au redémarrage.',
   absente: "Aucune config d'avant à restaurer." };
 function restoreDone(r, okMsg) {
-  if (r.ok) { toast(okMsg); loadStatus(); } else alert(RESTORE_ERR[r.err] || 'Échec de la restauration');
+  if (r.ok) { toast(okMsg); loadStatus(); } else toast(RESTORE_ERR[r.err] || 'Échec de la restauration');
   loadPrevCfg();
 }
 async function loadPrevCfg() {
@@ -1809,7 +1905,7 @@ async function loadPrevCfg() {
   const when = p.t > 1600000000 ? ' du ' + new Date(p.t * 1000).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   el.innerHTML = `Config d'avant la dernière restauration${when} : <button id="restore-undo" class="btn" type="button">↩ Revenir à cette config</button>`;
   $('#restore-undo').onclick = async () => {
-    if (!confirm("Revenir à la config d'avant la dernière restauration ? La config actuelle sera gardée à sa place.")) return;
+    if (!await ask("Revenir à la config d'avant la dernière restauration ? La config actuelle sera gardée à sa place.")) return;
     restoreDone(await fetch('/api/restore/undo', { method: 'POST' }).then(x => x.json()).catch(() => ({})), "Config d'avant restaurée");
   };
 }
@@ -1881,7 +1977,7 @@ function renderCentralsList() {
   });
   box.querySelectorAll('.cd').forEach(b => b.onclick = async (e) => {
     e.stopPropagation();
-    if (!confirm(`Supprimer la centrale « ${b.dataset.id} » ? (les volets ne sont pas touchés)`)) return;
+    if (!await ask(`Supprimer la centrale « ${b.dataset.id} » ? (les volets ne sont pas touchés)`)) return;
     await api('/api/volet/delete', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }).catch(() => {});
     toast('Centrale supprimée'); await loadStatus();
   });

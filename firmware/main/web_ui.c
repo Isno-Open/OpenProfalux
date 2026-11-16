@@ -11,6 +11,7 @@
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
+#include "cloud_enroll.h"      /* cloud_bundle_ok : validation du bundle d'appairage (testée) */
 #include "wifi_bridge.h"
 #include "hardware_config.h"   /* TARGET_NAME (expose la variante a l'UI OTA) */
 #include <string.h>
@@ -26,6 +27,8 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "log_ring.h"
+#include "crash_trace.h"
+#include "cloud_grant.h"
 #include "cc1101.h"
 #include "radio_profile.h"   /* profil radio (frequence par marque) */
 #include "esp_random.h"
@@ -199,6 +202,8 @@ extern const uint8_t app_capture_js_start[] asm("_binary_app_capture_js_gz_start
 extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end");
 extern const uint8_t pyramid_detect_js_start[] asm("_binary_pyramid_detect_js_gz_start");   /* detection de profil (pyramide, #111) */
 extern const uint8_t pyramid_detect_js_end[]   asm("_binary_pyramid_detect_js_gz_end");
+extern const uint8_t qrcode_js_start[] asm("_binary_qrcode_js_gz_start");   /* QR de l'appairage cloud (qrcode-generator, MIT) */
+extern const uint8_t qrcode_js_end[]   asm("_binary_qrcode_js_gz_end");
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
@@ -300,6 +305,7 @@ static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",     
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
 static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
 static esp_err_t h_js_detect(httpd_req_t *r) { return send_asset(r, "application/javascript", pyramid_detect_js_start, pyramid_detect_js_end, true); }
+static esp_err_t h_js_qrcode(httpd_req_t *r) { return send_asset(r, "application/javascript", qrcode_js_start, qrcode_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
 static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
@@ -1034,24 +1040,14 @@ static esp_err_t h_ota_rollback(httpd_req_t *r) {
 }
 
 /* ── /api/ota/pull : telecharge + flashe une image depuis une URL HTTPS (release GitHub) ── */
-static void ota_pull_bg_task(void *arg) {
-    char *url = (char *)arg;
-    esp_err_t err = ota_pull_from_url(url);
-    if (err != ESP_OK) ESP_LOGE(TAG, "ota_pull_from_url(%s) KO: %s", url, esp_err_to_name(err));
-    free(url);
-    vTaskDelete(NULL);
-}
 static esp_err_t h_ota_pull(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     const char *url = j ? cJSON_GetStringValue(cJSON_GetObjectItem(j, "url")) : NULL;
-    char *dup = (url && !strncmp(url, "https://", 8)) ? strdup(url) : NULL;   /* HTTPS uniquement */
+    bool ok = url && !strncmp(url, "https://", 8) && ota_pull_async(url);   /* HTTPS uniquement */
     if (j) cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
-    if (dup && xTaskCreate(ota_pull_bg_task, "ota_pull", 8192, dup, 5, NULL) == pdPASS)
-        return httpd_resp_sendstr(r, "{\"ok\":1}");
-    free(dup);
-    return httpd_resp_sendstr(r, "{\"ok\":0}");
+    return httpd_resp_sendstr(r, ok ? "{\"ok\":1}" : "{\"ok\":0}");
 }
 
 /* ── /api/rx/calibrate : auto-calibrage du gain RX ──
@@ -1297,17 +1293,18 @@ static esp_err_t h_health(httpd_req_t *r) {
     int nvol = 0; size_t vent = cfg_store_volet_entries(&nvol);
     size_t sp_total = 0, sp_used = 0; esp_spiffs_info("storage", &sp_total, &sp_used);
     const esp_partition_t *run = esp_ota_get_running_partition();
-    char out[760];
+    char crash[CRASH_JSON_MAX]; crash_trace_json(crash, sizeof(crash));
+    char out[760 + CRASH_JSON_MAX];
     snprintf(out, sizeof(out),
              "{\"reset\":%d,\"heap\":%u,\"heap_min\":%u,\"heap_blk\":%u,"
              "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"nvs_used\":%u,\"nvs_ns\":%s,"
              "\"volets\":%d,\"volet_entries\":%u,"
-             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\"}",
+             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\",\"crash\":%s,\"net_reboots\":%u}",
              (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
              (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries,
              (unsigned)nv.used_entries, ns, nvol, (unsigned)vent,
-             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version);
+             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version, crash, wifi_bridge_net_reboots());
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
@@ -1704,8 +1701,8 @@ static esp_err_t h_session(httpd_req_t *r) {
  * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
-#define MAX_ROUTES      64
-#define MAX_OPEN_ROUTES 12
+#define MAX_ROUTES      72
+#define MAX_OPEN_ROUTES 16
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
 
@@ -1798,6 +1795,136 @@ static esp_err_t h_report(httpd_req_t *r) {
     return httpd_resp_sendstr(r, out);
 }
 
+/* ─── Controle cloud (app.isno.fr) : pairing, statut, toggle, oubli. ────────────────────────────
+ * Le pairing appelle le serveur cloud /api/enroll avec un CODE, recoit le bundle (cert device signe
+ * par la CA du broker), ECRIT les certs cloud (jamais colles a la main), pose cloud_uri/cloud_dev en
+ * NVS et demarre le pont cloud. Le MQTT LOCAL n'est JAMAIS touche (pont additif). Re-pairer apres un
+ * reflash : le cert vit dans le compte, pas dans le boitier. */
+#ifndef CLOUD_DEFAULT_SERVER
+#define CLOUD_DEFAULT_SERVER "https://app.isno.fr"
+#endif
+
+static esp_err_t h_cloud_status(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char uri[160] = "", dev[40] = "", name[CLOUD_NAME_MAX] = ""; uint8_t on = 1;
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+        size_t sz = sizeof uri; nvs_get_str(h, "cloud_uri", uri, &sz);
+        sz = sizeof dev; nvs_get_str(h, "cloud_dev", dev, &sz);
+        sz = sizeof name; if (nvs_get_str(h, CLOUD_NAME_NVS_KEY, name, &sz) != ESP_OK) name[0] = 0;
+        nvs_get_u8(h, "cloud_on", &on);
+        nvs_close(h);
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    cJSON_AddBoolToObject(o, "paired", uri[0] != 0);
+    cJSON_AddBoolToObject(o, "enabled", on != 0);
+    cJSON_AddBoolToObject(o, "connected", mqtt_cloud_is_connected());
+    cJSON_AddStringToObject(o, "server", uri);
+    cJSON_AddStringToObject(o, "device_id", dev);
+    cJSON_AddStringToObject(o, "name", name);   /* nom sur le portail, vide tant qu'il ne l'a pas transmis */
+    char *s = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+    httpd_resp_sendstr(r, s ? s : "{\"ok\":0}"); free(s);
+    return ESP_OK;
+}
+
+/* POST {code, server?} : echange le code de pairing contre le bundle et provisionne le cloud. */
+/* Adresse du PORTAIL saisie (https://...), sinon celui par defaut. Une adresse d'un autre schema
+ * (l'adresse mqtts:// du broker, longtemps preremplie dans ce champ) est ecartee : le client HTTP
+ * echouait sur « No transport found ». */
+static const char *portal_or_default(const char *s) {
+    return (s && (!strncmp(s, "https://", 8) || !strncmp(s, "http://", 7))) ? s : CLOUD_DEFAULT_SERVER;
+}
+
+static esp_err_t h_cloud_pair(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    if (!body) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"body\"}");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"json\"}");
+    const char *code = jstr(j, "code"), *server = jstr(j, "server");
+    if (!code || !code[0]) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"code\"}"); }
+    char url[200], payload[80];
+    snprintf(url, sizeof url, "%s/api/enroll", portal_or_default(server));
+    snprintf(payload, sizeof payload, "{\"code\":\"%s\"}", code);
+    cJSON_Delete(j);
+    char *resp = NULL;
+    int status = cloud_http_post(url, payload, &resp);
+    if (status < 200 || status >= 300 || !resp) {
+        free(resp);
+        char o[64]; snprintf(o, sizeof o, "{\"ok\":0,\"status\":%d,\"err\":\"enroll\"}", status);
+        return httpd_resp_sendstr(r, o);
+    }
+    cJSON *b = cJSON_Parse(resp); free(resp);
+    if (!b) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"resp\"}");
+    char devb[40];
+    bool ok = cloud_apply_bundle(b, devb, sizeof devb);
+    cJSON_Delete(b);
+    if (!ok) return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"bundle\"}");
+    char o[96]; snprintf(o, sizeof o, "{\"ok\":1,\"device_id\":\"%s\"}", devb);
+    return httpd_resp_sendstr(r, o);
+}
+
+/* Appairage par QR code (« a la Netflix », cloud_grant.h). POST {server} : demande un code au
+ * portail et rend {user_code, uri, expires_in} a afficher ; GET : ou en est-on (l'interface
+ * interroge jusqu'a « ready »). */
+static esp_err_t h_cloud_grant_start(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
+    /* deja connecte au cloud : on n'appaire pas par-dessus (une nouvelle identite remplacerait la
+     * premiere, et la liaison TLS en cours plus les interrogations du portail epuisent la memoire,
+     * mesure du 2026-11-15 : 16 o au plus bas). « Oublier » d'abord. */
+    if (mqtt_cloud_is_connected()) { cJSON_Delete(j); return httpd_resp_sendstr(r, "{\"ok\":0,\"err\":\"paired\"}"); }
+    char server[160]; snprintf(server, sizeof server, "%s", portal_or_default(j ? jstr(j, "server") : NULL));
+    cJSON_Delete(j);
+    size_t n = strlen(server);
+    while (n && server[n - 1] == '/') server[--n] = 0;   /* « https://app.isno.fr/ » comme sans barre */
+    char out[400];
+    int rc = cloud_grant_start(server, out, sizeof out);
+    if (rc != 0) { char o[64]; snprintf(o, sizeof o, "{\"ok\":0,\"status\":%d}", rc); return httpd_resp_sendstr(r, o); }
+    return httpd_resp_sendstr(r, out);
+}
+static esp_err_t h_cloud_grant_status(httpd_req_t *r) {
+    char out[400]; cloud_grant_status(out, sizeof out);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
+
+/* POST {on} : active ou coupe le cloud sans perdre le cert (le pairing reste). */
+static esp_err_t h_cloud_toggle(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    char *body = read_body(r);
+    cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
+    /* « on » est OBLIGATOIRE et booleen : un corps vide ou sans « on » valait « off » et coupait le
+     * cloud sans le vouloir (constate le 2026-11-13). */
+    cJSON *onj = j ? cJSON_GetObjectItem(j, "on") : NULL;
+    if (!cJSON_IsBool(onj)) {
+        if (j) cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "on attendu : true ou false");
+    }
+    int on = cJSON_IsTrue(onj);
+    cJSON_Delete(j);
+    char uri[160] = "", dev[40] = "";
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        size_t sz = sizeof uri; nvs_get_str(h, "cloud_uri", uri, &sz);
+        sz = sizeof dev; nvs_get_str(h, "cloud_dev", dev, &sz);
+        nvs_set_u8(h, "cloud_on", on ? 1 : 0); nvs_commit(h); nvs_close(h);
+    }
+    /* demarrage ou arret faits par la tache de commande du cloud, pas ici */
+    bool queued = (on && uri[0] && dev[0]) ? mqtt_cloud_request_start(uri, dev) : mqtt_cloud_request_stop();
+    char o[64]; snprintf(o, sizeof o, "{\"ok\":%d,\"enabled\":%d}", queued ? 1 : 0, on ? 1 : 0);
+    return httpd_resp_sendstr(r, o);
+}
+
+/* POST : oublie le cloud (stoppe, efface certs + cloud_uri/cloud_dev). */
+static esp_err_t h_cloud_forget(httpd_req_t *r) {
+    httpd_resp_set_type(r, "application/json");
+    mqtt_cloud_forget_all();
+    return httpd_resp_sendstr(r, "{\"ok\":1}");
+}
+
 /* Enregistre une route PROTEGEE (toutes les routes sous "/api/"). */
 static void reg(httpd_handle_t s, const char *uri, httpd_method_t m, esp_err_t (*h)(httpd_req_t *)) {
     if (s_nroutes >= MAX_ROUTES) { ESP_LOGE(TAG, "route NON enregistree: %s (table pleine)", uri); return; }
@@ -1833,16 +1960,23 @@ void web_ui_start(void) {
      * connexion au lieu de recycler -> port 80 en connection-refused (MQTT non touche).
      * On recycle la socket la moins recente + un peu plus de sockets. */
     cfg.lru_purge_enable = true;
-    /* Sessions = sockets lwIP - 5 : 3 internes au httpd, 1 pour MQTT (permanent), 1 pour le TLS
-     * de la verification GitHub / l'OTA par URL. Soit 5 avec les 10 sockets par defaut, et pas le
-     * maximum 7 (sockets - 3) : a 7, six sessions navigateur + MQTT epuisaient les 10 sockets,
-     * accept() echouait (errno 23, ENFILE) AVANT la purge LRU, qui n'agit qu'a 7 sessions pleines
-     * -> interface et OTA injoignables tant qu'une page ouverte gardait ses sessions vivantes.
-     * Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne des sessions d'elle-meme. */
-#if CONFIG_LWIP_MAX_SOCKETS < 7
-#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des 5 sockets reserves"
+    /* Sessions = sockets lwIP moins ceux des autres : 3 internes au httpd, 1 par connexion MQTT
+     * (locale et cloud, permanentes), 1 pour le client TLS ponctuel (verification GitHub, OTA par
+     * URL, appairage). Soit 4 avec les 10 sockets par defaut, et pas le maximum 7 (sockets - 3) :
+     * a 7, six sessions navigateur + MQTT epuisaient les 10 sockets, accept() echouait (errno 23,
+     * ENFILE) AVANT la purge LRU, qui n'agit qu'a sessions pleines -> interface et OTA
+     * injoignables tant qu'une page ouverte gardait ses sessions vivantes. La reserve comptait une
+     * seule connexion MQTT : avec le cloud, l'errno 23 est revenu au chevauchement HA + cloud +
+     * GitHub (mesure du 2026-11-14 sur l'ATOM). Une carte qui monte CONFIG_LWIP_MAX_SOCKETS gagne
+     * des sessions d'elle-meme. */
+#define HTTPD_INTERNAL_SOCKETS 3
+#define MQTT_SOCKETS           2   /* broker local + broker cloud */
+#define TLS_CLIENT_SOCKETS     1   /* GitHub, OTA par URL, appairage : un a la fois (tour TLS) */
+#define RESERVED_SOCKETS (HTTPD_INTERNAL_SOCKETS + MQTT_SOCKETS + TLS_CLIENT_SOCKETS)
+#if CONFIG_LWIP_MAX_SOCKETS < RESERVED_SOCKETS + 2
+#error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des sockets reserves"
 #endif
-    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - 5;
+    cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - RESERVED_SOCKETS;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }
@@ -1855,6 +1989,7 @@ void web_ui_start(void) {
     reg_open(s, "/app.js",    HTTP_GET, h_js);
     reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
     reg_open(s, "/pyramid-detect.js", HTTP_GET, h_js_detect);   /* detection de profil (pyramide, #111) */
+    reg_open(s, "/qrcode.js", HTTP_GET, h_js_qrcode);           /* QR de l'appairage cloud */
     reg(s, "/profiles.json", HTTP_GET, h_profiles);   /* table de profils (protegee, soulage la table ouverte ; l'UI la fetch apres login) */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);
@@ -1924,5 +2059,11 @@ void web_ui_start(void) {
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
     reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
+    reg(s, "/api/cloud/status", HTTP_GET,  h_cloud_status);   /* controle cloud app.isno.fr */
+    reg(s, "/api/cloud/pair",   HTTP_POST, h_cloud_pair);     /* code de pairing -> bundle + demarrage */
+    reg(s, "/api/cloud/grant",  HTTP_POST, h_cloud_grant_start);    /* appairage par QR code */
+    reg(s, "/api/cloud/grant",  HTTP_GET,  h_cloud_grant_status);
+    reg(s, "/api/cloud/toggle", HTTP_POST, h_cloud_toggle);   /* active/coupe sans perdre le cert */
+    reg(s, "/api/cloud/forget", HTTP_POST, h_cloud_forget);   /* oubli complet */
     ESP_LOGI(TAG, "HTTP UI demarree");
 }

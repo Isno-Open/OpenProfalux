@@ -60,6 +60,9 @@ jobs:
       # Une route de trop n'est pas enregistree (404) : /api/central dehors depuis #42, en v0.2.12.
       - name: Places des tables de routes (web_ui.c)
         run: python3 tools/check_routes.py
+      # Pas de alert/confirm/prompt : bloques en silence par certains navigateurs integres (2026-11-16).
+      - name: Aucune boite du navigateur dans l'interface
+        run: python3 tools/check_web_dialogs.py
 
   build:
     needs: cartes
@@ -176,6 +179,23 @@ jobs:
              -o remote_battery_host_test
           ./remote_battery_host_test
 
+  # La taille de la reserve TLS selon la configuration (tls_budget.c) : elle doit couvrir les pics
+  # mesures sur l'ATOM. Voir firmware/test/tls-budget. Pur, gcc suffit.
+  banc-tls-budget:
+    name: Banc de test de la reserve TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: tls_budget (gcc + AddressSanitizer)
+        working-directory: firmware/test/tls-budget
+        run: |
+          cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
+             -I ../../main main/test_main.c ../../main/tls_budget.c \
+             -o tls_budget_host_test
+          ./tls_budget_host_test
+
   # La recherche de "tag_name" par morceaux dans la reponse de l'API GitHub (github_tag.c), coupee
   # a toutes les positions. Voir firmware/test/github-tag. Pur, gcc suffit.
   banc-github-tag:
@@ -245,6 +265,23 @@ jobs:
              -o enrol_gate_host_test
           ./enrol_gate_host_test
 
+  # Le garde-fou reseau (net_watch.c) : quand relancer le Wi-Fi, quand redemarrer, et jamais sur
+  # une passerelle qui n'a jamais repondu. Voir firmware/test/net-watch. Pur, un simple gcc suffit.
+  banc-net-watch:
+    name: Banc de test du garde-fou reseau
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: net_watch (gcc + AddressSanitizer)
+        working-directory: firmware/test/net-watch
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/net_watch.c \
+             -o net_watch_host_test
+          ./net_watch_host_test
+
   # Le retour automatique apres une mise a jour (ota_rollback.c) : ce que le firmware conclut
   # des etats OTA. Voir firmware/test/ota-rollback. Pur, un simple gcc suffit.
   banc-ota-rollback:
@@ -261,6 +298,40 @@ jobs:
              -I main -I ../../main main/test_main.c ../../main/ota_rollback.c \
              -o ota_rollback_host_test
           ./ota_rollback_host_test
+
+  # Le mapping de topics cloud (cloud_topic.c) : le prefixe par device_id qui isole chaque boitier
+  # dans openprofalux/{device_id}/# (isolation ACL). Voir firmware/test/cloud-topic. Pur, gcc suffit.
+  banc-cloud-topic:
+    name: Banc de test du mapping de topics cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cloud_topic (gcc + AddressSanitizer)
+        working-directory: firmware/test/cloud-topic
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/cloud_topic.c \
+             -o cloud_topic_host_test
+          ./cloud_topic_host_test
+
+  # Les decisions du cloud (cloud_enroll.c) : validation du bundle d'appairage et gate d'activation
+  # (handlers /api/cloud/pair et /toggle, et le boot). Voir firmware/test/cloud-enroll. Pur, gcc suffit.
+  banc-cloud-enroll:
+    name: Banc de test des decisions du cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cloud_enroll (gcc + AddressSanitizer)
+        working-directory: firmware/test/cloud-enroll
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/cloud_enroll.c \
+             -o cloud_enroll_host_test
+          ./cloud_enroll_host_test
 
   # Le nom mDNS du boitier (mdns_name.c) : nettoyage du nom choisi, nom par defaut a suffixe
   # pour un boitier neuf. Voir firmware/test/mdns-name.
@@ -313,22 +384,42 @@ jobs:
              -o virt_counter_host_test
           ./virt_counter_host_test
 
-  # La taille de la reserve TLS selon la configuration (tls_budget.c) : elle doit couvrir les pics
-  # mesures sur l'ATOM. Voir firmware/test/tls-budget. Pur, gcc suffit.
-  banc-tls-budget:
-    name: Banc de test de la reserve TLS
+  # Noms des types d'appareils publies au portail cloud (cover_attrs.c) : miroir des cles de
+  # profiles.json "types" et de leurs codes. Voir firmware/test/cover-attrs. Pur, gcc suffit.
+  banc-cover-attrs:
+    name: Banc de test de la description des appareils pour le cloud
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
 
-      - name: tls_budget (gcc + AddressSanitizer)
-        working-directory: firmware/test/tls-budget
+      - name: cover_attrs (gcc + AddressSanitizer), contre le vrai profiles.json
+        working-directory: firmware/test/cover-attrs
         run: |
           cc -std=gnu11 -Wall -Wextra -fsanitize=address -g \
-             -I ../../main main/test_main.c ../../main/tls_budget.c \
-             -o tls_budget_host_test
-          ./tls_budget_host_test
+             -I ../../main main/test_main.c ../../main/cover_attrs.c \
+             -o cover_attrs_host_test
+          ./cover_attrs_host_test ../../main/web/profiles.json
+
+  # Plugin de la famille OpenProfalux pour OpenCloudApp (cloud-plugin/) : types d'appareils engendres
+  # depuis profiles.json, lecture de messages REELS d'un boitier, commandes, verification par le vrai
+  # registre d'OpenCloudApp (sous-module fige). Un profiles.json qui casse le plugin echoue ici.
+  banc-cloud-plugin:
+    name: Banc de test du plugin cloud OpenProfalux
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 26.13.1
+      - name: npm ci + tests
+        working-directory: cloud-plugin
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
 
   # La confirmation d'une trame recue par une seconde identique (rx_confirm.c) :
   # voir firmware/test/rx-confirm/README.md. Pure, un simple gcc suffit (issue #39).

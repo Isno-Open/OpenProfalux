@@ -12,6 +12,9 @@ int  wifi_bridge_start_fallback(const char *ap_ssid, void (*on_back)(void));
  * (BOARD_HAS_ETHERNET). L'appelant ne l'invoque que sous cette garde. */
 int  wifi_bridge_start_eth(void);
 bool wifi_bridge_in_fallback(void);
+/* Redemarrages du garde-fou reseau (passerelle muette, Wi-Fi associe : voir net_watch.h) depuis la
+ * derniere mise sous tension. Garde en memoire RTC : le demarrage suivant sait pourquoi il a eu lieu. */
+unsigned wifi_bridge_net_reboots(void);
 bool wifi_bridge_ap_active(void);   /* point d'acces (config ou secours) actif : portail captif */
 /* Nom mDNS du boitier (sans .local), fixe au demarrage par main.c ; affiche par l'UI. */
 void        wifi_bridge_set_hostname(const char *host);

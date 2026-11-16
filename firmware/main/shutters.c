@@ -10,7 +10,9 @@
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
+#include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
 #include <string.h>
+#include <ctype.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -809,12 +811,55 @@ static void ha_state_str(const volet_t *v, char *out) {
     else if (v->position >= 99)   strcpy(out, "closed");    /* fermeture 100 = ferme (bas) */
     else                          strcpy(out, "stopped");
 }
-/* Publie position + etat du volet (retained). Appele sous LOCK. */
+/* Un volet est POSITIONNEL (position publiee, reglable depuis HA et le portail) si son etat se suit :
+ * ecoute permanente active (sinon un coup de vraie telecommande desynchronise l'estimation), ni
+ * centrale ni zone (leur position ne serait celle d'aucun volet), et ETALONNE (sans temps de course,
+ * le pourcentage serait une supposition ; decide le 2026-11-14). Une seule regle pour la description
+ * cloud, la position publiee et la decouverte HA. */
+_Static_assert(COVER_DEVICES_MAX == SH_MAX_VOLETS, "COVER_DEVICES_MAX (profiles.json devices_max) doit egaler SH_MAX_VOLETS");
+_Static_assert(COVER_NAME_MAX == SH_ID_LEN - 1, "COVER_NAME_MAX (profiles.json name_max) doit egaler SH_ID_LEN - 1");
+
+/* Rang d'affichage (1..N) d'un volet range, 0 sinon : l'ordre stocke est 0-base, -1 = non range. */
+static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
+
+static bool volet_positional(const volet_t *v) {
+    return s_log_frames && !v->central && !is_zone(v)
+        && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
+}
+
+/* Publie description + position + etat du volet (retained). Appele sous LOCK. La description
+ * (attrs : type, positionnel) sert au portail cloud pour choisir la carte ; elle part avec l'etat,
+ * donc a chaque changement et a chaque resynchronisation. Publie des que le MQTT local OU le cloud
+ * est la : un boitier pilote seulement par le cloud doit aussi montrer ses appareils. */
 static void publish_volet_state(volet_t *v) {
-    if (!s_mqtt_ready) return;
+    if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;
+    /* attrs : type, positionnel, reglages (~120 o) + le nom echappe (SH_ID_LEN octets, au pire x6 en
+     * \\u00XX) + pour une centrale ou une zone, ses membres (slugs entre guillemets). STATIQUES : trop gros
+     * pour la pile de la tache appelante, et on est sous LOCK (un seul appelant a la fois). */
+    static char attrs[160 + 6 * SH_ID_LEN + SH_MAX_VOLETS * (SH_ID_LEN + 3)], member_slugs[SH_MEMBERS_LEN];
     char topic[96], pl[16], st[10], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
-    if (s_log_frames) {   /* position publiee seulement si suivi actif (coherent avec la decouverte + l'UI) */
+    /* membres d'une centrale ou d'une zone, en SLUGS : l'identifiant de l'appareil dans le portail */
+    const cover_role_t role = v->central ? COVER_ROLE_CENTRAL : is_zone(v) ? COVER_ROLE_ZONE : COVER_ROLE_SIMPLE;
+    member_slugs[0] = 0;
+    if (role != COVER_ROLE_SIMPLE) {
+        char mid[SH_ID_LEN], ms[SH_ID_LEN]; size_t w = 0;
+        for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
+            slugify(ms, sizeof(ms), mid);
+            int k = snprintf(member_slugs + w, sizeof(member_slugs) - w, "%s%s", w ? "," : "", ms);
+            if (k < 0 || (size_t)k >= sizeof(member_slugs) - w) break;   /* ne peut pas arriver : meme borne que members */
+            w += (size_t)k;
+        }
+    }
+    /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
+    const cover_attrs_t ca = { .type = v->type, .positional = volet_positional(v), .name = v->id, .up_ms = v->travel_up_ms,
+                               .down_ms = v->travel_down_ms, .rank = volet_rank(v), .orientation = v->orientation,
+                               .role = role, .members = member_slugs };
+    if (cover_attrs_json(&ca, attrs, sizeof(attrs)) > 0) {
+        snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
+        pub_defer(topic, attrs, 1, 1);
+    }
+    if (volet_positional(v)) {   /* position publiee seulement si elle se suit (meme regle que la decouverte) */
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
         snprintf(pl, sizeof(pl), "%d", 100 - (int)(v->position + 0.5f));   /* HA = % d'OUVERTURE (100=ouvert) ; interne = fermeture */
         pub_defer(topic, pl, 0, 1);
@@ -850,7 +895,8 @@ static const char *remote_slug(const char *serial) {
     return (serial[0] == '0' && (serial[1] == 'x' || serial[1] == 'X')) ? serial + 2 : serial;
 }
 static void publish_batt_state(remote_t *r) {
-    if (!s_mqtt_ready || !r->name[0] || !r->batt.known) return;
+    /* local OU cloud : un boitier relie au seul cloud publie aussi la pile (cf. publish_volet_state) */
+    if ((!s_mqtt_ready && !mqtt_cloud_is_connected()) || !r->name[0] || !r->batt.known) return;
     char topic[64];
     snprintf(topic, sizeof(topic), "openprofalux/remote/%s/battery", remote_slug(r->serial));
     pub_defer(topic, r->batt.low ? "ON" : "OFF", 0, 1);
@@ -914,7 +960,7 @@ static void announce_one(volet_t *v) {
     char pos[240] = "";
     /* Ni centrale ni zone n'ont de position (juste ouvrir/fermer/stop) : la leur ne
      * serait celle d'aucun volet, et un seul STOP arrete des volets de vitesses differentes. */
-    if (s_log_frames && !v->central && !is_zone(v))
+    if (volet_positional(v))
         snprintf(pos, sizeof(pos),
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
@@ -969,10 +1015,11 @@ static void announce_extras(void) {
 }
 
 /* Efface la decouverte HA d'un cover : payload retenu vide sur le topic de config (HA
- * retire alors l'entite) + ses topics d'etat/position. Sans ca, un volet supprime reste
- * affiche dans Home Assistant (le discovery retenu survit). Appele sous LOCK. */
+ * retire alors l'entite) + ses topics d'etat/position/attrs. Sans ca, un volet supprime reste
+ * affiche dans Home Assistant (le discovery retenu survit) et sur le portail cloud (attrs retenu,
+ * relu a chaque redemarrage du portail). Pas de condition sur la liaison locale : le cloud peut
+ * etre connecte sans elle (pub_flush publie sur chaque liaison connectee). Sous LOCK. */
 static void clear_one(volet_t *v) {
-    if (!s_mqtt_ready) return;
     char topic[96], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);
     snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
@@ -981,6 +1028,8 @@ static void clear_one(volet_t *v) {
     pub_defer(topic, "", 0, 1);
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
     pub_defer(topic, "", 0, 1);
+    snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
+    pub_defer(topic, "", 0, 1);   /* vide = appareil retire pour le portail (fait gone) */
 }
 
 /* ── API commande ── */
@@ -1119,10 +1168,69 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
     return rc;
 }
 
+/* ── Telecommandes connues, pour le portail cloud (docs/CLOUD.md, point 7) ──
+ *   openprofalux/remote/<slug>/info  {"serial":"0x0000813","name":"...","used_by":"Chambre Parents"} (retenu)
+ *   openprofalux/ignored/<slug>      {"serial":"0x0000813"} (retenu)
+ * Message vide retenu = retiree (supprimee, ignoree, reacceptee). Plutot que d'appeler la publication a
+ * chaque endroit qui change la liste ou ses volets (on en oublierait), la tache compare toutes les
+ * REMOTES_SYNC_MS une empreinte de l'ensemble et ne republie que si elle a change. Sous LOCK. */
+#define REMOTES_SYNC_MS 5000
+#define REMOTE_SERIAL_DIGITS 7   /* serial d'une telecommande : 0x + 7 chiffres hexa (0x%07X), son slug = les chiffres */
+static char     s_pub_remotes[SH_MAX_REMOTES][SH_SERIAL_LEN], s_pub_ignored[SH_MAX_IGNORED][SH_SERIAL_LEN];
+static int      s_npub_remotes, s_npub_ignored;
+static uint32_t s_remotes_sig;
+static bool     s_remotes_force = true;
+
+static uint32_t fnv(uint32_t h, const char *p) { for (; p && *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; } return (h ^ 0xff) * 16777619u; }
+
+static void remotes_sync(void) {
+    if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;   /* rien publie : on reessaiera */
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < s_nremotes; i++) { h = fnv(h, s_remotes[i].serial); h = fnv(h, s_remotes[i].name); h = fnv(h, remote_user(s_remotes[i].serial)); }
+    h = fnv(h, "|");
+    for (int i = 0; i < s_nignored; i++) h = fnv(h, s_ignored[i]);
+    if (!s_remotes_force && h == s_remotes_sig) return;
+    s_remotes_force = false; s_remotes_sig = h;
+    char topic[64];
+    for (int i = 0; i < s_npub_remotes; i++) if (!remote_find(s_pub_remotes[i])) {
+        snprintf(topic, sizeof(topic), "openprofalux/remote/%s/info", remote_slug(s_pub_remotes[i]));
+        pub_defer(topic, "", 0, 1);
+    }
+    for (int i = 0; i < s_npub_ignored; i++) if (!ignored(s_pub_ignored[i])) {
+        snprintf(topic, sizeof(topic), "openprofalux/ignored/%s", remote_slug(s_pub_ignored[i]));
+        pub_defer(topic, "", 0, 1);
+    }
+    s_npub_remotes = 0;
+    for (int i = 0; i < s_nremotes; i++) {
+        const remote_t *r = &s_remotes[i];
+        cJSON *o = cJSON_CreateObject();   /* cJSON : un nom avec guillemets ne casse pas le JSON */
+        if (!o) continue;
+        cJSON_AddStringToObject(o, "serial", r->serial);
+        if (r->name[0]) cJSON_AddStringToObject(o, "name", r->name);
+        const char *user = remote_user(r->serial);
+        if (user) cJSON_AddStringToObject(o, "used_by", user);
+        char *js = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        if (!js) continue;
+        snprintf(topic, sizeof(topic), "openprofalux/remote/%s/info", remote_slug(r->serial));
+        pub_defer(topic, js, 0, 1);
+        free(js);
+        strlcpy(s_pub_remotes[s_npub_remotes++], r->serial, SH_SERIAL_LEN);
+    }
+    s_npub_ignored = 0;
+    for (int i = 0; i < s_nignored; i++) {
+        char pl[48];
+        snprintf(pl, sizeof(pl), "{\"serial\":\"%.*s\"}", SH_SERIAL_LEN - 1, s_ignored[i]);   /* serial normalise 0x%07X : rien a echapper */
+        snprintf(topic, sizeof(topic), "openprofalux/ignored/%s", remote_slug(s_ignored[i]));
+        pub_defer(topic, pl, 0, 1);
+        strlcpy(s_pub_ignored[s_npub_ignored++], s_ignored[i], SH_SERIAL_LEN);
+    }
+}
+
 /* ── Tache : suivi position + streaming du maintien ── */
 static void tick_task(void *arg) {
     (void)arg;
-    int save_ticks = 0;
+    int save_ticks = 0, remotes_ticks = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
         LOCK();
@@ -1153,6 +1261,7 @@ static void tick_task(void *arg) {
             if (reached || (int)(v->position + 0.5f) != v->pub_pos || v->dir != v->pub_dir)
                 publish_volet_state(v);
         }
+        if (++remotes_ticks * TICK_MS >= REMOTES_SYNC_MS) { remotes_ticks = 0; remotes_sync(); }   /* telecommandes connues (portail) */
         UNLOCK();
         pub_flush();   /* publie les changements de position/etat HORS LOCK */
         if (s_pos_dirty) { s_pos_dirty = false; LOCK(); save_cfg(); UNLOCK(); }   /* fige la nouvelle position en NVS (retenue au reboot) */
@@ -1367,6 +1476,34 @@ int shutters_set_followers(const char *id, const char *members_csv, const char *
     ESP_LOGW(TAG, "zone '%s' : suiveurs=[%s]", id, v->members ? v->members : "");
     UNLOCK();
     pub_flush();
+    return 0;
+}
+
+/* Change les MEMBRES d'une centrale existante (portail cloud) : chacun existe, n'est ni elle-meme ni une
+ * centrale (une centrale ne diffuse pas a une autre). Rien d'autre ne change (position, nom...). *why
+ * recoit la raison d'un refus. */
+int shutters_set_central_members(const char *id, const char *members_csv, const char **why) {
+    const char *err = NULL;
+    LOCK();
+    volet_t *v = id ? find_volet(id) : NULL;
+    char mid[SH_ID_LEN];
+    if (!v || !v->central) err = "centrale inconnue";
+    else for (const char *p = cfg_members_next(members_csv, mid); p && !err; p = cfg_members_next(p, mid)) {
+        volet_t *m = find_volet(mid);
+        if (!m) err = "membre inconnu";
+        else if (m == v) err = "une centrale ne peut pas se contenir";
+        else if (m->central) err = "une centrale ne peut pas etre membre";
+    }
+    if (!err && cfg_volet_set_members(v, members_csv) != 0) err = "trop de membres";
+    if (err) {
+        UNLOCK();
+        ESP_LOGW(TAG, "centrale '%s' refusee : %s", id ? id : "?", err);
+        if (why) *why = err;
+        return -1;
+    }
+    save_cfg();
+    ESP_LOGW(TAG, "centrale '%s' : membres=[%s]", id, v->members ? v->members : "");
+    UNLOCK();
     return 0;
 }
 
@@ -1592,6 +1729,39 @@ int shutters_set_order(const char *ids_csv) {
     UNLOCK();
     free(buf);
     ESP_LOGI(TAG, "ordre d'affichage mis a jour (%d volets ranges)", rank);
+    return 0;
+}
+
+/* Place un volet au rang `rank` (1..N) de l'ordre d'affichage et renumerote les autres, dans l'ordre
+ * qu'ils avaient (les non ranges a la suite, dans leur ordre de creation). Portail : un rang par
+ * appareil, plutot que la liste entiere de l'interface locale. */
+int shutters_set_rank(const char *id, int rank) {
+    if (rank < 1) return -1;
+    LOCK();
+    volet_t *target = find_volet(id);
+    if (!target) { UNLOCK(); return -1; }
+    int idx[SH_MAX_VOLETS], n = 0;
+    for (int i = 0; i < s_nvolets; i++) if (&s_volets[i] != target) idx[n++] = i;
+    /* tri stable par ordre actuel (non ranges en fin) : insertion, n <= SH_MAX_VOLETS */
+    for (int a = 1; a < n; a++) {
+        int k = idx[a], b = a - 1;
+        int ok = s_volets[k].order < 0 ? 1 << 20 : s_volets[k].order;
+        while (b >= 0) {
+            int ob = s_volets[idx[b]].order < 0 ? 1 << 20 : s_volets[idx[b]].order;
+            if (ob <= ok) break;
+            idx[b + 1] = idx[b]; b--;
+        }
+        idx[b + 1] = k;
+    }
+    int pos = rank - 1 > n ? n : rank - 1;
+    int r = 0;
+    for (int i = 0; i <= n; i++) {
+        if (i == pos) target->order = r++;
+        if (i < n) s_volets[idx[i]].order = r++;
+    }
+    save_cfg();
+    UNLOCK();
+    ESP_LOGI(TAG, "'%s' au rang %d", id, pos + 1);
     return 0;
 }
 
@@ -2022,7 +2192,7 @@ bool shutters_prev_cfg_time(time_t *t) {
 /* ── Integration Home Assistant (MQTT) ── */
 /* Etat de l'entite update HA : version installee + derniere version GitHub connue. */
 static void publish_update_state(void) {
-    if (!s_mqtt_ready) return;
+    if (!s_mqtt_ready && !mqtt_cloud_is_connected()) return;   /* local OU cloud, comme les volets */
     const esp_app_desc_t *d = esp_app_get_description();
     const char *inst = d ? d->version : "?";
     const char *latest = ota_latest_version();
@@ -2067,6 +2237,20 @@ void shutters_mqtt_announce(const char *device) {
     ESP_LOGI(TAG, "HA discovery publiee pour %d cover(s), device=%s", s_nvolets, s_device);
 }
 
+/* Connexion cloud (re)etablie : le portail n'a rien vu de ce qui s'est passe avant, et un appareil
+ * qui ne bouge pas ne republie rien. On republie description et etat de chaque appareil. */
+void shutters_cloud_resync(void) {
+    LOCK();
+    for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
+    for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
+    s_remotes_force = true; remotes_sync();                                      /* telecommandes connues et ignorees */
+    publish_update_state();                                                      /* version installee / derniere */
+    pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);    /* ecoute permanente (portail) */
+    UNLOCK();
+    pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
+    ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s), version et ecoute republies", s_nvolets, s_nremotes);
+}
+
 void shutters_mqtt_lost(void) {
     LOCK();
     bool was = s_mqtt_ready;
@@ -2080,9 +2264,20 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     if (!strcmp(topic, "openprofalux/update/install")) {
         if (ota_latest_url()[0]) {
             ESP_LOGW(TAG, "HA -> installer MAJ %s : %s", ota_latest_version(), ota_latest_url());
-            ota_pull_from_url(ota_latest_url());   /* telecharge + reboot (retour auto si elle plante, voir ota.c) */
+            ota_pull_async(ota_latest_url());   /* telecharge + reboot, hors de la tache MQTT (voir ota.c) */
         } else {
             ESP_LOGW(TAG, "HA -> install demande mais aucune version GitHub connue");
+        }
+        return;
+    }
+    /* Retour a la version precedente (portail, avec confirmation cote utilisateur) : seulement si une
+     * version valide attend dans l'autre partition ; redemarre aussitot. */
+    if (!strcmp(topic, "openprofalux/ota/rollback")) {
+        if (len == 8 && !memcmp(data, "ROLLBACK", 8) && ota_rollback_possible()) {
+            ESP_LOGW(TAG, "portail -> retour a la version precedente");
+            ota_rollback();   /* reboote, ou echoue s'il n'y a pas d'image precedente valide */
+        } else {
+            ESP_LOGW(TAG, "retour a la version precedente refuse (commande ou image precedente)");
         }
         return;
     }
@@ -2137,6 +2332,43 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
             s_busy_until[idx] = (len >= 1 && data[0] == '1') ? (sync_now_ms() + SYNC_STALE_MS) : 0;
         return;
     }
+    /* Telecommandes connues (portail cloud, point 7) : la cible est le slug du serial (7 chiffres hexa).
+     *   remote/<slug>/set     DELETE | IGNORE   (refuse si un volet s'en sert, comme en local)
+     *   remote/<slug>/config  {"name":"..."}    (renommer ; vide = sans nom)
+     *   ignored/<slug>/set    ACCEPT            (n'est plus ignoree ; revient a son prochain appui) */
+    {
+        static const char R[] = "openprofalux/remote/", I[] = "openprofalux/ignored/";
+        bool is_r = !strncmp(topic, R, sizeof(R) - 1), is_i = !strncmp(topic, I, sizeof(I) - 1);
+        if (is_r || is_i) {
+            const char *after = topic + (is_r ? sizeof(R) : sizeof(I)) - 1, *slash = strchr(after, '/');
+            char serial[SH_SERIAL_LEN];
+            size_t n = slash ? (size_t)(slash - after) : 0;
+            bool hex = n == REMOTE_SERIAL_DIGITS;
+            for (size_t i = 0; hex && i < n; i++) hex = isxdigit((unsigned char)after[i]);
+            if (!hex) { ESP_LOGW(TAG, "telecommande : cible invalide (%s)", topic); return; }
+            snprintf(serial, sizeof(serial), "0x%.*s", (int)n, after);
+            for (char *c = serial + 2; *c; c++) *c = (char)toupper((unsigned char)*c);
+            const char *sub = slash + 1, *why = NULL;
+            int rc = -1;
+            if (is_r && !strcmp(sub, "set") && len == 6 && !memcmp(data, "DELETE", 6)) rc = shutters_delete_remote(serial, &why);
+            else if (is_r && !strcmp(sub, "set") && len == 6 && !memcmp(data, "IGNORE", 6)) rc = shutters_ignore_remote(serial, &why);
+            else if (is_i && !strcmp(sub, "set") && len == 6 && !memcmp(data, "ACCEPT", 6)) { rc = shutters_unignore_remote(serial); if (rc) why = "pas ignoree"; }
+            else if (is_r && !strcmp(sub, "config") && len > 0 && len < 256) {
+                char *js = strndup(data, (size_t)len);
+                cJSON *j = js ? cJSON_Parse(js) : NULL;
+                free(js);
+                const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(j, "name"));
+                LOCK(); bool known = remote_find(serial) != NULL; UNLOCK();
+                if (!known) why = "telecommande inconnue";
+                else if (!name || strlen(name) > COVER_NAME_MAX) why = "nom absent ou trop long";
+                else rc = shutters_remote_name(serial, name);
+                cJSON_Delete(j);
+            } else why = "commande inconnue";
+            if (rc != 0) ESP_LOGW(TAG, "telecommande %s : %s refuse (%s)", serial, sub, why ? why : "?");
+            else ESP_LOGI(TAG, "telecommande %s : %s applique", serial, sub);
+            return;   /* la tache republie la liste (remotes_sync) */
+        }
+    }
     static const char P[] = "openprofalux/cover/";
     if (strncmp(topic, P, sizeof(P) - 1)) return;
     const char *after = topic + sizeof(P) - 1;
@@ -2149,6 +2381,66 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     volet_t *v = find_volet_by_slug(slug);
     if (!v) { ESP_LOGW(TAG, "MQTT cmd : volet slug '%s' inconnu", slug); return; }
     char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof(id));
+    /* Reglages d'un appareil (portail cloud, docs/CLOUD.md) : {"travel_up_ms":N,"travel_down_ms":N,
+     * "orientation":N,"rank":N,"members":["slug",...]}, chaque champ facultatif (les temps de course vont par deux). Tout
+     * champ present est verifie contre ses bornes : un seul faux, et rien n'est applique. Puis
+     * description et decouverte republiees (le volet peut devenir positionnel, changer de rang). */
+    if (!strcmp(sub, "config")) {
+        /* borne : de quoi tenir tous les membres possibles en slugs (centrale de SH_MAX_VOLETS appareils) */
+        if (len <= 0 || len > 64 + SH_MAX_VOLETS * (SH_ID_LEN + 3)) { ESP_LOGW(TAG, "config '%s' : taille %d refusee", id, len); return; }
+        char *js = strndup(data, (size_t)len);
+        cJSON *j = js ? cJSON_Parse(js) : NULL;
+        free(js);
+        cJSON *u = cJSON_GetObjectItem(j, "travel_up_ms"), *d = cJSON_GetObjectItem(j, "travel_down_ms");
+        cJSON *o = cJSON_GetObjectItem(j, "orientation"), *k = cJSON_GetObjectItem(j, "rank");
+        cJSON *mb = cJSON_GetObjectItem(j, "members");
+        bool has_travel = u || d;
+        /* membres (centrale ou zone deja creee sur le boitier) : liste de SLUGS -> ids reels, en CSV ;
+         * un slug inconnu refuse tout. Un appareil simple n'en a pas (le devenir se fait sur le boitier). */
+        /* sur le tas : ce gestionnaire tourne dans la tache MQTT locale ET dans la tache cloud */
+        char *members_csv = mb ? calloc(1, SH_MEMBERS_LEN) : NULL;
+        bool members_ok = !mb;
+        bool central = false;
+        if (mb && members_csv) {
+            LOCK();   /* la liste des volets ne bouge pas pendant la traduction */
+            size_t w = 0; central = v->central; members_ok = cJSON_IsArray(mb) && (central || is_zone(v));
+            cJSON *it;
+            cJSON_ArrayForEach(it, mb) {
+                if (!members_ok) break;
+                volet_t *m = cJSON_IsString(it) ? find_volet_by_slug(it->valuestring) : NULL;
+                int n = m ? snprintf(members_csv + w, SH_MEMBERS_LEN - w, "%s%s", w ? "," : "", m->id) : -1;
+                if (n < 0 || (size_t)n >= SH_MEMBERS_LEN - w) members_ok = false; else w += (size_t)n;
+            }
+            UNLOCK();
+        }
+        uint32_t up = cJSON_IsNumber(u) ? (uint32_t)cJSON_GetNumberValue(u) : 0, down = cJSON_IsNumber(d) ? (uint32_t)cJSON_GetNumberValue(d) : 0;
+        int ori = cJSON_IsNumber(o) ? (int)cJSON_GetNumberValue(o) : -2, rank = cJSON_IsNumber(k) ? (int)cJSON_GetNumberValue(k) : -2;
+        bool ok = j && (has_travel || o || k || mb) && members_ok
+            && (!has_travel || (cover_travel_ok(up) && cover_travel_ok(down)))
+            && (!o || (ori >= 0 && ori <= COVER_ORIENTATION_MAX))
+            && (!k || (rank >= 1 && rank <= COVER_DEVICES_MAX));
+        cJSON_Delete(j);
+        if (!ok) { ESP_LOGW(TAG, "config '%s' refusee (champ absent ou hors bornes)", id); free(members_csv); return; }
+        if ((has_travel && shutters_calibrate(id, up, down) != 0) || (ori >= 0 && shutters_set_orientation(id, ori) != 0)
+            || (rank >= 1 && shutters_set_rank(id, rank) != 0)) { free(members_csv); return; }
+        if (mb) {
+            /* centrale : sa liste de diffusion ; zone : ses suiveurs, avec les regles de la zone (pas de
+             * centrale ni de zone suiveuse). Une zone videe redevient un volet simple, comme en local. */
+            const char *why = NULL;
+            int rc = central ? shutters_set_central_members(id, members_csv, &why) : shutters_set_followers(id, members_csv, &why);
+            free(members_csv);
+            if (rc != 0) { ESP_LOGW(TAG, "config '%s' : membres refuses (%s)", id, why ? why : "?"); return; }
+        }
+        ESP_LOGI(TAG, "config '%s' appliquee", id);
+        LOCK();
+        /* le rang peut avoir change pour tous : chacun republie le sien */
+        for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
+        volet_t *cv = find_volet(id);
+        if (cv) announce_one(cv);
+        UNLOCK();
+        pub_flush();   /* hors LOCK (anti-deadlock), comme a la connexion */
+        return;
+    }
     char payload[16]; int m = len < 15 ? len : 15; memcpy(payload, data, m); payload[m] = 0;
     if (!s_mqtt_obey) { ESP_LOGW(TAG, "MQTT cmd ignoree (obey=OFF) pour '%s'", id); return; }   /* carte secondaire : une seule carte emet un volet partage */
     if (!strcmp(sub, "set")) {
@@ -2178,7 +2470,9 @@ void shutters_set_log_frames(bool on) {
     LOCK();
     save_cfg();                                        /* persiste l'ecoute permanente -> restauree au boot */
     for (int i = 0; i < s_nvolets; i++) announce_one(&s_volets[i]);   /* re-publie la decouverte : position apparait/disparait selon l'option */
-    if (s_mqtt_ready) pub_defer("openprofalux/listen/state", on ? "ON" : "OFF", 0, 1);   /* etat du switch HA */
+    /* etat du switch HA et du portail : sans condition sur la liaison locale, le cloud peut etre
+     * connecte sans elle (pub_defer sert les deux) */
+    pub_defer("openprofalux/listen/state", on ? "ON" : "OFF", 0, 1);
     UNLOCK();
     pub_flush();
     ESP_LOGI(TAG, "log_frames=%d", on);

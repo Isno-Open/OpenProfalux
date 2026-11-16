@@ -24,6 +24,34 @@
 int  mqtt_bridge_start(const char *broker_uri, const char *client_id, const char *user, const char *pass);
 void mqtt_bridge_stop(void);
 
+/* ── Connexion CLOUD additive (broker ISNO en mqtts mTLS), EN PLUS du local, qui reste INTACT. ──
+ * Un 2e client MQTT. Les topics cloud sont prefixes par le device_id (openprofalux/{device_id}/...)
+ * pour coller a l'ACL du broker. La publication des volets (mqtt_pub_*) part automatiquement sur les
+ * DEUX connexions, avec le prefixe pose cote cloud ; les commandes cloud recues sont ramenees a la
+ * forme locale et traitees par le meme chemin. cloud_uri vide => cloud non demarre (local seul).
+ * Certificats cloud via mqtt_cert_write avec which = "cloud_ca" | "cloud_cert" | "cloud_key". */
+int  mqtt_cloud_start(const char *cloud_uri, const char *device_id);
+void mqtt_cloud_stop(void);
+bool mqtt_cloud_is_connected(void);
+/* Demandes faites depuis le serveur web : executees par une tache dediee, jamais dans le
+ * gestionnaire HTTP (l'arret d'un client y figeait le serveur). false = demande refusee. */
+bool mqtt_cloud_request_start(const char *cloud_uri, const char *device_id);
+bool mqtt_cloud_request_stop(void);
+/* Comme stop, mais annonce « oublie » : le portail retire le boitier du compte (POST /api/cloud/forget). */
+bool mqtt_cloud_request_forget(void);
+/* Oubli complet du cloud : annonce « oublie », arret, certificats et configuration effaces. Depuis
+ * l'interface (POST /api/cloud/forget) ou sur ordre du portail (boitier retire de son compte). */
+void mqtt_cloud_forget_all(void);
+/* Mise a jour : met le cloud en pause (memoire), sans rien enregistrer ni annoncer ; true s'il tournait.
+ * mqtt_cloud_resume le relance si la mise a jour n'aboutit pas (apres un redemarrage, il repart seul). */
+bool mqtt_cloud_pause(void);
+void mqtt_cloud_resume(void);
+/* Nom donne au boitier sur le portail (cle NVS « cloud_name », cfg) : 60 caracteres UTF-8 au plus. */
+#define CLOUD_NAME_NVS_KEY "cloud_name"
+#define CLOUD_NAME_MAX     244   /* 60 caracteres de 4 octets au plus, et le zero final */
+/* Republie « online » sur les connexions etablies (battement : filet contre un ancien testament). */
+void mqtt_pub_presence(void);
+
 /* Certificats TLS pour mqtts, stockes en SPIFFS (partition storage, 960 Ko) et non en
  * NVS : la NVS de 16 Ko est deja trop juste pour la config des volets, exactement comme
  * pour le ring de trames. which = "ca" (autorite du broker) | "cert" (client) | "key"
@@ -37,6 +65,11 @@ int  mqtt_pub_state(const char *device_name, const char *json);
 int  mqtt_pub_system_status(void);
 /* Publish générique (topic libre). qos/retain passés tels quels. */
 int  mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain);
+/* Pile restee libre au plus bas (octets) des taches d'envoi par file. */
+uint32_t mqtt_outbox_stack_free(void);
+/* Coupures du cloud (connecte -> deconnecte) et erreurs de connexion, depuis le demarrage. */
+uint32_t mqtt_cloud_drops(void);
+uint32_t mqtt_cloud_errors(void);
 
 /* Callback registered by main - dispatched based on topic */
 typedef struct {
@@ -44,6 +77,8 @@ typedef struct {
     void (*on_ota_pull)(const char *url);                             /* openprofalux/ota/pull */
     void (*on_connected)(void);                                       /* broker connecte : publier la decouverte */
     void (*on_disconnected)(void);                                    /* broker perdu : statut hors ligne */
+    void (*on_cloud_connected)(void);                                 /* cloud connecte : republier l'etat des appareils */
+    char *(*export_backup)(void);                                     /* sauvegarde demandee par le portail : JSON a liberer, NULL si echec */
 } mqtt_handlers_t;
 
 int  mqtt_bridge_set_handlers(const mqtt_handlers_t *h);

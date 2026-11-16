@@ -23,7 +23,7 @@
 #include "wifi_bridge.h"
 #include "mqtt_bridge.h"
 #include "tls_pool.h"
-#include "tls_budget.h"
+#include "cloud_enroll.h"   /* cloud_want : gate d'activation du cloud (testée) */
 #include "shutters.h"
 #include "pfx_enrol.h"
 #include "web_ui.h"
@@ -34,7 +34,7 @@
 #include "mdns_name.h"
 #include "esp_app_desc.h"   /* esp_app_get_description()->version = PROJECT_VER */
 #include "log_ring.h"
-#include "memprobe.h"
+#include "crash_trace.h"
 #include "memprobe.h"
 #include <esp_attr.h>     /* RTC_NOINIT_ATTR */
 #include <esp_system.h>   /* esp_reset_reason */
@@ -76,6 +76,9 @@ static char s_wifi_pass[64]   = "";
 static char s_mqtt_uri[160]   = "mqtt://ha.local:1883";
 static char s_mqtt_user[128]  = "";   /* certains brokers utilisent des tokens JWT longs */
 static char s_mqtt_pass[256]  = "";   /* HA peut generer des mdp broker >64 : marge (nvs_get_str echoue si buffer trop court -> champ vide -> 'not authorized'). Aligne sur OpenXtraflame. */
+static char s_mqtt_cloud_uri[160] = "";   /* broker cloud (mqtts://hote:8883) ; vide = cloud desactive (local seul) */
+static char s_cloud_dev_id[40]    = "";   /* device_id cloud = CN du certificat client (isolation ACL) ; vide = reprend le nom d'appareil */
+static uint8_t s_cloud_on         = 1;    /* interrupteur cloud (toggle UI) ; defaut 1 = actif si cloud_uri present */
 
 /* Load user config from NVS "cfg" namespace */
 static void load_config(void) {
@@ -88,6 +91,9 @@ static void load_config(void) {
     sz = sizeof(s_mqtt_uri);    nvs_get_str(h, "mqtt_uri", s_mqtt_uri, &sz);
     sz = sizeof(s_mqtt_user);   nvs_get_str(h, "mqtt_user", s_mqtt_user, &sz);
     sz = sizeof(s_mqtt_pass);   nvs_get_str(h, "mqtt_pass", s_mqtt_pass, &sz);
+    sz = sizeof(s_mqtt_cloud_uri); nvs_get_str(h, "cloud_uri", s_mqtt_cloud_uri, &sz);
+    sz = sizeof(s_cloud_dev_id);   nvs_get_str(h, "cloud_dev", s_cloud_dev_id, &sz);
+    nvs_get_u8(h, "cloud_on", &s_cloud_on);
     uint8_t lf = 0; nvs_get_u8(h, "log_frames", &lf); s_log_frames = lf;
     uint8_t mo = 1; nvs_get_u8(h, "mqtt_obey", &mo); s_mqtt_obey = mo;   /* absent = oui */
     uint8_t db = 0; nvs_get_u8(h, "debug", &db); s_debug = db;
@@ -113,18 +119,20 @@ static void load_config(void) {
 
 /* Publish state JSON (heartbeat : etat liaison + heap libre) */
 static void publish_state(const char *last_cmd) {
-    char json[320];
+    char json[384];
     /* reserve TLS : libre, plus bas atteint, debordements (voir tls_pool.h) ; sert a la dimensionner */
     tls_pool_stats_t tp; tls_pool_stats(&tp);
     int ring = 0, hops = 0; shutters_mem_sizes(&ring, &hops);   /* tailles deduites de la RAM */
     snprintf(json, sizeof(json),
         "{\"last_cmd\":\"%s\",\"rssi\":%d,\"free_heap\":%u,\"min_heap\":%u,"
         "\"tls_pool\":%u,\"tls_free\":%u,\"tls_min\":%u,\"tls_spills\":%u,\"tls_offturn\":%u,"
-        "\"ring\":%d,\"hops_cap\":%d,\"pub_drops\":%u,\"up_s\":%u}",
+        "\"ring\":%d,\"hops_cap\":%d,\"out_stack\":%u,\"cloud_drops\":%u,\"cloud_errors\":%u,\"pub_drops\":%u,\"up_s\":%u}",
         last_cmd, wifi_bridge_rssi(), (unsigned)esp_get_free_heap_size(),
         (unsigned)esp_get_minimum_free_heap_size(),
         (unsigned)tp.size, (unsigned)tp.free_now, (unsigned)tp.free_min, (unsigned)tp.spills, (unsigned)tls_turn_misses(),
-        ring, hops, (unsigned)shutters_pub_dropped(), (unsigned)(esp_timer_get_time() / 1000000));
+        ring, hops, (unsigned)mqtt_outbox_stack_free(),
+        (unsigned)mqtt_cloud_drops(), (unsigned)mqtt_cloud_errors(), (unsigned)shutters_pub_dropped(),
+        (unsigned)(esp_timer_get_time() / 1000000));
     mqtt_pub_state(s_device_name, json);
 }
 
@@ -132,10 +140,41 @@ static void publish_state(const char *last_cmd) {
 
 static void on_ota_pull(const char *url) {
     ESP_LOGI(TAG, "▶ OTA pull depuis %s", url);
-    ota_pull_from_url(url);
+    ota_pull_async(url);   /* hors de la tache du client MQTT (voir ota.c) */
 }
+/* ── Le cloud demarre APRES le MQTT local ──
+ * Capture serie du 2026-11-16 sur l'ATOM : les deux clients partaient ensemble au demarrage. Pendant
+ * que le cloud ouvrait sa liaison TLS, le MQTT LOCAL (TCP simple) restait bloque en ecriture 10 s et
+ * tombait, a la meme milliseconde que l'abandon du cloud : rien ne sortait plus du boitier. Le cloud
+ * attend donc que le local soit connecte et ait publie sa decouverte HA ; sans broker local joignable,
+ * il part quand meme au bout de CLOUD_DEFER_MAX_MS. */
+#define CLOUD_AFTER_LOCAL_MS 5000
+#define CLOUD_DEFER_MAX_MS   30000
+static bool s_cloud_deferred = false;   /* cloud voulu, pas encore lance */
+static esp_timer_handle_t s_cloud_defer_timer = NULL;
+static void cloud_defer_cb(void *arg) {
+    (void)arg;
+    if (!__atomic_exchange_n(&s_cloud_deferred, false, __ATOMIC_SEQ_CST)) return;   /* deja lance */
+    /* coupe ou oublie depuis l'interface pendant l'attente : la configuration enregistree fait foi */
+    uint8_t on = 0; char uri[sizeof(s_mqtt_cloud_uri)] = "", dev[sizeof(s_cloud_dev_id)] = ""; size_t ul = sizeof(uri), dl = sizeof(dev);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_u8(h, "cloud_on", &on) != ESP_OK) on = 1;   /* absent = actif (comme au demarrage) */
+        if (nvs_get_str(h, "cloud_uri", uri, &ul) != ESP_OK) uri[0] = 0;
+        if (nvs_get_str(h, "cloud_dev", dev, &dl) != ESP_OK) dev[0] = 0;
+        nvs_close(h);
+    }
+    /* reappaire pendant l'attente (autre identite) : l'appairage a deja lance le cloud */
+    if (!on || strcmp(uri, s_mqtt_cloud_uri) || (dev[0] && strcmp(dev, s_cloud_dev_id))) { ESP_LOGI(TAG, "cloud : change pendant l'attente, demarrage annule"); return; }
+    mqtt_cloud_request_start(s_mqtt_cloud_uri, s_cloud_dev_id);   /* hors de la tache du timer (file dediee) */
+}
+
 static void on_mqtt_connected(void) {
     shutters_mqtt_announce(s_device_name);   /* publie la decouverte HA a la VRAIE connexion broker */
+    if (s_cloud_defer_timer && __atomic_load_n(&s_cloud_deferred, __ATOMIC_SEQ_CST)) {
+        esp_timer_stop(s_cloud_defer_timer);
+        esp_timer_start_once(s_cloud_defer_timer, (uint64_t)CLOUD_AFTER_LOCAL_MS * 1000);
+    }
 }
 
 /* ── Retour du Wi-Fi en mode secours (wifi_bridge_start_fallback) ──
@@ -195,6 +234,13 @@ void app_main(void) {
     if (s_fb_magic == FALLBACK_MAGIC && esp_reset_reason() == ESP_RST_SW)
         ESP_LOGW(TAG, "redemarre apres le retour du Wi-Fi (%u s en mode secours)", (unsigned)s_fb_secs);
     s_fb_magic = 0;
+    /* dernier plantage garde en memoire RTC : dans le journal, pour qu'un boitier sans liaison serie
+     * dise ou il a plante (crash_trace.h) */
+    { char ct[CRASH_JSON_MAX]; crash_trace_json(ct, sizeof(ct));
+      if (esp_reset_reason() == ESP_RST_PANIC) ESP_LOGE(TAG, "redemarre apres un plantage : %s", ct);
+      else if (strcmp(ct, "null")) ESP_LOGW(TAG, "dernier plantage garde : %s", ct); }
+    if (wifi_bridge_net_reboots() && esp_reset_reason() == ESP_RST_SW)
+        ESP_LOGW(TAG, "redemarre par le garde-fou reseau (passerelle muette) : %u fois depuis la mise sous tension", wifi_bridge_net_reboots());
 
     /* 1. NVS */
     esp_err_t err = nvs_flash_init();
@@ -209,12 +255,13 @@ void app_main(void) {
     /* 2. Config */
     load_config();
     /* Reserve TLS prise d'un bloc des la configuration connue, avant que le reste du demarrage
-     * ne morcelle la memoire, et a la taille de CE boitier (tls_pool_need). Un mqtts choisi en
-     * cours de route deborde sur le tas jusqu'au redemarrage, et se compte. */
+     * ne morcelle la memoire, et a la taille de CE boitier (tls_pool_need). Un cloud appaire ou
+     * un mqtts choisi en cours de route deborde sur le tas jusqu'au redemarrage, et se compte. */
     {
         bool local_tls  = strncmp(s_mqtt_uri, "mqtts://", 8) == 0;
         bool local_mtls = local_tls && mqtt_cert_len("cert") && mqtt_cert_len("key");
-        tls_pool_init(tls_pool_need(local_tls, local_mtls, false, s_upd_auto));
+        bool cloud      = s_mqtt_cloud_uri[0] && s_cloud_on;
+        tls_pool_init(tls_pool_need(local_tls, local_mtls, cloud, s_upd_auto));
     }
     memprobe("boot-reserve-tls");
     /* Nom mDNS (mdns_name.h), decide AVANT le Wi-Fi : un boitier neuf demarre sans Wi-Fi (point
@@ -372,7 +419,11 @@ void app_main(void) {
     memprobe("boot-web");
 
     /* 6. MQTT */
-    if (wifi_bridge_is_connected() && strlen(s_mqtt_uri) > 0) {
+    /* Local (HA) et/ou cloud (broker ISNO), ADDITIF : le cloud ne remplace rien, il s'ajoute.
+     * Un boitier sans HA peut n'avoir que le cloud. Handlers communs aux deux connexions. */
+    bool want_local = wifi_bridge_is_connected() && strlen(s_mqtt_uri) > 0;
+    bool want_cloud = cloud_want(wifi_bridge_is_connected(), s_mqtt_cloud_uri, s_cloud_on);
+    if (want_local || want_cloud) {
         /* Handlers AVANT le start : la decouverte HA est publiee sur l'evenement CONNECTED
          * (vraie connexion), plus au boot a l'aveugle. Le statut UI suit CONNECTED/DISCONNECTED. */
         mqtt_handlers_t h = {
@@ -380,14 +431,29 @@ void app_main(void) {
             .on_ota_pull = on_ota_pull,               /* OTA pull */
             .on_connected = on_mqtt_connected,        /* -> publie la decouverte HA */
             .on_disconnected = shutters_mqtt_lost,    /* -> statut hors ligne */
+            .on_cloud_connected = shutters_cloud_resync,   /* -> le portail voit les appareils des la connexion */
+            .export_backup = shutters_export_json,         /* -> sauvegarde telechargee depuis le portail */
         };
         mqtt_bridge_set_handlers(&h);
+    }
+    if (want_local) {
         mqtt_bridge_start(s_mqtt_uri, s_device_name,
                           strlen(s_mqtt_user) ? s_mqtt_user : NULL,
                           strlen(s_mqtt_pass) ? s_mqtt_pass : NULL);
     }
-
+    if (want_cloud) {   /* 2e connexion mTLS vers le broker ISNO, topics prefixes par le device_id */
+        if (!s_cloud_dev_id[0]) strlcpy(s_cloud_dev_id, s_device_name, sizeof(s_cloud_dev_id));
+        const esp_timer_create_args_t ta = { .callback = cloud_defer_cb, .name = "cloud_defer" };
+        if (want_local && esp_timer_create(&ta, &s_cloud_defer_timer) == ESP_OK) {
+            s_cloud_deferred = true;   /* AVANT le premier CONNECTED possible du local */
+            esp_timer_start_once(s_cloud_defer_timer, (uint64_t)CLOUD_DEFER_MAX_MS * 1000);
+            ESP_LOGI(TAG, "cloud : demarrage apres le MQTT local (au plus %d s)", CLOUD_DEFER_MAX_MS / 1000);
+        } else {
+            mqtt_cloud_start(s_mqtt_cloud_uri, s_cloud_dev_id);
+        }
+    }
     memprobe("boot-mqtt");
+
     ESP_LOGI(TAG, "PRET (%s). Pilotage via HA/MQTT + UI web. Capture/replay actif.", TARGET_NAME);
 
     /* Boucle de fond : heartbeat MQTT (~60 s) + validation de l'image OTA apres ~60 s sans
@@ -403,7 +469,8 @@ void app_main(void) {
             shutters_size_from_ram();
             memprobe("battement-anneau");
             publish_state("HEARTBEAT");
-            if (!ota_marked) { ota_mark_valid(); ota_marked = true; }
+            mqtt_pub_presence();   /* filet contre le testament d'une ancienne session (voir mqtt_bridge.c) */
+            if (!ota_marked) { ota_mark_valid(); ota_marked = true; mqtt_pub_system_status(); }   /* fin de l'essai : le portail le voit */
         }
 #if CONFIG_HEAP_TASK_TRACKING
         /* Build de diagnostic : ce que chaque tache tient sur le tas, toutes les 20 s, sur la

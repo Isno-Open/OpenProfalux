@@ -6,6 +6,11 @@
 # ESP-IDF lit ce fichier une premiere fois en « expansion precoce » dans un autre
 # processus CMake : on n'engendre qu'a la vraie configuration.
 set(BOARD_JSON "${CMAKE_CURRENT_LIST_DIR}/../../boards/${BOARD}.json")
+# BOARD_FILE : une carte HORS de boards/, que ni la CI ni les releases ne voient. Sert a la
+# carte de simulation QEMU (firmware/test/qemu/board.json), qui ne doit jamais etre publiee.
+if(DEFINED BOARD_FILE AND NOT "${BOARD_FILE}" STREQUAL "")
+    set(BOARD_JSON "${BOARD_FILE}")
+endif()
 set(BOARD_HDR_DIR "${CMAKE_BINARY_DIR}/board")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(NOT EXISTS "${BOARD_JSON}")
@@ -33,6 +38,7 @@ set(WEB_SRCS "${CMAKE_CURRENT_LIST_DIR}/web/index.html"
              "${CMAKE_CURRENT_LIST_DIR}/web/app.js"
              "${CMAKE_CURRENT_LIST_DIR}/web/app-capture.js"
              "${CMAKE_CURRENT_LIST_DIR}/web/pyramid-detect.js"
+             "${CMAKE_CURRENT_LIST_DIR}/web/qrcode.js"
              "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest"
              "${CMAKE_CURRENT_LIST_DIR}/web/profiles.json")
 set(WEB_GZ_DIR "${CMAKE_BINARY_DIR}/web")
@@ -54,6 +60,7 @@ idf_component_register(
         "tls_pool.c"
         "tls_budget.c"
         "memprobe.c"
+        "github_tag.c"
         "mqtt_tls_policy.c"
         "shutters.c"
         "remote_battery.c"
@@ -67,6 +74,7 @@ idf_component_register(
         "mdns_name.c"
         "captive_dns.c"
         "enrol_gate.c"
+        "net_watch.c"
         "freq_sweep.c"
         "rx_confirm.c"
         "pfx_keys.c"
@@ -76,11 +84,15 @@ idf_component_register(
         "req_guard.c"
         "ota.c"
         "ota_rollback.c"
+        "cloud_topic.c"
+        "cover_attrs.c"
+        "cloud_enroll.c"
         "radio.c"
         "rf_capture.c"
         "radio_profile.c"
         "log_ring.c"
-        "github_tag.c"
+        "crash_trace.c"
+        "cloud_grant.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
@@ -88,6 +100,7 @@ idf_component_register(
         "${WEB_GZ_DIR}/app.js.gz"
         "${WEB_GZ_DIR}/app-capture.js.gz"
         "${WEB_GZ_DIR}/pyramid-detect.js.gz"
+        "${WEB_GZ_DIR}/qrcode.js.gz"
         "${WEB_GZ_DIR}/manifest.webmanifest.gz"
         "${WEB_GZ_DIR}/profiles.json.gz"
         "web/icon-192.png"
@@ -96,6 +109,7 @@ idf_component_register(
         spiffs
         esp_wifi
         esp_netif
+        lwip
         esp_eth
         esp_event
         mqtt
@@ -111,3 +125,6 @@ idf_component_register(
         esp-tls
         mbedtls
 )
+# Trace du dernier plantage (crash_trace.c) : l'editeur de liens fait passer l'appel du gestionnaire de
+# panique d'ESP-IDF par __wrap_esp_panic_handler, qui note la trace avant de lui rendre la main.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")
