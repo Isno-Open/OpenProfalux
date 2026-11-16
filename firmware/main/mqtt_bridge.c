@@ -564,6 +564,19 @@ int mqtt_pub_state(const char *device, const char *json) {
     return outbox_send(&s_out_local, topic, json, 1, 1);
 }
 
+int mqtt_pub_cloud(const char *topic, const char *payload, int qos, int retain) {
+    if (!s_mqtt_cloud) return -1;
+    cloud_pub(topic, payload, qos, retain);
+    return 0;
+}
+
+static int64_t s_cloud_connected_at_us = 0;
+uint32_t mqtt_cloud_connected_age_ms(void) {
+    if (!s_cloud_connected || !s_cloud_connected_at_us) return UINT32_MAX;
+    int64_t ms = (esp_timer_get_time() - s_cloud_connected_at_us) / 1000;
+    return ms > (int64_t)(UINT32_MAX - 1) ? UINT32_MAX - 1 : (uint32_t)ms;
+}
+
 int mqtt_pub_raw(const char *topic, const char *payload, int qos, int retain) {
     cloud_pub(topic, payload, qos, retain);  /* cloud (si actif) ; "homeassistant/..." reste local */
     return outbox_send(&s_out_local, topic, payload, qos, retain);
@@ -668,6 +681,8 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
         case MQTT_EVENT_CONNECTED: {
             turn_give(&s_turn_cloud);
             memprobe("cloud-connecte");
+            memtrace_window("cloud-connecte", 1500, false);   /* republication de l'etat : la pointe (diagnostic seulement) */
+            s_cloud_connected_at_us = esp_timer_get_time();   /* la verification GitHub laisse passer la pointe */
             s_cloud_connected = true;
             esp_mqtt_client_publish(s_mqtt_cloud, s_cloud_avail, PRESENCE_ONLINE, 0, 1, 1);
             esp_mqtt_client_subscribe(s_mqtt_cloud, s_cloud_avail, 1);   /* testament d'une ancienne session */
