@@ -38,6 +38,8 @@ esp_err_t ota_upload_begin(size_t total_bytes);
 esp_err_t ota_upload_data(const void *data, size_t len);
 esp_err_t ota_upload_end(void);
 esp_err_t ota_upload_abort(void);
+/* Telechargement + installation dans une tache dediee (a appeler depuis un message MQTT ou le serveur web). */
+bool ota_pull_async(const char *url);
 esp_err_t ota_pull_from_url(const char *url);   /* telecharge + flashe une image HTTPS (release GitHub) */
 
 /* Interroge GitHub (releases/latest) -> derniere version + URL d'asset de la variante.

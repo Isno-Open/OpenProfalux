@@ -40,6 +40,7 @@ static char *s_tls_ca = NULL, *s_tls_cert = NULL, *s_tls_key = NULL;
 /* ── Connexion CLOUD additive (broker ISNO), EN PLUS du local qui reste INTACT. Un 2e client, ses
  * propres certificats, et des topics prefixes par le device_id (= segment d'isolation de l'ACL). ── */
 static esp_mqtt_client_handle_t s_mqtt_cloud = NULL;
+static char s_curi_saved[160] = "";   /* broker du client cloud en cours (pause/reprise) */
 static char  s_cloud_id[40];      /* device_id (doit = CN du certificat client cote broker) */
 static char  s_cloud_base[56];    /* "openprofalux/{device_id}" */
 static char  s_cloud_avail[72];   /* LWT cloud : "{base}/status" */
@@ -774,7 +775,7 @@ void mqtt_cloud_stop(void) {
  * esp_mqtt_client_stop attend la fin de la tache du client ; appele depuis un gestionnaire HTTP,
  * il figeait le serveur web (constate le 2026-11-13 avec POST /api/cloud/toggle). Le serveur web
  * depose la demande ici et repond tout de suite ; une tache dediee l'execute. */
-typedef enum { CLOUD_CTL_START, CLOUD_CTL_STOP, CLOUD_CTL_FORGET } cloud_ctl_op_t;
+typedef enum { CLOUD_CTL_START, CLOUD_CTL_STOP, CLOUD_CTL_FORGET, CLOUD_CTL_PAUSE } cloud_ctl_op_t;
 typedef struct { cloud_ctl_op_t op; char uri[160]; char dev[40]; } cloud_ctl_t;
 #define CLOUD_CTL_DEPTH 4
 #define CLOUD_CTL_STACK 4096   /* demarrage : lecture des certificats et configuration TLS */
@@ -803,6 +804,7 @@ static void cloud_ctl_task(void *arg) {
     for (;;) {
         if (xQueueReceive(q, &c, portMAX_DELAY) != pdTRUE) continue;
         if (c.op == CLOUD_CTL_START) mqtt_cloud_start(c.uri, c.dev);   /* arrete l'ancien client d'abord (sans annonce) */
+        else if (c.op == CLOUD_CTL_PAUSE) mqtt_cloud_stop();          /* pause (mise a jour) : ni annonce, ni reglage touche */
         else {   /* coupe voulue : le portail le sait (desactive : grise ; oublie : retire du compte) */
             cloud_announce_leave(c.op == CLOUD_CTL_FORGET ? PRESENCE_FORGOTTEN : PRESENCE_DISABLED);
             mqtt_cloud_stop();
@@ -840,6 +842,37 @@ bool mqtt_cloud_request_forget(void) {
     return cloud_ctl_post(&c);
 }
 
+/* ── Pause du cloud pendant une mise a jour ──
+ * Mesure du 2026-11-16 sur l'ATOM : avec le cloud actif, la memoire descendait jusqu'a 16 o et l'envoi
+ * de l'image s'interrompait (420 Ko, puis 31 Ko, puis 1,15 Mo sur 1,3 Mo). La liaison TLS du cloud
+ * libere ~25 Ko : on la met en pause le temps de la mise a jour. Rien n'est enregistre (le cloud reste
+ * « active ») et rien n'est annonce : apres le redemarrage il repart seul ; si la mise a jour echoue,
+ * mqtt_cloud_resume le relance aussitot. */
+#define CLOUD_PAUSE_WAIT_MS 3000   /* arret du client : la tache se termine, la memoire revient */
+#define CLOUD_PAUSE_STEP_MS 100
+static volatile bool s_cloud_paused = false;
+static char s_pause_uri[160], s_pause_dev[40];
+
+bool mqtt_cloud_pause(void) {
+    if (!s_mqtt_cloud || s_cloud_paused) return false;
+    strlcpy(s_pause_uri, s_curi_saved, sizeof(s_pause_uri));
+    strlcpy(s_pause_dev, s_cloud_id, sizeof(s_pause_dev));
+    cloud_ctl_t c = { .op = CLOUD_CTL_PAUSE };
+    if (!cloud_ctl_post(&c)) return false;
+    s_cloud_paused = true;
+    for (int t = 0; s_mqtt_cloud && t < CLOUD_PAUSE_WAIT_MS; t += CLOUD_PAUSE_STEP_MS) vTaskDelay(pdMS_TO_TICKS(CLOUD_PAUSE_STEP_MS));
+    ESP_LOGI(TAG, "cloud en pause pendant la mise a jour (%s)", s_mqtt_cloud ? "arret en cours" : "arrete");
+    return true;
+}
+
+void mqtt_cloud_resume(void) {
+    if (!s_cloud_paused) return;
+    s_cloud_paused = false;
+    ESP_LOGI(TAG, "mise a jour non aboutie : le cloud reprend");
+    mqtt_cloud_request_start(s_pause_uri, s_pause_dev);
+}
+
+
 int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
     if (!cloud_uri || !*cloud_uri || !device_id || !*device_id) return -1;   /* vide => cloud désactivé */
     mqtt_cloud_stop();
@@ -848,6 +881,7 @@ int mqtt_cloud_start(const char *cloud_uri, const char *device_id) {
     snprintf(s_cloud_avail, sizeof(s_cloud_avail), "%s/status", s_cloud_base);
     static char s_curi[160];
     snprintf(s_curi, sizeof(s_curi), "%s", cloud_uri);
+    strlcpy(s_curi_saved, cloud_uri, sizeof(s_curi_saved));   /* pour reprendre apres une pause */
     esp_mqtt_client_config_t cfg = {
         .task.stack_size = MQTT_TASK_STACK,
         .outbox.limit = OUTBOX_BUDGET,   /* file interne d'esp-mqtt (QoS 1 en attente d'accuse) bornee aussi */

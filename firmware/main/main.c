@@ -140,7 +140,7 @@ static void publish_state(const char *last_cmd) {
 
 static void on_ota_pull(const char *url) {
     ESP_LOGI(TAG, "▶ OTA pull depuis %s", url);
-    ota_pull_from_url(url);
+    ota_pull_async(url);   /* hors de la tache du client MQTT (voir ota.c) */
 }
 /* ── Le cloud demarre APRES le MQTT local ──
  * Capture serie du 2026-11-16 sur l'ATOM : les deux clients partaient ensemble au demarrage. Pendant

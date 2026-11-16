@@ -2264,7 +2264,7 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     if (!strcmp(topic, "openprofalux/update/install")) {
         if (ota_latest_url()[0]) {
             ESP_LOGW(TAG, "HA -> installer MAJ %s : %s", ota_latest_version(), ota_latest_url());
-            ota_pull_from_url(ota_latest_url());   /* telecharge + reboot (retour auto si elle plante, voir ota.c) */
+            ota_pull_async(ota_latest_url());   /* telecharge + reboot, hors de la tache MQTT (voir ota.c) */
         } else {
             ESP_LOGW(TAG, "HA -> install demande mais aucune version GitHub connue");
         }

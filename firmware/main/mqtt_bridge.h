@@ -42,6 +42,10 @@ bool mqtt_cloud_request_forget(void);
 /* Oubli complet du cloud : annonce « oublie », arret, certificats et configuration effaces. Depuis
  * l'interface (POST /api/cloud/forget) ou sur ordre du portail (boitier retire de son compte). */
 void mqtt_cloud_forget_all(void);
+/* Mise a jour : met le cloud en pause (memoire), sans rien enregistrer ni annoncer ; true s'il tournait.
+ * mqtt_cloud_resume le relance si la mise a jour n'aboutit pas (apres un redemarrage, il repart seul). */
+bool mqtt_cloud_pause(void);
+void mqtt_cloud_resume(void);
 /* Nom donne au boitier sur le portail (cle NVS « cloud_name », cfg) : 60 caracteres UTF-8 au plus. */
 #define CLOUD_NAME_NVS_KEY "cloud_name"
 #define CLOUD_NAME_MAX     244   /* 60 caracteres de 4 octets au plus, et le zero final */

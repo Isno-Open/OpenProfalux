@@ -1040,24 +1040,14 @@ static esp_err_t h_ota_rollback(httpd_req_t *r) {
 }
 
 /* ── /api/ota/pull : telecharge + flashe une image depuis une URL HTTPS (release GitHub) ── */
-static void ota_pull_bg_task(void *arg) {
-    char *url = (char *)arg;
-    esp_err_t err = ota_pull_from_url(url);
-    if (err != ESP_OK) ESP_LOGE(TAG, "ota_pull_from_url(%s) KO: %s", url, esp_err_to_name(err));
-    free(url);
-    vTaskDelete(NULL);
-}
 static esp_err_t h_ota_pull(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     const char *url = j ? cJSON_GetStringValue(cJSON_GetObjectItem(j, "url")) : NULL;
-    char *dup = (url && !strncmp(url, "https://", 8)) ? strdup(url) : NULL;   /* HTTPS uniquement */
+    bool ok = url && !strncmp(url, "https://", 8) && ota_pull_async(url);   /* HTTPS uniquement */
     if (j) cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
-    if (dup && xTaskCreate(ota_pull_bg_task, "ota_pull", 8192, dup, 5, NULL) == pdPASS)
-        return httpd_resp_sendstr(r, "{\"ok\":1}");
-    free(dup);
-    return httpd_resp_sendstr(r, "{\"ok\":0}");
+    return httpd_resp_sendstr(r, ok ? "{\"ok\":1}" : "{\"ok\":0}");
 }
 
 /* ── /api/rx/calibrate : auto-calibrage du gain RX ──

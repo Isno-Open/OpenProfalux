@@ -11,6 +11,7 @@
 #include "esp_https_ota.h"
 #include "tls_pool.h"
 #include "memprobe.h"
+#include "mqtt_bridge.h"   /* pause du cloud pendant la mise a jour (memoire) */
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_system.h"
@@ -148,11 +149,12 @@ esp_err_t ota_upload_begin(size_t total_bytes)
     /* En essai, esp_ota_begin refuse toute ecriture (ESP_ERR_OTA_ROLLBACK_INVALID_STATE) :
      * qui envoie une mise a jour a montre que la version actuelle tourne, on la valide. */
     validate_if_on_trial("nouvelle mise a jour");
+    mqtt_cloud_pause();   /* ~25 Ko rendus : sinon l'envoi s'interrompait (voir mqtt_bridge.c) */
     previous_erased();   /* esp_ota_begin efface l'autre partition */
     update_partition = esp_ota_get_next_update_partition(NULL);
-    if (!update_partition) return ESP_FAIL;
+    if (!update_partition) { mqtt_cloud_resume(); return ESP_FAIL; }
     esp_err_t err = esp_ota_begin(update_partition, total_bytes, &update_handle);
-    if (err != ESP_OK) { ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err)); return err; }
+    if (err != ESP_OK) { ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err)); mqtt_cloud_resume(); return err; }
     xSemaphoreTake(ota_mutex, portMAX_DELAY);
     status.state = OTA_STATE_RECEIVING; status.total_bytes = total_bytes; status.written_bytes = 0;
     strncpy(status.message, "receiving", sizeof(status.message) - 1);
@@ -195,17 +197,38 @@ fail:
     status.state = OTA_STATE_FAILED;
     strncpy(status.message, esp_err_to_name(err), sizeof(status.message) - 1);
     xSemaphoreGive(ota_mutex);
+    mqtt_cloud_resume();
     return err;
 }
 
 esp_err_t ota_upload_abort(void)
 {
     esp_ota_abort(update_handle);
+    mqtt_cloud_resume();
     xSemaphoreTake(ota_mutex, portMAX_DELAY);
     status.state = OTA_STATE_IDLE;
     strncpy(status.message, "aborted", sizeof(status.message) - 1);
     xSemaphoreGive(ota_mutex);
     return ESP_OK;
+}
+
+/* Telechargement dans sa PROPRE tache : appele depuis un message MQTT, il tournait dans la tache du
+ * client ; mettre le cloud en pause (mqtt_cloud_pause) depuis la tache meme du client cloud l'aurait
+ * bloque (l'arret attend la fin de cette tache). */
+#define OTA_PULL_STACK 8192
+#define OTA_PULL_PRIO  5
+static void ota_pull_task(void *arg) {
+    char *url = (char *)arg;
+    esp_err_t err = ota_pull_from_url(url);
+    if (err != ESP_OK) ESP_LOGE(TAG, "ota_pull_from_url(%s) KO: %s", url, esp_err_to_name(err));
+    free(url);
+    vTaskDelete(NULL);
+}
+bool ota_pull_async(const char *url) {
+    char *dup = url ? strdup(url) : NULL;
+    if (dup && xTaskCreate(ota_pull_task, "ota_pull", OTA_PULL_STACK, dup, OTA_PULL_PRIO, NULL) == pdPASS) return true;
+    free(dup);
+    return false;
 }
 
 esp_err_t ota_pull_from_url(const char *url)
@@ -218,19 +241,20 @@ esp_err_t ota_pull_from_url(const char *url)
     esp_https_ota_config_t ota_cfg = { .http_config = &http_cfg };
     esp_https_ota_handle_t handle = NULL;
     validate_if_on_trial("nouvelle mise a jour");   /* comme ota_upload_begin */
+    mqtt_cloud_pause();   /* comme ota_upload_begin : la memoire du telechargement TLS */
     previous_erased();
     /* Tour de poignee de main (tls_pool.h), tenu tout le telechargement : en cas de succes, le
      * boitier redemarre ; chaque sortie en echec le rend. */
     bool turn = tls_turn_take(TLS_TURN_WAIT_MS);
     esp_err_t err = esp_https_ota_begin(&ota_cfg, &handle);
-    if (err != ESP_OK) { if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; return err; }
+    if (err != ESP_OK) { if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; mqtt_cloud_resume(); return err; }
     status.state = OTA_STATE_RECEIVING;
     status.total_bytes = esp_https_ota_get_image_size(handle);
     while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS)
         status.written_bytes = esp_https_ota_get_image_len_read(handle);
-    if (!esp_https_ota_is_complete_data_received(handle)) { esp_https_ota_abort(handle); if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; return err; }
+    if (!esp_https_ota_is_complete_data_received(handle)) { esp_https_ota_abort(handle); if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; mqtt_cloud_resume(); return err; }
     err = esp_https_ota_finish(handle);
-    if (err != ESP_OK) { if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; return err; }
+    if (err != ESP_OK) { if (turn) tls_turn_give(); status.state = OTA_STATE_FAILED; mqtt_cloud_resume(); return err; }
     status.state = OTA_STATE_REBOOTING;
     vTaskDelay(pdMS_TO_TICKS(3000));
     esp_restart();
