@@ -267,3 +267,8 @@ progress::-webkit-progress-value{background:var(--accent)}
 .ask{max-width:min(440px,calc(100vw - 32px));border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);padding:20px;box-shadow:var(--shadow)}
 .ask::backdrop{background:rgb(0 0 0 / .45)}
 .ask p{margin:0 0 16px;white-space:pre-line;line-height:1.45}
+
+/* Onglet Cloud : nom donne sur le portail, puis identifiant cloud en petit */
+.cloud-ident{display:flex;flex-direction:column;gap:2px;margin:-4px 0 12px 2px}
+.cloud-ident span{font-weight:650;font-size:1rem}
+.cloud-ident small{color:var(--muted);font-family:var(--mono);font-size:.74rem}

@@ -50,6 +50,8 @@ const BOX_ACTIONS = [UPDATE_INSTALL, ROLLBACK, LISTEN_ON, LISTEN_OFF] as const;
 export const BACKUP = { file: "backup", requestPath: "backup/get", requestPayload: "GET", dataPath: "backup/data" } as const;
 // Boitier retire de son compte sur le portail : ordre de s'oublier, retenu (firmware : CLOUD_FORGET_PATH).
 export const UNPAIR = { path: "cloud/forget", payload: "FORGET" } as const;
+// Nom donne au boitier sur le portail, retenu : affiche dans son onglet Cloud (firmware : CLOUD_NAME_PATH).
+export const BOX_NAME_PATH = "cloud/name";
 /** Etat de pile d'une telecommande (binary_sensor HA : ON = pile faible). */
 const BATTERY_LOW = "ON";
 
@@ -225,6 +227,7 @@ export const family: FamilyDecl = {
   boxFiles: [{ id: BACKUP.file, label: { fr: "Télécharger la sauvegarde", en: "Download the backup" }, type: BOX_FILE_TYPE.json }],
   requestFile: (_target, file) => (file === BACKUP.file ? { path: BACKUP.requestPath, payload: BACKUP.requestPayload } : null),
   unpair: () => ({ path: UNPAIR.path, payload: UNPAIR.payload }),
+  boxName: (_target, name) => ({ path: BOX_NAME_PATH, payload: name }),
   read,
   reorder,
   command,

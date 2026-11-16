@@ -102,6 +102,7 @@ bool cloud_apply_bundle(cJSON *b, char *dev, size_t dev_len) {
         nvs_set_str(h, "cloud_uri", brob);
         nvs_set_str(h, "cloud_dev", dev);
         nvs_set_u8(h, "cloud_on", 1);
+        nvs_erase_key(h, CLOUD_NAME_NVS_KEY);   /* nouvelle identite : le nom viendra du portail */
         nvs_commit(h); nvs_close(h);
     }
     mqtt_cloud_request_start(brob, dev);   /* hors du serveur web (voir mqtt_bridge.c) */

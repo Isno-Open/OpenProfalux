@@ -42,6 +42,9 @@ bool mqtt_cloud_request_forget(void);
 /* Oubli complet du cloud : annonce « oublie », arret, certificats et configuration effaces. Depuis
  * l'interface (POST /api/cloud/forget) ou sur ordre du portail (boitier retire de son compte). */
 void mqtt_cloud_forget_all(void);
+/* Nom donne au boitier sur le portail (cle NVS « cloud_name », cfg) : 60 caracteres UTF-8 au plus. */
+#define CLOUD_NAME_NVS_KEY "cloud_name"
+#define CLOUD_NAME_MAX     244   /* 60 caracteres de 4 octets au plus, et le zero final */
 /* Republie « online » sur les connexions etablies (battement : filet contre un ancien testament). */
 void mqtt_pub_presence(void);
 

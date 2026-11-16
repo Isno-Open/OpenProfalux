@@ -330,3 +330,7 @@ test("carte declaree : le target du firmware (releve reel du M5), pour la fiche 
 test("boitier retire du compte : ordre d'oubli sous cloud/forget, que le firmware ecoute", () => {
   assert.deepEqual(family.unpair?.({ box: BOX }), { path: "cloud/forget", payload: "FORGET" });
 });
+
+test("nom du boitier : transmis sous cloud/name, que le firmware affiche", () => {
+  assert.deepEqual(family.boxName?.({ box: BOX }, "Maison"), { path: "cloud/name", payload: "Maison" });
+});

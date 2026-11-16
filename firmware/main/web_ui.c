@@ -1816,11 +1816,12 @@ static esp_err_t h_report(httpd_req_t *r) {
 
 static esp_err_t h_cloud_status(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
-    char uri[160] = "", dev[40] = ""; uint8_t on = 1;
+    char uri[160] = "", dev[40] = "", name[CLOUD_NAME_MAX] = ""; uint8_t on = 1;
     nvs_handle_t h;
     if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
         size_t sz = sizeof uri; nvs_get_str(h, "cloud_uri", uri, &sz);
         sz = sizeof dev; nvs_get_str(h, "cloud_dev", dev, &sz);
+        sz = sizeof name; if (nvs_get_str(h, CLOUD_NAME_NVS_KEY, name, &sz) != ESP_OK) name[0] = 0;
         nvs_get_u8(h, "cloud_on", &on);
         nvs_close(h);
     }
@@ -1831,6 +1832,7 @@ static esp_err_t h_cloud_status(httpd_req_t *r) {
     cJSON_AddBoolToObject(o, "connected", mqtt_cloud_is_connected());
     cJSON_AddStringToObject(o, "server", uri);
     cJSON_AddStringToObject(o, "device_id", dev);
+    cJSON_AddStringToObject(o, "name", name);   /* nom sur le portail, vide tant qu'il ne l'a pas transmis */
     char *s = cJSON_PrintUnformatted(o); cJSON_Delete(o);
     httpd_resp_sendstr(r, s ? s : "{\"ok\":0}"); free(s);
     return ESP_OK;

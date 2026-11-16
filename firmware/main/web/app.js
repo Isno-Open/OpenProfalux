@@ -1660,9 +1660,14 @@ async function loadCloud() {
   const st = $('#cloud-status'); if (!st) return;
   const b = st.querySelector('b');
   if (!s.paired) { st.className = 'statline'; b.textContent = 'Non appairé'; }
-  else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud désactivé · ' + esc(s.device_id || ''); }
-  else if (s.connected) { st.className = 'statline ok'; b.textContent = 'Connecté · ' + esc(s.device_id || ''); }
-  else { st.className = 'statline bad'; b.textContent = 'Appairé, hors ligne · ' + esc(s.device_id || ''); }
+  else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud désactivé'; }
+  else if (s.connected) { st.className = 'statline ok'; b.textContent = 'Connecté au cloud ISNO'; }
+  else { st.className = 'statline bad'; b.textContent = 'Appairé, hors ligne'; }
+  /* textContent : le nom vient du portail, il n'est jamais interprete comme du HTML */
+  $('#cloud-ident').hidden = !s.paired;
+  $('#cloud-name').textContent = s.name || '';
+  $('#cloud-name').hidden = !s.name;
+  $('#cloud-devid').textContent = s.device_id ? 'identifiant cloud : ' + s.device_id : '';
   /* s.server est l'adresse du BROKER (mqtts://...) : ce champ attend celle du PORTAIL, on ne le
      preremplit donc pas avec (le boitier tentait sinon d'appeler le portail en mqtts) */
   $('#cloud-actions').hidden = !s.paired;
