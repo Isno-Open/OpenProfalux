@@ -265,6 +265,23 @@ jobs:
              -o enrol_gate_host_test
           ./enrol_gate_host_test
 
+  # Le garde-fou reseau (net_watch.c) : quand relancer le Wi-Fi, quand redemarrer, et jamais sur
+  # une passerelle qui n'a jamais repondu. Voir firmware/test/net-watch. Pur, un simple gcc suffit.
+  banc-net-watch:
+    name: Banc de test du garde-fou reseau
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: net_watch (gcc + AddressSanitizer)
+        working-directory: firmware/test/net-watch
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/net_watch.c \
+             -o net_watch_host_test
+          ./net_watch_host_test
+
   # Le retour automatique apres une mise a jour (ota_rollback.c) : ce que le firmware conclut
   # des etats OTA. Voir firmware/test/ota-rollback. Pur, un simple gcc suffit.
   banc-ota-rollback:

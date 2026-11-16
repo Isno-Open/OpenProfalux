@@ -10,6 +10,10 @@
 #include <esp_system.h>
 #include <nvs.h>
 #include "captive_dns.h"
+#include "net_watch.h"
+#include "ping/ping_sock.h"
+#include <freertos/semphr.h>
+#include <esp_attr.h>
 #include <time.h>
 #include <stdlib.h>
 #include <freertos/FreeRTOS.h>
@@ -74,11 +78,72 @@ static const char *reason_text(uint8_t r) {
 /* Watchdog WiFi : si la STA reste coupee, relance la pile toute seule (plus besoin de
  * debrancher). Demarre APRES la 1re connexion (pas en mode SoftAP-config). */
 static TaskHandle_t s_wdt = NULL;
+
+/* Garde-fou reseau (voir net_watch.h) : la passerelle repond-elle au ping ? */
+#define GW_PINGS          3
+#define GW_PING_GAP_MS    300
+#define GW_PING_WAIT_MS   1000
+#define NET_REBOOT_MAGIC  0x4E455457u   /* « NETW » : la memoire RTC est aleatoire a la mise sous tension */
+static RTC_NOINIT_ATTR uint32_t s_net_magic;
+static RTC_NOINIT_ATTR uint32_t s_net_reboots;
+static volatile int s_ping_ok;
+static SemaphoreHandle_t s_ping_done;
+static void ping_ok_cb(esp_ping_handle_t h, void *a)  { (void)h; (void)a; s_ping_ok++; }
+static void ping_end_cb(esp_ping_handle_t h, void *a) { (void)h; (void)a; xSemaphoreGive(s_ping_done); }
+
+unsigned wifi_bridge_net_reboots(void) { return s_net_magic == NET_REBOOT_MAGIC ? s_net_reboots : 0; }
+
+/* true si la passerelle a repondu a au moins un ping. Sans passerelle connue, ou sans memoire pour
+ * ouvrir la sonde, on rend true : ce n'est pas une preuve de panne, on ne redemarre pas la-dessus. */
+static bool gateway_answers(void) {
+    esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (!n || esp_netif_get_ip_info(n, &ip) != ESP_OK || ip.gw.addr == 0) return true;
+    if (!s_ping_done && !(s_ping_done = xSemaphoreCreateBinary())) return true;
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.target_addr.type = IPADDR_TYPE_V4;
+    cfg.target_addr.u_addr.ip4.addr = ip.gw.addr;
+    cfg.count = GW_PINGS; cfg.interval_ms = GW_PING_GAP_MS; cfg.timeout_ms = GW_PING_WAIT_MS;
+    esp_ping_callbacks_t cb = { .on_ping_success = ping_ok_cb, .on_ping_end = ping_end_cb };
+    esp_ping_handle_t h;
+    s_ping_ok = 0;
+    xSemaphoreTake(s_ping_done, 0);   /* fin d'une sonde precedente eventuellement restee */
+    if (esp_ping_new_session(&cfg, &cb, &h) != ESP_OK) return true;
+    esp_ping_start(h);
+    /* sonde qui ne finit pas dans le temps : le boitier est trop bloque pour la mener, c'est un echec */
+    xSemaphoreTake(s_ping_done, pdMS_TO_TICKS(GW_PINGS * (GW_PING_GAP_MS + GW_PING_WAIT_MS) + 2000));
+    esp_ping_stop(h);
+    esp_ping_delete_session(h);
+    return s_ping_ok > 0;
+}
+
 static void wifi_watchdog_task(void *arg) {
-    (void)arg; int down_s = 0;
+    (void)arg; int down_s = 0, probe_s = 0;
+    net_watch_t nw; nw_init(&nw);
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        if (wifi_bridge_is_connected()) { down_s = 0; continue; }
+        if (wifi_bridge_is_connected()) {
+            down_s = 0;
+            if ((probe_s += 10) < NW_PROBE_PERIOD_S) continue;
+            probe_s = 0;
+            switch (nw_probe(&nw, true, gateway_answers())) {
+                case NW_ACT_RESTART_WIFI:
+                    ESP_LOGW(TAG, "passerelle muette depuis %d s, Wi-Fi associe -> restart pile WiFi", nw.fails * NW_PROBE_PERIOD_S);
+                    esp_wifi_stop(); vTaskDelay(pdMS_TO_TICKS(500)); esp_wifi_start();
+                    esp_wifi_set_ps(WIFI_PS_NONE);
+                    break;
+                case NW_ACT_REBOOT:
+                    if (s_net_magic != NET_REBOOT_MAGIC) { s_net_magic = NET_REBOOT_MAGIC; s_net_reboots = 0; }
+                    s_net_reboots++;
+                    ESP_LOGE(TAG, "passerelle muette depuis %d s malgre la relance du Wi-Fi -> reboot de recuperation", nw.fails * NW_PROBE_PERIOD_S);
+                    esp_restart();
+                    break;
+                case NW_ACT_NONE: break;
+            }
+            continue;
+        }
+        nw_probe(&nw, false, false);   /* Wi-Fi coupe : affaire du garde-fou ci-dessous */
+        probe_s = 0;
         down_s += 10;
         if (down_s == 120) {   /* 2 min coupe -> relance propre de la pile (re-declenche STA_START->connect) */
             ESP_LOGW(TAG, "WiFi coupe depuis 2 min -> restart pile WiFi");

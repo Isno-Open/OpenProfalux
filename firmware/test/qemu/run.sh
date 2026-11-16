@@ -121,7 +121,7 @@ wait_web() { for _ in $(seq 1 120); do curl -s -m3 "$WEB/api/cloud/status" >/dev
              echo "ECHEC : interface web muette"; return 1; }
 wait_web
 
-echo ">> appairage cloud, broker local, puis redemarrage : les deux connexions partent ensemble"
+echo ">> appairage cloud, broker local, puis redemarrage : le local d abord, le cloud ensuite"
 curl -s -m120 -X POST "$WEB/api/cloud/pair" -H 'Content-Type: application/json' \
   -d "{\"code\":\"sim\",\"server\":\"http://$HOST_FROM_GUEST:$PORT_ENROLL\"}"; echo
 curl -s -m10 -X POST "$WEB/api/config" -H 'Content-Type: application/json' \

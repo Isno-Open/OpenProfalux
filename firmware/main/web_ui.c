@@ -1309,12 +1309,12 @@ static esp_err_t h_health(httpd_req_t *r) {
              "{\"reset\":%d,\"heap\":%u,\"heap_min\":%u,\"heap_blk\":%u,"
              "\"nvs_free\":%u,\"nvs_avail\":%u,\"nvs_total\":%u,\"nvs_used\":%u,\"nvs_ns\":%s,"
              "\"volets\":%d,\"volet_entries\":%u,"
-             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\",\"crash\":%s}",
+             "\"spiffs_used\":%u,\"spiffs_total\":%u,\"part\":\"%s\",\"version\":\"%s\",\"crash\":%s,\"net_reboots\":%u}",
              (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size(), (unsigned)esp_get_minimum_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
              (unsigned)nv.free_entries, (unsigned)nv.available_entries, (unsigned)nv.total_entries,
              (unsigned)nv.used_entries, ns, nvol, (unsigned)vent,
-             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version, crash);
+             (unsigned)sp_used, (unsigned)sp_total, run ? run->label : "?", esp_app_get_description()->version, crash, wifi_bridge_net_reboots());
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }

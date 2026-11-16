@@ -142,8 +142,39 @@ static void on_ota_pull(const char *url) {
     ESP_LOGI(TAG, "▶ OTA pull depuis %s", url);
     ota_pull_from_url(url);
 }
+/* ── Le cloud demarre APRES le MQTT local ──
+ * Capture serie du 2026-11-16 sur l'ATOM : les deux clients partaient ensemble au demarrage. Pendant
+ * que le cloud ouvrait sa liaison TLS, le MQTT LOCAL (TCP simple) restait bloque en ecriture 10 s et
+ * tombait, a la meme milliseconde que l'abandon du cloud : rien ne sortait plus du boitier. Le cloud
+ * attend donc que le local soit connecte et ait publie sa decouverte HA ; sans broker local joignable,
+ * il part quand meme au bout de CLOUD_DEFER_MAX_MS. */
+#define CLOUD_AFTER_LOCAL_MS 5000
+#define CLOUD_DEFER_MAX_MS   30000
+static bool s_cloud_deferred = false;   /* cloud voulu, pas encore lance */
+static esp_timer_handle_t s_cloud_defer_timer = NULL;
+static void cloud_defer_cb(void *arg) {
+    (void)arg;
+    if (!__atomic_exchange_n(&s_cloud_deferred, false, __ATOMIC_SEQ_CST)) return;   /* deja lance */
+    /* coupe ou oublie depuis l'interface pendant l'attente : la configuration enregistree fait foi */
+    uint8_t on = 0; char uri[sizeof(s_mqtt_cloud_uri)] = "", dev[sizeof(s_cloud_dev_id)] = ""; size_t ul = sizeof(uri), dl = sizeof(dev);
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_u8(h, "cloud_on", &on) != ESP_OK) on = 1;   /* absent = actif (comme au demarrage) */
+        if (nvs_get_str(h, "cloud_uri", uri, &ul) != ESP_OK) uri[0] = 0;
+        if (nvs_get_str(h, "cloud_dev", dev, &dl) != ESP_OK) dev[0] = 0;
+        nvs_close(h);
+    }
+    /* reappaire pendant l'attente (autre identite) : l'appairage a deja lance le cloud */
+    if (!on || strcmp(uri, s_mqtt_cloud_uri) || (dev[0] && strcmp(dev, s_cloud_dev_id))) { ESP_LOGI(TAG, "cloud : change pendant l'attente, demarrage annule"); return; }
+    mqtt_cloud_request_start(s_mqtt_cloud_uri, s_cloud_dev_id);   /* hors de la tache du timer (file dediee) */
+}
+
 static void on_mqtt_connected(void) {
     shutters_mqtt_announce(s_device_name);   /* publie la decouverte HA a la VRAIE connexion broker */
+    if (s_cloud_defer_timer && __atomic_load_n(&s_cloud_deferred, __ATOMIC_SEQ_CST)) {
+        esp_timer_stop(s_cloud_defer_timer);
+        esp_timer_start_once(s_cloud_defer_timer, (uint64_t)CLOUD_AFTER_LOCAL_MS * 1000);
+    }
 }
 
 /* ── Retour du Wi-Fi en mode secours (wifi_bridge_start_fallback) ──
@@ -208,6 +239,8 @@ void app_main(void) {
     { char ct[CRASH_JSON_MAX]; crash_trace_json(ct, sizeof(ct));
       if (esp_reset_reason() == ESP_RST_PANIC) ESP_LOGE(TAG, "redemarre apres un plantage : %s", ct);
       else if (strcmp(ct, "null")) ESP_LOGW(TAG, "dernier plantage garde : %s", ct); }
+    if (wifi_bridge_net_reboots() && esp_reset_reason() == ESP_RST_SW)
+        ESP_LOGW(TAG, "redemarre par le garde-fou reseau (passerelle muette) : %u fois depuis la mise sous tension", wifi_bridge_net_reboots());
 
     /* 1. NVS */
     esp_err_t err = nvs_flash_init();
@@ -410,7 +443,14 @@ void app_main(void) {
     }
     if (want_cloud) {   /* 2e connexion mTLS vers le broker ISNO, topics prefixes par le device_id */
         if (!s_cloud_dev_id[0]) strlcpy(s_cloud_dev_id, s_device_name, sizeof(s_cloud_dev_id));
-        mqtt_cloud_start(s_mqtt_cloud_uri, s_cloud_dev_id);
+        const esp_timer_create_args_t ta = { .callback = cloud_defer_cb, .name = "cloud_defer" };
+        if (want_local && esp_timer_create(&ta, &s_cloud_defer_timer) == ESP_OK) {
+            s_cloud_deferred = true;   /* AVANT le premier CONNECTED possible du local */
+            esp_timer_start_once(s_cloud_defer_timer, (uint64_t)CLOUD_DEFER_MAX_MS * 1000);
+            ESP_LOGI(TAG, "cloud : demarrage apres le MQTT local (au plus %d s)", CLOUD_DEFER_MAX_MS / 1000);
+        } else {
+            mqtt_cloud_start(s_mqtt_cloud_uri, s_cloud_dev_id);
+        }
     }
     memprobe("boot-mqtt");
 

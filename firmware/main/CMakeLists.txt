@@ -74,6 +74,7 @@ idf_component_register(
         "mdns_name.c"
         "captive_dns.c"
         "enrol_gate.c"
+        "net_watch.c"
         "freq_sweep.c"
         "rx_confirm.c"
         "pfx_keys.c"
@@ -108,6 +109,7 @@ idf_component_register(
         spiffs
         esp_wifi
         esp_netif
+        lwip
         esp_eth
         esp_event
         mqtt
