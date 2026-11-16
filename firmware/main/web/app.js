@@ -1660,7 +1660,7 @@ async function loadCloud() {
   const st = $('#cloud-status'); if (!st) return;
   const b = st.querySelector('b');
   if (!s.paired) { st.className = 'statline'; b.textContent = 'Non appairé'; }
-  else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud coupé · ' + esc(s.device_id || ''); }
+  else if (!s.enabled) { st.className = 'statline'; b.textContent = 'Appairé, cloud désactivé · ' + esc(s.device_id || ''); }
   else if (s.connected) { st.className = 'statline ok'; b.textContent = 'Connecté · ' + esc(s.device_id || ''); }
   else { st.className = 'statline bad'; b.textContent = 'Appairé, hors ligne · ' + esc(s.device_id || ''); }
   /* s.server est l'adresse du BROKER (mqtts://...) : ce champ attend celle du PORTAIL, on ne le
@@ -1669,7 +1669,7 @@ async function loadCloud() {
   /* deja appaire : pas de nouvel appairage par-dessus (« Oublier » d'abord) */
   $('#cloud-pairing').hidden = !!s.paired;
   if (s.paired) { grantStop(); $('#cloud-qr-wrap').hidden = true; }
-  const tg = $('#cloud-toggle'); tg.textContent = s.enabled ? 'Couper' : 'Activer'; tg.dataset.on = s.enabled ? '1' : '0';
+  const tg = $('#cloud-toggle'); tg.textContent = s.enabled ? 'Désactiver' : 'Activer'; tg.dataset.on = s.enabled ? '1' : '0';
 }
 $('#cloud-pair').onclick = async () => {
   const code = $('#cloud-code').value.trim(), server = $('#cloud-server').value.trim();

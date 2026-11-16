@@ -639,6 +639,9 @@ int mqtt_pub_system_status(void) {
  * sans copie : la seule memoire en jeu est le texte JSON, comme pour /api/backup. */
 #define BACKUP_GET_PATH  TOPIC_BASE "/backup/get"
 #define BACKUP_DATA_PATH TOPIC_BASE "/backup/data"
+/* Ordre du portail : le boitier a ete retire de son compte. Retenu (un boitier hors ligne le recoit a sa
+ * reconnexion) : on l'efface en l'executant. Meme chemin que le plugin (cloud-plugin, UNPAIR). */
+#define CLOUD_FORGET_PATH TOPIC_BASE "/cloud/forget"
 static void cloud_backup_reply(void) {
     if (!s_hdl.export_backup || !s_mqtt_cloud) return;
     char ct[192];
@@ -680,6 +683,7 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             snprintf(sub, sizeof(sub), "%s/remote/+/config", s_cloud_base);      esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/ignored/+/set", s_cloud_base);        esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);
             snprintf(sub, sizeof(sub), "%s/backup/get", s_cloud_base);           esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* sauvegarde (portail) */
+            snprintf(sub, sizeof(sub), "%s/cloud/forget", s_cloud_base);         esp_mqtt_client_subscribe(s_mqtt_cloud, sub, 1);   /* retire du compte (portail) */
             ESP_LOGI(TAG, "cloud connecté, base=%s", s_cloud_base);
             if (s_hdl.on_cloud_connected) s_hdl.on_cloud_connected();   /* -> republie description + etat */
             break;
@@ -699,6 +703,14 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
             if (!local_topic_from_cloud(evt->topic, evt->topic_len, s_cloud_base, lt, sizeof(lt))) break;
             /* une demande de sauvegarde retenue sur le broker se rejouerait a chaque connexion : ignoree */
             if (!strcmp(lt, BACKUP_GET_PATH)) { if (!evt->retain) cloud_backup_reply(); break; }
+            if (!strcmp(lt, CLOUD_FORGET_PATH)) {
+                if (evt->data_len <= 0) break;   /* notre propre effacement du retenu, qui revient */
+                ESP_LOGW(TAG, "retire du compte sur le portail : le cloud s'oublie");
+                char ct[128]; snprintf(ct, sizeof(ct), "%s/cloud/forget", s_cloud_base);
+                esp_mqtt_client_publish(s_mqtt_cloud, ct, "", 0, 1, 1);   /* efface l'ordre retenu (part avant l'annonce) */
+                mqtt_cloud_forget_all();
+                break;
+            }
             handle_incoming(lt, (int)strlen(lt), evt->data, evt->data_len);
             break;
         }
@@ -714,6 +726,16 @@ static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, vo
                 ESP_LOGE(TAG, "cloud MQTT error");
             break;
         default: break;
+    }
+}
+
+void mqtt_cloud_forget_all(void) {
+    mqtt_cloud_request_forget();   /* le client garde ses certificats en memoire : les effacer ici ne le gene pas */
+    mqtt_cert_write("cloud_ca", ""); mqtt_cert_write("cloud_cert", ""); mqtt_cert_write("cloud_key", "");
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, "cloud_uri"); nvs_erase_key(h, "cloud_dev"); nvs_erase_key(h, "cloud_on");
+        nvs_commit(h); nvs_close(h);
     }
 }
 

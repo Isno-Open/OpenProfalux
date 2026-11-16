@@ -48,6 +48,8 @@ const BOX_ACTIONS = [UPDATE_INSTALL, ROLLBACK, LISTEN_ON, LISTEN_OFF] as const;
 /** Sauvegarde du boitier, demandee par le portail (firmware mqtt_bridge.c, BACKUP_GET_PATH et
  *  BACKUP_DATA_PATH) : le boitier repond sur le cloud seulement, sans retenue. */
 export const BACKUP = { file: "backup", requestPath: "backup/get", requestPayload: "GET", dataPath: "backup/data" } as const;
+// Boitier retire de son compte sur le portail : ordre de s'oublier, retenu (firmware : CLOUD_FORGET_PATH).
+export const UNPAIR = { path: "cloud/forget", payload: "FORGET" } as const;
 /** Etat de pile d'une telecommande (binary_sensor HA : ON = pile faible). */
 const BATTERY_LOW = "ON";
 
@@ -222,6 +224,7 @@ export const family: FamilyDecl = {
   ],
   boxFiles: [{ id: BACKUP.file, label: { fr: "Télécharger la sauvegarde", en: "Download the backup" }, type: BOX_FILE_TYPE.json }],
   requestFile: (_target, file) => (file === BACKUP.file ? { path: BACKUP.requestPath, payload: BACKUP.requestPayload } : null),
+  unpair: () => ({ path: UNPAIR.path, payload: UNPAIR.payload }),
   read,
   reorder,
   command,

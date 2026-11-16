@@ -39,6 +39,9 @@ bool mqtt_cloud_request_start(const char *cloud_uri, const char *device_id);
 bool mqtt_cloud_request_stop(void);
 /* Comme stop, mais annonce « oublie » : le portail retire le boitier du compte (POST /api/cloud/forget). */
 bool mqtt_cloud_request_forget(void);
+/* Oubli complet du cloud : annonce « oublie », arret, certificats et configuration effaces. Depuis
+ * l'interface (POST /api/cloud/forget) ou sur ordre du portail (boitier retire de son compte). */
+void mqtt_cloud_forget_all(void);
 /* Republie « online » sur les connexions etablies (battement : filet contre un ancien testament). */
 void mqtt_pub_presence(void);
 
