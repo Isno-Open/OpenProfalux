@@ -1646,9 +1646,17 @@ async function runRxTest(idx, band, btn) {
 }
 loadDiag();
 /* ── Cloud (app.isno.fr) : appairage, statut, toggle, oubli ── */
+/* Appaire mais pas encore connecte (juste apres l'appairage, ou liaison tombee) : on relit l'etat
+   tant que l'onglet Cloud est affiche, sinon il restait « hors ligne » alors que le boitier s'etait
+   connecte quelques secondes plus tard (constate le 2026-11-16). */
+const CLOUD_RECHECK_MS = 4000;
+let cloudRecheck = null;
 async function loadCloud() {
+  if (cloudRecheck) { clearTimeout(cloudRecheck); cloudRecheck = null; }
   let s;
   try { s = await api('/api/cloud/status'); } catch (e) { return; }
+  if (s.paired && s.enabled && !s.connected)
+    cloudRecheck = setTimeout(() => { if (!document.hidden && (location.hash || '').includes('cloud')) loadCloud(); else cloudRecheck = null; }, CLOUD_RECHECK_MS);
   const st = $('#cloud-status'); if (!st) return;
   const b = st.querySelector('b');
   if (!s.paired) { st.className = 'statline'; b.textContent = 'Non appairé'; }
