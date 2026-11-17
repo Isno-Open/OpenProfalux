@@ -1843,13 +1843,17 @@ $('#ota-check').onclick = async () => {
     : cur === latest ? `✅ ${cur} = dernière version` : `✅ Installée ${cur}, dernière release ${latest}`;
   updateBadge(st);
 };
-/* "0.2.12" plus recente que "0.2.11" ? Comparaison numerique ; suffixe ("-dev") ignore. */
+/* "0.2.12" plus recente que "0.2.11" ? Comparaison numerique. A numeros egaux, une version de
+   test ("0.2.12-test9") est PLUS ANCIENNE que la version publiee ("0.2.12"), comme en semver :
+   sinon un testeur ne se voyait jamais proposer la release (revue de la PR #70). Deux suffixes
+   entre eux ne se comparent pas (pas d'ordre fiable entre deux builds de test). */
 function newerThan(a, b) {
   const p = v => ((String(v || '').replace(/^v/, '').match(/^\d+(?:\.\d+)*/) || [null])[0]);
   const x = p(a), y = p(b); if (!x || !y) return false;
   const xa = x.split('.').map(Number), ya = y.split('.').map(Number);
   for (let i = 0; i < Math.max(xa.length, ya.length); i++) { const d = (xa[i] || 0) - (ya[i] || 0); if (d) return d > 0; }
-  return false;
+  const hasSuffix = v => String(v || '').replace(/^v/, '').length > p(v).length;
+  return !hasSuffix(a) && hasSuffix(b);
 }
 /* Mise a jour disponible (verification GitHub faite par le boitier, toutes les 6 h) : pastille
  * sur l'onglet OTA, et dans l'onglet la ligne + le bouton d'installation, sans cliquer. */
