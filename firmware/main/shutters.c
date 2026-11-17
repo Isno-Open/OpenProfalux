@@ -807,7 +807,11 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
 
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
  * On integre juste la position ensuite ; l'arret se fait par do_stop (rafale STOP) au bon moment. */
-static void start_move(volet_t *v, int dir) {
+/* target : cible du mouvement (% de fermeture, 0 ou 100 pour une pleine course). Elle ne s'ecrit
+ * qu'une fois la rafale partie : ecrite avant, une commande qui echoue (code roulant non enregistre)
+ * changeait la cible d'un mouvement EN COURS, que la boucle de tick croyait alors atteinte, et le
+ * suivi s'arretait pendant que le moteur continuait (revue de la PR #131). */
+static void start_move(volet_t *v, int dir, int target) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     bool sent;
     if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
@@ -819,6 +823,7 @@ static void start_move(volet_t *v, int dir) {
         radio_pause_rx(false);
         return;
     }
+    v->target = target;
     v->dir = dir; v->own_move = true;
     v->last_tick_us = esp_timer_get_time();
     zone_follow(v, dir);
@@ -1110,8 +1115,8 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
             volet_t *m = find_volet(mid);
             if (!m || m == v || m->central) continue;
-            if      (!strcmp(cmd, "up"))   { m->target = 0;   start_move(m, +1); }
-            else if (!strcmp(cmd, "down")) { m->target = 100; start_move(m, -1); }
+            if      (!strcmp(cmd, "up"))   start_move(m, +1, 0);
+            else if (!strcmp(cmd, "down")) start_move(m, -1, 100);
             else if (!strcmp(cmd, "stop")) { do_stop(m); }
             publish_volet_state(m);
         }
@@ -1137,16 +1142,15 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         UNLOCK(); return -1;
     }
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
-    if (!strcmp(cmd, "up"))        { v->target = 0;   start_move(v, +1); }   /* ouvrir : monter vers 0 */
-    else if (!strcmp(cmd, "down")) { v->target = 100; start_move(v, -1); }   /* fermer : descendre vers 100 */
+    if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
+    else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
     else if (!strcmp(cmd, "stop")) { do_stop(v); }
     else if (!strcmp(cmd, "pos"))  {   /* value = % de fermeture voulu */
         if (value < 0) value = 0;
         if (value > 100) value = 100;
-        v->target = value;
-        if (value > v->position + 1)      start_move(v, -1);   /* plus ferme -> descendre */
-        else if (value < v->position - 1) start_move(v, +1);   /* plus ouvert -> monter */
-        else v->dir = 0;
+        if (value > v->position + 1)      start_move(v, -1, value);   /* plus ferme -> descendre */
+        else if (value < v->position - 1) start_move(v, +1, value);   /* plus ouvert -> monter */
+        else { v->target = value; v->dir = 0; }
     }
     publish_volet_state(v);
     UNLOCK();
