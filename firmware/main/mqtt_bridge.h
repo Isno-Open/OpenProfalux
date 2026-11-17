@@ -45,6 +45,10 @@ void mqtt_cloud_forget_all(void);
 /* Mise a jour : met le cloud en pause (memoire), sans rien enregistrer ni annoncer ; true s'il tournait.
  * mqtt_cloud_resume le relance si la mise a jour n'aboutit pas (apres un redemarrage, il repart seul). */
 bool mqtt_cloud_pause(void);
+/* Publie vers le cloud SEUL (topic local reecrit), si actif ; -1 sinon. */
+int mqtt_pub_cloud(const char *topic, const char *payload, int qos, int retain);
+/* Millisecondes depuis la derniere connexion du cloud ; UINT32_MAX si deconnecte ou jamais connecte. */
+uint32_t mqtt_cloud_connected_age_ms(void);
 void mqtt_cloud_resume(void);
 /* Nom donne au boitier sur le portail (cle NVS « cloud_name », cfg) : 60 caracteres UTF-8 au plus. */
 #define CLOUD_NAME_NVS_KEY "cloud_name"

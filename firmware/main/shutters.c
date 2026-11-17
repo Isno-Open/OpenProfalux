@@ -187,7 +187,13 @@ static void remote_remove(int i) {
  * mutuelle = deadlock (httpd/tick/commandes tous figes). On EMPILE le message sous
  * LOCK (malloc seulement, jamais bloquant) puis on PUBLIE apres le UNLOCK via
  * pub_flush(). Voir aussi shutters_on_rx (meme principe, deja applique). */
-typedef struct pubmsg { struct pubmsg *next; int qos, retain; char *topic; char *payload; } pubmsg_t;
+typedef struct pubmsg { struct pubmsg *next; int qos, retain; bool cloud_only; char *topic; char *payload; } pubmsg_t;
+/* Republication a la connexion du cloud : vers le cloud SEUL (le broker local a deja tout, retenu),
+ * et espacee. Mesure du 2026-11-16 sur l'ATOM (build memtrace) : tout publie d'un coup vers les deux
+ * brokers, pendant que le cloud deversait ses retenus, la memoire chutait de 14 a 20 Ko en une
+ * seconde (tampons Wi-Fi et dechiffrement TLS). Pose sous LOCK par shutters_cloud_resync. */
+static bool s_pub_cloud_only = false;
+#define CLOUD_RESYNC_GAP_MS 30   /* entre deux messages de la republication : les accuses suivent */
 static pubmsg_t *s_pub_head, *s_pub_tail;   /* file simple, touchee UNIQUEMENT sous LOCK */
 /* File BORNEE, comme celle de mqtt_bridge.c : un message retenu (etat, attributs, annonce) ne
  * vaut que par sa derniere valeur, il remplace donc celui du meme topic encore en attente ; le
@@ -208,6 +214,7 @@ static void pub_defer(const char *topic, const char *payload, int qos, int retai
             if (!p) { s_pub_dropped++; return; }
             s_pub_bytes = s_pub_bytes - strlen(e->payload) + strlen(p);
             free(e->payload); e->payload = p; e->qos = qos;
+            e->cloud_only = e->cloud_only && s_pub_cloud_only;   /* deja voulu en local : reste pour les deux */
             return;
         }
     }
@@ -215,7 +222,7 @@ static void pub_defer(const char *topic, const char *payload, int qos, int retai
     if (s_pub_bytes + need > PUB_DEFER_BUDGET) { s_pub_dropped++; return; }
     pubmsg_t *m = malloc(sizeof(*m));
     if (!m) { s_pub_dropped++; return; }
-    m->next = NULL; m->qos = qos; m->retain = retain;
+    m->next = NULL; m->qos = qos; m->retain = retain; m->cloud_only = s_pub_cloud_only;
     m->topic = strdup(topic); m->payload = strdup(payload);
     if (!m->topic || !m->payload) { free(m->topic); free(m->payload); free(m); s_pub_dropped++; return; }
     if (s_pub_tail) s_pub_tail->next = m; else s_pub_head = m;
@@ -230,7 +237,8 @@ static void pub_flush(void) {
     LOCK(); pubmsg_t *m = s_pub_head; s_pub_head = s_pub_tail = NULL; s_pub_bytes = 0; UNLOCK();
     while (m) {
         pubmsg_t *n = m->next;
-        mqtt_pub_raw(m->topic, m->payload, m->qos, m->retain);
+        if (m->cloud_only) { mqtt_pub_cloud(m->topic, m->payload, m->qos, m->retain); vTaskDelay(pdMS_TO_TICKS(CLOUD_RESYNC_GAP_MS)); }
+        else mqtt_pub_raw(m->topic, m->payload, m->qos, m->retain);
         free(m->topic); free(m->payload); free(m);
         m = n;
     }
@@ -2241,11 +2249,13 @@ void shutters_mqtt_announce(const char *device) {
  * qui ne bouge pas ne republie rien. On republie description et etat de chaque appareil. */
 void shutters_cloud_resync(void) {
     LOCK();
+    s_pub_cloud_only = true;   /* tout ce qui s'empile ici part vers le cloud seul, espace (voir pub_flush) */
     for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
     for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
     s_remotes_force = true; remotes_sync();                                      /* telecommandes connues et ignorees */
     publish_update_state();                                                      /* version installee / derniere */
     pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);    /* ecoute permanente (portail) */
+    s_pub_cloud_only = false;
     UNLOCK();
     pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
     ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s), version et ecoute republies", s_nvolets, s_nremotes);
@@ -2506,8 +2516,21 @@ bool shutters_get_update_auto(void)    { return s_upd_auto; }
 /* Tache NEE A LA DEMANDE : elle verifie, publie, puis se supprime et rend sa pile. Permanente,
  * elle tenait 6 Ko pour un travail de quelques secondes toutes les 6 h ; mesure le 2026-11-13
  * sur l'ATOM, la memoire manquait justement au Wi-Fi et a TLS (voir mqtt_bridge.c, file d'envoi). */
+/* Pas de verification GitHub dans la minute qui suit une connexion du cloud : sa session TLS (~14 Ko)
+ * s'ajoutait a la pointe de la connexion (republication, retenus du broker), et la memoire tombait a
+ * quelques octets (mesures du 2026-11-16 sur l'ATOM). Le tour TLS n'espacait que les poignees de main. */
+#define UPD_CLOUD_QUIET_MS 60000
+#define UPD_QUIET_STEP_MS  5000
+#define UPD_QUIET_MAX_MS   300000   /* un cloud qui se reconnecte sans cesse ne repousse pas la verification sans fin */
 static void update_check_task(void *arg) {
     (void)arg;
+    uint32_t age, waited = 0;
+    while (waited < UPD_QUIET_MAX_MS && (age = mqtt_cloud_connected_age_ms()) < UPD_CLOUD_QUIET_MS) {
+        uint32_t wait = UPD_CLOUD_QUIET_MS - age;
+        if (wait > UPD_QUIET_STEP_MS) wait = UPD_QUIET_STEP_MS;
+        vTaskDelay(pdMS_TO_TICKS(wait));
+        waited += wait;
+    }
     ota_check_github();
     if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
     /* Pile reellement consommee : UPD_STACK se regle sur ce releve (une ligne toutes les 6 h). */
