@@ -740,7 +740,14 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre. Un crash entre les
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
     v->virt_counter = cnt + 1;
-    save_cfg();
+    /* Reservation non ecrite (NVS pleine...) : on n'emet PAS. Emettre quand meme ferait avancer le
+     * moteur sur un compteur que le boitier aura oublie au prochain redemarrage, et il rejouerait
+     * alors des codes deja consommes, que le moteur ignore (revue de la PR #86). */
+    if (save_cfg() != ESP_OK) {
+        v->virt_counter = cnt;
+        ESP_LOGE(TAG, "TX VIRT annule : compteur non enregistre (flash pleine ?)");
+        return false;
+    }
     tx_params_t p = tx_params_of(v);
     radio_tx_device(bits, PRESS_REPEATS, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
@@ -753,13 +760,17 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
  * d'adresse (24 bits) et virt_counter de code roulant : memes champs que la telecommande
  * virtuelle Profalux, reinterpretes par protocole. Reserve-puis-emet comme Profalux : on
  * persiste le PROCHAIN code AVANT d'emettre (au pire un code saute, jamais un rejeu). */
-static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
+static bool somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     uint16_t code = v->virt_counter;
-    somfy_rts_remote_t r = { .address = v->virt_serial & 0xFFFFFF, .rolling_code = code };
+    somfy_rts_remote_t r = { .address = v->virt_serial & SOMFY_RTS_ADDR_MAX, .rolling_code = code };
     uint8_t frame[SOMFY_RTS_FRAME_BYTES];
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
-    save_cfg();
+    if (save_cfg() != ESP_OK) {   /* meme regle que emit_virt_profalux : pas d'emission sans reservation */
+        v->virt_counter = code;
+        ESP_LOGE(TAG, "TX SOMFY annule : code roulant non enregistre (flash pleine ?)");
+        return false;
+    }
     /* Format de trame PAR VOLET (fiche, issue #73) : 56 bits par defaut (rafale COURTE, comme la vraie
      * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
      * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
@@ -767,11 +778,11 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS, v->freq_khz);
     else                     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS, v->freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
-             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
+             (unsigned)(v->virt_serial & SOMFY_RTS_ADDR_MAX), cmd, (unsigned)code);
+    return true;
 }
 static bool emit_virt_somfy(volet_t *v, uint8_t button) {
-    somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
-    return true;
+    return somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
 }
 
 /* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
@@ -1107,10 +1118,10 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
             UNLOCK(); return -1;
         }
         radio_pause_rx(true);
-        somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
+        bool sent = somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
         radio_pause_rx(false);
         UNLOCK();
-        return 0;
+        return sent ? 0 : -1;
     }
     if (!strcmp(cmd, "pos") && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
