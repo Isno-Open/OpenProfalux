@@ -5,7 +5,7 @@ Une ligne = un retour vérifié. Chaque ligne porte la photo de la télécommand
 testeur l'a fournie.
 
 - **rejeu** : capturer une commande de la télécommande d'origine puis la réémettre.
-- **enrôlement** : créer une identité que le moteur apprend, pour piloter sans capturer.
+- **enrôlement** : créer une identité que le moteur apprend, après avoir capté une fois sa télécommande d'origine.
 
 Tableau bilingue : une cellule qui diffère entre les langues s'écrit « français // anglais ».
 Sur isno.fr, chaque article n'affiche que sa langue ; ici sur GitHub, les deux sont visibles.
