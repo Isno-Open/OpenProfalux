@@ -669,9 +669,20 @@ static int rfkey_cmp(const void *a, const void *b) {   /* t decroissant */
 }
 int shutters_rf_page(int offset, int limit, shutters_rf_item_t *out, int *nout) {
     *nout = 0;
-    rfkey_t *keys = malloc(s_rf_n * sizeof(rfkey_t));
-    if (!keys) return -1;
+    /* La capacite se relit SOUS LOCK : au premier battement, shutters_size_from_ram agrandit
+     * l'anneau. Lue avant, elle laissait la boucle ecrire au-dela de keys (revue de la PR #127).
+     * L'anneau ne fait que grandir, une seule fois : au pire un second tour. */
+    rfkey_t *keys = NULL;
+    int cap = 0;
     LOCK();
+    while (cap < s_rf_n) {
+        cap = s_rf_n;
+        UNLOCK();
+        free(keys);
+        keys = malloc((size_t)cap * sizeof(rfkey_t));
+        if (!keys) return -1;
+        LOCK();
+    }
     int n = 0;
     for (int k = 0; k < s_rf_n; k++) {
         int idx = (s_rfhead - 1 - k + 2 * s_rf_n) % s_rf_n;
@@ -2637,7 +2648,11 @@ void shutters_size_from_ram(void) {
     int n = (int)(ring_bytes / sizeof(rfrec_t));
     if (n > RF_RING_MAX) n = RF_RING_MAX;
     if (n < RF_RING_BOOT) n = RF_RING_BOOT;
-    size_t hops_budget = spare - (size_t)n * sizeof(rfrec_t);
+    /* n vaut au moins RF_RING_BOOT, meme quand spare n'y suffit pas : sans cette borne, la
+     * soustraction (non signee) bouclait et donnait aux sets de hops le MAXIMUM precisement quand
+     * la memoire manque (revue de la PR #127). */
+    size_t ring_used = (size_t)n * sizeof(rfrec_t);
+    size_t hops_budget = spare > ring_used ? spare - ring_used : 0;
     size_t per_remote = hops_budget / ((size_t)(s_nremotes + HOPS_SPARE_REMOTES) * sizeof(dframe_t));
     uint16_t cap = per_remote > SH_HOPS_MAX ? SH_HOPS_MAX : per_remote < SH_HOPS_MIN ? SH_HOPS_MIN : (uint16_t)per_remote;
 
