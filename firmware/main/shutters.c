@@ -1387,31 +1387,39 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
 /* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
  * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
-int shutters_create_virtual_somfy(const char *id, uint32_t address) {
-    if (!id || !*id) return -1;
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address) {
+    if (!id || !*id || !address || address > SOMFY_RTS_ADDR_MAX) return SH_SOMFY_INVALID;
+    if (strlen(id) >= SH_ID_LEN) return SH_SOMFY_NAME_TOO_LONG;
     /* Une adresse Somfy ne doit JAMAIS ressembler a une identite Profalux 0x067 valide. Sinon un
      * ancien firmware (d'avant le champ `proto`) qui restaure ce volet le prendrait pour un volet
      * virtuel Profalux et emettrait une vraie trame 0x067 sur 868, pouvant commander un moteur
      * Profalux du meme foyer mixte. On refuse ces adresses a la source : le cas devient impossible,
      * y compris sur les firmwares deja deployes. */
-    if (pfx_key_for_serial(address & 0xFFFFFF, NULL, NULL)) {
+    if (pfx_key_for_serial(address, NULL, NULL)) {
         ESP_LOGW(TAG, "volet Somfy '%s' refuse : adresse 0x%06X ressemble a une identite Profalux 0x067",
-                 id, (unsigned)(address & 0xFFFFFF));
-        return -1;
+                 id, (unsigned)address);
+        return SH_SOMFY_INVALID;
     }
     LOCK();
-    volet_t *v = get_or_create(id);
-    if (!v) { UNLOCK(); return -1; }
+    volet_t *v = find_volet(id);
+    if (v) {
+        bool same = v->virt && v->proto == VOLET_PROTO_SOMFY_RTS && v->virt_serial == address;
+        UNLOCK();
+        if (!same) ESP_LOGW(TAG, "volet Somfy '%s' refuse : nom deja pris", id);
+        return same ? SH_SOMFY_CREATED : SH_SOMFY_NAME_TAKEN;
+    }
+    v = get_or_create(id);
+    if (!v) { UNLOCK(); return SH_SOMFY_INVALID; }
     v->virt = true;
     v->proto = VOLET_PROTO_SOMFY_RTS;
-    v->virt_serial = address & 0xFFFFFF;
+    v->virt_serial = address;
     v->virt_counter = 1;
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)(address & 0xFFFFFF));
-    return 0;
+    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)address);
+    return SH_SOMFY_CREATED;
 }
 
 /* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
@@ -2036,7 +2044,7 @@ char *shutters_status_json(void) {
             char vhex[SH_SERIAL_LEN];
             /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
             snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
-                     (unsigned)(somfy ? (v->virt_serial & 0xFFFFFF) : v->virt_serial));
+                     (unsigned)(somfy ? (v->virt_serial & SOMFY_RTS_ADDR_MAX) : v->virt_serial));
             cJSON_AddStringToObject(o, "virt_serial", vhex);
         }
         if (v->central) cJSON_AddBoolToObject(o, "central", true);

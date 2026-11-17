@@ -47,7 +47,17 @@ int  shutters_learn_assign(const char *id, const char *action, const char *bits)
 /* Cree un volet "virtuel PFX" a partir d'une identite 0x067 enrolee (pilote par generation,
  * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
 int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
-int  shutters_create_virtual_somfy(const char *id, uint32_t address);   /* volet Somfy RTS (adresse 24 bits, pas de capture) */
+/* Volet Somfy RTS (adresse 24 bits, pas de capture). Un nom deja pris est refuse : le reprendre
+ * remettait le code roulant a 1 (le moteur appaire ignorait alors toutes les commandes) ou
+ * convertissait un volet Profalux en Somfy. Seule exception, le meme volet Somfy a la meme adresse
+ * (formulaire renvoye) : accepte tel quel, code roulant garde. */
+typedef enum {
+    SH_SOMFY_CREATED = 0,
+    SH_SOMFY_INVALID,          /* nom vide, adresse nulle ou hors 24 bits, adresse reservee, plus de place */
+    SH_SOMFY_NAME_TOO_LONG,    /* ne tiendrait pas dans SH_ID_LEN : il serait tronque */
+    SH_SOMFY_NAME_TAKEN,       /* un autre appareil porte deja ce nom */
+} sh_somfy_create_t;
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address);
 int  shutters_create_rejeu(const char *id, uint8_t type);                /* appareil a rejeu brut OOK (code fixe) */
 int  shutters_set_type(const char *id, uint8_t type);                    /* corrige le dev_type d'un appareil existant */
 int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
