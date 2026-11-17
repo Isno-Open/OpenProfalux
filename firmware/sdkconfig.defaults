@@ -67,3 +67,7 @@ CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC=y
 # les 2 s + verification GitHub + commandes STOP) : 2372 o jamais touches sur 4096. Les piles
 # des clients MQTT, elles, se reglent dans main/mqtt_bridge.c (MQTT_TASK_STACK).
 CONFIG_MDNS_TASK_STACK_SIZE=3072
+
+# Fermeture en attente (SO_LINGER) pour le serveur web : un fichier de l'interface n'est servi
+# qu'une fois le precedent parti, voir send_asset dans main/web_ui.c.
+CONFIG_LWIP_SO_LINGER=y

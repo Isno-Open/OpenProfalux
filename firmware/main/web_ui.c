@@ -277,7 +277,17 @@ static esp_err_t send_asset(httpd_req_t *r, const char *type, const uint8_t *s, 
     }
     httpd_resp_set_type(r, type);
     if (gz) httpd_resp_set_hdr(r, "Content-Encoding", "gzip");
-    return httpd_resp_send(r, (const char *)s, e - s);
+    /* Un fichier envoye ferme sa connexion, et la fermeture attend que les donnees soient
+     * parties (enable_so_linger, web_ui_start). Sans cela, httpd_resp_send rend la main des que
+     * la reponse est DEPOSEE dans le tampon d'envoi TCP, et le serveur remplit aussitot celui de
+     * la connexion suivante : un navigateur qui charge l'interface en ouvre 6, et plusieurs
+     * tampons pleins (jusqu'a CONFIG_LWIP_TCP_SND_BUF_DEFAULT chacun, plus les tampons Wi-Fi
+     * d'emission) coexistaient. Mesure du 2026-11-17 sur l'ATOM, cloud actif : les memes
+     * fichiers creusaient le libre de 5 Ko demandes un par un, de 10 Ko demandes six a la fois. */
+    httpd_resp_set_hdr(r, "Connection", "close");
+    esp_err_t err = httpd_resp_send(r, (const char *)s, e - s);
+    httpd_sess_trigger_close(r->handle, httpd_req_to_sockfd(r));
+    return err;
 }
 static char *read_body_max(httpd_req_t *r, int max) {
     int len = r->content_len;
@@ -1977,6 +1987,12 @@ void web_ui_start(void) {
 #error "CONFIG_LWIP_MAX_SOCKETS trop bas : il faut au moins 2 sessions web en plus des sockets reserves"
 #endif
     cfg.max_open_sockets = CONFIG_LWIP_MAX_SOCKETS - RESERVED_SOCKETS;
+    /* Fermeture qui attend que les donnees envoyees soient accusees (voir send_asset) : le
+     * serveur ne sert la requete suivante qu'une fois le tampon d'envoi vide. Borne a
+     * WEB_LINGER_S : un client parti ne bloque pas le serveur plus longtemps. */
+#define WEB_LINGER_S 5
+    cfg.enable_so_linger = true;
+    cfg.linger_timeout = WEB_LINGER_S;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t s = NULL;
     if (httpd_start(&s, &cfg) != ESP_OK) { ESP_LOGE(TAG, "httpd start KO"); return; }

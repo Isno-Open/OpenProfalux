@@ -93,9 +93,22 @@ static void ping_end_cb(esp_ping_handle_t h, void *a) { (void)h; (void)a; xSemap
 
 unsigned wifi_bridge_net_reboots(void) { return s_net_magic == NET_REBOOT_MAGIC ? s_net_reboots : 0; }
 
+/* Dernier echange abouti avec un broker (wifi_bridge_note_traffic). Une sonde de ping cree sa
+ * tache et son socket, ~2,7 Ko : trace figee au creux du 2026-11-17 sur l'ATOM, elle s'ajoutait a
+ * un creux de 7 Ko sans aucune interface ouverte. Quand un broker vient de repondre, la pile
+ * reseau du boitier n'est pas bloquee, et c'est ce que le garde-fou veut savoir : le ping
+ * n'apprend rien de plus. Le silence, lui, se verifie toujours par le ping : un broker arrete ne fait
+ * jamais redemarrer le boitier. */
+static volatile int64_t s_traffic_us = INT64_MIN / 2;
+void wifi_bridge_note_traffic(void) { s_traffic_us = esp_timer_get_time(); }
+static bool traffic_recent(void) {
+    return esp_timer_get_time() - s_traffic_us < (int64_t)NW_PROBE_PERIOD_S * 1000000;
+}
+
 /* true si la passerelle a repondu a au moins un ping. Sans passerelle connue, ou sans memoire pour
  * ouvrir la sonde, on rend true : ce n'est pas une preuve de panne, on ne redemarre pas la-dessus. */
 static bool gateway_answers(void) {
+    if (traffic_recent()) return true;
     esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t ip;
     if (!n || esp_netif_get_ip_info(n, &ip) != ESP_OK || ip.gw.addr == 0) return true;
