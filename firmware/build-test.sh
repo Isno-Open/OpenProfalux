@@ -31,6 +31,11 @@ BASE="$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' CMakeLists.txt | head -1 | tr -d '"'
 NEXT="$(python3 -c "v='$BASE'.split('.'); v[-1]=str(int(v[-1])+1); print('.'.join(v))")"
 FULL="${NEXT}-${LABEL}"
 export OPF_VERSION="$FULL"
+# Commit construit, lu ICI (hors conteneur) : la pre-release doit pointer sur lui. Sans --target,
+# gh cree le tag sur la branche par defaut, et le tag ne designait pas la source des binaires
+# construits depuis une branche de test (revue de la PR #70). Vide hors depot git.
+OPF_COMMIT="${OPF_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)}"
+export OPF_COMMIT
 
 # Deux facons d'executer, pour la meme sortie : un environnement ESP-IDF v6.1 actif, ou a
 # defaut le conteneur officiel (meme version que la CI). OPF_VERSION est passe au conteneur.
@@ -38,7 +43,7 @@ if ! command -v idf.py >/dev/null; then
   [ "${ISNO_NO_DOCKER:-0}" = "1" ] && { echo "idf.py absent et docker interdit"; exit 1; }
   command -v docker >/dev/null || { echo "ni idf.py ni docker : active l'environnement ESP-IDF v6.1"; exit 1; }
   echo ">> idf.py absent, on passe par ${IDF_IMAGE:-espressif/idf:v6.1}"
-  exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_VERSION="$FULL" \
+  exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_VERSION="$FULL" -e OPF_COMMIT="$OPF_COMMIT" \
     -e OPF_SDKCONFIG_EXTRA="${OPF_SDKCONFIG_EXTRA:-}" \
     -v "$(cd .. && pwd)":/project -w /project/firmware \
     "${IDF_IMAGE:-espressif/idf:v6.1}" bash build-test.sh "$@"
@@ -80,8 +85,11 @@ for f in "${BOARDS[@]}"; do
   echo "   app=$(stat -c%s "$REL/openprofalux-$board-$LABEL.bin") o  full=$(stat -c%s "$REL/openprofalux-$board-$LABEL-full.bin") o"
 done
 
-echo "== binaires de test produits (version $FULL) =="; ls -la "$REL"/*.bin | awk '{print $5, $NF}'
+# Seulement les binaires de CE label : release-test garde ceux des labels precedents, et un joker
+# large les publiait tous dans la nouvelle pre-release (revue de la PR #70).
+MINE="$REL/openprofalux-*-$LABEL.bin $REL/openprofalux-*-$LABEL-full.bin"
+echo "== binaires de test produits (version $FULL) =="; ls -la $MINE | awk '{print $5, $NF}'
 echo "Publier en pre-release (exclue de /releases/latest, donc pas d'OTA auto) :"
 echo "  gh auth switch --user Shad107"
-echo "  gh release create v$FULL --prerelease --title v$FULL --notes 'build de test' $REL/openprofalux-*.bin"
-echo "  # ou, si la pre-release existe deja : gh release upload v$FULL $REL/openprofalux-*.bin --clobber"
+echo "  gh release create v$FULL --prerelease --title v$FULL --notes 'build de test' ${OPF_COMMIT:+--target $OPF_COMMIT} $MINE"
+echo "  # ou, si la pre-release existe deja : gh release upload v$FULL $MINE --clobber"

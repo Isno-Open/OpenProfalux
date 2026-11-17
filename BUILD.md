@@ -59,7 +59,7 @@ version `<prochaine release>-<label>` (ex. `0.2.12-test9`), affichée au boot et
 l'en-tête de l'UI.
 
 ```bash
-./build-test.sh test9
+./firmware/build-test.sh test9
 ```
 
 Produit dans `firmware/release-test/` : `openprofalux-<carte>-test9.bin` (app seule, pour

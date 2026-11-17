@@ -34,5 +34,6 @@ firmware-capture-test/main/*.o
 # Sorties de firmware/build-release.sh
 firmware/build-*/
 firmware/release/
+firmware/release-test/
 firmware/sdkconfig.devkit
 dist/
