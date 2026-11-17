@@ -33,8 +33,18 @@ typedef struct {
     bool wifi_restarted;   /* la relance du Wi-Fi a deja ete tentee pour cette panne */
 } net_watch_t;
 
+/* Ce que la sonde a appris de la passerelle. Trois cas, pas deux : un broker qui vient de repondre
+ * prouve que le reseau marche, mais PAS que la passerelle repond au ping. Le confondre avec une
+ * reponse armait le garde-fou sur un reseau qui filtre l'ICMP, et le premier silence des brokers
+ * le faisait ensuite relancer le Wi-Fi puis redemarrer (revue de la PR #129). */
+typedef enum {
+    NW_GW_SILENT = 0,   /* sondee, aucune reponse */
+    NW_GW_ANSWERED,     /* sondee, au moins une reponse : arme le garde-fou */
+    NW_GW_SKIPPED,      /* pas sondee (trafic recent d'un broker, ou ping impossible) : reseau
+                           presume sain, compteur remis a zero, garde-fou NI arme NI desarme */
+} nw_gateway_t;
+
 void nw_init(net_watch_t *w);
 /* Resultat d'une sonde. associated : le Wi-Fi se dit associe (sinon c'est l'affaire du garde-fou
- * Wi-Fi, qui relance et redemarre de son cote : on remet a zero). gateway_ok : la passerelle a
- * repondu a au moins un ping. */
-net_watch_action_t nw_probe(net_watch_t *w, bool associated, bool gateway_ok);
+ * Wi-Fi, qui relance et redemarre de son cote : on remet a zero). */
+net_watch_action_t nw_probe(net_watch_t *w, bool associated, nw_gateway_t gateway);

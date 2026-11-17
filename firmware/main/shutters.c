@@ -669,9 +669,20 @@ static int rfkey_cmp(const void *a, const void *b) {   /* t decroissant */
 }
 int shutters_rf_page(int offset, int limit, shutters_rf_item_t *out, int *nout) {
     *nout = 0;
-    rfkey_t *keys = malloc(s_rf_n * sizeof(rfkey_t));
-    if (!keys) return -1;
+    /* La capacite se relit SOUS LOCK : au premier battement, shutters_size_from_ram agrandit
+     * l'anneau. Lue avant, elle laissait la boucle ecrire au-dela de keys (revue de la PR #127).
+     * L'anneau ne fait que grandir, une seule fois : au pire un second tour. */
+    rfkey_t *keys = NULL;
+    int cap = 0;
     LOCK();
+    while (cap < s_rf_n) {
+        cap = s_rf_n;
+        UNLOCK();
+        free(keys);
+        keys = malloc((size_t)cap * sizeof(rfkey_t));
+        if (!keys) return -1;
+        LOCK();
+    }
     int n = 0;
     for (int k = 0; k < s_rf_n; k++) {
         int idx = (s_rfhead - 1 - k + 2 * s_rf_n) % s_rf_n;
@@ -1241,12 +1252,15 @@ static void remotes_sync(void) {
     }
 }
 
+static void bulk_spawn(void);   /* (defini plus bas) : annonces et republication demandees */
+
 /* ── Tache : suivi position + streaming du maintien ── */
 static void tick_task(void *arg) {
     (void)arg;
     int save_ticks = 0, remotes_ticks = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+        bulk_spawn();     /* demande restee en attente faute de memoire : reessai (non bloquant) */
         LOCK();
         int64_t now = esp_timer_get_time();
         for (int i = 0; i < s_nvolets; i++) {
@@ -2234,16 +2248,52 @@ static void announce_update(void) {
     publish_update_state();
 }
 
+/* Publications EN MASSE (decouverte HA, republication vers le cloud) : un appareil par lot, chaque
+ * lot vide hors LOCK (pub_flush) avant le suivant. Tout empile d'un coup depassait PUB_DEFER_BUDGET
+ * des une douzaine de volets : 24 volets aux noms courts perdaient 15 annonces, a chaque connexion,
+ * sans reessai (revue de la PR #124). Un lot = un appareil, toujours tres en dessous du budget.
+ * L'index est relu sous LOCK a chaque tour : la liste peut changer entre deux lots. */
+typedef void (*bulk_fn)(int i);
+static void announce_volet_at(int i) { announce_one(&s_volets[i]); }
+static void announce_batt_at(int i)  { if (s_remotes[i].name[0]) announce_batt(&s_remotes[i]); }   /* pile des telecommandes nommees */
+static void resync_volet_at(int i)   { publish_volet_state(&s_volets[i]); }
+static void resync_batt_at(int i)    { publish_batt_state(&s_remotes[i]); }
+static void pub_bulk(const int *count, bulk_fn fn, bool cloud_only) {
+    for (int i = 0;; i++) {
+        LOCK();
+        bool more = i < *count;
+        if (more) { s_pub_cloud_only = cloud_only; fn(i); s_pub_cloud_only = false; }
+        UNLOCK();
+        if (!more) return;
+        pub_flush();
+    }
+}
+
+/* Les deux rappels de connexion (local et cloud) tournent dans la tache esp-mqtt, qui tient le
+ * verrou de son client : la tache d'envoi (mqtt_bridge.c) ne peut rien publier avant leur retour.
+ * Publier ici en masse remplissait la file d'envoi (6 Ko), puis attendait et perdait le reste, en
+ * bloquant la connexion (revue de la PR #130). Les rappels posent donc une DEMANDE, traitee par une
+ * tache a part (bulk_task), pendant que l'envoi vide la file au fil des lots. */
+static volatile bool s_announce_pending = false;
+static volatile bool s_resync_pending = false;
+
 void shutters_mqtt_announce(const char *device) {
     LOCK();
     strlcpy(s_device, (device && *device) ? device : "op", sizeof(s_device));
     s_mqtt_ready = true;
-    for (int i = 0; i < s_nvolets; i++) announce_one(&s_volets[i]);
+    UNLOCK();
+    s_announce_pending = true;   /* -> announce_all, dans sh_bulk */
+    bulk_spawn();
+}
+
+static void announce_all(void) {
+    LOCK();
     announce_extras();           /* switch "Ecoute RF permanente" + capteur "Derniere trame" */
     announce_update();           /* entite update HA (firmware) */
-    for (int i = 0; i < s_nremotes; i++) if (s_remotes[i].name[0]) announce_batt(&s_remotes[i]);   /* pile des telecommandes nommees */
     UNLOCK();
     pub_flush();                 /* publie la decouverte HORS LOCK (anti-deadlock a la connexion) */
+    pub_bulk(&s_nvolets, announce_volet_at, false);
+    pub_bulk(&s_nremotes, announce_batt_at, false);
     /* NB : plus de flush en masse du ring ici. Les frames/log/<slot> sont QoS1 RETAINED
      * (le broker les garde deja) + persistees en SPIFFS ; re-pousser tout le ring (jusqu'a
      * 1000 QoS1) SOUS LOCK dans la tache MQTT tenait le LOCK trop longtemps -> httpd/commandes
@@ -2253,18 +2303,74 @@ void shutters_mqtt_announce(const char *device) {
 
 /* Connexion cloud (re)etablie : le portail n'a rien vu de ce qui s'est passe avant, et un appareil
  * qui ne bouge pas ne republie rien. On republie description et etat de chaque appareil. */
-void shutters_cloud_resync(void) {
+void shutters_cloud_resync(void) { s_resync_pending = true; bulk_spawn(); }   /* -> resync_all, dans sh_bulk */
+
+static void resync_all(void) {
+    /* tout part vers le cloud seul, espace (voir pub_flush), par lots (voir pub_bulk) */
+    pub_bulk(&s_nvolets, resync_volet_at, true);
+    pub_bulk(&s_nremotes, resync_batt_at, true);                                 /* pile des telecommandes */
     LOCK();
-    s_pub_cloud_only = true;   /* tout ce qui s'empile ici part vers le cloud seul, espace (voir pub_flush) */
-    for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
-    for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
+    s_pub_cloud_only = true;
     s_remotes_force = true; remotes_sync();                                      /* telecommandes connues et ignorees */
+    s_pub_cloud_only = false;
+    UNLOCK();
+    pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
+    LOCK();
+    s_pub_cloud_only = true;
     publish_update_state();                                                      /* version installee / derniere */
     pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);    /* ecoute permanente (portail) */
     s_pub_cloud_only = false;
     UNLOCK();
-    pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
+    pub_flush();
     ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s), version et ecoute republies", s_nvolets, s_nremotes);
+}
+
+/* Tache NEE A LA DEMANDE pour les publications en masse, comme sh_upd : ni la tache esp-mqtt (son
+ * verrou bloque l'envoi, voir s_announce_pending), ni tick_task, qui arrete les volets envoyes vers
+ * une position intermediaire : la republication vers le cloud attend 30 ms par message (plus de 2 s
+ * pour 24 volets), et le volet aurait depasse sa cible pendant ce temps (revue de la PR #130).
+ * Elle traite les demandes jusqu'a ce qu'il n'y en ait plus, puis se supprime et rend sa pile. */
+#define BULK_STACK 2560   /* 1552 o mesures sur l'ATOM le 2026-11-17 (2 volets, 8 telecommandes), + 1 Ko */
+static TaskHandle_t s_bulk_task = NULL;   /* non NULL = la tache tourne ou va tourner */
+static portMUX_TYPE s_bulk_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void bulk_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        if (s_announce_pending) { s_announce_pending = false; announce_all(); }
+        if (s_resync_pending)   { s_resync_pending = false; resync_all(); }
+        /* fin decidee sous la meme section que la creation : une demande posee entre-temps
+         * trouve soit cette tache encore la (elle boucle), soit la place libre (nouvelle tache) */
+        taskENTER_CRITICAL(&s_bulk_mux);
+        bool more = s_announce_pending || s_resync_pending;
+        if (!more) s_bulk_task = NULL;
+        taskEXIT_CRITICAL(&s_bulk_mux);
+        if (!more) break;
+    }
+    ESP_LOGI(TAG, "publications en masse : pile %u/%u o utilises", (unsigned)(BULK_STACK - uxTaskGetStackHighWaterMark(NULL)),
+             (unsigned)BULK_STACK);
+    vTaskDelete(NULL);
+}
+
+/* Lance la tache si une demande attend et qu'aucune ne tourne. Sans memoire, la demande reste
+ * posee : tick_task rappelle cette fonction a chaque tour, la publication part des que possible. */
+static void bulk_spawn(void) {
+    if (!s_announce_pending && !s_resync_pending) return;
+    taskENTER_CRITICAL(&s_bulk_mux);
+    bool busy = s_bulk_task != NULL;
+    if (!busy) s_bulk_task = (TaskHandle_t)1;   /* reserve la place avant de creer, hors section */
+    taskEXIT_CRITICAL(&s_bulk_mux);
+    if (busy) return;
+    TaskHandle_t t = NULL;
+    if (xTaskCreate(bulk_task, "sh_bulk", BULK_STACK, NULL, 4, &t) != pdPASS) {
+        taskENTER_CRITICAL(&s_bulk_mux);
+        s_bulk_task = NULL;
+        taskEXIT_CRITICAL(&s_bulk_mux);
+        return;
+    }
+    taskENTER_CRITICAL(&s_bulk_mux);
+    if (s_bulk_task == (TaskHandle_t)1) s_bulk_task = t;   /* deja finie : elle a remis NULL */
+    taskEXIT_CRITICAL(&s_bulk_mux);
 }
 
 void shutters_mqtt_lost(void) {
@@ -2528,15 +2634,18 @@ bool shutters_get_update_auto(void)    { return s_upd_auto; }
 #define UPD_CLOUD_QUIET_MS 60000
 #define UPD_QUIET_STEP_MS  5000
 #define UPD_QUIET_MAX_MS   300000   /* un cloud qui se reconnecte sans cesse ne repousse pas la verification sans fin */
+static volatile bool s_upd_waiting = false;   /* la verification attend la fin de la pointe du cloud */
 static void update_check_task(void *arg) {
     (void)arg;
     uint32_t age, waited = 0;
     while (waited < UPD_QUIET_MAX_MS && (age = mqtt_cloud_connected_age_ms()) < UPD_CLOUD_QUIET_MS) {
+        s_upd_waiting = true;
         uint32_t wait = UPD_CLOUD_QUIET_MS - age;
         if (wait > UPD_QUIET_STEP_MS) wait = UPD_QUIET_STEP_MS;
         vTaskDelay(pdMS_TO_TICKS(wait));
         waited += wait;
     }
+    s_upd_waiting = false;
     ota_check_github();
     if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
     /* Pile reellement consommee : UPD_STACK se regle sur ce releve (une ligne toutes les 6 h). */
@@ -2571,6 +2680,8 @@ static bool update_check_spawn(void) {
 }
 
 void shutters_update_check_now(void) { update_check_spawn(); }
+bool shutters_update_checking(void) { return s_upd_task != NULL; }
+bool shutters_update_waiting(void)  { return s_upd_waiting; }
 
 /* Echeances : la premiere 30 s apres le demarrage, puis toutes les 6 h. */
 static void update_timer_cb(void *arg) {
@@ -2632,7 +2743,11 @@ void shutters_size_from_ram(void) {
     int n = (int)(ring_bytes / sizeof(rfrec_t));
     if (n > RF_RING_MAX) n = RF_RING_MAX;
     if (n < RF_RING_BOOT) n = RF_RING_BOOT;
-    size_t hops_budget = spare - (size_t)n * sizeof(rfrec_t);
+    /* n vaut au moins RF_RING_BOOT, meme quand spare n'y suffit pas : sans cette borne, la
+     * soustraction (non signee) bouclait et donnait aux sets de hops le MAXIMUM precisement quand
+     * la memoire manque (revue de la PR #127). */
+    size_t ring_used = (size_t)n * sizeof(rfrec_t);
+    size_t hops_budget = spare > ring_used ? spare - ring_used : 0;
     size_t per_remote = hops_budget / ((size_t)(s_nremotes + HOPS_SPARE_REMOTES) * sizeof(dframe_t));
     uint16_t cap = per_remote > SH_HOPS_MAX ? SH_HOPS_MAX : per_remote < SH_HOPS_MIN ? SH_HOPS_MIN : (uint16_t)per_remote;
 
