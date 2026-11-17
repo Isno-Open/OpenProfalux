@@ -27,6 +27,13 @@ static char s_uri[160];
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 
+/* Evenements qui demandent une reponse du broker : le reseau marche (garde-fou, wifi_bridge). */
+static bool mqtt_event_proves_network(esp_mqtt_event_id_t id) {
+    return id == MQTT_EVENT_CONNECTED || id == MQTT_EVENT_DATA || id == MQTT_EVENT_PUBLISHED
+        || id == MQTT_EVENT_SUBSCRIBED;
+}
+
+
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_mqtt = NULL;
 static mqtt_handlers_t          s_hdl = {0};
@@ -329,6 +336,7 @@ void mqtt_pub_presence(void) {
 static void mqtt_event_cb(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
     (void)arg; (void)base;
     esp_mqtt_event_handle_t evt = event_data;
+    if (mqtt_event_proves_network(evt->event_id)) wifi_bridge_note_traffic();
     switch (evt->event_id) {
         case MQTT_EVENT_BEFORE_CONNECT:
             memprobe("local-avant-connexion");
@@ -673,6 +681,7 @@ static void cloud_backup_reply(void) {
 static void mqtt_cloud_event_cb(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
     (void)arg; (void)base; (void)id;
     esp_mqtt_event_handle_t evt = event_data;
+    if (mqtt_event_proves_network(evt->event_id)) wifi_bridge_note_traffic();
     switch (evt->event_id) {
         case MQTT_EVENT_BEFORE_CONNECT:
             memprobe("cloud-avant-connexion");
