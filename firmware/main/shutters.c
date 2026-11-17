@@ -2245,16 +2245,37 @@ static void announce_update(void) {
     publish_update_state();
 }
 
+/* Publications EN MASSE (decouverte HA, republication vers le cloud) : un appareil par lot, chaque
+ * lot vide hors LOCK (pub_flush) avant le suivant. Tout empile d'un coup depassait PUB_DEFER_BUDGET
+ * des une douzaine de volets : 24 volets aux noms courts perdaient 15 annonces, a chaque connexion,
+ * sans reessai (revue de la PR #124). Un lot = un appareil, toujours tres en dessous du budget.
+ * L'index est relu sous LOCK a chaque tour : la liste peut changer entre deux lots. */
+typedef void (*bulk_fn)(int i);
+static void announce_volet_at(int i) { announce_one(&s_volets[i]); }
+static void announce_batt_at(int i)  { if (s_remotes[i].name[0]) announce_batt(&s_remotes[i]); }   /* pile des telecommandes nommees */
+static void resync_volet_at(int i)   { publish_volet_state(&s_volets[i]); }
+static void resync_batt_at(int i)    { publish_batt_state(&s_remotes[i]); }
+static void pub_bulk(const int *count, bulk_fn fn, bool cloud_only) {
+    for (int i = 0;; i++) {
+        LOCK();
+        bool more = i < *count;
+        if (more) { s_pub_cloud_only = cloud_only; fn(i); s_pub_cloud_only = false; }
+        UNLOCK();
+        if (!more) return;
+        pub_flush();
+    }
+}
+
 void shutters_mqtt_announce(const char *device) {
     LOCK();
     strlcpy(s_device, (device && *device) ? device : "op", sizeof(s_device));
     s_mqtt_ready = true;
-    for (int i = 0; i < s_nvolets; i++) announce_one(&s_volets[i]);
     announce_extras();           /* switch "Ecoute RF permanente" + capteur "Derniere trame" */
     announce_update();           /* entite update HA (firmware) */
-    for (int i = 0; i < s_nremotes; i++) if (s_remotes[i].name[0]) announce_batt(&s_remotes[i]);   /* pile des telecommandes nommees */
     UNLOCK();
     pub_flush();                 /* publie la decouverte HORS LOCK (anti-deadlock a la connexion) */
+    pub_bulk(&s_nvolets, announce_volet_at, false);
+    pub_bulk(&s_nremotes, announce_batt_at, false);
     /* NB : plus de flush en masse du ring ici. Les frames/log/<slot> sont QoS1 RETAINED
      * (le broker les garde deja) + persistees en SPIFFS ; re-pousser tout le ring (jusqu'a
      * 1000 QoS1) SOUS LOCK dans la tache MQTT tenait le LOCK trop longtemps -> httpd/commandes
@@ -2265,16 +2286,22 @@ void shutters_mqtt_announce(const char *device) {
 /* Connexion cloud (re)etablie : le portail n'a rien vu de ce qui s'est passe avant, et un appareil
  * qui ne bouge pas ne republie rien. On republie description et etat de chaque appareil. */
 void shutters_cloud_resync(void) {
+    /* tout part vers le cloud seul, espace (voir pub_flush), par lots (voir pub_bulk) */
+    pub_bulk(&s_nvolets, resync_volet_at, true);
+    pub_bulk(&s_nremotes, resync_batt_at, true);                                 /* pile des telecommandes */
     LOCK();
-    s_pub_cloud_only = true;   /* tout ce qui s'empile ici part vers le cloud seul, espace (voir pub_flush) */
-    for (int i = 0; i < s_nvolets; i++) publish_volet_state(&s_volets[i]);
-    for (int i = 0; i < s_nremotes; i++) publish_batt_state(&s_remotes[i]);   /* pile des telecommandes */
+    s_pub_cloud_only = true;
     s_remotes_force = true; remotes_sync();                                      /* telecommandes connues et ignorees */
+    s_pub_cloud_only = false;
+    UNLOCK();
+    pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
+    LOCK();
+    s_pub_cloud_only = true;
     publish_update_state();                                                      /* version installee / derniere */
     pub_defer("openprofalux/listen/state", s_log_frames ? "ON" : "OFF", 0, 1);    /* ecoute permanente (portail) */
     s_pub_cloud_only = false;
     UNLOCK();
-    pub_flush();                 /* hors LOCK (anti-deadlock), comme a la connexion locale */
+    pub_flush();
     ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s), version et ecoute republies", s_nvolets, s_nremotes);
 }
 
