@@ -839,10 +839,12 @@ static void do_stop(volet_t *v) {
          * de figer une position qu'il a deja depassee (revue de la PR #131). */
         v->target = v->dir > 0 ? 0 : 100; v->own_move = false;
         ESP_LOGE(TAG, "volet '%s' : STOP non emis, suivi jusqu'a la butee", v->id);
+        /* Pas de zone_follow : les suiveurs d'une zone obeissent a SA trame, qui n'est pas partie.
+         * Ils continuent donc eux aussi jusqu'a leur butee, et gardent leur suivi en cours. */
     } else {
         v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
+        zone_follow(v, 0);
     }
-    zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
