@@ -131,6 +131,12 @@ bool shutters_get_update_auto(void);
 /* Demande une verification tout de suite, en tache de fond (ne bloque pas l'appelant).
  * Fin observable par ota_check_count(). */
 void shutters_update_check_now(void);
+/* Une verification tourne (attente comprise). Une demande peut attendre jusqu'a quelques minutes
+ * qu'une connexion du cloud retombe (memoire) : l'interface suit ces deux etats au lieu de
+ * conclure a une panne d'Internet au bout d'un delai fixe. */
+bool shutters_update_checking(void);
+/* La verification attend la fin de la pointe de connexion du cloud, GitHub pas encore interroge. */
+bool shutters_update_waiting(void);
 
 /* ── Sauvegarde / restauration ── */
 /* Exporte toute la config (telecommandes + noms + trames de reference + calibration) en

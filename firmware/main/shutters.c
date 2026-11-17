@@ -2528,15 +2528,18 @@ bool shutters_get_update_auto(void)    { return s_upd_auto; }
 #define UPD_CLOUD_QUIET_MS 60000
 #define UPD_QUIET_STEP_MS  5000
 #define UPD_QUIET_MAX_MS   300000   /* un cloud qui se reconnecte sans cesse ne repousse pas la verification sans fin */
+static volatile bool s_upd_waiting = false;   /* la verification attend la fin de la pointe du cloud */
 static void update_check_task(void *arg) {
     (void)arg;
     uint32_t age, waited = 0;
     while (waited < UPD_QUIET_MAX_MS && (age = mqtt_cloud_connected_age_ms()) < UPD_CLOUD_QUIET_MS) {
+        s_upd_waiting = true;
         uint32_t wait = UPD_CLOUD_QUIET_MS - age;
         if (wait > UPD_QUIET_STEP_MS) wait = UPD_QUIET_STEP_MS;
         vTaskDelay(pdMS_TO_TICKS(wait));
         waited += wait;
     }
+    s_upd_waiting = false;
     ota_check_github();
     if (s_mqtt_ready) { publish_update_state(); pub_flush(); }
     /* Pile reellement consommee : UPD_STACK se regle sur ce releve (une ligne toutes les 6 h). */
@@ -2571,6 +2574,8 @@ static bool update_check_spawn(void) {
 }
 
 void shutters_update_check_now(void) { update_check_spawn(); }
+bool shutters_update_checking(void) { return s_upd_task != NULL; }
+bool shutters_update_waiting(void)  { return s_upd_waiting; }
 
 /* Echeances : la premiere 30 s apres le demarrage, puis toutes les 6 h. */
 static void update_timer_cb(void *arg) {

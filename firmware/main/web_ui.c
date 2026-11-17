@@ -984,16 +984,18 @@ static esp_err_t h_ota_check(httpd_req_t *r) {
 static esp_err_t h_ota_status(httpd_req_t *r) {
     ota_status_t st; ota_get_status(&st);
     ota_rb_info_t rb; ota_rb_info(&rb);
-    char out[768];   /* message[128] + version[64] + target + derniere version + son URL[192] + version ecartee[32] + JSON */
+    char out[832];   /* message[128] + version[64] + target + derniere version + son URL[192] + versions ecartee et precedente[2x32] + JSON (~250 o de clefs) */
     /* latest / latest_url / checks : resultat de la derniere verification GitHub faite PAR LE
      * BOITIER (automatique ou demandee par /api/ota/check) ; checks avance a chaque fin.
+     * checking / check_waiting : une verification tourne, et attend encore le cloud (shutters.h).
      * img / rb_auto / annulee : retour automatique (ota_rollback.h). */
     snprintf(out, sizeof(out), "{\"state\":%d,\"total\":%u,\"written\":%u,\"msg\":\"%s\",\"version\":\"%s\",\"target\":\"" TARGET_NAME "\","
-             "\"latest\":\"%s\",\"latest_url\":\"%s\",\"checks\":%u,"
+             "\"latest\":\"%s\",\"latest_url\":\"%s\",\"checks\":%u,\"checking\":%d,\"check_waiting\":%d,"
              "\"img\":\"%s\",\"rb_auto\":%d,\"annulee\":\"%s\",\"annulee_auto\":%d,"
              "\"rb_possible\":%d,\"precedente\":\"%s\"}",
              st.state, (unsigned)st.total_bytes, (unsigned)st.written_bytes, st.message, st.active_version,
              ota_latest_version(), ota_latest_url(), (unsigned)ota_check_count(),
+             shutters_update_checking() ? 1 : 0, shutters_update_waiting() ? 1 : 0,
              rb.on_trial ? "essai" : "validee", rb.rb_auto, rb.discarded, rb.discarded_auto ? 1 : 0,
              rb.rb_possible ? 1 : 0, rb.previous);
     httpd_resp_set_type(r, "application/json");

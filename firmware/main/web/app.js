@@ -1807,14 +1807,22 @@ $('#ota-check').onclick = async () => {
   const span = $('#ota-latest'); span.textContent = '⏳ Le boîtier interroge GitHub…'; $('#ota-github').hidden = true;
   const r = await api('/api/ota/check', { method: 'POST' }).catch(() => null);
   if (!r || !r.ok) { span.textContent = '❌ Le boîtier ne répond pas'; return; }
-  let st = null;
-  for (let i = 0; i < 25; i++) {   /* ~25 s max : la requete GitHub a 10 s de delai */
+  /* Le boitier dit lui-meme ou il en est (checking, check_waiting) : juste apres une connexion du
+     cloud, il attend jusqu'a quelques minutes avant d'interroger GitHub (memoire). Un delai fixe
+     cote page concluait alors a une panne d'Internet sur un boitier sain (revue de la PR #129).
+     Seul le silence du boitier lui-meme, quelques interrogations de suite, met fin a l'attente. */
+  const SILENT_MAX = 5;
+  let st = null, silent = 0;
+  while (silent < SILENT_MAX) {
     await new Promise(res => setTimeout(res, 1000));
-    st = await api('/api/ota/status').catch(() => null);
-    if (st && st.checks > r.checks) break;
-    st = null;
+    const s = await api('/api/ota/status').catch(() => null);
+    if (!s) { silent++; continue; }
+    silent = 0;
+    if (s.checks > r.checks) { st = s; break; }
+    if (!s.checking) break;   /* finie sans avancer le compteur : pas de resultat a lire */
+    span.textContent = s.check_waiting ? '⏳ Le boîtier attend la fin de la connexion du cloud…' : '⏳ Le boîtier interroge GitHub…';
   }
-  if (!st) { span.textContent = '❌ Pas de réponse de GitHub (Internet ?)'; return; }
+  if (!st) { span.textContent = silent ? '❌ Le boîtier ne répond plus' : '❌ Pas de réponse de GitHub (Internet ?)'; return; }
   const latest = (st.latest || '').replace(/^v/, '');
   if (!latest) { span.textContent = '❌ Le boîtier n\'a pas pu lire la dernière version (Internet ? limite de l\'API GitHub ?)'; return; }
   const cur = (st.version || '').replace(/^v/, '');
