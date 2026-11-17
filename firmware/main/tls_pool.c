@@ -22,6 +22,12 @@ static uint8_t *s_base = NULL;          /* zone reservee, NULL = pas de reserve 
 static size_t s_size = 0;
 static multi_heap_handle_t s_heap = NULL;
 static volatile uint32_t s_spills = 0;
+/* Verrou du tas de la reserve. Un tas enregistre par multi_heap_register n'en a AUCUN (NULL dans
+ * ESP-IDF v6.1, cf multi_heap_set_lock) : or une session mqtts etablie lit et ecrit (donc alloue et
+ * libere) pendant qu'une autre tache (verification GitHub, OTA) fait sa poignee de main. Le tour de
+ * poignee de main ne serialise que les poignees de main. Sans verrou, deux taches modifiaient les
+ * metadonnees du tas en meme temps (revue de la PR #127). Meme type que celui d'ESP-IDF. */
+static portMUX_TYPE s_heap_lock = portMUX_INITIALIZER_UNLOCKED;
 
 
 static bool in_pool(const void *p) {
@@ -33,7 +39,7 @@ static void *tls_calloc(size_t n, size_t size) {
     if (n && size > SIZE_MAX / n) return NULL;   /* n*size deborde : refus, comme calloc */
     size_t bytes = n * size;
     if (s_heap) {
-        void *p = multi_heap_malloc(s_heap, bytes);   /* multi_heap a son propre verrou */
+        void *p = multi_heap_malloc(s_heap, bytes);   /* sous s_heap_lock (tls_pool_init) */
         if (p) { memset(p, 0, bytes); return p; }
         s_spills++;
     }
@@ -55,6 +61,7 @@ void tls_pool_init(size_t bytes) {
     if (!base) { ESP_LOGE(TAG, "reserve de %u o impossible : TLS dans la memoire generale", (unsigned)bytes); return; }
     multi_heap_handle_t h = multi_heap_register(base, bytes);
     if (!h) { heap_caps_free(base); ESP_LOGE(TAG, "reserve non initialisee"); return; }
+    multi_heap_set_lock(h, &s_heap_lock);   /* AVANT de publier le tas : voir s_heap_lock */
     s_base = base; s_size = bytes; s_heap = h;
     /* A partir d'ici, toute allocation de mbedTLS passe par la reserve. */
     if (mbedtls_platform_set_calloc_free(tls_calloc, tls_free) != 0) {
