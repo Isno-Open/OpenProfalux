@@ -184,7 +184,12 @@ int radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t
     uint32_t back = cc1101_get_freq_khz();
     int r = cc1101_set_freq_khz(freq_khz);
     if (r == 0) r = cc1101_tx_ook_pulses(levels, us, n);
-    cc1101_set_freq_khz(back);   /* retablit la porteuse de cette radio, quoi qu'il arrive */
+    /* retablit la porteuse de cette radio, quoi qu'il arrive. Un echec n'est plus avale : la radio
+     * resterait a freq_khz alors que l'emission se disait reussie (revue de la PR #86). */
+    if (cc1101_set_freq_khz(back) != 0) {
+        ESP_LOGE(TAG, "radio %d : porteuse %u kHz non retablie apres l'emission OOK", idx, (unsigned)back);
+        r = -1;
+    }
     cc1101_select(prev);         /* rend la main a la radio primaire (868) */
     xSemaphoreGive(s_mtx);
     s_paused = was;
