@@ -44,6 +44,7 @@
 
 static const char *TAG = "shutters";
 #define TICK_MS 150
+#define TICK_STACK 4096   /* tick_task, publications en masse comprises (relevee par bulk_pending) */
 #define SH_HOPS_MAX 1024   /* plafond du set de hops distincts par serial (12 Ko/serial) */
 #define SH_HOPS_MIN   32   /* plancher : de quoi reconnaitre une telecommande meme a court de RAM */
 
@@ -1252,12 +1253,15 @@ static void remotes_sync(void) {
     }
 }
 
+static void bulk_pending(void);   /* (defini plus bas) : annonces et republication demandees */
+
 /* ── Tache : suivi position + streaming du maintien ── */
 static void tick_task(void *arg) {
     (void)arg;
     int save_ticks = 0, remotes_ticks = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
+        bulk_pending();   /* annonces HA et republication cloud demandees a la connexion */
         LOCK();
         int64_t now = esp_timer_get_time();
         for (int i = 0; i < s_nvolets; i++) {
@@ -2266,10 +2270,24 @@ static void pub_bulk(const int *count, bulk_fn fn, bool cloud_only) {
     }
 }
 
+/* Les deux rappels de connexion (local et cloud) tournent dans la tache esp-mqtt, qui tient le
+ * verrou de son client : la tache d'envoi (mqtt_bridge.c) ne peut rien publier avant leur retour.
+ * Publier ici en masse remplissait la file d'envoi (6 Ko), puis attendait et perdait le reste, en
+ * bloquant la connexion (revue de la PR #130). Les rappels posent donc une DEMANDE, et tick_task la
+ * traite hors de la tache esp-mqtt, pendant que l'envoi vide la file au fil des lots. */
+static volatile bool s_announce_pending = false;
+static volatile bool s_resync_pending = false;
+
 void shutters_mqtt_announce(const char *device) {
     LOCK();
     strlcpy(s_device, (device && *device) ? device : "op", sizeof(s_device));
     s_mqtt_ready = true;
+    UNLOCK();
+    s_announce_pending = true;   /* -> announce_all, dans tick_task */
+}
+
+static void announce_all(void) {
+    LOCK();
     announce_extras();           /* switch "Ecoute RF permanente" + capteur "Derniere trame" */
     announce_update();           /* entite update HA (firmware) */
     UNLOCK();
@@ -2285,7 +2303,9 @@ void shutters_mqtt_announce(const char *device) {
 
 /* Connexion cloud (re)etablie : le portail n'a rien vu de ce qui s'est passe avant, et un appareil
  * qui ne bouge pas ne republie rien. On republie description et etat de chaque appareil. */
-void shutters_cloud_resync(void) {
+void shutters_cloud_resync(void) { s_resync_pending = true; }   /* -> resync_all, dans tick_task */
+
+static void resync_all(void) {
     /* tout part vers le cloud seul, espace (voir pub_flush), par lots (voir pub_bulk) */
     pub_bulk(&s_nvolets, resync_volet_at, true);
     pub_bulk(&s_nremotes, resync_batt_at, true);                                 /* pile des telecommandes */
@@ -2303,6 +2323,17 @@ void shutters_cloud_resync(void) {
     UNLOCK();
     pub_flush();
     ESP_LOGI(TAG, "cloud : etat de %d appareil(s), %d telecommande(s), version et ecoute republies", s_nvolets, s_nremotes);
+}
+
+/* Demandes posees par les rappels de connexion (voir s_announce_pending). Appele par tick_task,
+ * hors LOCK. La pile reellement consommee est relevee a chaque fois : TICK_STACK s'y regle. */
+static void bulk_pending(void) {
+    bool a = s_announce_pending, c = s_resync_pending;
+    if (!a && !c) return;
+    if (a) { s_announce_pending = false; announce_all(); }
+    if (c) { s_resync_pending = false; resync_all(); }
+    ESP_LOGI(TAG, "publications en masse : pile %u/%u o utilises", (unsigned)(TICK_STACK - uxTaskGetStackHighWaterMark(NULL)),
+             (unsigned)TICK_STACK);
 }
 
 void shutters_mqtt_lost(void) {
@@ -2736,7 +2767,7 @@ void shutters_init(void) {
     s_rf_n = s_rf ? RF_RING_BOOT : 0;
     ignore_load();
     purge_ghost_remotes_once();   /* une fois : fantomes d'avant la confirmation des trames (#39) */
-    xTaskCreate(tick_task, "sh_tick", 4096, NULL, 5, NULL);
+    xTaskCreate(tick_task, "sh_tick", TICK_STACK, NULL, 5, NULL);
     {   /* check GitHub -> entite update HA : minuterie, la tache nait a chaque echeance */
         const esp_timer_create_args_t ta = { .callback = update_timer_cb, .name = "sh_upd" };
         if (esp_timer_create(&ta, &s_upd_timer) == ESP_OK) esp_timer_start_once(s_upd_timer, UPD_FIRST_US);
