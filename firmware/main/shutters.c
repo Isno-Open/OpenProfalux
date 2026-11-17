@@ -824,10 +824,19 @@ static void start_move(volet_t *v, int dir) {
     zone_follow(v, dir);
 }
 static void do_stop(volet_t *v) {
-    v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
-    if (v->virt) emit_virt(v, PFX_BTN_STOP);
+    bool sent = true;
+    if (v->virt) sent = emit_virt(v, PFX_BTN_STOP);
     else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
     else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
+    if (!sent && v->dir) {
+        /* STOP non emis (code roulant non enregistre, voir emit_virt_profalux) : le moteur continue
+         * jusqu'a sa butee. On l'y suit, comme un mouvement lance par la vraie telecommande, au lieu
+         * de figer une position qu'il a deja depassee (revue de la PR #131). */
+        v->target = v->dir > 0 ? 0 : 100; v->own_move = false;
+        ESP_LOGE(TAG, "volet '%s' : STOP non emis, suivi jusqu'a la butee", v->id);
+    } else {
+        v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
+    }
     zone_follow(v, 0);
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
 }
