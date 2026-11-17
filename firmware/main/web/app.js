@@ -635,20 +635,21 @@ function renderLearnSlots() {
     return;
   }
   /* Somfy RTS : rien a capturer. La capture ne decode que le KeeLoq, et un volet Somfy se pilote
-     par son adresse et son code roulant (revue de la PR #86). */
-  if (v && v.virt && v.proto === VOLET_PROTO.somfy) {
-    box.innerHTML = `<div class="statline ok"><span class="dot"></span><b>Volet Somfy RTS (télécommande virtuelle).</b> Il est piloté par son adresse et son code roulant : pas de télécommande à capturer.</div>`;
-    return;
-  }
+     par son adresse et son code roulant (revue de la PR #86). Pas de retour anticipe : la suite
+     rafraichit aussi les reglages propres au volet (orientation, zone, numero), qui garderaient
+     sinon ceux du volet precedent (revue de la PR #131). */
+  const somfy = !!(v && v.virt && v.proto === VOLET_PROTO.somfy);
   const cmd = (v && v.cmd) || {};
   /* Volet enrôlé : piloté par génération, le clonage n'est pas nécessaire. On autorise
    * quand même d'apprendre ici sa VRAIE télécommande d'origine, uniquement pour SUIVRE
    * la position (le pilotage reste par génération, ces trames ne sont pas rejouées). */
-  const virtNote = (v && v.virt)
+  const virtNote = somfy
+    ? `<div class="statline ok"><span class="dot"></span><b>Volet Somfy RTS (télécommande virtuelle).</b> Il est piloté par son adresse et son code roulant : pas de télécommande à capturer.</div>`
+    : (v && v.virt)
     ? `<div class="statline ok"><span class="dot"></span><b>Volet enrôlé (télécommande virtuelle).</b> Il est piloté par génération, pas besoin de cloner. En option, apprends ci-dessous sa <b>télécommande d'origine</b> : le boîtier suivra alors la position quand tu l'utilises.</div>`
     : '';
   box.innerHTML = virtNote;
-  const ACTS = captureActions();      // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique)
+  const ACTS = somfy ? [] : captureActions();   // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique) ; Somfy : aucune
   const rejeu = isRejeuContext();     // rejeu brut (CAME, code fixe) vs clone KeeLoq décodé
   for (const A of ACTS) {
     const c = rejeu ? null : cmd[A.a];
@@ -707,6 +708,8 @@ function renderLearnSlots() {
   const hint = $('#learn-hint');
   if (hint) hint.textContent = !id
     ? 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.'
+    : somfy
+      ? `Volet Somfy « ${id} » : rien à capturer, il se pilote depuis l'onglet Volets.`
     : (v && v.virt)
       ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie sur sa télécommande d'origine en tenant le bouton une seconde (< 1 m du boîtier). Facultatif.`
       : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
