@@ -6,6 +6,9 @@
 #include "cfg_model.h"   /* tx_override_t (TXOVR_*) : tri-etat des options d'emission par appareil */
 #include "pfx_enrol.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
+#include "somfy_rts.h"  /* SOMFY_RTS_ADDR_MAX */
+#include <ctype.h>
+#include <errno.h>
 #include "enrol_gate.h"
 #include "radio.h"
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
@@ -1549,25 +1552,52 @@ static esp_err_t h_followers(httpd_req_t *r) {
 /* Cree un volet Somfy RTS : {id, address} -> adresse 24 bits (chaine "0x..." / decimale, ou
  * nombre). Pas de capture d'identite (contrairement au Profalux) : on choisit l'adresse, puis
  * on appaire depuis l'UI (commande "prog"). */
+/* Adresse Somfy lue EN ENTIER : une chaine (hexa "0x..." ou decimale) sans reste ni signe, ou un
+ * nombre entier, et dans 1..SOMFY_RTS_ADDR_MAX. Avant, strtoul s'arretait au premier caractere
+ * inattendu ("1junk" -> 1) et le masque 24 bits changeait l'adresse en silence ("0x1234567" ->
+ * 0x234567, "-1" -> 0xFFFFFF) : le volet etait cree sous une autre adresse que celle saisie. */
+static bool somfy_address_parse(const cJSON *a, uint32_t *out) {
+    double v;
+    if (cJSON_IsString(a) && a->valuestring) {
+        const char *s = a->valuestring;
+        if (!isxdigit((unsigned char)s[0])) return false;   /* ni vide, ni signe, ni espace */
+        char *end = NULL;
+        errno = 0;
+        unsigned long u = strtoul(s, &end, 0);
+        if (errno || !end || *end) return false;
+        v = (double)u;
+    } else if (cJSON_IsNumber(a)) {
+        v = a->valuedouble;
+        if (v != (double)(uint32_t)v) return false;   /* negatif, fractionnaire ou trop grand */
+    } else return false;
+    if (v < 1 || v > SOMFY_RTS_ADDR_MAX) return false;
+    *out = (uint32_t)v;
+    return true;
+}
+
 static esp_err_t h_somfy_create(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id");
-    cJSON *a = cJSON_GetObjectItem(j, "address");
     uint32_t address = 0;
-    if (cJSON_IsString(a) && a->valuestring) address = (uint32_t)strtoul(a->valuestring, NULL, 0);
-    else if (cJSON_IsNumber(a)) address = (uint32_t)a->valuedouble;
     const char *err = NULL;
     if (!id || !*id) err = "nom manquant";
     else if (strchr(id, ',')) err = "virgule dans le nom";
-    else if ((address & 0xFFFFFF) == 0) err = "adresse manquante ou nulle";
-    else if (pfx_key_for_serial(address & 0xFFFFFF, NULL, NULL))
+    else if (!somfy_address_parse(cJSON_GetObjectItem(j, "address"), &address))
+        err = "adresse invalide : un nombre de 1 a 0xFFFFFF (24 bits)";
+    else if (pfx_key_for_serial(address, NULL, NULL))
         err = "adresse reservee (ressemble a une identite Profalux 0x067), choisis-en une autre";
-    int rc = err ? -1 : shutters_create_virtual_somfy(id, address);
+    sh_somfy_create_t rc = err ? SH_SOMFY_INVALID : shutters_create_virtual_somfy(id, address);
+    if (!err) switch (rc) {
+        case SH_SOMFY_CREATED:       break;
+        case SH_SOMFY_NAME_TOO_LONG: err = "nom trop long (accents comptes double)"; break;
+        case SH_SOMFY_NAME_TAKEN:    err = "un appareil porte deja ce nom"; break;
+        case SH_SOMFY_INVALID:       err = "creation impossible"; break;
+    }
     if (err) ESP_LOGW(TAG, "volet Somfy '%s' refuse : %s", id ? id : "", err);
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
+    cJSON_AddNumberToObject(o, "ok", rc == SH_SOMFY_CREATED ? 1 : 0);
     if (err) cJSON_AddStringToObject(o, "err", err);
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o); cJSON_Delete(j);

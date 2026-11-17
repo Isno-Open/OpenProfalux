@@ -162,6 +162,10 @@ void somfy_rts_frame80(const uint8_t base56[SOMFY_RTS_FRAME_BYTES], somfy_rts_cm
 int somfy_rts_tx_pulses80(const uint8_t bytes[SOMFY_RTS_FRAME_BYTES_80], bool first,
                           somfy_rts_pulse_t *out, int max);
 
+/* Plus grande adresse de telecommande Somfy : 24 bits. Une adresse plus grande ne se masque pas en
+ * silence, elle se refuse (l'utilisateur a note celle qu'il a saisie). */
+#define SOMFY_RTS_ADDR_MAX 0xFFFFFFu
+
 /* Telecommande virtuelle Somfy : adresse 24 bits + code roulant 16 bits. Le quartet
  * de cle n'est PAS un etat a part : c'est le quartet BAS du code roulant (verifie sur
  * les vecteurs open-rts : code 0x1E63 -> cle 0xA3, code 0x007B -> cle 0xAB). */

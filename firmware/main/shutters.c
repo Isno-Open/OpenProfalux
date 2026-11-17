@@ -740,7 +740,14 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre. Un crash entre les
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
     v->virt_counter = cnt + 1;
-    save_cfg();
+    /* Reservation non ecrite (NVS pleine...) : on n'emet PAS. Emettre quand meme ferait avancer le
+     * moteur sur un compteur que le boitier aura oublie au prochain redemarrage, et il rejouerait
+     * alors des codes deja consommes, que le moteur ignore (revue de la PR #86). */
+    if (save_cfg() != ESP_OK) {
+        v->virt_counter = cnt;
+        ESP_LOGE(TAG, "TX VIRT annule : compteur non enregistre (flash pleine ?)");
+        return false;
+    }
     tx_params_t p = tx_params_of(v);
     radio_tx_device(bits, PRESS_REPEATS, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
@@ -753,13 +760,17 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
  * d'adresse (24 bits) et virt_counter de code roulant : memes champs que la telecommande
  * virtuelle Profalux, reinterpretes par protocole. Reserve-puis-emet comme Profalux : on
  * persiste le PROCHAIN code AVANT d'emettre (au pire un code saute, jamais un rejeu). */
-static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
+static bool somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     uint16_t code = v->virt_counter;
-    somfy_rts_remote_t r = { .address = v->virt_serial & 0xFFFFFF, .rolling_code = code };
+    somfy_rts_remote_t r = { .address = v->virt_serial & SOMFY_RTS_ADDR_MAX, .rolling_code = code };
     uint8_t frame[SOMFY_RTS_FRAME_BYTES];
     somfy_rts_remote_next(&r, cmd, frame);   /* trame + incrementation du code roulant */
     v->virt_counter = r.rolling_code;
-    save_cfg();
+    if (save_cfg() != ESP_OK) {   /* meme regle que emit_virt_profalux : pas d'emission sans reservation */
+        v->virt_counter = code;
+        ESP_LOGE(TAG, "TX SOMFY annule : code roulant non enregistre (flash pleine ?)");
+        return false;
+    }
     /* Format de trame PAR VOLET (fiche, issue #73) : 56 bits par defaut (rafale COURTE, comme la vraie
      * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
      * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
@@ -767,11 +778,11 @@ static void somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
     if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS, v->freq_khz);
     else                     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS, v->freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
-             (unsigned)(v->virt_serial & 0xFFFFFF), cmd, (unsigned)code);
+             (unsigned)(v->virt_serial & SOMFY_RTS_ADDR_MAX), cmd, (unsigned)code);
+    return true;
 }
 static bool emit_virt_somfy(volet_t *v, uint8_t button) {
-    somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
-    return true;
+    return somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
 }
 
 /* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
@@ -796,7 +807,11 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
 
 /* Demarre un mouvement (dir=+1 up / -1 down) : UNE rafale (appui), puis le moteur part seul.
  * On integre juste la position ensuite ; l'arret se fait par do_stop (rafale STOP) au bon moment. */
-static void start_move(volet_t *v, int dir) {
+/* target : cible du mouvement (% de fermeture, 0 ou 100 pour une pleine course). Elle ne s'ecrit
+ * qu'une fois la rafale partie : ecrite avant, une commande qui echoue (code roulant non enregistre)
+ * changeait la cible d'un mouvement EN COURS, que la boucle de tick croyait alors atteinte, et le
+ * suivi s'arretait pendant que le moteur continuait (revue de la PR #131). */
+static void start_move(volet_t *v, int dir, int target) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     bool sent;
     if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
@@ -808,16 +823,28 @@ static void start_move(volet_t *v, int dir) {
         radio_pause_rx(false);
         return;
     }
+    v->target = target;
     v->dir = dir; v->own_move = true;
     v->last_tick_us = esp_timer_get_time();
     zone_follow(v, dir);
 }
 static void do_stop(volet_t *v) {
-    v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
-    if (v->virt) emit_virt(v, PFX_BTN_STOP);
+    bool sent = true;
+    if (v->virt) sent = emit_virt(v, PFX_BTN_STOP);
     else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
     else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
-    zone_follow(v, 0);
+    if (!sent && v->dir) {
+        /* STOP non emis (code roulant non enregistre, voir emit_virt_profalux) : le moteur continue
+         * jusqu'a sa butee. On l'y suit, comme un mouvement lance par la vraie telecommande, au lieu
+         * de figer une position qu'il a deja depassee (revue de la PR #131). */
+        v->target = v->dir > 0 ? 0 : 100; v->own_move = false;
+        ESP_LOGE(TAG, "volet '%s' : STOP non emis, suivi jusqu'a la butee", v->id);
+        /* Pas de zone_follow : les suiveurs d'une zone obeissent a SA trame, qui n'est pas partie.
+         * Ils continuent donc eux aussi jusqu'a leur butee, et gardent leur suivi en cours. */
+    } else {
+        v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true;   /* fin mouvement : suivi telecommande OK + retenir la position */
+        zone_follow(v, 0);
+    }
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
@@ -1090,8 +1117,8 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
             volet_t *m = find_volet(mid);
             if (!m || m == v || m->central) continue;
-            if      (!strcmp(cmd, "up"))   { m->target = 0;   start_move(m, +1); }
-            else if (!strcmp(cmd, "down")) { m->target = 100; start_move(m, -1); }
+            if      (!strcmp(cmd, "up"))   start_move(m, +1, 0);
+            else if (!strcmp(cmd, "down")) start_move(m, -1, 100);
             else if (!strcmp(cmd, "stop")) { do_stop(m); }
             publish_volet_state(m);
         }
@@ -1107,26 +1134,25 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
             UNLOCK(); return -1;
         }
         radio_pause_rx(true);
-        somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
+        bool sent = somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
         radio_pause_rx(false);
         UNLOCK();
-        return 0;
+        return sent ? 0 : -1;
     }
     if (!strcmp(cmd, "pos") && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
-    if (!strcmp(cmd, "up"))        { v->target = 0;   start_move(v, +1); }   /* ouvrir : monter vers 0 */
-    else if (!strcmp(cmd, "down")) { v->target = 100; start_move(v, -1); }   /* fermer : descendre vers 100 */
+    if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
+    else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
     else if (!strcmp(cmd, "stop")) { do_stop(v); }
     else if (!strcmp(cmd, "pos"))  {   /* value = % de fermeture voulu */
         if (value < 0) value = 0;
         if (value > 100) value = 100;
-        v->target = value;
-        if (value > v->position + 1)      start_move(v, -1);   /* plus ferme -> descendre */
-        else if (value < v->position - 1) start_move(v, +1);   /* plus ouvert -> monter */
-        else v->dir = 0;
+        if (value > v->position + 1)      start_move(v, -1, value);   /* plus ferme -> descendre */
+        else if (value < v->position - 1) start_move(v, +1, value);   /* plus ouvert -> monter */
+        else { v->target = value; v->dir = 0; }
     }
     publish_volet_state(v);
     UNLOCK();
@@ -1387,31 +1413,39 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
 /* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
  * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
-int shutters_create_virtual_somfy(const char *id, uint32_t address) {
-    if (!id || !*id) return -1;
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address) {
+    if (!id || !*id || !address || address > SOMFY_RTS_ADDR_MAX) return SH_SOMFY_INVALID;
+    if (strlen(id) >= SH_ID_LEN) return SH_SOMFY_NAME_TOO_LONG;
     /* Une adresse Somfy ne doit JAMAIS ressembler a une identite Profalux 0x067 valide. Sinon un
      * ancien firmware (d'avant le champ `proto`) qui restaure ce volet le prendrait pour un volet
      * virtuel Profalux et emettrait une vraie trame 0x067 sur 868, pouvant commander un moteur
      * Profalux du meme foyer mixte. On refuse ces adresses a la source : le cas devient impossible,
      * y compris sur les firmwares deja deployes. */
-    if (pfx_key_for_serial(address & 0xFFFFFF, NULL, NULL)) {
+    if (pfx_key_for_serial(address, NULL, NULL)) {
         ESP_LOGW(TAG, "volet Somfy '%s' refuse : adresse 0x%06X ressemble a une identite Profalux 0x067",
-                 id, (unsigned)(address & 0xFFFFFF));
-        return -1;
+                 id, (unsigned)address);
+        return SH_SOMFY_INVALID;
     }
     LOCK();
-    volet_t *v = get_or_create(id);
-    if (!v) { UNLOCK(); return -1; }
+    volet_t *v = find_volet(id);
+    if (v) {
+        bool same = v->virt && v->proto == VOLET_PROTO_SOMFY_RTS && v->virt_serial == address;
+        UNLOCK();
+        if (!same) ESP_LOGW(TAG, "volet Somfy '%s' refuse : nom deja pris", id);
+        return same ? SH_SOMFY_CREATED : SH_SOMFY_NAME_TAKEN;
+    }
+    v = get_or_create(id);
+    if (!v) { UNLOCK(); return SH_SOMFY_INVALID; }
     v->virt = true;
     v->proto = VOLET_PROTO_SOMFY_RTS;
-    v->virt_serial = address & 0xFFFFFF;
+    v->virt_serial = address;
     v->virt_counter = 1;
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)(address & 0xFFFFFF));
-    return 0;
+    ESP_LOGW(TAG, "volet Somfy '%s' cree : adresse 0x%06X", id, (unsigned)address);
+    return SH_SOMFY_CREATED;
 }
 
 /* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
@@ -2036,7 +2070,7 @@ char *shutters_status_json(void) {
             char vhex[SH_SERIAL_LEN];
             /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
             snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
-                     (unsigned)(somfy ? (v->virt_serial & 0xFFFFFF) : v->virt_serial));
+                     (unsigned)(somfy ? (v->virt_serial & SOMFY_RTS_ADDR_MAX) : v->virt_serial));
             cJSON_AddStringToObject(o, "virt_serial", vhex);
         }
         if (v->central) cJSON_AddBoolToObject(o, "central", true);

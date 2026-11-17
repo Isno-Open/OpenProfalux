@@ -621,6 +621,10 @@ function setCaptureTitle() {
         : 'Donne un nom, puis capture chaque commande en appuyant sur ta télécommande. Une capture par commande suffit.')
     : 'Tu as ta télécommande d’origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus.';
 }
+/* Protocole d'un volet virtuel, tel que /api/status l'envoie (champ proto, shutters.c). Valeurs
+   du fil, nommees une fois ici : le code s'y refere par leur nom. */
+const VOLET_PROTO = Object.freeze({ profalux: 'profalux', somfy: 'somfy' });
+
 function renderLearnSlots() {
   const box = $('#learn-slots'); if (!box) return;
   const id = activeVolet;
@@ -630,15 +634,22 @@ function renderLearnSlots() {
     renderZoneMembers(v);   /* masque la zone (pas de suiveurs pour une centrale) */
     return;
   }
+  /* Somfy RTS : rien a capturer. La capture ne decode que le KeeLoq, et un volet Somfy se pilote
+     par son adresse et son code roulant (revue de la PR #86). Pas de retour anticipe : la suite
+     rafraichit aussi les reglages propres au volet (orientation, zone, numero), qui garderaient
+     sinon ceux du volet precedent (revue de la PR #131). */
+  const somfy = !!(v && v.virt && v.proto === VOLET_PROTO.somfy);
   const cmd = (v && v.cmd) || {};
   /* Volet enrôlé : piloté par génération, le clonage n'est pas nécessaire. On autorise
    * quand même d'apprendre ici sa VRAIE télécommande d'origine, uniquement pour SUIVRE
    * la position (le pilotage reste par génération, ces trames ne sont pas rejouées). */
-  const virtNote = (v && v.virt)
+  const virtNote = somfy
+    ? `<div class="statline ok"><span class="dot"></span><b>Volet Somfy RTS (télécommande virtuelle).</b> Il est piloté par son adresse et son code roulant : pas de télécommande à capturer.</div>`
+    : (v && v.virt)
     ? `<div class="statline ok"><span class="dot"></span><b>Volet enrôlé (télécommande virtuelle).</b> Il est piloté par génération, pas besoin de cloner. En option, apprends ci-dessous sa <b>télécommande d'origine</b> : le boîtier suivra alors la position quand tu l'utilises.</div>`
     : '';
   box.innerHTML = virtNote;
-  const ACTS = captureActions();      // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique)
+  const ACTS = somfy ? [] : captureActions();   // commandes PAR TYPE : volet = 3, portail = 1 (bouton unique) ; Somfy : aucune
   const rejeu = isRejeuContext();     // rejeu brut (CAME, code fixe) vs clone KeeLoq décodé
   for (const A of ACTS) {
     const c = rejeu ? null : cmd[A.a];
@@ -697,6 +708,8 @@ function renderLearnSlots() {
   const hint = $('#learn-hint');
   if (hint) hint.textContent = !id
     ? 'Choisis un volet ci-dessus (ou crée-en un) pour activer la capture.'
+    : somfy
+      ? `Volet Somfy « ${id} » : rien à capturer, il se pilote depuis l'onglet Volets.`
     : (v && v.virt)
       ? `Volet enrôlé « ${id} » : pour suivre la position, clique Capturer puis appuie sur sa télécommande d'origine en tenant le bouton une seconde (< 1 m du boîtier). Facultatif.`
       : `Volet « ${id} » : clique Capturer, puis appuie sur le bouton de ta télécommande en le tenant une seconde (< 1 m du boîtier).`;
@@ -1833,13 +1846,17 @@ $('#ota-check').onclick = async () => {
     : cur === latest ? `✅ ${cur} = dernière version` : `✅ Installée ${cur}, dernière release ${latest}`;
   updateBadge(st);
 };
-/* "0.2.12" plus recente que "0.2.11" ? Comparaison numerique ; suffixe ("-dev") ignore. */
+/* "0.2.12" plus recente que "0.2.11" ? Comparaison numerique. A numeros egaux, une version de
+   test ("0.2.12-test9") est PLUS ANCIENNE que la version publiee ("0.2.12"), comme en semver :
+   sinon un testeur ne se voyait jamais proposer la release (revue de la PR #70). Deux suffixes
+   entre eux ne se comparent pas (pas d'ordre fiable entre deux builds de test). */
 function newerThan(a, b) {
   const p = v => ((String(v || '').replace(/^v/, '').match(/^\d+(?:\.\d+)*/) || [null])[0]);
   const x = p(a), y = p(b); if (!x || !y) return false;
   const xa = x.split('.').map(Number), ya = y.split('.').map(Number);
   for (let i = 0; i < Math.max(xa.length, ya.length); i++) { const d = (xa[i] || 0) - (ya[i] || 0); if (d) return d > 0; }
-  return false;
+  const hasSuffix = v => String(v || '').replace(/^v/, '').length > p(v).length;
+  return !hasSuffix(a) && hasSuffix(b);
 }
 /* Mise a jour disponible (verification GitHub faite par le boitier, toutes les 6 h) : pastille
  * sur l'onglet OTA, et dans l'onglet la ligne + le bouton d'installation, sans cliquer. */
@@ -2371,9 +2388,9 @@ function profileForDevice(v) {
   const profs = (PROFILES && PROFILES.profils) || [];
   let marque = v.marque;
   if (!marque) {
-    if (v.proto === 'somfy') marque = 'Somfy RTS';
+    if (v.proto === VOLET_PROTO.somfy) marque = 'Somfy RTS';
     else if (v.rejeu)        marque = 'CAME';
-    else if (v.proto === 'profalux' || (!v.virt && !v.rejeu)) marque = 'Profalux';
+    else if (v.proto === VOLET_PROTO.profalux || (!v.virt && !v.rejeu)) marque = 'Profalux';
   }
   if (!marque) return null;
   const mec = v.rejeu ? 'rejeu' : v.virt ? 'enrolement' : 'cloner';
@@ -2485,7 +2502,7 @@ function deviceKind(v) {   // tx = porte des réglages d'émission (le panneau a
   if (v.central) return { ico: '🎛', lbl: 'centrale', tx: false };
   if (v.zone) return { ico: '🔗', lbl: 'zone', tx: false };
   if (v.rejeu) return { ico: '📻', lbl: 'rejeu (code fixe)', tx: true };    // CAME : fréquence PAR APPAREIL (capture + émission), via le panneau avancé
-  if (v.virt) return v.proto === 'profalux'
+  if (v.virt) return v.proto === VOLET_PROTO.profalux
     ? { ico: '🪟', lbl: 'virtuelle Profalux', tx: true }
     : { ico: '🪟', lbl: 'Somfy RTS', tx: true };                            // freq fixe (lecture seule) + format 56/80
   return { ico: '🪟', lbl: 'télécommande clonée', tx: true };               // capturée (KeeLoq, émis par emit_press)
