@@ -105,14 +105,15 @@ static bool traffic_recent(void) {
     return esp_timer_get_time() - s_traffic_us < (int64_t)NW_PROBE_PERIOD_S * 1000000;
 }
 
-/* true si la passerelle a repondu a au moins un ping. Sans passerelle connue, ou sans memoire pour
- * ouvrir la sonde, on rend true : ce n'est pas une preuve de panne, on ne redemarre pas la-dessus. */
-static bool gateway_answers(void) {
-    if (traffic_recent()) return true;
+/* Sonde de la passerelle (voir nw_gateway_t). Trafic recent d'un broker, passerelle inconnue ou pas
+ * de memoire pour ouvrir la sonde : NW_GW_SKIPPED. Ce n'est ni une preuve de panne (on ne redemarre
+ * pas la-dessus) ni une preuve que la passerelle repond au ping (on n'arme pas le garde-fou). */
+static nw_gateway_t gateway_probe(void) {
+    if (traffic_recent()) return NW_GW_SKIPPED;
     esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t ip;
-    if (!n || esp_netif_get_ip_info(n, &ip) != ESP_OK || ip.gw.addr == 0) return true;
-    if (!s_ping_done && !(s_ping_done = xSemaphoreCreateBinary())) return true;
+    if (!n || esp_netif_get_ip_info(n, &ip) != ESP_OK || ip.gw.addr == 0) return NW_GW_SKIPPED;
+    if (!s_ping_done && !(s_ping_done = xSemaphoreCreateBinary())) return NW_GW_SKIPPED;
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
     cfg.target_addr.type = IPADDR_TYPE_V4;
     cfg.target_addr.u_addr.ip4.addr = ip.gw.addr;
@@ -121,13 +122,13 @@ static bool gateway_answers(void) {
     esp_ping_handle_t h;
     s_ping_ok = 0;
     xSemaphoreTake(s_ping_done, 0);   /* fin d'une sonde precedente eventuellement restee */
-    if (esp_ping_new_session(&cfg, &cb, &h) != ESP_OK) return true;
+    if (esp_ping_new_session(&cfg, &cb, &h) != ESP_OK) return NW_GW_SKIPPED;
     esp_ping_start(h);
     /* sonde qui ne finit pas dans le temps : le boitier est trop bloque pour la mener, c'est un echec */
     xSemaphoreTake(s_ping_done, pdMS_TO_TICKS(GW_PINGS * (GW_PING_GAP_MS + GW_PING_WAIT_MS) + 2000));
     esp_ping_stop(h);
     esp_ping_delete_session(h);
-    return s_ping_ok > 0;
+    return s_ping_ok > 0 ? NW_GW_ANSWERED : NW_GW_SILENT;
 }
 
 static void wifi_watchdog_task(void *arg) {
@@ -139,7 +140,7 @@ static void wifi_watchdog_task(void *arg) {
             down_s = 0;
             if ((probe_s += 10) < NW_PROBE_PERIOD_S) continue;
             probe_s = 0;
-            switch (nw_probe(&nw, true, gateway_answers())) {
+            switch (nw_probe(&nw, true, gateway_probe())) {
                 case NW_ACT_RESTART_WIFI:
                     ESP_LOGW(TAG, "passerelle muette depuis %d s, Wi-Fi associe -> restart pile WiFi", nw.fails * NW_PROBE_PERIOD_S);
                     esp_wifi_stop(); vTaskDelay(pdMS_TO_TICKS(500)); esp_wifi_start();
@@ -155,7 +156,7 @@ static void wifi_watchdog_task(void *arg) {
             }
             continue;
         }
-        nw_probe(&nw, false, false);   /* Wi-Fi coupe : affaire du garde-fou ci-dessous */
+        nw_probe(&nw, false, NW_GW_SKIPPED);   /* Wi-Fi coupe : affaire du garde-fou ci-dessous */
         probe_s = 0;
         down_s += 10;
         if (down_s == 120) {   /* 2 min coupe -> relance propre de la pile (re-declenche STA_START->connect) */
