@@ -63,8 +63,14 @@ static int      s_nremotes = 0;
 #define RF_RING_MAX  1000     /* plafond : trames a l'affichage (paginees) ; l'export /api/frames = l'ensemble du dataset */
 #define RF_RING_BOOT   64     /* avant le calcul : les trames recues au demarrage seulement */
 /* Memoire laissee au reste du firmware quand ring et sets ont pris leur part : pics du serveur web,
- * rafales MQTT, verification GitHub. A valider avec min_heap, publie avec le battement. */
-#define WORK_FLOOR_BYTES (16 * 1024)
+ * rafales MQTT, verification GitHub. A valider avec min_heap, publie avec le battement.
+ * 16 Ko ne suffisaient pas a la verification GitHub (toutes les 6 h, et au demarrage) : trace figee
+ * au creux, 8 demarrages sur 8 le 2026-11-17 sur l'ATOM, cloud actif. Hors reserve TLS, elle tient
+ * ~5 Ko (client HTTP, contexte esp_tls) et les tampons Wi-Fi et TCP de la chaine de certificats de
+ * GitHub (~10 Ko) : le libre tombait de 12 a 17 Ko a 0,9 a 3 Ko. Tant que la verification passait
+ * avant le premier battement (ce calcul), elle trouvait la memoire du ring pas encore prise ; la
+ * verification de 6 h, elle, tombait deja sur le plancher. 24 Ko : le pic de GitHub plus ~8 Ko. */
+#define WORK_FLOOR_BYTES (24 * 1024)
 /* Telecommandes en plus de celles connues au calcul, pour qu'un ajout ait encore sa place. */
 #define HOPS_SPARE_REMOTES 2
 #define STATUS_RF_SHOW 20     /* nb de trames recentes mises dans /api/status (leger, poll 3 s) ; l'onglet RF pagine via /api/rf */
