@@ -105,6 +105,12 @@ export type TxFieldName = ValueOf<typeof TX_FIELD>;
 /* Genre d'un champ d'emission, pour le controle qui le saisit. */
 export const FIELD_KIND = { number: 'number', toggle: 'toggle', choice: 'choice' } as const;
 export type FieldKind = ValueOf<typeof FIELD_KIND>;
+/* Drapeau oui / non que le firmware envoie en nombre (« %d » : 0 ou 1, /api/config, /api/ota/status...). Il
+   accepte un booleen en ecriture. */
+export const FLAG = { off: 0, on: 1 } as const;
+export type Flag = ValueOf<typeof FLAG>;
+/* Lecture d'un drapeau : absent (firmware d'avant) = la valeur par defaut. */
+export const isFlagOn = (flag: Flag | undefined, absent: boolean): boolean => (flag === undefined ? absent : flag !== FLAG.off);
 /* Tri-etat d'un reglage oui / non d'une fiche (tx_rpt, tx_rmt) : 0 = celui du profil. */
 export const TRISTATE = { inherit: 0, no: 1, yes: 2 } as const;
 

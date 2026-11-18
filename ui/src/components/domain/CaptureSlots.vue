@@ -19,7 +19,10 @@ const emit = defineEmits<{ capture: [cmd: Command]; move: [from: Command, to: Co
 const SYMBOL: Partial<Record<Command, string>> = { [COMMAND.up]: '▲', [COMMAND.stop]: '■', [COMMAND.down]: '▼' };
 const moveTargets = (cmd: Command): SelectOption[] =>
   [{ value: '', label: 'Déplacer vers…' }, ...props.actions.filter(x => x.cmd !== cmd).map(x => ({ value: x.cmd, label: `→ ${x.label}` }))];
-function onMove(from: Command, value: string | number): void { if (typeof value === 'string' && isCommand(value)) emit('move', from, value); }
+/* Pas de deplacement pendant une capture : la trame attendue irait sur la commande deplacee, et l'autre serait perdue. */
+function onMove(from: Command, value: string | number): void {
+  if (!props.disabled && typeof value === 'string' && isCommand(value)) emit('move', from, value);
+}
 </script>
 
 <template>
@@ -35,7 +38,7 @@ function onMove(from: Command, value: string | number): void { if (typeof value 
       </div>
       <div class="actions">
         <OpSelect v-if="!replay && learned[a.cmd] && actions.length > 1" :model-value="''" :options="moveTargets(a.cmd)" class="move"
-                  :aria-label="`Déplacer la trame de ${a.label}`" @update:model-value="value => onMove(a.cmd, value)" />
+                  :disabled="disabled" :aria-label="`Déplacer la trame de ${a.label}`" @update:model-value="value => onMove(a.cmd, value)" />
         <OpButton :variant="learned[a.cmd] ? BUTTON.normal : BUTTON.primary" small :disabled="disabled" @click="emit('capture', a.cmd)">
           {{ learned[a.cmd] ? 'Recapturer' : 'Capturer' }}</OpButton>
       </div>

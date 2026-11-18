@@ -4,7 +4,7 @@
 // ouvert, 100 = ferme). Les captures, l'enrolement et le calage reussissent apres un court delai, comme si on
 // appuyait bien sur la telecommande.
 import profilesTable from '../../../firmware/main/web/profiles.json';   // la vraie table, source unique
-import { BAND, BRAND, COMMAND, PROTOCOL, type Command } from '../domain';
+import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
 import type { Device, LearnedCommand, OkReply, PfxState, Profiles, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
@@ -202,7 +202,7 @@ export default {
   },
 
   /* Telecommande virtuelle (enrolement) */
-  async pfxState(): Promise<PfxState> { return { models: PFX_MODELS, active: !!pfx, learn_ok: !!pfx, ...(pfx || {}) }; },
+  async pfxState(): Promise<PfxState> { return { models: PFX_MODELS, active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}) }; },
   async pfxCapture({ model, marque }: Record<string, unknown>) {
     await wait(2500);
     pfx = { serial: hex7(nextIdentity++), idx: 12, counter: 1, remote: '0x0E5A3B9', model: Number(model) || 0, marque: typeof marque === 'string' ? marque : undefined };

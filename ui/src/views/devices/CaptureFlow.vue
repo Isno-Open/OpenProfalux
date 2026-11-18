@@ -140,6 +140,7 @@ async function capture(cmd: Command): Promise<void> {
   } finally { busy.value = ''; }
 }
 async function moveCapture(from: Command, to: Command): Promise<void> {
+  if (busy.value) return;   // capture en cours : sa trame ecraserait celle que l'on deplace
   await api.moveCapture({ id: id.value, from, to });
   toast(`Commande déplacée vers ${actions.value.find(a => a.cmd === to)?.label ?? to}`);
   refresh();

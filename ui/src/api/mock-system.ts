@@ -1,13 +1,14 @@
 // Fausses donnees des onglets Reseau, OTA, Systeme et Support : les memes champs que /api/config, /api/radios,
 // /api/health, /api/diag, /api/ota/status, /api/rf et /api/log du firmware. Les actions longues (verification
 // GitHub, mise a jour, calibration du gain, captures) reussissent apres un delai.
-import { BAND, CHECK_PHASE, FAILURE, GRANT_STATE, NO_SERIAL, RADIO_PROFILE, SCAN_STATE, type CheckPhase, type DownloadKey } from '../domain';
+import { BAND, CHECK_PHASE, FAILURE, FLAG, GRANT_STATE, NO_SERIAL, RADIO_PROFILE, SCAN_STATE, type CheckPhase, type DownloadKey } from '../domain';
 import type realSystemApi from './real-system';
 import type { Progress } from './real-system';
 import type {
   CaptureLast, CloudStatus, Config, ConfigReply, ConfigUpdate, Dataset, DatasetFrame, Health, OkReply, OtaStatus, RadioDetail,
   ReceptionTest, RfFrame, UndoInfo,
 } from './types';
+import { WRITABLE_CONFIG_FLAGS } from './types';
 
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const startedAt = Math.floor(Date.now() / 1000);
@@ -15,7 +16,7 @@ const startedAt = Math.floor(Date.now() / 1000);
 const config: Config = {
   wifi_ssid: 'MaBox', device: '', mdns_default: 'openprofalux', mdns_host: 'openprofalux',
   mqtt_uri: 'mqtt://192.168.1.10', mqtt_user: 'ha', mqtt_pass_len: 12, mqtt_ca_len: 0, mqtt_cert_len: 0, mqtt_key_len: 0,
-  mqtt_obey: true, log_frames: true, debug: false, ui_auth: true, update_auto: true,
+  mqtt_obey: FLAG.on, log_frames: FLAG.on, debug: FLAG.off, ui_auth: FLAG.on, update_auto: FLAG.on,
 };
 const radios: RadioDetail[] = [
   { idx: 0, band: BAND.mhz868, band_low_khz: 863000, band_high_khz: 870000, partnum: 0, version: 20, present: true, primary: true,
@@ -26,7 +27,7 @@ const radios: RadioDetail[] = [
 /* Frequence de chaque profil de reception (celle du firmware), et marqueur d'image refusee (nom « refus »). */
 const PROFILE_FREQ_KHZ: Record<string, number> = { [RADIO_PROFILE.profalux]: 868425, [RADIO_PROFILE.eveno]: 868330 };
 const ota: OtaStatus = {
-  version: '0.2.15', part: 'ota_0', rb_auto: 1, img: 'valide', rb_possible: true, precedente: '0.2.14',
+  version: '0.2.15', part: 'ota_0', rb_auto: 1, img: 'valide', rb_possible: FLAG.on, precedente: '0.2.14',
   latest: '', latest_url: '', checks: 0, state: 0, written: 0, total: 0, msg: '',
 };
 let rejectNextImage = false;
@@ -90,7 +91,12 @@ export default {
       const value = rest[field];
       if (value !== undefined) { config[`${field}_len`] = value.length; delete rest[field]; }
     }
-    if (rest.ui_pass !== undefined) { config.ui_auth = !!rest.ui_pass; delete rest.ui_pass; }
+    /* Drapeaux ecrits en booleen, relus en 0 / 1 (comme le firmware). */
+    for (const field of WRITABLE_CONFIG_FLAGS) {
+      const value = rest[field];
+      if (value !== undefined) { config[field] = value ? FLAG.on : FLAG.off; delete rest[field]; }
+    }
+    if (rest.ui_pass !== undefined) { config.ui_auth = rest.ui_pass ? FLAG.on : FLAG.off; delete rest.ui_pass; }
     delete rest.wifi_pass; delete rest.reboot;
     Object.assign(config, rest);
     return ok();

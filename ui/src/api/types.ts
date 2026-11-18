@@ -1,7 +1,7 @@
 // Les contrats echanges avec le firmware (web_ui.c, shutters.c, ota.c...) : un type par reponse ou par corps
 // envoye. Les noms de champs sont ceux du JSON du firmware (des donnees, pas des identifiants : ils restent tels
 // quels). Les fausses donnees (mock*.ts) sont verifiees contre ces memes types.
-import type { Command } from '../domain';
+import type { Command, Flag } from '../domain';
 
 /* Refus metier commun a beaucoup de routes : { ok: 0, err }. */
 export interface OkReply { ok?: number; err?: string }
@@ -125,8 +125,8 @@ export interface GainCalibration { state: number; testing?: number; result?: num
 export interface PfxModel { name: string; routine: string }
 export interface PfxState {
   models: PfxModel[];
-  active: boolean | number;
-  learn_ok?: boolean | number;
+  active: Flag;
+  learn_ok?: Flag;
   serial?: string;
   idx?: number;
   counter?: number;
@@ -152,17 +152,22 @@ export interface Config {
   mqtt_ca_len: number;
   mqtt_cert_len: number;
   mqtt_key_len: number;
-  mqtt_obey: boolean;
-  log_frames: boolean;
-  debug: boolean;
-  ui_auth: boolean;
-  update_auto: boolean;
+  mqtt_obey?: Flag;      // absent sur un firmware d'avant : oui
+  log_frames: Flag;
+  debug: Flag;
+  ui_auth: Flag;
+  update_auto?: Flag;    // absent sur un firmware d'avant : oui
   radio_profile?: string;
   freq_khz?: number;
   rx_gain?: number;
 }
-/* /api/config (ecriture) : seuls les champs envoyes changent ; radio: N pour une radio secondaire. */
-export type ConfigUpdate = Partial<Omit<Config, 'mqtt_pass_len' | 'mqtt_ca_len' | 'mqtt_cert_len' | 'mqtt_key_len'>> & {
+/* /api/config (ecriture) : seuls les champs envoyes changent ; radio: N pour une radio secondaire. Les drapeaux
+   s'ecrivent en booleen ; ui_auth ne s'ecrit pas (ui_pass). */
+type ConfigLength = 'mqtt_pass_len' | 'mqtt_ca_len' | 'mqtt_cert_len' | 'mqtt_key_len';
+type ConfigFlag = 'mqtt_obey' | 'log_frames' | 'debug' | 'ui_auth' | 'update_auto';
+export const WRITABLE_CONFIG_FLAGS = ['mqtt_obey', 'log_frames', 'debug', 'update_auto'] as const satisfies readonly ConfigFlag[];
+export type ConfigUpdate = Partial<Omit<Config, ConfigLength | ConfigFlag>>
+  & Partial<Record<(typeof WRITABLE_CONFIG_FLAGS)[number], boolean>> & {
   radio?: number;
   wifi_pass?: string;
   mqtt_pass?: string;
@@ -218,7 +223,7 @@ export interface OtaStatus {
   target?: string;
   rb_auto?: number;
   img?: string;
-  rb_possible?: boolean | number;
+  rb_possible?: Flag;
   precedente?: string;
   annulee?: string;
   annulee_auto?: number;

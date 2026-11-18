@@ -9,7 +9,7 @@ import type { OtaStatus } from '../api/types';
 import type { Progress } from '../api/real-system';
 import { withoutV, isNewer, updateAvailable } from '../versions';
 import {
-  BUTTON, CHECK_PHASE, FAILURE, HTTP_CONFLICT, OTA_CONFIRM, OTA_IMAGE, OTA_SOURCE, TONE,
+  BUTTON, CHECK_PHASE, FAILURE, FLAG, HTTP_CONFLICT, OTA_CONFIRM, OTA_IMAGE, OTA_SOURCE, TONE, isFlagOn,
   type OtaConfirm, type OtaSource, type Tone,
 } from '../domain';
 import { ICON } from '../icons';
@@ -42,7 +42,7 @@ async function readStatus(): Promise<void> {
 onMounted(async () => {
   await readStatus();
   const c = await api.config().catch(() => null);
-  auto.value = c?.update_auto !== false;   // absent (ancien firmware) = active
+  auto.value = isFlagOn(c?.update_auto, true);   // le firmware envoie 0 / 1 ; absent (firmware d'avant) = active
   const s = status.value;
   if (s && updateAvailable(s)) check.value = { tone: TONE.warning, text: `Installée ${withoutV(s.version)}, disponible ${withoutV(s.latest)}.` };
 });
@@ -58,7 +58,7 @@ const rollbackInfo = computed<Message | null>(() => {
   return { tone: TONE.neutral, text: 'Retour automatique : vérifié à la prochaine mise à jour.' };
 });
 const cancelled = computed(() => (status.value?.annulee && status.value.annulee_auto ? status.value.annulee : ''));
-const canRollback = computed(() => !status.value || status.value.rb_possible === undefined || !!status.value.rb_possible);
+const canRollback = computed(() => !status.value || isFlagOn(status.value.rb_possible, true));
 
 async function checkLatest(): Promise<void> {
   checking.value = true;
@@ -108,7 +108,7 @@ async function rollback(): Promise<void> {
   try { await api.otaRollback(); }
   catch (e) {
     if (e === HTTP_CONFLICT && status.value) {   // refus : aucune version precedente valide (le boitier ne redemarre pas)
-      status.value = { ...status.value, rb_possible: 0 };
+      status.value = { ...status.value, rb_possible: FLAG.off };
       return;
     }
   }

@@ -2,11 +2,11 @@
 // Une liste deroulante.
 export interface SelectOption { value: string | number; label: string; disabled?: boolean }
 const model = defineModel<string | number>({ default: '' });
-withDefaults(defineProps<{ options: SelectOption[]; id?: string }>(), { id: undefined });
+withDefaults(defineProps<{ options: SelectOption[]; id?: string; disabled?: boolean }>(), { id: undefined });
 </script>
 
 <template>
-  <select :id="id" v-model="model" class="op-input op-select">
+  <select :id="id" v-model="model" class="op-input op-select" :disabled="disabled">
     <option v-for="o in options" :key="o.value" :value="o.value" :disabled="o.disabled">{{ o.label }}</option>
   </select>
 </template>

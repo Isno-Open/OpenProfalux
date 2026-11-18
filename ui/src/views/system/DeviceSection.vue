@@ -5,7 +5,7 @@ import { onMounted, reactive, ref } from 'vue';
 import { toast, sessionClosed, protectionRemoved } from '../../store';
 import api from '../../api/index';
 import type { Config, RadioDetail } from '../../api/types';
-import { BUTTON, TONE } from '../../domain';
+import { BUTTON, TONE, isFlagOn } from '../../domain';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
 import OpSwitch from '../../components/base/OpSwitch.vue';
@@ -26,7 +26,8 @@ async function load(): Promise<void> {
   const c = await api.config();
   config.value = c;
   name.value = c.device || '';
-  Object.assign(options, { log_frames: !!c.log_frames, mqtt_obey: c.mqtt_obey !== false, debug: !!c.debug });
+  /* Le firmware envoie 0 / 1 ; mqtt_obey absent (firmware d'avant) = oui. */
+  Object.assign(options, { log_frames: isFlagOn(c.log_frames, false), mqtt_obey: isFlagOn(c.mqtt_obey, true), debug: isFlagOn(c.debug, false) });
   radios.value = (await api.radioDetails()).radios ?? [];
 }
 onMounted(load);
