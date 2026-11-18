@@ -194,19 +194,15 @@ static bool req_guard_ok(httpd_req_t *r) {
     return false;
 }
 
-/* Fichiers UI embarques COMPRESSES (tools/gzip_web.py, voir EMBED_FILES du CMakeLists). */
+/* Fichiers UI embarques COMPRESSES (tools/gzip_web.py, voir EMBED_FILES du CMakeLists). index.html, app.js et
+ * style.css sont construits depuis ui/ (Vue, tools/build_ui.sh) : un seul fichier JavaScript, qui contient aussi
+ * la detection de profil (pyramid-detect.js) et le QR de l'appairage cloud (qrcode-generator, MIT). */
 extern const uint8_t index_html_start[] asm("_binary_index_html_gz_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_gz_end");
 extern const uint8_t style_css_start[]  asm("_binary_style_css_gz_start");
 extern const uint8_t style_css_end[]    asm("_binary_style_css_gz_end");
 extern const uint8_t app_js_start[]     asm("_binary_app_js_gz_start");
 extern const uint8_t app_js_end[]       asm("_binary_app_js_gz_end");
-extern const uint8_t app_capture_js_start[] asm("_binary_app_capture_js_gz_start");   /* UI capture brute (issue #95) */
-extern const uint8_t app_capture_js_end[]   asm("_binary_app_capture_js_gz_end");
-extern const uint8_t pyramid_detect_js_start[] asm("_binary_pyramid_detect_js_gz_start");   /* detection de profil (pyramide, #111) */
-extern const uint8_t pyramid_detect_js_end[]   asm("_binary_pyramid_detect_js_gz_end");
-extern const uint8_t qrcode_js_start[] asm("_binary_qrcode_js_gz_start");   /* QR de l'appairage cloud (qrcode-generator, MIT) */
-extern const uint8_t qrcode_js_end[]   asm("_binary_qrcode_js_gz_end");
 /* Ecran d'accueil du telephone : manifeste (compresse) et icone (PNG, deja compressee). */
 extern const uint8_t manifest_start[]   asm("_binary_manifest_webmanifest_gz_start");
 extern const uint8_t manifest_end[]     asm("_binary_manifest_webmanifest_gz_end");
@@ -316,9 +312,6 @@ static const char *jstr(cJSON *o, const char *k) {
 static esp_err_t h_index(httpd_req_t *r) { return send_asset(r, "text/html",       index_html_start, index_html_end, true); }
 static esp_err_t h_css  (httpd_req_t *r) { return send_asset(r, "text/css",        style_css_start,  style_css_end,  true); }
 static esp_err_t h_js   (httpd_req_t *r) { return send_asset(r, "application/javascript", app_js_start, app_js_end, true); }
-static esp_err_t h_js_capture(httpd_req_t *r) { return send_asset(r, "application/javascript", app_capture_js_start, app_capture_js_end, true); }
-static esp_err_t h_js_detect(httpd_req_t *r) { return send_asset(r, "application/javascript", pyramid_detect_js_start, pyramid_detect_js_end, true); }
-static esp_err_t h_js_qrcode(httpd_req_t *r) { return send_asset(r, "application/javascript", qrcode_js_start, qrcode_js_end, true); }
 static esp_err_t h_manifest(httpd_req_t *r) { return send_asset(r, "application/manifest+json", manifest_start, manifest_end, true); }
 static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/json", profiles_json_start, profiles_json_end, true); }
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
@@ -2035,9 +2028,6 @@ void web_ui_start(void) {
     reg_open(s, "/",          HTTP_GET, h_index);
     reg_open(s, "/style.css", HTTP_GET, h_css);
     reg_open(s, "/app.js",    HTTP_GET, h_js);
-    reg_open(s, "/app-capture.js", HTTP_GET, h_js_capture);   /* UI capture brute (issue #95) */
-    reg_open(s, "/pyramid-detect.js", HTTP_GET, h_js_detect);   /* detection de profil (pyramide, #111) */
-    reg_open(s, "/qrcode.js", HTTP_GET, h_js_qrcode);           /* QR de l'appairage cloud */
     reg(s, "/profiles.json", HTTP_GET, h_profiles);   /* table de profils (protegee, soulage la table ouverte ; l'UI la fetch apres login) */
     /* Ouverts comme l'interface : le navigateur les demande sans cookie de session. */
     reg_open(s, "/manifest.webmanifest", HTTP_GET, h_manifest);

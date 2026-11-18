@@ -1,0 +1,31 @@
+<script setup>
+// Le controle d'un portail CAME : une seule commande, rejouee telle quelle (code fixe), comme le bouton
+// de la telecommande d'origine. Le libelle vient du type « portail » de profiles.json.
+defineProps({
+  libelle: { type: String, default: 'Bouton du portail' },
+  envoi: Boolean,
+  disabled: Boolean,
+});
+defineEmits(['ordre']);
+</script>
+
+<template>
+  <div class="portail">
+    <button type="button" :class="{ envoi }" :disabled="disabled && !envoi" @click="$emit('ordre', 'up')">
+      <svg viewBox="0 0 24 24" class="sym" aria-hidden="true"><path d="M7 5.5a7.5 7.5 0 1 0 10 0M12 3v8" /></svg>
+      Actionner le portail
+    </button>
+    <p class="aide">{{ libelle }} : une seule commande, comme la télécommande d'origine.</p>
+  </div>
+</template>
+
+<style scoped>
+.portail{display:grid;gap:8px}
+button{display:flex;align-items:center;justify-content:center;gap:10px;padding:13px 0;font-weight:650;border:1px solid transparent;background:color-mix(in srgb,var(--muted) 12%,transparent);color:var(--text);border-radius:14px;cursor:pointer;transition:.12s}
+button:hover:not(:disabled){border-color:var(--accent-line);color:var(--accent)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.envoi{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);animation:pulse 1s ease-in-out infinite}
+.sym{width:1.25em;height:1.25em;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
+.aide{margin:0;font-size:.76rem;color:var(--muted)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+</style>

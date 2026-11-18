@@ -23,7 +23,9 @@ Brochage : voir `boards/<carte>.json`. **CC1101 = 3.3 V max, jamais 5 V.**
 
 ## Build
 ```bash
-# via Docker ESP-IDF v6.1 (un repertoire de build par carte)
+# d'abord l'interface web (ui/, Vue), depuis la racine du depot : npm s'il est la, sinon Docker
+../tools/build_ui.sh
+# puis le firmware, via Docker ESP-IDF v6.1 (un repertoire de build par carte)
 docker run --rm -v "$PWD/..":/project -w /project/firmware espressif/idf:v6.1 bash -c "
   idf.py -B build-isno-super -DBOARD=isno-super set-target esp32s3
   idf.py -B build-isno-super -DBOARD=isno-super build"
@@ -97,12 +99,13 @@ seul** sur la version précédente ; l'onglet **OTA** le signale.
 1. Pas de Wi-Fi configuré → l'ESP32 ouvre un point d'accès **ouvert** `OpenProfalux_XXXX`
    (fin de son adresse MAC).
 2. S'y connecter : le téléphone ouvre tout seul la page de configuration (portail captif), sinon
-   ouvrir http://192.168.4.1. Onglet **Wi-Fi** : réseau, mot de passe, nom du boîtier (facultatif).
+   ouvrir http://192.168.4.1. Onglet **Réseau › Wi-Fi** : réseau, mot de passe, nom du boîtier (facultatif).
 3. Redémarrage → le boîtier rejoint le réseau, à l'adresse affichée par la page
    (`http://openprofalux-xxxx.local`, ou `http://<nom>.local`).
-4. Onglet **MQTT** : adresse du broker → les covers apparaissent dans Home Assistant.
-5. Onglet **Télécommandes** : « Cloner une télécommande » (capturer ▲/▼/■, nommer le volet),
-   puis « Calibrer la position » (chronométrer une course complète pour la position en %).
+4. Onglet **Réseau › MQTT** : adresse du broker → les covers apparaissent dans Home Assistant.
+5. Onglet **Appareils** : « Ajouter un appareil » (type, marque, puis méthode : cloner sa télécommande
+   en capturant ▲/▼/■, ou créer une télécommande virtuelle), puis « Calibration » (chronométrer une
+   course complète pour la position en %).
 
 ## Sécurité de l'interface
 - Le boîtier refuse les envois (POST `/api/...`) qu'une page d'un **autre site** ferait faire au navigateur :

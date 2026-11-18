@@ -27,6 +27,18 @@ fragment de chaque carte se retrouve dans son `sdkconfig`.
 
 ESP-IDF **v6.1** : depuis la migration du 2026-09-27, le dépôt ne compile plus en v5.
 
+**D'abord l'interface web.** Elle vit dans `ui/` (Vue 3 + Vite) et se construit dans `ui/dist`, que le
+firmware compresse et embarque. Depuis la racine du dépôt :
+
+```bash
+tools/build_ui.sh
+```
+
+Le script prend `npm` s'il est installé (Node 22.12 ou plus récent), sinon Docker (`node:22.23.3-alpine`) :
+rien à installer de plus. À refaire après chaque modification de `ui/` ou de `firmware/main/web/`
+(`profiles.json`). Sans elle, la configuration CMake s'arrête et rappelle la commande. Sous Windows sans
+Docker : `cd ui`, `npm ci`, `npm run build`. Pour travailler sur l'interface, voir `ui/README.md`.
+
 ```bash
 docker run --rm -v "$PWD":/project -w /project/firmware espressif/idf:v6.1 bash -c "
     idf.py -B build-isno-super -DBOARD=isno-super set-target esp32s3
@@ -50,6 +62,8 @@ La même chose tourne en intégration continue à chaque poussée, pour chaque c
 de `boards/` : voir `.github/workflows/firmware.yml`.
 
 ## Builds de test (version identifiable)
+
+`build-test.sh` et `build-release.sh` construisent l'interface eux-mêmes (`tools/build_ui.sh`) avant le firmware.
 
 Une build de test doit s'annoncer avec une version **distincte de la release**, sinon le
 testeur voit le même `0.2.11` que l'ancienne version et ne peut pas vérifier son flash.
@@ -135,9 +149,9 @@ mqtt:
 2. Aucun WiFi configuré → point d'accès **ouvert** `OpenProfalux_XXXX` (fin de la MAC)
 3. Se connecter : le portail captif ouvre la page de configuration (sinon http://192.168.4.1)
 4. Configurer :
-   - onglet **Wi-Fi** : SSID + password, nom du boîtier (=ex `volet_chambre_invitee`, facultatif)
+   - onglet **Réseau › Wi-Fi** : SSID + password, nom du boîtier (=ex `volet_chambre_invitee`, facultatif)
    - ESP32 reboot → connect WiFi, à l'adresse affichée (`http://<nom>.local`)
-   - onglet **MQTT** : broker URI (=`mqtt://192.168.1.x:1883`)
+   - onglet **Réseau › MQTT** : broker URI (=`mqtt://192.168.1.x:1883`)
 5. ESP32 reboot → connect MQTT → HA discovery auto
 
 ## Debug depuis mon côté (=via MQTT)

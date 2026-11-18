@@ -1,0 +1,78 @@
+<symbol id="i-volet" viewBox="0 0 32 32">
+    <rect x="3" y="5" width="26" height="24" rx="3" fill="#DCD8E4"/><rect x="6" y="8" width="20" height="18" rx="1" fill="#7BC8F6"/>
+    <rect x="15.5" y="8" width="1" height="18" fill="#DCD8E4"/><rect x="6" y="8" width="20" height="9" fill="#F7F5FA"/>
+    <rect x="6" y="10.6" width="20" height=".8" fill="#C9C4D4"/><rect x="6" y="13.3" width="20" height=".8" fill="#C9C4D4"/>
+    <rect x="6" y="15.8" width="20" height="1.7" fill="#F4433C"/><rect x="2" y="2.5" width="28" height="5" rx="1.6" fill="#6B6880"/>
+    <rect x="1.5" y="27.5" width="29" height="2.2" rx="1.1" fill="#A9A4B8"/>
+  </symbol>
+<symbol id="i-telec" viewBox="0 0 32 32">
+    <rect x="8.5" y="1" width="15" height="30" rx="5.5" fill="#A9A4B8"/><rect x="9.8" y="2.3" width="12.4" height="27.4" rx="4.4" fill="#F7F5FA"/>
+    <rect x="11.5" y="4.5" width="9" height="7" rx="2.6" fill="#6B6880"/><rect x="11.5" y="13.1" width="9" height="5.8" rx="2.4" fill="#A9A4B8"/><rect x="11.5" y="20.5" width="9" height="7" rx="2.6" fill="#6B6880"/>
+    <rect x="14.7" y="14.7" width="2.6" height="2.6" rx=".5" fill="#fff"/>
+    <path d="M13.8 9.2l2.2-2.2 2.2 2.2M13.8 22.8l2.2 2.2 2.2-2.2" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+<symbol id="i-reseau" viewBox="0 0 32 32">
+    <rect x="2" y="2" width="28" height="28" rx="7.5" fill="#DCD8E4"/><rect x="3.2" y="3.2" width="25.6" height="25.6" rx="6.4" fill="#F7F5FA"/>
+    <path d="M12.5 18.5a5 5 0 0 1 7 0M8.6 14.6a10.5 10.5 0 0 1 14.8 0" stroke="#1C9BF0" stroke-width="2.9" fill="none" stroke-linecap="round"/>
+    <circle cx="16" cy="22" r="2.3" fill="#F4433C"/>
+  </symbol>
+<symbol id="i-ota" viewBox="0 0 32 32">
+    <rect x="4" y="14" width="24" height="15.5" rx="3" fill="#DCD8E4"/><rect x="4" y="25.5" width="24" height="4" rx="2" fill="#A9A4B8"/>
+    <rect x="9" y="14" width="14" height="3" rx="1" fill="#6B6880"/><circle cx="23.5" cy="21.5" r="1.3" fill="#43C463"/>
+    <path d="M16 2.8v11.4M11.2 9.6 16 14.4l4.8-4.8" stroke="#1C9BF0" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+<symbol id="i-sys" viewBox="0 0 32 32">
+    <path d="M26.68 13.39L30.00 13.60L30.00 18.40L26.68 18.61L25.40 21.71L27.59 24.20L24.20 27.59L21.71 25.40L18.61 26.68L18.40 30.00L13.60 30.00L13.39 26.68L10.29 25.40L7.80 27.59L4.41 24.20L6.60 21.71L5.32 18.61L2.00 18.40L2.00 13.60L5.32 13.39L6.60 10.29L4.41 7.80L7.80 4.41L10.29 6.60L13.39 5.32L13.60 2.00L18.40 2.00L18.61 5.32L21.71 6.60L24.20 4.41L27.59 7.80L25.40 10.29Z" fill="#A9A4B8"/><circle cx="16" cy="16" r="5.4" fill="#F7F5FA"/><circle cx="16" cy="16" r="2.3" fill="#6B6880"/>
+  </symbol>
+<symbol id="i-info" viewBox="0 0 32 32">
+    <rect x="2" y="2" width="28" height="28" rx="7.5" fill="#DCD8E4"/><rect x="3.2" y="3.2" width="25.6" height="25.6" rx="6.4" fill="#F7F5FA"/>
+    <circle cx="16" cy="9.6" r="2.3" fill="#1C9BF0"/><rect x="14.1" y="13.4" width="3.8" height="11.2" rx="1.9" fill="#1C9BF0"/>
+  </symbol>
+<symbol id="i-centrale" viewBox="0 0 32 32">
+    <rect x="5" y="12.5" width="22" height="17" rx="1.5" fill="#E6E1EC"/>
+    <path d="M16 3 29.5 14.2H2.5z" fill="#F4433C" stroke="#F4433C" stroke-width="1.5" stroke-linejoin="round"/>
+    <rect x="7.3" y="16.5" width="5.6" height="5.6" fill="#7BC8F6"/><rect x="7.3" y="16.5" width="5.6" height="2.6" fill="#A9A4B8"/>
+    <rect x="19.1" y="16.5" width="5.6" height="5.6" fill="#7BC8F6"/><rect x="19.1" y="16.5" width="5.6" height="2.6" fill="#A9A4B8"/>
+    <rect x="13.6" y="21" width="4.8" height="8.5" rx="1" fill="#6B6880"/><rect x="3.5" y="28.5" width="25" height="2" rx="1" fill="#A9A4B8"/>
+  </symbol>
+<symbol id="i-pile" viewBox="0 0 32 32">
+    <rect x="1.5" y="8" width="26" height="16" rx="4" fill="#A9A4B8"/><rect x="3" y="9.5" width="23" height="13" rx="2.8" fill="#F7F5FA"/><rect x="27.5" y="12.5" width="3.2" height="7" rx="1.4" fill="#6B6880"/>
+    <rect x="5" y="11.5" width="5.4" height="9" rx="1.2" fill="#43C463"/><rect x="11.8" y="11.5" width="5.4" height="9" rx="1.2" fill="#43C463"/><rect x="18.6" y="11.5" width="5.4" height="9" rx="1.2" fill="#43C463"/>
+  </symbol>
+<symbol id="i-pile-faible" viewBox="0 0 32 32">
+    <rect x="1.5" y="8" width="26" height="16" rx="4" fill="#A9A4B8"/><rect x="3" y="9.5" width="23" height="13" rx="2.8" fill="#F7F5FA"/><rect x="27.5" y="12.5" width="3.2" height="7" rx="1.4" fill="#6B6880"/>
+    <rect x="5" y="11.5" width="5.4" height="9" rx="1.2" fill="#F4433C"/>
+  </symbol>
+<symbol id="i-zone" viewBox="0 0 32 32">
+    <rect x="1.5" y="5.5" width="29" height="22" rx="4" fill="#DCD8E4"/><rect x="4" y="10.5" width="11" height="14" fill="#7BC8F6"/><rect x="4" y="10.5" width="11" height="6" fill="#F7F5FA"/><rect x="4" y="16.0" width="11" height="1.3" fill="#F4433C"/><rect x="3.5" y="8.5" width="12" height="2.8" rx="1" fill="#6B6880"/><rect x="17" y="10.5" width="11" height="14" fill="#7BC8F6"/><rect x="17" y="10.5" width="11" height="6" fill="#F7F5FA"/><rect x="17" y="16.0" width="11" height="1.3" fill="#F4433C"/><rect x="16.5" y="8.5" width="12" height="2.8" rx="1" fill="#6B6880"/>
+  </symbol><symbol id="i-portail" viewBox="0 0 32 32">
+  <rect x="2" y="9" width="4.2" height="19" rx="1.2" fill="#6B6880"/><rect x="25.8" y="9" width="4.2" height="19" rx="1.2" fill="#6B6880"/>
+  <rect x="1.3" y="7" width="5.6" height="2.8" rx="1" fill="#A9A4B8"/><rect x="25.1" y="7" width="5.6" height="2.8" rx="1" fill="#A9A4B8"/>
+  <path d="M6.2 15.5Q16 7.5 25.8 15.5" stroke="#6B6880" stroke-width="2" fill="none"/>
+  <path d="M6.2 25.5H25.8M9.6 13.6v11.9M13 12.2v13.3M19 12.2v13.3M22.4 13.6v11.9" stroke="#6B6880" stroke-width="1.7" fill="none"/>
+  <path d="M16 11.6v13.9" stroke="#A9A4B8" stroke-width="1"/>
+  <rect x=".5" y="27.8" width="31" height="2.4" rx="1.2" fill="#A9A4B8"/>
+</symbol>
+<symbol id="i-appareils" viewBox="0 0 32 32">
+  <rect x="1.5" y="3.5" width="14" height="14" rx="2.4" fill="#DCD8E4"/><rect x="3.5" y="6" width="10" height="9.5" rx=".8" fill="#7BC8F6"/>
+  <rect x="3.5" y="6" width="10" height="5" fill="#F7F5FA"/><rect x="3.5" y="7.6" width="10" height=".6" fill="#C9C4D4"/><rect x="3.5" y="9.2" width="10" height=".6" fill="#C9C4D4"/>
+  <rect x="3.5" y="10.4" width="10" height="1.1" fill="#F4433C"/><rect x=".8" y="1.8" width="15.4" height="3.1" rx="1.1" fill="#6B6880"/>
+  <rect x="15.2" y="15.5" width="2.9" height="14" rx=".9" fill="#6B6880"/><rect x="28.6" y="15.5" width="2.9" height="14" rx=".9" fill="#6B6880"/>
+  <rect x="14.7" y="14.3" width="3.9" height="1.9" rx=".8" fill="#A9A4B8"/><rect x="28.1" y="14.3" width="3.9" height="1.9" rx=".8" fill="#A9A4B8"/>
+  <path d="M18.1 20.6Q23.35 16.2 28.6 20.6" stroke="#6B6880" stroke-width="1.5" fill="none"/>
+  <path d="M18.1 27.4H28.6M20.2 19.2v8.2M22.3 18.3v9.1M24.4 18.3v9.1M26.5 19.2v8.2" stroke="#6B6880" stroke-width="1.2" fill="none"/>
+  <path d="M23.35 18.1v9.3" stroke="#A9A4B8" stroke-width=".7"/>
+  <rect x="13.6" y="29.3" width="19" height="1.7" rx=".85" fill="#A9A4B8"/>
+</symbol>
+<symbol id="i-support" viewBox="0 0 32 32">
+  <rect x="2" y="6.5" width="23" height="17" rx="3" fill="#DCD8E4"/><rect x="3.3" y="7.8" width="20.4" height="14.4" rx="2" fill="#F7F5FA"/>
+  <path d="M4.4 9.4 13.5 16l9.1-6.6" stroke="#A9A4B8" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="24" cy="22.5" r="7" fill="#1C9BF0"/>
+  <path d="M21.8 20.7a2.3 2.3 0 1 1 3.2 2.1c-.6.3-1 .7-1 1.4v.3" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <circle cx="24" cy="26.6" r="1.15" fill="#fff"/>
+</symbol>
+<symbol id="i-cloud" viewBox="0 0 32 32">
+  <path d="M8.8 26h16.1a6.6 6.6 0 0 0 1.2-13.1 9 9 0 0 0-17.2 1.4A6 6 0 0 0 8.8 26z" fill="#DCD8E4"/>
+  <path d="M8.9 24.5h15.9a5.1 5.1 0 0 0 .9-10.1l-.8-.2-.3-.8a7.5 7.5 0 0 0-14.3 1.1l-.2.9-.9.2a4.5 4.5 0 0 0-.3 8.9z" fill="#F7F5FA"/>
+  <path d="M13 21.6v-6.4M10.4 17.6 13 15l2.6 2.6M19 15.2v6.4M16.4 19.2 19 21.8l2.6-2.6" stroke="#1C9BF0" stroke-width="2.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</symbol>

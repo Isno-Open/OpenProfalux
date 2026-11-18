@@ -1,0 +1,21 @@
+{
+  "name": "openprofalux-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Interface web du boitier OpenProfalux, en Vue 3 (issue #120). Construite par tools/build_ui.sh, embarquee par le firmware.",
+  "scripts": {
+    "dev": "vite",
+    "dev:maquette": "vite --mode maquette",
+    "build": "vite build",
+    "build:maquette": "vite build --mode maquette"
+  },
+  "dependencies": {
+    "qrcode-generator": "2.0.4",
+    "vue": "3.5.44"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.10",
+    "vite": "8.3.5"
+  }
+}
