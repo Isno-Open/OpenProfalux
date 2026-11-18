@@ -1,11 +1,14 @@
 // Les routes du firmware (web_ui.c) pour Reseau (Wi-Fi, MQTT, Cloud), OTA, Systeme et Support. Memes
 // appels et memes corps que l'interface d'avant (app.js).
-import { CHECK_PHASE, DOWNLOAD, FAILURE, HTTP_UNAUTHORIZED, NO_SERIAL, OTA_STATE, SCAN_STATE, type CheckPhase, type DownloadKey } from '../domain';
+import {
+  CHECK_PHASE, DOWNLOAD, FAILURE, HTTP_UNAUTHORIZED, NO_SERIAL, OTA_STATE, REBOOT_MARGIN_MS, SCAN_STATE, bootInstant,
+  type CheckPhase, type DownloadKey,
+} from '../domain';
 import { json, post, wait, poll } from './http';
 import type {
   CaptureLast, CloudGrantPoll, CloudGrantReply, CloudPairReply, CloudStatus, Config, ConfigReply, ConfigUpdate, Dataset, Diag,
   GainCalibration, Health, MqttDiscovery, MultiCaptureReply, OkReply, OtaInstallReply, OtaStatus, RadiosReply, ReceptionTest,
-  ReportBody, ReportReply, RfPage, UndoInfo,
+  ReportBody, ReportReply, RfPage, Status, UndoInfo,
 } from './types';
 
 /* Avancement d'une mise a jour : fraction (null = inconnue) et message. */
@@ -20,6 +23,17 @@ const DOWNLOAD_LINKS: Record<DownloadKey, string> = { [DOWNLOAD.backup]: '/api/b
 /* Les fausses donnees n'ont pas de fichiers : elles mettent null, et l'ecran fabrique le fichier. */
 const downloadLinks = (): Record<DownloadKey, string> | null => DOWNLOAD_LINKS;
 const asReply = (d: OkReply): OkReply => d;
+
+/* Une relecture pendant un redemarrage : abandonnee au bout de REBOOT_POLL_TIMEOUT_MS (null), pour que la suivante
+   reparte sur une connexion neuve. Sans cela, une requete partie juste avant le redemarrage reste suspendue jusqu'a
+   ce que TCP abandonne (pres de 40 s mesurees sur un ATOM), bien apres le retour du boitier. */
+const REBOOT_POLL_TIMEOUT_MS = 4000;
+async function jsonWithin<T>(url: string): Promise<T | null> {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), REBOOT_POLL_TIMEOUT_MS);
+  try { return await json<T>(url, { signal: controller.signal }); }
+  catch { return null; }
+  finally { clearTimeout(timer); }
+}
 
 export default {
   downloadLinks: downloadLinks(),
@@ -113,19 +127,25 @@ export default {
     file.arrayBuffer().then(b => x.send(b));
   }),
   otaRollback: () => post('/api/ota/rollback'),
-  /* Attendre la fin d'un redemarrage : que le boitier tombe, puis qu'il reponde de nouveau (45 s au plus). Tant
-     qu'il repond sans etre tombe, il verifie encore l'image recue, ou va redemarrer (3 s apres l'etat
-     OTA_STATE.rebooting) : une reponse de ce moment-la ne prouve rien. Image refusee a la verification
-     (OTA_STATE.failed) : il garde sa version et ne redemarre pas, rejet avec la raison. Rend l'etat d'apres le
-     redemarrage (version), ou null. */
-  async waitForReboot(): Promise<OtaStatus | null> {
+  /* Attendre la fin d'un redemarrage (45 s au plus) : le boitier repond de nouveau, au repos, et il a redemarre,
+     ce que dit son uptime (bootInstant : son instant de demarrage a avance depuis bootBefore, lu avant
+     l'installation). Une requete en echec ne suffit pas a le savoir : le navigateur relance de lui-meme une
+     requete coupee par le redemarrage, et elle aboutit une fois le boitier revenu, sans echec visible. A l'inverse,
+     un boitier qui repond en pleine installation (coupure Wi-Fi) ou juste avant de redemarrer n'a pas redemarre.
+     Sans bootBefore (statut jamais lu), repli : une relecture en echec, puis le boitier au repos. Image refusee a
+     la verification (OTA_STATE.failed) : il garde sa version et ne redemarre pas, rejet avec la raison. Rend l'etat
+     d'apres le redemarrage (version), ou null. */
+  async waitForReboot(bootBefore: number | null): Promise<OtaStatus | null> {
     let down = false;
     for (let i = 0; i < 45; i++) {
       await wait(1000);
-      const s = await json<OtaStatus>('/api/ota/status').catch(() => null);
+      const s = await jsonWithin<OtaStatus>('/api/ota/status');
       if (!s) { down = true; continue; }
-      if (down) return s;
       if (s.state === OTA_STATE.failed) return Promise.reject(`image refusée à la vérification (${s.msg || 'voir le journal'})`);
+      if (s.state !== OTA_STATE.idle) continue;
+      if (bootBefore === null) { if (down) return s; continue; }
+      const st = await jsonWithin<Status>('/api/status');
+      if (st && bootInstant(st.uptime, Date.now()) > bootBefore + REBOOT_MARGIN_MS) return s;
     }
     return null;
   },

@@ -34,6 +34,7 @@ export const state = reactive<AppState>({
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let failures = 0, refreshing = false, launched = false;
+let loadingProfiles: Promise<void> | null = null;
 
 export function toast(text: string): void {
   state.toast = { text };
@@ -50,6 +51,15 @@ whenUnauthorized(async () => {
   state.loggedIn = false;
 });
 
+/* profiles.json : lu au lancement, puis relu a chaque relecture du statut tant qu'il manque (coupure au
+   demarrage) : sans lui, Ajouter un appareil et les reglages d'emission n'ont rien a montrer. L'ancienne
+   interface le redemandait de meme a chaque ecran qui en avait besoin. */
+function loadProfiles(): Promise<void> {
+  if (state.profiles) return Promise.resolve();
+  loadingProfiles ??= api.profiles().then(p => { state.profiles = p; }, () => {}).finally(() => { loadingProfiles = null; });
+  return loadingProfiles;
+}
+
 export async function refresh(): Promise<void> {
   if (refreshing || !state.loggedIn) return;
   refreshing = true;
@@ -61,6 +71,7 @@ export async function refresh(): Promise<void> {
     state.statusOkAt = Date.now();
     failures = 0;
     state.offline = false;
+    if (!state.profiles) loadProfiles();
   } catch (e) {
     if (e !== HTTP_UNAUTHORIZED && ++failures >= OFFLINE_AFTER_FAILURES) state.offline = true;
   } finally {
@@ -78,7 +89,7 @@ export async function checkUpdate(): Promise<OtaStatus | null> {
 /* L'application une fois la session ouverte : profils, statut, rafraichissements. Une seule fois. */
 async function launch(): Promise<void> {
   state.loggedIn = true;
-  if (!state.profiles) state.profiles = await api.profiles().catch(() => null);
+  await loadProfiles();
   await refresh();
   if (launched) return;
   launched = true;

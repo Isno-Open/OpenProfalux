@@ -49,7 +49,12 @@ export const BAND = { mhz868: '868', mhz433: '433' } as const;
 export const RADIO_PROFILE = { profalux: 'profalux', eveno: 'eveno', custom: 'custom' } as const;
 
 /* Etats de /api/ota/status (champ state) et de l'image (champ img). */
-export const OTA_STATE = { rebooting: 4, failed: 99 } as const;
+export const OTA_STATE = { idle: 0, rebooting: 4, failed: 99 } as const;
+/* Instant du dernier demarrage du boitier (ms, horloge du navigateur), d'apres son uptime (s, /api/status) lu a
+   l'instant at : il avance a chaque redemarrage. L'uptime est arrondi a la seconde : deux demarrages se
+   distinguent au-dela de REBOOT_MARGIN_MS. */
+export const bootInstant = (uptimeS: number, at: number): number => at - uptimeS * 1000;
+export const REBOOT_MARGIN_MS = 3000;
 export const OTA_IMAGE = { trial: 'essai' } as const;
 
 /* Balayage « Caler sur ma telecommande » (/api/rx/sweep) et calibration du gain (/api/rx/calibrate). */

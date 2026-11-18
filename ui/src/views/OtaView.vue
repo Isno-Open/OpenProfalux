@@ -9,7 +9,7 @@ import type { OtaStatus } from '../api/types';
 import type { Progress } from '../api/real-system';
 import { withoutV, isNewer, updateAvailable } from '../versions';
 import {
-  BUTTON, CHECK_PHASE, FAILURE, FLAG, HTTP_CONFLICT, OTA_CONFIRM, OTA_IMAGE, OTA_SOURCE, TONE, isFlagOn,
+  BUTTON, CHECK_PHASE, FAILURE, FLAG, HTTP_CONFLICT, OTA_CONFIRM, OTA_IMAGE, OTA_SOURCE, TONE, bootInstant, isFlagOn,
   type OtaConfirm, type OtaSource, type Tone,
 } from '../domain';
 import { ICON } from '../icons';
@@ -78,11 +78,14 @@ async function checkLatest(): Promise<void> {
   } finally { checking.value = false; }
 }
 
-/* Le boitier redemarre : on attend qu'il soit tombe puis revenu, puis on recharge la page (sa nouvelle interface).
-   Une image refusee a la verification rejette : l'appelant affiche l'echec. */
-async function waitAndReload(text: string): Promise<void> {
+/* L'instant du dernier demarrage, d'apres le statut deja relu par l'interface : lu AVANT l'installation, il permet
+   de reconnaitre le redemarrage (voir waitForReboot). */
+const lastBoot = (): number | null => (state.status && state.statusOkAt ? bootInstant(state.status.uptime, state.statusOkAt) : null);
+/* Le boitier redemarre : on attend qu'il soit revenu sur un nouveau demarrage, puis on recharge la page (sa nouvelle
+   interface). Une image refusee a la verification rejette : l'appelant affiche l'echec. */
+async function waitAndReload(text: string, bootBefore: number | null): Promise<void> {
   outcome.value = { tone: TONE.ok, text };
-  const s = await api.waitForReboot();
+  const s = await api.waitForReboot(bootBefore);
   outcome.value = s ? { tone: TONE.ok, text: `Redémarré sur la version ${s.version || '?'}, rechargement…` }
     : { tone: TONE.warning, text: 'Le boîtier ne répond pas encore : recharge la page dans un instant.' };
   if (s) setTimeout(() => location.reload(), 900);
@@ -92,12 +95,13 @@ async function install(source: OtaSource): Promise<void> {
   const fromGithub = source === OTA_SOURCE.github;
   progress.value = { value: 0, text: fromGithub ? 'téléchargement…' : 'envoi…' };
   const onProgress: Progress = (value, text) => { progress.value = { value: value ?? progress.value?.value ?? null, text }; };
+  const bootBefore = lastBoot();
   try {
     if (fromGithub) await api.otaInstall(onProgress, status.value?.latest_url ?? '');
     else if (file.value) await api.otaUpload(file.value, onProgress);
     else return;
     progress.value = { value: 1, text: fromGithub ? 'installée' : 'reçu' };
-    await waitAndReload(fromGithub ? 'Installée : redémarrage, reconnexion…' : 'Reçu : vérification et redémarrage (environ 5 s), reconnexion…');
+    await waitAndReload(fromGithub ? 'Installée : redémarrage, reconnexion…' : 'Reçu : vérification et redémarrage (environ 5 s), reconnexion…', bootBefore);
   } catch (e) {
     progress.value = null;
     outcome.value = { tone: TONE.danger, text: `Échec${typeof e === 'string' ? ` : ${e}` : ''}. Le boîtier garde sa version.` };
@@ -105,6 +109,7 @@ async function install(source: OtaSource): Promise<void> {
 }
 async function rollback(): Promise<void> {
   confirm.value = OTA_CONFIRM.none;
+  const bootBefore = lastBoot();
   try { await api.otaRollback(); }
   catch (e) {
     if (e === HTTP_CONFLICT && status.value) {   // refus : aucune version precedente valide (le boitier ne redemarre pas)
@@ -112,7 +117,7 @@ async function rollback(): Promise<void> {
       return;
     }
   }
-  try { await waitAndReload(`Retour à la version ${status.value?.precedente || 'précédente'} : redémarrage, reconnexion…`); }
+  try { await waitAndReload(`Retour à la version ${status.value?.precedente || 'précédente'} : redémarrage, reconnexion…`, bootBefore); }
   catch (e) { outcome.value = { tone: TONE.danger, text: `Échec : ${e}.` }; }
 }
 async function toggleAuto(on: boolean): Promise<void> {
