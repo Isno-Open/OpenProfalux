@@ -1,11 +1,12 @@
-<script setup>
-// Une liste deroulante. options : [{ value, label, disabled }].
-const modele = defineModel({ type: [String, Number], default: '' });
-defineProps({ options: { type: Array, required: true }, id: { type: String, default: null } });
+<script setup lang="ts">
+// Une liste deroulante.
+export interface SelectOption { value: string | number; label: string; disabled?: boolean }
+const model = defineModel<string | number>({ default: '' });
+withDefaults(defineProps<{ options: SelectOption[]; id?: string }>(), { id: undefined });
 </script>
 
 <template>
-  <select :id="id" v-model="modele" class="op-input op-select">
+  <select :id="id" v-model="model" class="op-input op-select">
     <option v-for="o in options" :key="o.value" :value="o.value" :disabled="o.disabled">{{ o.label }}</option>
   </select>
 </template>

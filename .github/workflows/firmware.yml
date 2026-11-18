@@ -64,8 +64,9 @@ jobs:
       - name: Aucune boite du navigateur dans l'interface
         run: python3 tools/check_web_dialogs.py
 
-  # L'interface web (ui/, Vue 3 + Vite) : construite une fois, puis embarquee par chaque carte. Node fige
-  # (meme version que l'image de tools/build_ui.sh), paquets figes par ui/package-lock.json (npm ci).
+  # L'interface web (ui/, Vue 3, TypeScript et Vite) : types verifies, construite une fois, puis embarquee par
+  # chaque carte. Node fige (meme version que l'image de tools/build_ui.sh), paquets figes par
+  # ui/package-lock.json (npm ci).
   interface:
     name: Interface web
     runs-on: ubuntu-latest
@@ -75,7 +76,7 @@ jobs:
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22.23.3
-      - name: Construire ui/ (npm ci + vite build)
+      - name: Construire ui/ (npm ci, vue-tsc, vite build)
         run: tools/build_ui.sh
       - name: Poids de l'interface (gzip)
         run: |

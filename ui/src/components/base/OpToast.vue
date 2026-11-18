@@ -1,9 +1,9 @@
-<script setup>
-import { etat } from '../../store.js';
+<script setup lang="ts">
+import { state } from '../../store';
 </script>
 
 <template>
-  <div class="op-toast" :class="{ visible: etat.toast }" role="status" aria-live="polite">{{ etat.toast && etat.toast.texte }}</div>
+  <div class="op-toast" :class="{ visible: state.toast }" role="status" aria-live="polite">{{ state.toast?.text }}</div>
 </template>
 
 <style scoped>

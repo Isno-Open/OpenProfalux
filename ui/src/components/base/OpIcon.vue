@@ -1,9 +1,7 @@
-<script setup>
+<script setup lang="ts">
 // Une icone de la charte (voir IconSprite) : le meme dessin sur tous les appareils, contrairement aux emojis.
-defineProps({
-  name: { type: String, required: true },
-  size: { type: String, default: '1.3em' },
-});
+import type { IconName } from '../../icons';
+withDefaults(defineProps<{ name: IconName; size?: string }>(), { size: '1.3em' });
 </script>
 
 <template>

@@ -12,13 +12,13 @@ import re
 import sys
 
 DIALOG_CALL = re.compile(r"\b(?:window\.)?(alert|confirm|prompt)\s*\(")
-SUFFIXES = {".js", ".vue", ".html"}
+SUFFIXES = {".js", ".ts", ".vue", ".html"}
 
 roots = [pathlib.Path(a) for a in sys.argv[1:]] or [pathlib.Path("ui/src"), pathlib.Path("firmware/main/web")]
-found, vus = [], 0
+found, seen = [], 0
 for root in roots:
     for f in sorted(p for p in root.rglob("*") if p.suffix in SUFFIXES and "node_modules" not in p.parts):
-        vus += 1
+        seen += 1
         for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             if DIALOG_CALL.search(line):
                 found.append(f"{f}:{n}: {line.strip()}")
@@ -26,4 +26,4 @@ if found:
     print("Boite du navigateur interdite, confirmer dans la page ou toast() :")
     print("\n".join(found))
     sys.exit(1)
-print(f"aucune boite du navigateur dans {' et '.join(map(str, roots))} ({vus} fichiers)")
+print(f"aucune boite du navigateur dans {' et '.join(map(str, roots))} ({seen} fichiers)")

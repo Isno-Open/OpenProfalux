@@ -1,15 +1,12 @@
-<script setup>
-defineProps({
-  items: { type: Array, required: true },   // [{ id, label }]
-  active: { type: String, default: '' },
-});
-defineEmits(['choisir']);
+<script setup lang="ts" generic="Id extends string">
+withDefaults(defineProps<{ items: { id: Id; label: string }[]; active?: Id | null }>(), { active: null });
+defineEmits<{ choose: [id: Id] }>();
 </script>
 
 <template>
   <nav class="op-subtabs" aria-label="Sections">
     <button v-for="s in items" :key="s.id" type="button" class="subtab" :class="{ active: s.id === active }"
-            :aria-current="s.id === active ? 'page' : null" @click="$emit('choisir', s.id)">{{ s.label }}</button>
+            :aria-current="s.id === active ? 'page' : undefined" @click="$emit('choose', s.id)">{{ s.label }}</button>
   </nav>
 </template>
 

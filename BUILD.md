@@ -27,8 +27,8 @@ fragment de chaque carte se retrouve dans son `sdkconfig`.
 
 ESP-IDF **v6.1** : depuis la migration du 2026-09-27, le dépôt ne compile plus en v5.
 
-**D'abord l'interface web.** Elle vit dans `ui/` (Vue 3 + Vite) et se construit dans `ui/dist`, que le
-firmware compresse et embarque. Depuis la racine du dépôt :
+**D'abord l'interface web.** Elle vit dans `ui/` (Vue 3, TypeScript et Vite) et se construit dans `ui/dist`,
+que le firmware compresse et embarque, après vérification des types. Depuis la racine du dépôt :
 
 ```bash
 tools/build_ui.sh

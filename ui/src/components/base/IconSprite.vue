@@ -1,10 +1,10 @@
-<script setup>
+<script setup lang="ts">
 // Les dessins des icones, poses une seule fois dans la page ; OpIcon les reprend par <use>.
-import symboles from '../../assets/icones.svg.txt?raw';
+import symbols from '../../assets/icons.svg.txt?raw';
 </script>
 
 <template>
-  <svg class="sprite" aria-hidden="true" v-html="symboles" />
+  <svg class="sprite" aria-hidden="true" v-html="symbols" />
 </template>
 
 <style scoped>

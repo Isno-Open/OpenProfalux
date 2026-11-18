@@ -1,21 +1,21 @@
-<script setup>
+<script setup lang="ts">
 // Une liste d'etiquettes avec une croix chacune, et un champ pour en ajouter (Entree).
 import { ref } from 'vue';
-defineProps({ tags: { type: Array, required: true }, placeholder: { type: String, default: '' }, mono: Boolean });
-const emit = defineEmits(['ajouter', 'retirer']);
-const saisie = ref('');
-function valider() {
-  const t = saisie.value.trim();
-  if (t) emit('ajouter', t);
-  saisie.value = '';
+withDefaults(defineProps<{ tags: string[]; placeholder?: string; mono?: boolean }>(), { placeholder: '' });
+const emit = defineEmits<{ add: [tag: string]; remove: [tag: string] }>();
+const draft = ref('');
+function submit(): void {
+  const t = draft.value.trim();
+  if (t) emit('add', t);
+  draft.value = '';
 }
 </script>
 
 <template>
   <div class="op-tagbox">
     <span v-for="t in tags" :key="t" class="tag" :class="{ mono }">{{ t }}
-      <button type="button" :aria-label="`Retirer ${t}`" title="Retirer" @click="emit('retirer', t)">×</button></span>
-    <input v-model="saisie" :placeholder="placeholder" spellcheck="false" autocomplete="off" :class="{ mono }" @keydown.enter.prevent="valider">
+      <button type="button" :aria-label="`Retirer ${t}`" title="Retirer" @click="emit('remove', t)">×</button></span>
+    <input v-model="draft" :placeholder="placeholder" spellcheck="false" autocomplete="off" :class="{ mono }" @keydown.enter.prevent="submit">
   </div>
 </template>
 

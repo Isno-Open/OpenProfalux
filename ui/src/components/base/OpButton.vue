@@ -1,13 +1,15 @@
-<script setup>
+<script setup lang="ts">
 import OpIcon from './OpIcon.vue';
-defineProps({
-  variant: { type: String, default: 'normal' },   // normal | primary | ghost | danger
-  icon: { type: String, default: '' },
-  wide: Boolean,
-  small: Boolean,
-  type: { type: String, default: 'button' },
-  disabled: Boolean,
-});
+import { BUTTON, type ButtonVariant } from '../../domain';
+import type { IconName } from '../../icons';
+withDefaults(defineProps<{
+  variant?: ButtonVariant;
+  icon?: IconName;
+  wide?: boolean;
+  small?: boolean;
+  type?: 'button' | 'submit';
+  disabled?: boolean;
+}>(), { variant: BUTTON.normal, icon: undefined, type: 'button' });
 </script>
 
 <template>

@@ -12,20 +12,20 @@ button{font:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 .page{max-width:var(--page);margin:0 auto;padding:0 clamp(14px,4vw,22px)}
-main.contenu{padding:14px 0 70px;display:grid;gap:var(--gap)}
+main.content{padding:14px 0 70px;display:grid;gap:var(--gap)}
 .hint{color:var(--muted);font-size:.85rem;margin:0}
-.grille{display:grid;gap:var(--gap)}
-@media (min-width:620px){.grille.deux{grid-template-columns:1fr 1fr}}
-.rangee{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
-.rangee.fin{justify-content:flex-end}
+.grid{display:grid;gap:var(--gap)}
+@media (min-width:620px){.grid.two{grid-template-columns:1fr 1fr}}
+.row{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+.row.end{justify-content:flex-end}
 
 /* Sur telephone, la barre d'onglets passe en bas ; le contenu lui laisse la place. */
-@media (max-width:640px){main.contenu{padding-bottom:96px}}
+@media (max-width:640px){main.content{padding-bottom:96px}}
 
 /* Champs de saisie, communs a tous les formulaires (OpField les entoure d'un libelle et d'une aide). */
 .op-input{width:100%;padding:9px 11px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font:inherit;font-size:.92rem}
 .op-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
 textarea.op-input{resize:vertical;min-height:4.5em;line-height:1.45}
 .op-input.mono{font-family:var(--mono)}
-.titre-section{margin:6px 0 2px}
-.lien-retour{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--accent);background:none;border:0;padding:0;cursor:pointer;font-weight:600;white-space:nowrap}
+.section-title{margin:6px 0 2px}
+.back-link{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--accent);background:none;border:0;padding:0;cursor:pointer;font-weight:600;white-space:nowrap}
