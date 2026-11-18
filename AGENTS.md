@@ -54,5 +54,5 @@ Signaler un contrôle ajouté sans appel, ou un banc qui ne tourne pas dans la C
 
 ### Écriture
 
-Pas de tiret cadratin ni demi-cadratin (`—`, `–`) dans le code, les commentaires, la documentation
+Pas de tiret cadratin ni demi-cadratin (U+2014, U+2013) dans le code, les commentaires, la documentation
 ou les messages : reformuler (virgules, parenthèses, deux-points).
