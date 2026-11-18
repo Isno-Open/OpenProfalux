@@ -164,8 +164,14 @@ export default {
     ota.precedente = ota.version; ota.version = '0.2.16'; ota.latest = 'v0.2.16'; ota.img = 'essai';
     return { redemarre: true };
   },
-  async attendreRetour() { await attendre(1500); return true; },
+  /* Une image dont le nom contient « refus » est refusee a la verification, comme par le boitier (etat 99). */
+  async attendreRetour() {
+    await attendre(1500);
+    if (ota.refus) { ota.refus = false; return Promise.reject('image refusée à la vérification (ESP_ERR_OTA_VALIDATE_FAILED)'); }
+    return { ...ota, state: 0 };
+  },
   async otaEnvoyer(fichier, suivi) {
+    ota.refus = /refus/i.test(fichier.name || '');
     for (let p = 0; p <= 100; p += 4) { suivi(p / 100, `envoi ${Math.round((fichier.size / 1024) * p / 100)} / ${Math.round(fichier.size / 1024)} Ko`); await attendre(120); }
     return ok();
   },

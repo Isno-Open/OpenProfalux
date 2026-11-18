@@ -1,7 +1,7 @@
 <script setup>
 // Les telecommandes captees par le boitier (meme celle d'un voisin), et celles qu'il ignore. Une
 // telecommande supprimee revient si elle est de nouveau captee ; une telecommande ignoree ne revient plus.
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { etat, rafraichir, toast } from '../../store.js';
 import { aVirgule } from '../../profils.js';
 import api from '../../api/index.js';
@@ -38,7 +38,14 @@ async function creerVolet(serial) {
     rafraichir();
   } catch (e) { toast(`Refusé : ${e}`); }
 }
-async function nommer(serial, nom) { await api.telecNommer(serial, nom.trim()); rafraichir(); }
+/* Le nom en cours de saisie, par telecommande : le statut relu toutes les 3 s ne l'ecrase pas. Il redevient celui
+   du boitier une fois enregistre. */
+const brouillons = reactive({});
+async function nommer(serial, nom) {
+  await api.telecNommer(serial, nom.trim()).catch(() => toast('Échec du renommage'));
+  await rafraichir();
+  delete brouillons[serial];
+}
 /* Sans confirmation : une telecommande supprimee revient d'un appui, une ignoree d'un clic sur sa croix. */
 async function supprimer(serial, nom) {
   try { await api.telecSupprimer(serial); toast(`${libelle(serial, nom)} supprimée`); } catch (e) { toast(`Refusé : ${e}`); }
@@ -62,7 +69,8 @@ async function retablir(s) { await api.telecRetablir(s); toast(`${s} n'est plus 
       <OpStatline v-if="pleine" tone="danger"><b>Liste pleine :</b> une nouvelle télécommande ne pourra pas être enregistrée. Supprime une télécommande inutile.</OpStatline>
       <div v-for="[serial, nom] in telecs" :key="serial" class="telec">
         <code class="serial">{{ serial }}</code>
-        <input class="op-input nom" :value="nom" placeholder="nom…" :aria-label="`Nom de la télécommande ${serial}`" @change="e => nommer(serial, e.target.value)">
+        <input class="op-input nom" :value="brouillons[serial] ?? nom" placeholder="nom…" :aria-label="`Nom de la télécommande ${serial}`"
+               @input="e => (brouillons[serial] = e.target.value)" @change="e => nommer(serial, e.target.value)">
         <span class="etat">
           <SignalBars v-if="rssi(serial) != null" :rssi="rssi(serial)" />
           <BatteryBadge :etat="(st.remote_battery || {})[serial] || null" />

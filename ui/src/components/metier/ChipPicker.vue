@@ -9,6 +9,7 @@ const props = defineProps({
   ajout: { type: String, default: '' },
   vide: { type: String, default: 'Rien à choisir pour l\'instant.' },
   label: { type: String, default: '' },
+  disabled: Boolean,   // pendant une operation (capture) : le choix ne bouge pas
 });
 const choisi = val => (props.multiple ? (modele.value || []).includes(val) : modele.value === val);
 function basculer(val) {
@@ -22,8 +23,8 @@ function basculer(val) {
 
 <template>
   <div class="chip-picker" role="group" :aria-label="label || null">
-    <OpChip v-for="o in options" :key="o.value" :on="choisi(o.value)" :icon="o.icon || ''" @click="basculer(o.value)">{{ o.label }}</OpChip>
-    <OpChip v-if="ajout" ajout :on="choisi('__nouveau')" @click="basculer('__nouveau')">{{ ajout }}</OpChip>
+    <OpChip v-for="o in options" :key="o.value" :on="choisi(o.value)" :icon="o.icon || ''" :disabled="disabled" @click="basculer(o.value)">{{ o.label }}</OpChip>
+    <OpChip v-if="ajout" ajout :on="choisi('__nouveau')" :disabled="disabled" @click="basculer('__nouveau')">{{ ajout }}</OpChip>
     <span v-if="!options.length && !ajout" class="hint">{{ vide }}</span>
   </div>
 </template>

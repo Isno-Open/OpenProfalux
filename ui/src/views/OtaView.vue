@@ -67,12 +67,14 @@ async function verifier() {
   } finally { verifEnCours.value = false; }
 }
 
-/* Le boitier redemarre : on attend qu'il revienne, puis on recharge la page (sa nouvelle interface). */
+/* Le boitier redemarre : on attend qu'il soit tombe puis revenu, puis on recharge la page (sa nouvelle
+   interface). Une image refusee a la verification rejette : l'appelant affiche l'echec. */
 async function attendreEtRecharger(texte) {
   fin.value = { ton: 'ok', texte };
-  const revenu = await api.attendreRetour();
-  fin.value = { ton: revenu ? 'ok' : 'alerte', texte: revenu ? 'Mise à jour installée, rechargement…' : 'Le boîtier ne répond pas encore : recharge la page dans un instant.' };
-  if (revenu) setTimeout(() => location.reload(), 900);
+  const s = await api.attendreRetour();
+  fin.value = s ? { ton: 'ok', texte: `Redémarré sur la version ${s.version || '?'}, rechargement…` }
+    : { ton: 'alerte', texte: 'Le boîtier ne répond pas encore : recharge la page dans un instant.' };
+  if (s) setTimeout(() => location.reload(), 900);
 }
 async function installer(source) {
   confirmer.value = ''; fin.value = null;
@@ -97,7 +99,8 @@ async function revenir() {
       return;
     }
   }
-  await attendreEtRecharger(`Retour à la version ${(st.value && st.value.precedente) || 'précédente'} : redémarrage, reconnexion…`);
+  try { await attendreEtRecharger(`Retour à la version ${(st.value && st.value.precedente) || 'précédente'} : redémarrage, reconnexion…`); }
+  catch (e) { fin.value = { ton: 'danger', texte: `Échec : ${e}.` }; }
 }
 async function basculerAuto(v) {
   const r = await api.enregistrerConfig({ update_auto: v }).catch(() => null);

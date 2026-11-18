@@ -96,13 +96,20 @@ export default {
     fichier.arrayBuffer().then(b => x.send(b));
   }),
   otaRevenir: () => post('/api/ota/rollback'),
-  /* Attendre que le boitier revienne apres un redemarrage (~15 s au plus). */
+  /* Attendre la fin d'un redemarrage : que le boitier tombe, puis qu'il reponde de nouveau (45 s au plus). Tant
+     qu'il repond sans etre tombe, il verifie encore l'image recue, ou va redemarrer (3 s apres l'etat 4) : une
+     reponse de ce moment-la ne prouve rien. Image refusee a la verification (etat 99) : il garde sa version et
+     ne redemarre pas, rejet avec la raison. Rend l'etat d'apres le redemarrage (version), ou null. */
   async attendreRetour() {
-    for (let i = 0; i < 15; i++) {
+    let tombe = false;
+    for (let i = 0; i < 45; i++) {
       await attendre(1000);
-      if (await json('/api/ota/status').catch(() => null)) return true;
+      const s = await json('/api/ota/status').catch(() => null);
+      if (!s) { tombe = true; continue; }
+      if (tombe) return s;
+      if (s.state === 99) return Promise.reject(`image refusée à la vérification (${s.msg || 'voir le journal'})`);
     }
-    return false;
+    return null;
   },
 
   /* ── Sauvegarde ── */

@@ -74,10 +74,13 @@ const enCours = ref('');
 const echec = ref('');
 const erreurNom = ref('');
 const panneau = ref(null);
-/* Frequence de CETTE capture : reglages avances, sinon le profil de marque, sinon la fiche. */
+/* Frequence de CETTE capture : les reglages avances d'abord. Puis, depuis la pyramide, le profil choisi ; pour un
+   appareil existant, sa frequence enregistree (porteuse calee, 0 = celle de sa marque), puis sa marque. */
 const frequence = computed(() => {
   const r = panneau.value ? panneau.value.lire() : {};
-  return r.freq_khz || (profilEffectif.value && profilEffectif.value.freq_khz) || (appareil.value && appareil.value.freq_khz) || 0;
+  const fiche = appareil.value && appareil.value.freq_khz;
+  const marque = profilEffectif.value && profilEffectif.value.freq_khz;
+  return r.freq_khz || (profil.value ? marque || fiche : fiche || marque) || 0;
 });
 /* L'enrolement n'est propose comme alternative que si la marque en declare un (pas CAME). */
 const enrolement = computed(() => {
@@ -96,26 +99,30 @@ async function capturer(cmd) {
   const label = actions.value.find(a => a.cmd === cmd).label;
   const p = profilEffectif.value || {};
   const reglages = profil.value && panneau.value ? panneau.value.lire() : {};
+  /* L'appareil vise est fige pour toute la capture : choisir un autre appareil pendant l'attente ne doit pas lui
+     faire recevoir les reglages de celle-ci. */
+  const cible = id.value, nouveau = choix.value === '__nouveau';
+  const serialCible = (appareil.value && (appareil.value.serials || [])[0]) || '';
   enCours.value = cmd;
   try {
     const r = await avecRadio(async () => api.capturer({
-      id: id.value, action: cmd, rejeu: rejeu.value, type: (types()[typeCle.value] || {}).code || 0, marque: p.marque,
+      id: cible, action: cmd, rejeu: rejeu.value, type: (types()[typeCle.value] || {}).code || 0, marque: p.marque,
       radio: await radioPour(p.band), freq_khz: frequence.value, rx: p.rx, existe: !!appareil.value,
       nomTelec: serialTelec.value ? '' : nomTelec.value.trim(),
       serialsConnus: (appareil.value && appareil.value.serials) || [], virt: virtuel.value,
     }));
     /* Les reglages avances (ajout depuis la pyramide) passent a l'appareil, comme la capture les a utilises. */
     if (profil.value) {
-      const corps = { id: id.value };
+      const corps = { id: cible };
       for (const [k, v] of Object.entries(reglages)) if (v) corps[k] = v;
       if (p.marque) corps.marque = p.marque;
       if (Object.keys(corps).length > 1) await api.emission(corps).catch(() => {});
     }
     toast(rejeu.value ? `✓ ${label} captée (${r.n} impulsions)` : `✓ ${label} apprise (0x${r.button}, ${r.rssi} dBm)`);
-    if (choix.value === '__nouveau') choix.value = id.value;
+    if (nouveau && choix.value === '__nouveau') choix.value = cible;
     await rafraichir();
   } catch (e) {
-    if (e && e.autre) toast(`Pas la bonne télécommande : trame de ${e.autre}, le volet utilise ${appareil.value.serials[0]}`);
+    if (e && e.autre) toast(`Pas la bonne télécommande : trame de ${e.autre}, le volet utilise ${serialCible}`);
     else if (e !== 'occupee') echec.value = label;
   } finally { enCours.value = ''; }
 }
@@ -155,10 +162,10 @@ const retour = computed(() => (profil.value ? { lien: `remotes/add/${profil.valu
       <OpStatline v-if="!rejeu && frequence" tone="neutre">Capture sur la fréquence de <b>{{ profil ? (profil.marque || profil.nom) : (id || 'cet appareil') }}</b> :
         <b>{{ mhz(frequence) }}</b>.<template v-if="profil"> Ajuste-la en bas (Réglages avancés, ou « Caler sur ma télécommande »).</template></OpStatline>
       <OpField :label="profil ? `${(types()[typeCle] || {}).label || 'Appareil'} à compléter` : 'Volet'" :hint="profil ? 'Un appareil déjà commencé, ou un nouveau.' : ''">
-        <ChipPicker v-model="choix" :options="options" :ajout="profil ? libelleNouveau : ''" label="Appareil" vide="Aucun appareil pour l'instant." />
+        <ChipPicker v-model="choix" :options="options" :ajout="profil ? libelleNouveau : ''" :disabled="!!enCours" label="Appareil" vide="Aucun appareil pour l'instant." />
       </OpField>
       <OpField v-if="choix === '__nouveau'" label="Nom de l'appareil" pour="cap-nom" hint="Il sert d'identifiant (centrales, zones, Home Assistant). Pas de virgule.">
-        <input id="cap-nom" v-model="nom" class="op-input" :placeholder="rejeu ? 'ex : Portail entrée' : 'ex : Salon'"
+        <input id="cap-nom" v-model="nom" class="op-input" :disabled="!!enCours" :placeholder="rejeu ? 'ex : Portail entrée' : 'ex : Salon'"
                :maxlength="(etat.profils && etat.profils.name_max) || 23" autocomplete="off">
       </OpField>
       <OpField v-if="!rejeu && !somfy" label="Nom de la télécommande" pour="cap-telec" :hint="serialTelec ? '' : 'Facultatif : pour la reconnaître dans Captées.'">
