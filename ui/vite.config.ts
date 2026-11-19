@@ -58,7 +58,10 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       fs: { allow: ['..'] },   // profiles.json est lu dans firmware/main/web
-      proxy: box ? Object.fromEntries(['/api', ...Object.keys(BOX_FILES)].map(path => [path, { target: `http://${box}`, changeOrigin: true }])) : undefined,
+      /* Le relais garde l'en-tete Host de la page (changeOrigin: false). Sans Sec-Fetch-Site (page ouverte en HTTP
+         ailleurs que sur localhost, depuis un telephone par exemple), le boitier n'accepte un POST que si Origin et
+         Host designent le meme hote (req_guard.c) : un Host change en celui du boitier les ferait tous refuser (403). */
+      proxy: box ? Object.fromEntries(['/api', ...Object.keys(BOX_FILES)].map(path => [path, { target: `http://${box}`, changeOrigin: false }])) : undefined,
     },
     build: {
       outDir: mock ? 'dist-mock' : 'dist',
