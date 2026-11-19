@@ -11,7 +11,9 @@ export function json<T>(url: string, options?: RequestInit): Promise<T> {
   return fetch(url, options).then(r => {
     if (r.status === HTTP_UNAUTHORIZED) { onUnauthorized(); return Promise.reject(HTTP_UNAUTHORIZED); }
     if (!r.ok) return Promise.reject(r.status);
-    const parsed: Promise<T> = r.json().catch(() => ({}));
+    /* Un corps qui n'est pas du JSON (reponse sans corps) vaut {}. Un corps qui n'a pas pu etre lu (requete
+       abandonnee par son delai, connexion coupee) est un echec : {} passerait pour une reponse. */
+    const parsed: Promise<T> = r.json().catch(e => (e instanceof SyntaxError ? {} : Promise.reject(e)));
     return parsed;
   });
 }

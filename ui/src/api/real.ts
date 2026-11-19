@@ -42,7 +42,7 @@ export default {
     .then(r => r.ok, () => false),
   logout: (): Promise<unknown> => fetch('/api/logout', { method: 'POST' }),
   status: (signal?: AbortSignal) => json<Status>('/api/status', { signal }),
-  profiles: () => json<Profiles>('/profiles.json'),
+  profiles: (signal?: AbortSignal) => json<Profiles>('/profiles.json', { signal }),
   sendShutter: (order: ShutterOrder) => post<ShutterReply>('/api/shutter', order),
   saveDisplayOrder: (ids: string[]) => post('/api/volet/order', { ids }),
 

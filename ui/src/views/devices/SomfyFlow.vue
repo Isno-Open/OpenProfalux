@@ -1,12 +1,29 @@
-<script setup lang="ts">
+<script lang="ts">
 // Creer un volet Somfy RTS (433,42 MHz) : pas besoin de telecommande d'origine. On choisit une adresse (24 bits),
 // le boitier la fait apprendre au moteur en mode appairage, puis on teste.
-import { computed, ref } from 'vue';
+import { ref } from 'vue';
+import type { Tone } from '../../domain';
+
+/* Le volet en cours vit hors de l'ecran, qui est demonte a chaque changement d'onglet. Il est deja cree dans le
+   boitier, et l'appairage ne s'emet que d'ici : revenir avant d'appairer doit le retrouver, comme dans l'ancienne
+   interface, ou le panneau restait dans la page. « Creer un autre volet » repart d'un formulaire vide. */
+const name = ref('');
+const address = ref('');
+const created = ref('');          // id du volet cree
+const message = ref<{ tone: Tone; text: string } | null>(null);
+const paired = ref(false);
+function startOver(): void {
+  name.value = ''; address.value = ''; created.value = ''; message.value = null; paired.value = false;
+}
+</script>
+
+<script setup lang="ts">
+import { computed } from 'vue';
 import { navigate } from '../../router';
 import { state, sendCommand, refresh, typeOf } from '../../store';
 import { hasComma } from '../../profiles';
 import api from '../../api/index';
-import { BUTTON, COMMAND, DEVICE_TYPE, DEVICE_TYPE_CODE, SECTION, TAB, TONE, type Command, type Tone } from '../../domain';
+import { BUTTON, COMMAND, DEVICE_TYPE, DEVICE_TYPE_CODE, SECTION, TAB, TONE, type Command } from '../../domain';
 import { ICON } from '../../icons';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
@@ -18,11 +35,8 @@ import ShutterControl from '../../components/domain/ShutterControl.vue';
 const NAME_EXISTS = 'exists';   // refus du firmware : un appareil porte deja ce nom
 const ADDRESS_PATTERN = /^0x[0-9a-f]{6}$/i;
 const ADDRESS_MAX = 0xFFFFFF;
-const name = ref('');
-const address = ref('');
-const created = ref('');          // id du volet cree
-const message = ref<{ tone: Tone; text: string } | null>(null);
-const paired = ref(false);
+/* Le volet en cours a ete supprime entre-temps (Appareils) : plus rien a appairer. */
+if (created.value && state.status && !state.status.volets.some(d => d.id === created.value)) startOver();
 const step = computed(() => (!created.value ? 0 : !paired.value ? 1 : 2));
 const dpad = computed(() => typeOf({ type: DEVICE_TYPE_CODE.shutter }).dpad ?? {});
 const sending = computed<Command | ''>(() => (state.sending && state.sending.id === created.value ? state.sending.cmd : ''));
@@ -63,7 +77,10 @@ async function pair(): Promise<void> {
           <OpButton :disabled="!!created" @click="generate">Générer</OpButton>
         </div>
       </OpField>
-      <div class="row"><OpButton :variant="BUTTON.primary" :disabled="!!created" @click="create">Créer le volet</OpButton></div>
+      <div class="row">
+        <OpButton :variant="BUTTON.primary" :disabled="!!created" @click="create">Créer le volet</OpButton>
+        <OpButton v-if="created" :variant="BUTTON.ghost" @click="startOver">Créer un autre volet</OpButton>
+      </div>
       <OpStatline v-if="message" :tone="message.tone">{{ message.text }}</OpStatline>
 
       <section v-if="created" class="step">

@@ -9,6 +9,7 @@ import { updateAvailable } from './versions';
 
 const STATUS_PERIOD_MS = 3000;          // comme app.js
 const STATUS_TIMEOUT_MS = 4000;         // au-dela, la requete est abandonnee
+const PROFILES_TIMEOUT_MS = 4000;       // de meme pour profiles.json
 const OFFLINE_AFTER_FAILURES = 2;       // bandeau « injoignable » apres deux echecs de suite
 const UPDATE_CHECK_PERIOD_MS = 30 * 60 * 1000; // relecture de la verification GitHub du boitier
 const TOAST_MS = 2600;
@@ -53,10 +54,15 @@ whenUnauthorized(async () => {
 
 /* profiles.json : lu au lancement, puis relu a chaque relecture du statut tant qu'il manque (coupure au
    demarrage) : sans lui, Ajouter un appareil et les reglages d'emission n'ont rien a montrer. L'ancienne
-   interface le redemandait de meme a chaque ecran qui en avait besoin. */
+   interface le redemandait de meme a chaque ecran qui en avait besoin. La requete est bornee comme celle du
+   statut : un fichier qui ne vient pas ne retient ni le lancement ni les relectures, et se redemande ensuite. */
 function loadProfiles(): Promise<void> {
   if (state.profiles) return Promise.resolve();
-  loadingProfiles ??= api.profiles().then(p => { state.profiles = p; }, () => {}).finally(() => { loadingProfiles = null; });
+  if (!loadingProfiles) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), PROFILES_TIMEOUT_MS);
+    loadingProfiles = api.profiles(controller.signal).then(p => { state.profiles = p; }, () => {})
+      .finally(() => { clearTimeout(timer); loadingProfiles = null; });
+  }
   return loadingProfiles;
 }
 
@@ -86,7 +92,8 @@ export async function checkUpdate(): Promise<OtaStatus | null> {
   return st;
 }
 
-/* L'application une fois la session ouverte : profils, statut, rafraichissements. Une seule fois. */
+/* L'application une fois la session ouverte : profils, statut, rafraichissements. Une seule fois. Les profils
+   d'abord, pour que la grille montre d'emblee le bon type de chaque appareil ; leur attente est bornee. */
 async function launch(): Promise<void> {
   state.loggedIn = true;
   await loadProfiles();
