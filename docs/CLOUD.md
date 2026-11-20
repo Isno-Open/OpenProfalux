@@ -27,7 +27,7 @@ HA Discovery, même comportement. Le cloud est une connexion **séparée**, ajou
 Aucun certificat à copier à la main : l'appareil le récupère auprès du serveur choisi au moment de
 l'appairage, puis le conserve. Après un reflash complet, on ré-appaire.
 
-L'onglet **Cloud** de l'interface web de l'appareil permet de :
+La section **Cloud** de l'onglet **Réseau**, dans l'interface web de l'appareil, permet de :
 
 - choisir le **serveur** (par défaut `https://app.isno.fr`, ou l'adresse de votre instance) ;
 - **appairer** l'appareil à votre compte, **par QR code** (« à la Netflix ») : le boîtier demande un
@@ -67,7 +67,7 @@ trames, le réglage de la réception radio, l'appairage cloud du boîtier, la d�
    volets, des portails ou des zones, jamais une autre centrale ; une zone est suivie par des volets
    simples. Créer ou supprimer une centrale ou une zone reste sur le boîtier ; une zone vidée de ses
    suiveurs redevient un volet simple, comme en local.
-7. **Télécommandes connues** : sur la page du boîtier, onglet « Télécommandes » : renommer,
+7. **Télécommandes connues** : sur la page du boîtier, Appareils › Captées : renommer,
    supprimer ou ignorer (avec confirmation ; pas une télécommande qu'un volet utilise, le boîtier
    refuserait), réaccepter une ignorée. Le boîtier publie `remote/<serial>/info` et `ignored/<serial>`
    (retenus, vides quand elles sont retirées) et ne republie que ce qui a changé (toutes les 5 s).

@@ -19,6 +19,10 @@
 #    0x1000 sur ESP32 classique, et la taille de flash suit la carte.
 set -euo pipefail
 cd "$(dirname "$0")"
+# L'interface web (ui/, Vue) se construit ICI, hors du conteneur ESP-IDF qui n'a pas Node :
+# tools/build_ui.sh (npm, sinon Docker). Le conteneur la trouve ensuite dans ui/dist.
+if [ "${OPF_UI_BUILT:-0}" != "1" ]; then ../tools/build_ui.sh; export OPF_UI_BUILT=1; fi
+
 # Deux facons d'executer, pour la meme sortie : un environnement ESP-IDF v6.1 actif
 # (idf.py sur le PATH), ou a defaut le conteneur officiel, qui garantit la meme version
 # que la CI. Le repli docker est automatique ; ISNO_NO_DOCKER=1 l'interdit si on veut
@@ -30,7 +34,7 @@ if ! command -v idf.py >/dev/null; then
   # -u : rien n'est ecrit en root dans l'arborescence (sinon le checkout suivant echoue
   # en EACCES, vu sur l'executeur). HOME=/tmp car l'utilisateur n'a pas de foyer dans
   # l'image. Le depot entier est monte : les cartes vivent a la racine.
-  exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+  exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_UI_BUILT=1 \
     -v "$(cd .. && pwd)":/project -w /project/firmware \
     "${IDF_IMAGE:-espressif/idf:v6.1}" bash build-release.sh "$@"
 fi

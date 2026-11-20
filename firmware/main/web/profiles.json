@@ -1,5 +1,5 @@
 {
-  "_contract": "Table de profils : SOURCE UNIQUE de l'ecran unifie 'Ajouter un appareil'. PYRAMIDE type -> marque -> profil. ALIGNE sur le schema DEPLOYE (box de Pascal, feat/came) : bloc 'rx' (reglage RX de capture), bloc 'tx' (encoder/short_us/long_us/repeats/gap_us pour le rejeu-encode CAME ; te_us/repeat_bit/rmt pour KeeLoq ; frame_bits pour Somfy). AJOUTS de la session connecteur (Noe) a integrer par Max : 'freq_khz' top-level par profil (la porteuse, deployee aujourd'hui dans tx.freq_khz -> a remonter), section 'params' par trait, profils Profalux/Somfy enrichis (freq + tx), profils Eveno et NeoSol (famille KeeLoq basse, 868330). Les constantes de protocole d'une marque (ex. timing sync Somfy) restent dans SON moteur (somfy_rts.h), pas ici.",
+  "_contract": "Table de profils : SOURCE UNIQUE de l'ecran unifie 'Ajouter un appareil'. PYRAMIDE type -> marque -> profil. ALIGNE sur le schema DEPLOYE (box de Pascal, feat/came) : bloc 'rx' (reglage RX de capture), bloc 'tx' (encoder/short_us/long_us/repeats/gap_us pour le rejeu-encode CAME ; te_us/repeat_bit/rmt pour KeeLoq ; frame_bits pour Somfy). AJOUTS de la session connecteur (Noe) a integrer par Max : 'freq_khz' top-level par profil (la porteuse, deployee aujourd'hui dans tx.freq_khz -> a remonter), section 'params' par trait, profils Profalux/Somfy enrichis (freq + tx), profils Eveno et NeoSol (famille KeeLoq basse, 868330). Les constantes de protocole d'une marque (ex. timing sync Somfy) restent dans SON moteur (somfy_rts.h), pas ici. 'description' par profil : la phrase montree a l'utilisateur sous la methode, dans l'interface ; les 'note' restent des notes de developpeur.",
   "devices_max": 24,
   "name_max": 23,
   "roles": {
@@ -40,6 +40,7 @@
   "profils": [
     {
       "type": "portail", "marque": "CAME", "nom": "Portail CAME (cloner la télécommande)",
+      "description": "Le boîtier enregistre le signal de ta télécommande et le rejoue à l'identique. Un seul bouton suffit : le moteur du portail enchaîne la séquence.",
       "mecanisme": "rejeu", "modulation": "OOK", "code": "fixe", "band": "433",
       "flow": "rejeu",
       "freq_khz": 433920,
@@ -49,6 +50,7 @@
     },
     {
       "type": "volet", "marque": "Profalux", "nom": "Cloner ma télécommande Profalux",
+      "description": "Tu as la télécommande d'origine : le boîtier copie ses commandes, une capture par bouton.",
       "mecanisme": "cloner", "modulation": "OOK", "code": "roulant", "band": "868",
       "flow": "learn",
       "freq_khz": 868425,
@@ -57,6 +59,7 @@
     },
     {
       "type": "volet", "marque": "Profalux", "nom": "Nouvelle télécommande Profalux",
+      "description": "Le boîtier devient une nouvelle télécommande, que le moteur apprend. La télécommande d'origine sert au geste de validation.",
       "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
       "flow": "enrol-pfx",
       "freq_khz": 868425,
@@ -65,6 +68,7 @@
     },
     {
       "type": "volet", "marque": "Eveno", "nom": "Nouvelle télécommande Eveno",
+      "description": "Le boîtier devient une nouvelle télécommande, que le moteur Eveno apprend. La télécommande d'origine sert au geste de validation.",
       "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
       "flow": "enrol-pfx",
       "freq_khz": 868330,
@@ -73,6 +77,7 @@
     },
     {
       "type": "volet", "marque": "NeoSol", "nom": "Nouveau volet Profalux NeoSol (solaire)",
+      "description": "Le boîtier devient une nouvelle télécommande du volet solaire, que le moteur apprend. La télécommande d'origine sert au geste de validation.",
       "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
       "flow": "enrol-pfx",
       "freq_khz": 868330,
@@ -81,6 +86,7 @@
     },
     {
       "type": "volet", "marque": "Somfy RTS", "nom": "Nouveau volet Somfy",
+      "description": "Pas besoin de télécommande d'origine : le boîtier choisit une adresse et le moteur l'apprend en mode appairage.",
       "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "433",
       "flow": "create-somfy", "endpoint": "/api/somfy/create",
       "freq_khz": 433420,

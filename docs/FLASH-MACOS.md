@@ -15,8 +15,10 @@ Prérequis : [Homebrew](https://brew.sh) installé.
 Système de compilation, Python, flash USB, git :
 
 ```bash
-brew install cmake ninja dfu-util python3 git
+brew install cmake ninja dfu-util python3 git node@22
 ```
+
+`node@22` sert à construire l'interface web du boîtier (`ui/`, voir l'étape 5).
 
 ## 2. ESP-IDF v6.1 et ses sous-modules
 
@@ -58,10 +60,15 @@ pour que `idf.py` soit trouvé) :
 Le M5 ATOM Lite est un ESP32 classique. `-DBOARD` donne le brochage de la carte, `-B` un dossier de
 build dédié. La compilation est longue et se termine sur `Project build complete`.
 
+D'abord l'interface web (`ui/`, Vue), que le firmware embarque : `tools/build_ui.sh` la construit dans
+`ui/dist` avec `npm`. À refaire après chaque modification de `ui/`.
+
 ```bash
 cd ~/esp
 git clone https://github.com/Isno-Open/OpenProfalux.git
-cd OpenProfalux/firmware
+cd OpenProfalux
+tools/build_ui.sh
+cd firmware
 idf.py -B build-m5-atom-lite -DBOARD=m5-atom-lite set-target esp32
 idf.py -B build-m5-atom-lite -DBOARD=m5-atom-lite build
 ```

@@ -103,21 +103,25 @@ Sur Mac, une procédure testée installe ESP-IDF v6.1 en natif (pas de Docker US
 
 ## L'interface web
 
-Servie par l'ESP32, sans aucune application : pilotage des volets, apprentissage,
-calibration, moniteur RF et configuration Wi-Fi / MQTT.
+Servie par l'ESP32, sans aucune application : pilotage des volets, ajout des appareils,
+calibration, moniteur RF et réglages réseau (Wi-Fi, MQTT, Cloud).
 
 <table>
   <tr>
     <td width="50%"><img src="images/ui/pc/volets.webp" alt="Onglet Volets"><br><sub><b>Volets</b> : une carte par volet, position estimée.</sub></td>
-    <td width="50%"><img src="images/ui/pc/telecommandes-cloner.webp" alt="Cloner une télécommande"><br><sub><b>Rejeu</b> : capture ▲/■/▼ d'une vraie télécommande.</sub></td>
+    <td width="50%"><img src="images/ui/pc/appareils-ajouter.webp" alt="Ajouter un appareil"><br><sub><b>Ajouter un appareil</b> : type, marque, puis méthode.</sub></td>
   </tr>
   <tr>
-    <td><img src="images/ui/pc/telecommandes-creer.webp" alt="Créer une télécommande virtuelle"><br><sub><b>Enrôlement</b> : identité virtuelle apprise au moteur.</sub></td>
-    <td><img src="images/ui/pc/wifi.webp" alt="Onglet Wi-Fi"><br><sub><b>Wi-Fi</b> : connexion du boîtier au réseau.</sub></td>
+    <td><img src="images/ui/pc/appareils-capturer.webp" alt="Cloner une télécommande"><br><sub><b>Rejeu</b> : capture ▲/■/▼ d'une vraie télécommande.</sub></td>
+    <td><img src="images/ui/pc/appareils-virtuelle.webp" alt="Créer une télécommande virtuelle"><br><sub><b>Enrôlement</b> : identité virtuelle apprise au moteur.</sub></td>
   </tr>
   <tr>
-    <td><img src="images/ui/pc/mqtt.webp" alt="Onglet MQTT"><br><sub><b>MQTT</b> : broker et discovery vers Home Assistant.</sub></td>
-    <td><img src="images/ui/pc/systeme-rf-debug.webp" alt="Moniteur RF"><br><sub><b>Moniteur RF</b> : chaque trame reçue (bits, RSSI, KeeLoq).</sub></td>
+    <td><img src="images/ui/pc/reseau-wifi.webp" alt="Réseau, section Wi-Fi"><br><sub><b>Wi-Fi</b> : connexion du boîtier au réseau.</sub></td>
+    <td><img src="images/ui/pc/reseau-mqtt.webp" alt="Réseau, section MQTT"><br><sub><b>MQTT</b> : broker et discovery vers Home Assistant.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="images/ui/pc/reseau-cloud.webp" alt="Réseau, section Cloud"><br><sub><b>Cloud</b> : pilotage à distance par le cloud ISNO.</sub></td>
+    <td><img src="images/ui/pc/systeme-rf.webp" alt="Moniteur RF"><br><sub><b>Moniteur RF</b> : chaque trame reçue (bits, RSSI, KeeLoq).</sub></td>
   </tr>
 </table>
 
@@ -154,6 +158,7 @@ broches, il n'en connaît aucune. Ajouter une carte, c'est ajouter un
 | `xiao-esp32s3` | Seeed XIAO ESP32S3 + CC1101 868 externe (dépannage, [#1](https://github.com/Isno-Open/OpenProfalux/issues/1)) | `esp32s3` |
 
 ```bash
+tools/build_ui.sh   # l'interface web (ui/, Vue) : npm s'il est installé, sinon Docker
 cd firmware
 idf.py -B build -DSDKCONFIG=build/sdkconfig -DIDF_TARGET=esp32s3 -DBOARD=isno-super build
 ```
