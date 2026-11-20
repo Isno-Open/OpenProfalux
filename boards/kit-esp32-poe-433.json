@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Kit radio 433 Ethernet PoE de la boutique ISNO (KIT-POE-433) : meme carte et meme",
+    "cablage UEXT que kit-esp32-poe-868, seul le module change (RC-CC1101-SPI-434).",
+    "Non essaye sur le materiel a la creation (2026-11-20)."
+  ],
+  "extends": "kit-esp32-poe-868",
+  "id": "kit-esp32-poe-433",
+  "name": "Kit ISNO Olimex ESP32-POE + CC1101 433 (UEXT)",
+  "radios": [
+    { "band": "433", "module": "RC-CC1101-SPI-434" }
+  ],
+  "bands_allowed_khz": [
+    { "radio": "433", "low": 433050, "high": 434790, "carrier_khz": 433920, "max_dbm": 10 }
+  ]
+}

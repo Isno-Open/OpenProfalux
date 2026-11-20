@@ -153,6 +153,10 @@ broches, il n'en connaît aucune. Ajouter une carte, c'est ajouter un
 | `xiao-esp32c3` | Seeed XIAO ESP32C3 + CC1101 868 externe (module M115 soudé) | `esp32c3` |
 | `lilygo-t-embed-cc1101` | LILYGO T-Embed (CC1101 868 intégré, écran TFT + SD sur le même bus SPI, [#112](https://github.com/Isno-Open/OpenProfalux/issues/112)) | `esp32s3` |
 | `xiao-esp32s3` | Seeed XIAO ESP32S3 + CC1101 868 externe (dépannage, [#1](https://github.com/Isno-Open/OpenProfalux/issues/1)) | `esp32s3` |
+| `kit-xiao-esp32s3-868` | Kit ISNO KIT-868 : XIAO ESP32-S3 + CC1101 868 en fils dupont (SPI 1 MHz) | `esp32s3` |
+| `kit-xiao-esp32s3-433` | Kit ISNO KIT-433 : même câblage, CC1101 433 (hérite de `kit-xiao-esp32s3-868`) | `esp32s3` |
+| `kit-esp32-poe-868` | Kit ISNO KIT-POE-868 : Olimex ESP32-POE + CC1101 868 sur le connecteur UEXT, sans soudure côté carte | `esp32` |
+| `kit-esp32-poe-433` | Kit ISNO KIT-POE-433 : même câblage UEXT, CC1101 433 (hérite de `kit-esp32-poe-868`) | `esp32` |
 
 ```bash
 cd firmware

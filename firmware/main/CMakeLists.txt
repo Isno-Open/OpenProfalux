@@ -26,7 +26,10 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(NOT r EQUAL 0)
         message(FATAL_ERROR "gen_board.py a refuse ${BOARD_JSON}")
     endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_JSON}" "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py")
+    # Toutes les cartes, pas seulement la visee : une carte peut heriter d'une autre
+    # (« extends »), et modifier le parent doit re-engendrer board_pins.h de l'enfant.
+    file(GLOB toutes_cartes "${CMAKE_CURRENT_LIST_DIR}/../../boards/*.json")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_JSON}" ${toutes_cartes} "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py")
 endif()
 
 # L'interface web est embarquee COMPRESSEE (gzip) : ~113 Ko de sources tiennent en ~35 Ko
