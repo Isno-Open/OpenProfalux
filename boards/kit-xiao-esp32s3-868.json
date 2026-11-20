@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Kit radio 868 de la boutique ISNO (KIT-868) : Seeed XIAO ESP32-S3 + RadioControlli",
+    "RC-CC1101-SPI-868, relies par 8 fils dupont femelle-femelle de 15 cm.",
+    "La carte (mcu, PSRAM, LED) vient de xiao-esp32s3 ; le cablage du kit est declare ICI en",
+    "entier, c'est celui du schema livre avec le kit : D8 SCK, D9 MISO, D10 MOSI, D4 CS,",
+    "D3 GDO0, D1 GDO2.",
+    "SPI a 1 MHz, pas 6 : fils de 15 cm, meme cause que d1-mini (mesure 2026-10-10, a 6 MHz",
+    "260 trames sur 300 au contenu faux en rafale, aucune a 1 MHz).",
+    "Non essaye sur le materiel a la creation (2026-11-20)."
+  ],
+  "extends": "xiao-esp32s3",
+  "id": "kit-xiao-esp32s3-868",
+  "name": "Kit ISNO XIAO ESP32-S3 + CC1101 868",
+  "spi_freq_hz": 1000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "RC-CC1101-SPI-868",
+      "pins": { "sck": 7, "miso": 8, "mosi": 9, "cs": 5, "gdo0": 4, "gdo2": 2 } }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Kit radio 433 de la boutique ISNO (KIT-433) : meme carte et meme cablage que",
+    "kit-xiao-esp32s3-868, seul le module change (RC-CC1101-SPI-434), donc la bande.",
+    "Non essaye sur le materiel a la creation (2026-11-20)."
+  ],
+  "extends": "kit-xiao-esp32s3-868",
+  "id": "kit-xiao-esp32s3-433",
+  "name": "Kit ISNO XIAO ESP32-S3 + CC1101 433",
+  "radios": [
+    { "band": "433", "module": "RC-CC1101-SPI-434" }
+  ],
+  "bands_allowed_khz": [
+    { "radio": "433", "low": 433050, "high": 434790, "carrier_khz": 433920, "max_dbm": 10 }
+  ]
+}

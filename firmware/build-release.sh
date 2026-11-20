@@ -51,7 +51,7 @@ fi
 # Les cartes vivent a la racine du depot (boards/), le firmware est un sous-dossier.
 for f in ../boards/*.json; do
   board="$(basename "$f" .json)"
-  target="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcu'])" "$f")"
+  target="$(python3 ../tools/gen_board.py --mcu "$f")"   # heritage resolu (« extends »)
   bdir="build-rel-$board"
   echo ">> build $board ($target)"
   rm -rf "$bdir"

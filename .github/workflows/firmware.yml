@@ -41,17 +41,21 @@ jobs:
       matrice: ${{ steps.lire.outputs.matrice }}
     steps:
       - uses: actions/checkout@v7
+      # Heritage des cartes (« extends ») et coherence de boards/ : avant de lire la matrice.
+      - name: Essais du generateur de carte
+        run: python3 -m unittest tools/test_gen_board.py
       - id: lire
         name: Lire les cartes declarees dans boards/
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, glob, os
+          import json, glob, os, subprocess
           cartes = []
           for f in sorted(glob.glob('boards/*.json')):
               nom = os.path.basename(f)[:-5]
-              mcu = json.load(open(f)).get('mcu')
-              if not mcu:
-                  raise SystemExit(f"{f} ne declare pas de mcu")
+              # Par le generateur, heritage resolu : une carte qui herite (« extends ») ne
+              # redeclare pas son mcu. Refus (code non nul) si aucun mcu au bout de la chaine.
+              mcu = subprocess.run(["python3", "tools/gen_board.py", "--mcu", f],
+                                   check=True, capture_output=True, text=True).stdout.strip()
               cartes.append({"board": nom, "target": mcu})
           print("matrice=" + json.dumps(cartes))
           PY

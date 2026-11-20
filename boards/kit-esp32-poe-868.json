@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "Kit radio 868 Ethernet PoE de la boutique ISNO (KIT-POE-868) : Olimex ESP32-POE-WROVER +",
+    "RadioControlli RC-CC1101-SPI-868, relies par 8 fils dupont sur le connecteur UEXT de la",
+    "carte, sans soudure cote carte. L'Ethernet et la carte viennent de esp32-poe.",
+    "UEXT (schema Olimex ESP32-PoE rev. M2) : 1 3,3 V, 2 GND, 3 GPIO4, 6 GPIO13 (rappel 2,2 k),",
+    "7 GPIO15 HSPIQ, 8 GPIO2 HSPID, 9 GPIO14 HSPICLK, 10 GPIO5 (rappel 10 k). La broche 4",
+    "(GPIO36) est ecartee : elle passe par une diode et n'est qu'une entree.",
+    "Different de esp32-poe (MISO 32, MOSI 13, CS 33), qui suppose des fils soudes sur EXT.",
+    "2, 5 et 15 sont des straps : sans effet ici (SI du CC1101 en entree, SO en haute impedance",
+    "CS haut, CS tire haut). 2, 14 et 15 sont aussi le bus de la microSD : kit sans carte SD.",
+    "SPI a 1 MHz : fils de 15 cm, voir d1-mini. Non essaye sur le materiel (2026-11-20)."
+  ],
+  "extends": "esp32-poe",
+  "id": "kit-esp32-poe-868",
+  "name": "Kit ISNO Olimex ESP32-POE + CC1101 868 (UEXT)",
+  "spi_freq_hz": 1000000,
+  "radios": [
+    { "chip": "CC1101", "band": "868", "module": "RC-CC1101-SPI-868",
+      "pins": { "sck": 14, "miso": 15, "mosi": 2, "cs": 5, "gdo0": 4, "gdo2": 13 } }
+  ]
+}

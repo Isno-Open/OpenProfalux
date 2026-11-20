@@ -14,6 +14,12 @@ inconnue fait échouer la configuration, elle ne compile pas avec de mauvaises b
 | `esp32-poe` | Olimex ESP32-POE + CC1101 externe (Ethernet LAN8720 en plus du Wi-Fi) | `esp32` |
 | `arduino-nano-esp32` | Arduino Nano ESP32 + CC1101 externe (SPI sur D10-D13, GDO0 sur D2) | `esp32s3` |
 | `xiao-esp32c3` | Seeed XIAO ESP32C3 + CC1101 868 externe (module M115 soudé) | `esp32c3` |
+| `kit-xiao-esp32s3-868` | Kit ISNO KIT-868 : XIAO ESP32-S3 + CC1101 868 en fils dupont (SPI 1 MHz) | `esp32s3` |
+| `kit-xiao-esp32s3-433` | Kit ISNO KIT-433 : même câblage, CC1101 433 (hérite de `kit-xiao-esp32s3-868`) | `esp32s3` |
+| `kit-esp32-poe-868` | Kit ISNO KIT-POE-868 : Olimex ESP32-POE + CC1101 868 sur le connecteur UEXT, sans soudure côté carte | `esp32` |
+| `kit-esp32-poe-433` | Kit ISNO KIT-POE-433 : même câblage UEXT, CC1101 433 (hérite de `kit-esp32-poe-868`) | `esp32` |
+
+Une carte peut **hériter** d'une autre (`"extends": "<carte>"`) : elle ne déclare que ce qui change, par exemple la bande de sa radio. `tools/gen_board.py` résout l'héritage, et c'est par lui que passe tout lecteur de `boards/`, CI comprise.
 
 La mémoire de la carte décide aussi de ses budgets réseau (tampons Wi-Fi, tampons TCP,
 taille des enregistrements TLS) : chaque carte déclare `psram`, et `tools/gen_board.py

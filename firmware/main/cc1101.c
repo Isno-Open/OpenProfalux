@@ -352,9 +352,14 @@ static int cc1101_configure_active_chip(void) {
         esp_rom_delay_us(1000);
     }
     /* La radio primaire (index 0) garde la porteuse Profalux de s_regs (868,425 MHz) ; une
-     * radio secondaire (p.ex. 433) pose la porteuse declaree par la carte. */
-    if (s_active != 0 && s_radios[s_active].carrier_khz)
-        cc1101_set_freq_khz(s_radios[s_active].carrier_khz);
+     * radio secondaire (p.ex. 433) pose la porteuse declaree par la carte. Une primaire dont la
+     * bande ne contient pas la porteuse de s_regs (carte 433 seule, comme les kits 433) pose
+     * aussi la sienne : sinon elle demarrerait a 868 MHz, hors de sa bande. */
+    const cc1101_radio_cfg_t *rc = &s_radios[s_active];
+    const uint32_t regs_khz = PROFALUX_FREQ_HZ / 1000;   /* porteuse que s_regs vient d'ecrire */
+    bool regs_out_of_band = regs_khz < rc->band_low_khz || regs_khz > rc->band_high_khz;
+    if (rc->carrier_khz && (s_active != 0 || regs_out_of_band))
+        cc1101_set_freq_khz(rc->carrier_khz);
     s_chip_khz[s_active] = s_freq_khz;   /* fige la porteuse de cette radio */
 
     uint8_t partnum = cc1101_read_reg(CC_PARTNUM | 0x40);

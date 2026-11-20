@@ -3,6 +3,10 @@
 
     python3 tools/gen_board.py boards/isno-super.json build/board/board_pins.h
     python3 tools/gen_board.py --sdkconfig boards/isno-super.json build/board.sdkconfig
+    python3 tools/gen_board.py --mcu boards/kit-esp32-poe-433.json
+
+Une carte peut heriter d'une autre (« extends », voir load_board) : TOUT lecteur de
+boards/ passe par load_board, sinon il lirait une declaration incomplete.
 
 Le fragment porte ce que la memoire de la carte decide (budgets reseau, voir
 NET_BUDGET_INTERNAL_RAM) ; CMakeLists.txt l'ajoute a sdkconfig.defaults avant project().
@@ -24,7 +28,54 @@ Les noms de macros sont ceux QUE LE CODE d'OpenProfalux lit deja
 garde son vocabulaire, seul le format de la declaration est partage.
 """
 import json
+import os
 import sys
+
+# Cle d'heritage : une carte peut deriver d'une autre (« extends »: "<id du parent>"), pour
+# qu'une variante ne recopie pas le cablage. Exemple : le kit 433 ne change que la bande de
+# sa radio, ses broches restent celles du kit 868. Une definition en double divergerait.
+EXTENDS = "extends"
+
+
+def merge_decl(base, over):
+    """Fusion d'une declaration enfant sur son parent.
+
+    - objet sur objet : fusion cle par cle, recursive ;
+    - liste d'objets sur liste d'objets : fusion PAR POSITION (radios[0] de l'enfant
+      complete radios[0] du parent), les elements en plus de l'enfant s'ajoutent ;
+    - tout le reste (texte, nombre, liste de textes comme _comment) : l'enfant remplace.
+    """
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = dict(base)
+        for k, v in over.items():
+            out[k] = merge_decl(base[k], v) if k in base else v
+        return out
+    if (isinstance(base, list) and isinstance(over, list)
+            and all(isinstance(x, dict) for x in base + over)):
+        return [merge_decl(base[i], o) if i < len(base) else o for i, o in enumerate(over)] + base[len(over):]
+    return over
+
+
+def load_board(path, _chain=()):
+    """Declaration COMPLETE d'une carte, heritage resolu. Tout lecteur de boards/ passe par ici.
+
+    Le parent se cherche dans le meme dossier que l'enfant. L'enfant doit declarer son propre
+    id : herite, il porterait le nom du parent dans board_pins.h et dans la cible annoncee.
+    """
+    path = os.path.abspath(path)
+    if path in _chain:
+        raise SystemExit("heritage circulaire : %s" % " -> ".join(_chain + (path,)))
+    d = json.load(open(path, encoding="utf-8"))
+    parent = d.get(EXTENDS)
+    if parent is None:
+        return d
+    if "id" not in d:
+        raise SystemExit("%s herite de %s mais ne declare pas son id" % (path, parent))
+    ppath = os.path.join(os.path.dirname(path), "%s.json" % parent)
+    if not os.path.exists(ppath):
+        raise SystemExit("%s herite de %s, introuvable (%s)" % (path, parent, ppath))
+    base = load_board(ppath, _chain + (path,))
+    return merge_decl(base, {k: v for k, v in d.items() if k != EXTENDS})
 
 
 def pick_radio(d):
@@ -168,9 +219,11 @@ def header(d):
         "#define CC1101_PIN_GDO2      %d" % pins["gdo2"],
         "#define CC1101_SPI_FREQ_HZ   %d" % freq,
         "",
-        "/* Plage autorisee de la radio PRIMAIRE (868), bornes incluses (kHz). */",
+        "/* Plage autorisee de la radio PRIMAIRE (868, ou la seule radio d'une carte 433), bornes",
+        " * incluses (kHz), et sa porteuse declaree (0 = non declaree). */",
         "#define CC1101_BAND_LOW_KHZ  %d" % b["low"],
         "#define CC1101_BAND_HIGH_KHZ %d" % b["high"],
+        "#define CC1101_CARRIER_KHZ   %d" % int(b.get("carrier_khz", 0)),
         "#define CC1101_MAX_DBM       %d" % b.get("max_dbm", 10),
         "",
     ]
@@ -254,12 +307,19 @@ def write_if_changed(path, text):
 if __name__ == "__main__":
     # gen_board.py <carte.json> <board_pins.h>           (composant main, a la configuration)
     # gen_board.py --sdkconfig <carte.json> <fragment>   (CMakeLists.txt racine, avant project())
+    # gen_board.py --mcu <carte.json>                   (CI : cible IDF de la carte, heritage resolu)
     if len(sys.argv) == 4 and sys.argv[1] == "--sdkconfig":
-        write_if_changed(sys.argv[3], sdkconfig_lines(json.load(open(sys.argv[2], encoding="utf-8")), sys.argv[2]))
+        write_if_changed(sys.argv[3], sdkconfig_lines(load_board(sys.argv[2]), sys.argv[2]))
+        sys.exit(0)
+    if len(sys.argv) == 3 and sys.argv[1] == "--mcu":
+        mcu = load_board(sys.argv[2]).get("mcu")
+        if not mcu:
+            raise SystemExit("%s ne declare pas de mcu" % sys.argv[2])
+        print(mcu)
         sys.exit(0)
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    d = load_board(sys.argv[1])
     text = header(d)
     try:
         if open(sys.argv[2], encoding="utf-8").read() == text:
