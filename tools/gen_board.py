@@ -219,9 +219,11 @@ def header(d):
         "#define CC1101_PIN_GDO2      %d" % pins["gdo2"],
         "#define CC1101_SPI_FREQ_HZ   %d" % freq,
         "",
-        "/* Plage autorisee de la radio PRIMAIRE (868), bornes incluses (kHz). */",
+        "/* Plage autorisee de la radio PRIMAIRE (868, ou la seule radio d'une carte 433), bornes",
+        " * incluses (kHz), et sa porteuse declaree (0 = non declaree). */",
         "#define CC1101_BAND_LOW_KHZ  %d" % b["low"],
         "#define CC1101_BAND_HIGH_KHZ %d" % b["high"],
+        "#define CC1101_CARRIER_KHZ   %d" % int(b.get("carrier_khz", 0)),
         "#define CC1101_MAX_DBM       %d" % b.get("max_dbm", 10),
         "",
     ]

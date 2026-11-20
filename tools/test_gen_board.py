@@ -26,61 +26,61 @@ def write(d, name, obj):
     return os.path.join(d, name + ".json")
 
 
-class Heritage(unittest.TestCase):
-    def test_la_variante_433_garde_le_cablage_du_parent(self):
-        for enfant, parent in (("kit-xiao-esp32s3-433", "kit-xiao-esp32s3-868"), ("kit-esp32-poe-433", "kit-esp32-poe-868")):
-            e = gen_board.load_board(os.path.join(BOARDS, enfant + ".json"))
+class Inheritance(unittest.TestCase):
+    def test_433_variant_keeps_parent_wiring(self):
+        for child, parent in (("kit-xiao-esp32s3-433", "kit-xiao-esp32s3-868"), ("kit-esp32-poe-433", "kit-esp32-poe-868")):
+            e = gen_board.load_board(os.path.join(BOARDS, child + ".json"))
             p = gen_board.load_board(os.path.join(BOARDS, parent + ".json"))
-            self.assertEqual(e["radios"][0]["pins"], p["radios"][0]["pins"], enfant)
-            self.assertEqual(e["radios"][0]["band"], "433", enfant)
-            self.assertEqual(e["mcu"], p["mcu"], enfant)
-            self.assertEqual(e["id"], enfant)
+            self.assertEqual(e["radios"][0]["pins"], p["radios"][0]["pins"], child)
+            self.assertEqual(e["radios"][0]["band"], "433", child)
+            self.assertEqual(e["mcu"], p["mcu"], child)
+            self.assertEqual(e["id"], child)
 
-    def test_le_kit_poe_garde_l_ethernet_de_la_carte(self):
+    def test_poe_kit_keeps_board_ethernet(self):
         e = gen_board.load_board(os.path.join(BOARDS, "kit-esp32-poe-433.json"))
         base = json.load(open(os.path.join(BOARDS, "esp32-poe.json"), encoding="utf-8"))
         self.assertEqual(e["ethernet"], base["ethernet"])
 
-    def test_fusion_des_listes_par_position(self):
+    def test_lists_merge_by_position(self):
         base = {"radios": [{"band": "868", "pins": {"cs": 1, "sck": 2}}, {"band": "433"}]}
         out = gen_board.merge_decl(base, {"radios": [{"pins": {"cs": 9}}]})
         self.assertEqual(out["radios"][0], {"band": "868", "pins": {"cs": 9, "sck": 2}})
         self.assertEqual(out["radios"][1], {"band": "433"})
 
-    def test_une_liste_de_textes_est_remplacee(self):
+    def test_text_list_is_replaced(self):
         self.assertEqual(gen_board.merge_decl({"_comment": ["a", "b"]}, {"_comment": ["c"]}), {"_comment": ["c"]})
 
-    def test_heritage_circulaire_refuse(self):
+    def test_circular_inheritance_refused(self):
         with tempfile.TemporaryDirectory() as d:
             write(d, "a", {"id": "a", "extends": "b"})
             write(d, "b", {"id": "b", "extends": "a"})
             with self.assertRaises(SystemExit):
                 gen_board.load_board(os.path.join(d, "a.json"))
 
-    def test_enfant_sans_id_refuse(self):
+    def test_child_without_id_refused(self):
         with tempfile.TemporaryDirectory() as d:
             write(d, "p", {"id": "p", "mcu": "esp32"})
             write(d, "e", {"extends": "p"})
             with self.assertRaises(SystemExit):
                 gen_board.load_board(os.path.join(d, "e.json"))
 
-    def test_parent_introuvable_refuse(self):
+    def test_missing_parent_refused(self):
         with tempfile.TemporaryDirectory() as d:
             write(d, "e", {"id": "e", "extends": "absent"})
             with self.assertRaises(SystemExit):
                 gen_board.load_board(os.path.join(d, "e.json"))
 
 
-class LecteursPassentParLeChargeur(unittest.TestCase):
+class ReadersGoThroughLoader(unittest.TestCase):
     """La mutation doit porter sur l'APPEL : un lecteur qui lirait le JSON brut verrait un
     enfant sans mcu ni Ethernet. On essaie donc les points d'entree reels."""
 
-    def test_mcu_d_un_enfant_qui_ne_le_declare_pas(self):
+    def test_mcu_of_child_that_does_not_declare_it(self):
         out = subprocess.run([sys.executable, GEN, "--mcu", os.path.join(BOARDS, "kit-esp32-poe-433.json")],
                              check=True, capture_output=True, text=True).stdout.strip()
         self.assertEqual(out, "esp32")
 
-    def test_en_tete_d_un_enfant(self):
+    def test_header_of_child(self):
         with tempfile.TemporaryDirectory() as d:
             h = os.path.join(d, "board_pins.h")
             subprocess.run([sys.executable, GEN, os.path.join(BOARDS, "kit-esp32-poe-433.json"), h], check=True)
@@ -88,28 +88,31 @@ class LecteursPassentParLeChargeur(unittest.TestCase):
         self.assertIn("#define CC1101_PIN_MISO      15", t)
         self.assertIn("#define CC1101_BAND_LOW_KHZ  433050", t)
         self.assertIn("#define BOARD_HAS_ETHERNET   1", t)
+        # La seule radio est en 433 : sa porteuse doit etre connue du firmware, sinon il
+        # demarrerait sur la porteuse Profalux (868), hors bande (revue Codex, PR #136).
+        self.assertIn("#define CC1101_CARRIER_KHZ   433920", t)
 
-    def test_fragment_sdkconfig_d_un_enfant(self):
+    def test_sdkconfig_fragment_of_child(self):
         with tempfile.TemporaryDirectory() as d:
             f = os.path.join(d, "frag")
             subprocess.run([sys.executable, GEN, "--sdkconfig", os.path.join(BOARDS, "kit-xiao-esp32s3-433.json"), f], check=True)
             self.assertIn("PSRAM presente", open(f, encoding="utf-8").read())
 
 
-class ToutesLesCartes(unittest.TestCase):
-    def test_chaque_carte_se_resout_et_tient_sa_bande(self):
-        fichiers = sorted(glob.glob(os.path.join(BOARDS, "*.json")))
-        self.assertTrue(fichiers)
-        for f in fichiers:
+class AllBoards(unittest.TestCase):
+    def test_every_board_resolves_and_keeps_its_band(self):
+        files = sorted(glob.glob(os.path.join(BOARDS, "*.json")))
+        self.assertTrue(files)
+        for f in files:
             d = gen_board.load_board(f)
-            nom = os.path.basename(f)[:-5]
-            self.assertEqual(d["id"], nom, f)
+            name = os.path.basename(f)[:-5]
+            self.assertEqual(d["id"], name, f)
             self.assertTrue(d.get("mcu"), f)
-            bandes = {str(b["radio"]): b for b in d.get("bands_allowed_khz", [])}
+            bands = {str(b["radio"]): b for b in d.get("bands_allowed_khz", [])}
             for r in d["radios"]:
-                b = bandes.get(str(r["band"]))
-                self.assertIsNotNone(b, "%s : radio %s sans plage" % (nom, r["band"]))
-                self.assertTrue(b["low"] <= b["carrier_khz"] <= b["high"], "%s : porteuse hors bande" % nom)
+                b = bands.get(str(r["band"]))
+                self.assertIsNotNone(b, "%s : radio %s sans plage" % (name, r["band"]))
+                self.assertTrue(b["low"] <= b["carrier_khz"] <= b["high"], "%s : porteuse hors bande" % name)
 
 
 if __name__ == "__main__":
