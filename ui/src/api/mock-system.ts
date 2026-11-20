@@ -59,6 +59,8 @@ const SECRET_FIELDS = ['mqtt_pass', 'mqtt_ca', 'mqtt_cert', 'mqtt_key'] as const
 const NOT_PAIRED: CloudStatus = { paired: false, enabled: false, connected: false, name: '', device_id: '' };
 let cloud: CloudStatus = { ...NOT_PAIRED };
 let grant: { start: number } | null = null;   // appairage par QR en cours
+const MOCK_GRANT_CODE = 'QKDW-7HPM';
+const MOCK_GRANT_URI = `https://app.isno.fr/activer?code=${MOCK_GRANT_CODE}`;
 const noDownloads = (): Record<DownloadKey, string> | null => null;
 
 export default {
@@ -116,12 +118,12 @@ export default {
     await wait(900);
     if (cloud.paired) return { ok: 0, err: 'paired' };
     grant = { start: Date.now() };
-    return { ok: 1, uri: 'https://app.isno.fr/activer?code=QKDW-7HPM', user_code: 'QKDW-7HPM' };
+    return { ok: 1, uri: MOCK_GRANT_URI, user_code: MOCK_GRANT_CODE };
   },
   /* Confirme « sur le telephone » 6 s apres la demande. */
   async cloudPollGrant() {
-    if (!grant) return { state: GRANT_STATE.error };
-    if (Date.now() - grant.start < 6000) return { state: GRANT_STATE.pending };
+    if (!grant) return { state: GRANT_STATE.idle };
+    if (Date.now() - grant.start < 6000) return { state: GRANT_STATE.pending, uri: MOCK_GRANT_URI, user_code: MOCK_GRANT_CODE };
     grant = null;
     cloud = { paired: true, enabled: true, connected: true, name: 'Maison', device_id: 'opf-7f3a92c1' };
     return { state: GRANT_STATE.ready, device_id: cloud.device_id };

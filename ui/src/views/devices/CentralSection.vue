@@ -41,9 +41,9 @@ async function save(): Promise<void> {
   catch (e) { toast(`Échec de l'enregistrement${typeof e === 'string' ? ` : ${e}` : ''}`); }
 }
 async function confirmDelete(id: string): Promise<void> {
-  await api.deleteDevice(id);
   deleting.value = '';
-  toast('Centrale supprimée');
+  try { await api.deleteDevice(id); toast('Centrale supprimée'); }
+  catch { toast('Refusé : centrale non supprimée'); }
   refresh();
 }
 </script>

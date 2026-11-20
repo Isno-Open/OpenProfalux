@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // Reseau › Wi-Fi : le reseau domestique du boitier (2,4 GHz) et son nom, qui donne son adresse .local.
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
+import { useConfig } from '../../config';
 import { state, toast } from '../../store';
 import api from '../../api/index';
-import type { Config } from '../../api/types';
 import { BUTTON, TONE } from '../../domain';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
@@ -15,13 +15,12 @@ import SignalBars from '../../components/domain/SignalBars.vue';
 const DEFAULT_HOST = 'openprofalux';
 const DEFAULT_NAMES = [DEFAULT_HOST, 'volet_test'];
 const MDNS_MAX = 32;
-const config = ref<Config | null>(null);
 const ssid = ref('');
 const pass = ref('');
 const name = ref('');
 const reboot = ref(true);
 const done = ref<{ network: string; address: string } | null>(null);
-onMounted(async () => { config.value = await api.config(); ssid.value = config.value.wifi_ssid || ''; name.value = config.value.device || ''; });
+const { config, failed, load } = useConfig(c => { ssid.value = c.wifi_ssid || ''; name.value = c.device || ''; });
 
 /* L'adresse mDNS, calculee comme le firmware (mdns_name.c) : minuscules, a-z et 0-9, tirets. */
 function sanitize(n: string): string {
@@ -71,7 +70,9 @@ async function save(): Promise<void> {
         <OpSwitch v-model="reboot">Redémarrer après enregistrement</OpSwitch>
         <p class="hint">Nécessaire pour rejoindre un nouveau réseau.</p>
       </div>
-      <div class="row end"><OpButton :variant="BUTTON.primary" @click="save">Enregistrer le Wi-Fi</OpButton></div>
+      <OpStatline v-if="failed" :tone="TONE.danger"><b>Configuration non lue</b> : rien ne peut être enregistré pour l'instant.
+        <OpButton small @click="load">Réessayer</OpButton></OpStatline>
+      <div class="row end"><OpButton :variant="BUTTON.primary" :disabled="!config" @click="save">Enregistrer le Wi-Fi</OpButton></div>
       <OpStatline v-if="done" :tone="TONE.ok">Après le redémarrage, reconnecte-toi à « {{ done.network }} » et ouvre <a :href="`${done.address}/`">{{ done.address }}</a>.
         Sur Android, si l'adresse ne répond pas, utilise l'adresse IP du boîtier indiquée par ta box internet.</OpStatline>
     </div>

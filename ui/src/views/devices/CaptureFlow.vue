@@ -9,7 +9,7 @@ import { route, navigate } from '../../router';
 import { state, withRadio, radioFor, refresh, toast, remoteName } from '../../store';
 import { profiles, types, typeKey, mechanism, deviceIcon, profileOf, isSomfy, hasComma, mhz } from '../../profiles';
 import api from '../../api/index';
-import { isOtherRemote } from '../../api/real';
+import { isOtherRemote, type CaptureRequest } from '../../api/real';
 import type { Profile } from '../../api/types';
 import {
   BUTTON, COMMAND, DEVICE_TYPE, FAILURE, FLOW, NEW_DEVICE, SECTION, TAB, TONE, isCommand, type Command, type Tone,
@@ -24,17 +24,18 @@ import TxParamsPanel from '../../components/domain/TxParamsPanel.vue';
 
 const SHUTTER_ACTIONS: CaptureAction[] = [{ cmd: COMMAND.up, label: 'Montée' }, { cmd: COMMAND.stop, label: 'Stop' }, { cmd: COMMAND.down, label: 'Descente' }];
 
-/* Profil porte par l'adresse ; null = gestion d'un appareil existant. */
-const profile = computed<Profile | null>(() => {
-  const i = parseInt(route.rest[0] ?? '', 10);
-  return Number.isNaN(i) ? null : profiles()[i] ?? null;
-});
+/* Profil porte par l'adresse ; null = gestion d'un appareil existant. L'adresse est lue une fois : l'ecran est
+   reconstruit a chaque adresse (DevicesView), et quitter l'onglet pendant une capture ne doit pas lui retirer son
+   profil. */
+const routeRest = [...route.rest];
+const profileIndex = parseInt(routeRest[0] ?? '', 10);
+const profile = computed<Profile | null>(() => (Number.isNaN(profileIndex) ? null : profiles()[profileIndex] ?? null));
 const devices = computed(() => state.status?.volets ?? []);
 /* Avec un profil : les appareils du meme type et du meme mecanisme (on ne clone pas un volet enrole). Sans
    profil : tous, sauf les centrales (pas de telecommande propre). */
 const compatible = computed(() => devices.value.filter(d => !d.central
   && (!profile.value || (!d.zone && typeKey(d) === profile.value.type && mechanism(d) === profile.value.mecanisme))));
-const preselected = route.rest[1] ? decodeURIComponent(route.rest[1]) : '';
+const preselected = routeRest[1] ? decodeURIComponent(routeRest[1]) : '';
 const choice = ref<string | string[]>(preselected || (profile.value ? NEW_DEVICE : ''));
 const choiceId = computed(() => (typeof choice.value === 'string' ? choice.value : ''));
 const name = ref('');
@@ -78,8 +79,8 @@ watch(() => `${id.value}|${remoteSerial.value}`, () => {
   remoteNameDraft.value = remoteSerial.value ? (state.status?.remotes[remoteSerial.value] || id.value) : '';
 }, { immediate: true });
 async function renameRemote(): Promise<void> {
-  await api.remoteRename(remoteSerial.value, remoteNameDraft.value.trim());
-  toast('Télécommande renommée');
+  try { await api.remoteRename(remoteSerial.value, remoteNameDraft.value.trim()); toast('Télécommande renommée'); }
+  catch { toast('Échec du renommage'); }
   refresh();
 }
 
@@ -110,22 +111,22 @@ async function capture(cmd: Command): Promise<void> {
     if (device.value && !compatible.value.includes(device.value)) { nameError.value = 'Ce nom est déjà pris par un autre appareil.'; return; }
   }
   const label = actions.value.find(a => a.cmd === cmd)?.label ?? cmd;
-  const p = effectiveProfile.value;
-  const settings = profile.value && panel.value ? panel.value.read() : {};
-  /* L'appareil vise est fige pour toute la capture : choisir un autre appareil pendant l'attente ne doit pas lui
-     faire recevoir les reglages de celle-ci. */
+  /* Tout ce que la capture utilise est fige ICI, avant la premiere attente : choisir un autre appareil, toucher aux
+     reglages ou quitter l'onglet pendant l'attente ne doit rien changer a celle-ci ni a ce qu'elle enregistre. */
+  const fromPyramid = !!profile.value, p = effectiveProfile.value, current = device.value;
+  const settings = fromPyramid && panel.value ? panel.value.read() : {};
   const target = id.value, isNew = choiceId.value === NEW_DEVICE;
-  const targetSerial = device.value?.serials[0] ?? '';
+  const targetSerial = current?.serials[0] ?? '';
+  const request: Omit<CaptureRequest, 'radio'> = {
+    id: target, action: cmd, replay: replay.value, type: types()[typeKeyOf.value]?.code ?? 0, brand: p?.marque,
+    freq_khz: frequency.value, rx: p?.rx, exists: !!current, remoteName: remoteSerial.value ? '' : remoteNameDraft.value.trim(),
+    knownSerials: current?.serials ?? [], virtual: virtual.value,
+  };
   busy.value = cmd;
   try {
-    const r = await withRadio(async () => api.capture({
-      id: target, action: cmd, replay: replay.value, type: types()[typeKeyOf.value]?.code ?? 0, brand: p?.marque,
-      radio: await radioFor(p?.band), freq_khz: frequency.value, rx: p?.rx, exists: !!device.value,
-      remoteName: remoteSerial.value ? '' : remoteNameDraft.value.trim(),
-      knownSerials: device.value?.serials ?? [], virtual: virtual.value,
-    }));
+    const r = await withRadio(async () => api.capture({ ...request, radio: await radioFor(p?.band) }));
     /* Les reglages avances (ajout depuis la pyramide) passent a l'appareil, comme la capture les a utilises. */
-    if (profile.value) {
+    if (fromPyramid) {
       const body: Record<string, unknown> = { id: target };
       for (const [k, v] of Object.entries(settings)) if (v) body[k] = v;
       if (p?.marque) body.marque = p.marque;
@@ -136,13 +137,16 @@ async function capture(cmd: Command): Promise<void> {
     await refresh();
   } catch (e) {
     if (isOtherRemote(e)) toast(`Pas la bonne télécommande : trame de ${e.otherRemote}, le volet utilise ${targetSerial}`);
+    else if (e === FAILURE.refused) toast(`Refusé par le boîtier : « ${label} » n'est pas enregistrée (liste des appareils pleine ?)`);
     else if (e !== FAILURE.busy) failed.value = label;
   } finally { busy.value = ''; }
 }
 async function moveCapture(from: Command, to: Command): Promise<void> {
   if (busy.value) return;   // capture en cours : sa trame ecraserait celle que l'on deplace
-  await api.moveCapture({ id: id.value, from, to });
-  toast(`Commande déplacée vers ${actions.value.find(a => a.cmd === to)?.label ?? to}`);
+  try {
+    await api.moveCapture({ id: id.value, from, to });
+    toast(`Commande déplacée vers ${actions.value.find(a => a.cmd === to)?.label ?? to}`);
+  } catch { toast('Refusé : commande non déplacée'); }
   refresh();
 }
 

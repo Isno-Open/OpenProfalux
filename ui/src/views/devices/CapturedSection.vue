@@ -66,7 +66,10 @@ async function addIgnored(serial: string): Promise<void> {
   try { await api.remoteIgnore(serial.trim()); toast('Télécommande ignorée'); } catch (e) { toast(`Refusé : ${e}`); }
   refresh();
 }
-async function unignore(serial: string): Promise<void> { await api.remoteUnignore(serial); toast(`${serial} n'est plus ignorée`); refresh(); }
+async function unignore(serial: string): Promise<void> {
+  try { await api.remoteUnignore(serial); toast(`${serial} n'est plus ignorée`); } catch { toast(`Refusé : ${serial} reste ignorée`); }
+  refresh();
+}
 </script>
 
 <template>

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // Reseau › MQTT : le pont vers Home Assistant. Broker (avec detection mDNS), identifiants, TLS. Les secrets
 // enregistres ne sont jamais reaffiches : seule leur longueur l'est.
-import { onMounted, reactive, ref } from 'vue';
+import { reactive, ref } from 'vue';
+import { useConfig } from '../../config';
 import { state, toast } from '../../store';
 import api from '../../api/index';
 import { navigate } from '../../router';
-import type { Config, ConfigUpdate } from '../../api/types';
+import type { ConfigUpdate } from '../../api/types';
 import { BUTTON, SECTION, TAB, TONE } from '../../domain';
 import { ICON } from '../../icons';
 import OpCard from '../../components/base/OpCard.vue';
@@ -21,12 +22,11 @@ const RELOAD_AFTER_REBOOT_MS = 8000;
 const BROKER_HINT = 'mqtt://adresse, ou mqtts:// pour chiffrer (voir TLS).';
 const TLS_TITLE = 'TLS (mqtts://)';
 type CertKey = 'ca' | 'cert' | 'key';
-const config = ref<Config | null>(null);
 const form = reactive({ uri: '', user: '', pass: '' });
 const certs = reactive<Record<CertKey, string>>({ ca: '', cert: '', key: '' });
 const erase = reactive<Record<CertKey, boolean>>({ ca: false, cert: false, key: false });
 const discovery = ref('');
-onMounted(async () => { config.value = await api.config(); form.uri = config.value.mqtt_uri || ''; form.user = config.value.mqtt_user || ''; });
+const { config, failed, load } = useConfig(c => { form.uri = c.mqtt_uri || ''; form.user = c.mqtt_user || ''; });
 
 async function discover(): Promise<void> {
   discovery.value = 'Recherche sur le réseau…';
@@ -92,7 +92,9 @@ const connected = (): boolean => !!state.status?.mqtt;
       </OpDetails>
       <p class="hint">Nom de l'appareil dans Home Assistant : <b>{{ config?.device || config?.mdns_default || 'OpenProfalux' }}</b>, réglé dans
         <button type="button" class="back-link" @click="navigate(`${TAB.system}/${SECTION.device}`)">Système › Appareil</button>.</p>
-      <div class="row end"><OpButton :variant="BUTTON.primary" @click="save">Enregistrer le MQTT</OpButton></div>
+      <OpStatline v-if="failed" :tone="TONE.danger"><b>Configuration non lue</b> : rien ne peut être enregistré pour l'instant.
+        <OpButton small @click="load">Réessayer</OpButton></OpStatline>
+      <div class="row end"><OpButton :variant="BUTTON.primary" :disabled="!config" @click="save">Enregistrer le MQTT</OpButton></div>
     </div>
   </OpCard>
 </template>

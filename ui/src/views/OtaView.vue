@@ -1,8 +1,22 @@
-<script setup lang="ts">
+<script lang="ts">
 // OTA : la version installee, le retour automatique, la mise a jour depuis GitHub (le boitier telecharge lui-meme)
 // ou depuis un fichier, et le retour a la version precedente. Les confirmations sont dans la page, pas des fenetres
 // du navigateur. Apres un redemarrage, la page attend le boitier puis se recharge.
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { ref } from 'vue';
+import type { Tone } from '../domain';
+
+interface Message { tone: Tone; text: string }
+/* L'operation en cours vit hors de l'ecran, qui est demonte a chaque changement d'onglet : une mise a jour ou une
+   verification continue pendant ce temps, et l'ecran la retrouve au retour (avancement, boutons grises), comme
+   dans l'ancienne interface, ou le panneau restait dans la page. */
+const check = ref<Message | null>(null);       // resultat de la verification
+const checking = ref(false);
+const progress = ref<{ value: number | null; text: string } | null>(null);
+const outcome = ref<Message | null>(null);
+</script>
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted } from 'vue';
 import { state, toast } from '../store';
 import api from '../api/index';
 import type { OtaStatus } from '../api/types';
@@ -10,7 +24,7 @@ import type { Progress } from '../api/real-system';
 import { withoutV, isNewer, updateAvailable } from '../versions';
 import {
   BUTTON, CHECK_PHASE, FAILURE, FLAG, HTTP_CONFLICT, OTA_CONFIRM, OTA_IMAGE, OTA_SOURCE, TONE, bootInstant, isFlagOn,
-  type OtaConfirm, type OtaSource, type Tone,
+  type OtaConfirm, type OtaSource,
 } from '../domain';
 import { ICON } from '../icons';
 import OpCard from '../components/base/OpCard.vue';
@@ -20,16 +34,11 @@ import OpSwitch from '../components/base/OpSwitch.vue';
 import OpProgress from '../components/base/OpProgress.vue';
 import OpFileInput from '../components/base/OpFileInput.vue';
 
-interface Message { tone: Tone; text: string }
 const TRIAL_RECHECK_MS = 65000;   // apres la minute de validation d'une version en essai
 const ROLLBACK_AUTO_ON = 1, ROLLBACK_AUTO_OFF = 0;
 const status = ref<OtaStatus | null>(null);
 const auto = ref(true);
-const check = ref<Message | null>(null);       // resultat de la verification
-const checking = ref(false);
 const confirm = ref<OtaConfirm>(OTA_CONFIRM.none);
-const progress = ref<{ value: number | null; text: string } | null>(null);
-const outcome = ref<Message | null>(null);
 const file = ref<File | null>(null);
 let recheck: ReturnType<typeof setTimeout> | undefined;
 
@@ -44,7 +53,7 @@ onMounted(async () => {
   const c = await api.config().catch(() => null);
   auto.value = isFlagOn(c?.update_auto, true);   // le firmware envoie 0 / 1 ; absent (firmware d'avant) = active
   const s = status.value;
-  if (s && updateAvailable(s)) check.value = { tone: TONE.warning, text: `Installée ${withoutV(s.version)}, disponible ${withoutV(s.latest)}.` };
+  if (s && updateAvailable(s) && !checking.value) check.value = { tone: TONE.warning, text: `Installée ${withoutV(s.version)}, disponible ${withoutV(s.latest)}.` };
 });
 onUnmounted(() => clearTimeout(recheck));
 

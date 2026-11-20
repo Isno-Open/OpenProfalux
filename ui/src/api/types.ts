@@ -183,7 +183,8 @@ export interface MqttDiscovery { uri?: string }
 /* Cloud ISNO. */
 export interface CloudStatus { paired: boolean; enabled: boolean; connected: boolean; name: string; device_id: string }
 export interface CloudGrantReply extends OkReply { uri?: string; user_code?: string; status?: number }
-export interface CloudGrantPoll { state: string; device_id?: string }
+/* En attente (pending), le boitier redonne le code et l'adresse : l'ecran reprend l'appairage. */
+export interface CloudGrantPoll { state: string; device_id?: string; user_code?: string; uri?: string }
 export interface CloudPairReply extends OkReply { device_id?: string }
 
 /* /api/health et /api/diag. */

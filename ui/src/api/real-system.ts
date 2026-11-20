@@ -4,7 +4,7 @@ import {
   CHECK_PHASE, DOWNLOAD, FAILURE, HTTP_UNAUTHORIZED, NO_SERIAL, OTA_STATE, REBOOT_MARGIN_MS, SCAN_STATE, bootInstant,
   type CheckPhase, type DownloadKey,
 } from '../domain';
-import { json, post, wait, poll } from './http';
+import { json, post, wait, poll, requireOk } from './http';
 import type {
   CaptureLast, CloudGrantPoll, CloudGrantReply, CloudPairReply, CloudStatus, Config, ConfigReply, ConfigUpdate, Dataset, Diag,
   GainCalibration, Health, MqttDiscovery, MultiCaptureReply, OkReply, OtaInstallReply, OtaStatus, RadiosReply, ReceptionTest,
@@ -24,8 +24,8 @@ const DOWNLOAD_LINKS: Record<DownloadKey, string> = { [DOWNLOAD.backup]: '/api/b
 const downloadLinks = (): Record<DownloadKey, string> | null => DOWNLOAD_LINKS;
 const asReply = (d: OkReply): OkReply => d;
 
-/* Une relecture pendant un redemarrage : abandonnee au bout de REBOOT_POLL_TIMEOUT_MS (null), pour que la suivante
-   reparte sur une connexion neuve. Sans cela, une requete partie juste avant le redemarrage reste suspendue jusqu'a
+/* Une relecture pendant une mise a jour ou un redemarrage : abandonnee au bout de REBOOT_POLL_TIMEOUT_MS (null), pour
+   que la suivante reparte sur une connexion neuve. Sans cela, une requete partie juste avant le redemarrage reste suspendue jusqu'a
    ce que TCP abandonne (pres de 40 s mesurees sur un ATOM), bien apres le retour du boitier. */
 const REBOOT_POLL_TIMEOUT_MS = 4000;
 async function jsonWithin<T>(url: string): Promise<T | null> {
@@ -72,12 +72,12 @@ export default {
   rawCapture: (radio: number) => post<{ n: number }>(`/api/capture/start?radio=${radio}`),
   lastCapture: () => json<CaptureLast>('/api/capture/last'),
   lastCaptureText: () => text('/api/capture/last'),
-  replayCapture: () => post('/api/capture/replay'),
+  replayCapture: () => requireOk(post('/api/capture/replay')),
   multiCapture: (radio: number) => post<MultiCaptureReply>(`/api/capture/multi?radio=${radio}`),
 
   /* ── Trames RF, dataset, journal ── */
   rf: (offset: number, limit: number) => json<RfPage>(`/api/rf?offset=${offset}&limit=${limit}`),
-  replayFrame: (serial: string, hop: string) => post('/api/rf/replay', { serial, hop }),
+  replayFrame: (serial: string, hop: string) => requireOk(post('/api/rf/replay', { serial, hop })),
   dataset: () => json<Dataset>('/api/frames'),
   log: () => text('/api/log'),
 
@@ -92,7 +92,7 @@ export default {
     let silences = 0;
     while (silences < 5) {
       await wait(1000);
-      const s = await json<OtaStatus>('/api/ota/status').catch(() => null);
+      const s = await jsonWithin<OtaStatus>('/api/ota/status');
       if (!s) { silences++; continue; }
       silences = 0;
       if (s.checks > (r.checks ?? 0)) return s;
@@ -108,7 +108,7 @@ export default {
     let missed = 0;
     for (;;) {
       await wait(800);
-      const s = await json<OtaStatus>('/api/ota/status').catch(() => null);
+      const s = await jsonWithin<OtaStatus>('/api/ota/status');
       if (!s) { if (++missed >= 3) return { rebooting: true }; continue; }
       missed = 0;
       if (s.total) onProgress(s.written / s.total, s.msg || '');

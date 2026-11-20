@@ -62,7 +62,7 @@ export const SCAN_STATE = { running: 1, done: 2 } as const;
 export const SWEEP_STATUS = { found: 0, tooWeak: -2, outOfRange: -3 } as const;
 
 /* Appairage cloud par QR (/api/cloud/grant, champ state). */
-export const GRANT_STATE = { pending: 'pending', ready: 'ready', expired: 'expired', denied: 'denied', error: 'error' } as const;
+export const GRANT_STATE = { idle: 'idle', pending: 'pending', ready: 'ready', expired: 'expired', denied: 'denied', error: 'error' } as const;
 /* Refus d'une demande d'appairage : le boitier est deja appaire (champ err). */
 export const CLOUD_ALREADY_PAIRED = 'paired';
 

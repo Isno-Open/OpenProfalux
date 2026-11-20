@@ -21,11 +21,16 @@ const radios = ref<RadioDetail[]>([]);
 const diag = ref<Diag | null>(null);
 const testingTx = ref(false);
 const rx = ref<Message | null>(null);
-onMounted(async () => { radios.value = (await api.radioDetails()).radios ?? []; diag.value = await api.diag().catch(() => null); });
+const diagFailed = ref(false);
+/* Deux lectures independantes : l'echec de l'une ne laisse pas l'autre en « Chargement… ». */
+onMounted(() => {
+  api.radioDetails().then(r => { radios.value = r.radios ?? []; }, () => {});
+  api.diag().then(d => { diag.value = d; }, () => { diagFailed.value = true; });
+});
 const hex = (n: number): string => `0x${Number(n).toString(16).toUpperCase().padStart(2, '0')}`;
 const verdict = computed<Message>(() => {
   const x = diag.value;
-  if (!x) return { tone: TONE.neutral, text: 'Chargement…' };
+  if (!x) return diagFailed.value ? { tone: TONE.danger, text: 'Diagnostic non lu : le boîtier n\'a pas répondu. Rouvre cette section pour réessayer.' } : { tone: TONE.neutral, text: 'Chargement…' };
   if (!(x.partnum === CC1101_PARTNUM && !NO_VERSION.includes(x.version))) return { tone: TONE.danger, text: `Module non détecté (câblage, SPI). VERSION ${hex(x.version)}` };
   if (x.spi_fails > 0) return { tone: TONE.danger, text: 'Réglages radio non pris par le module : coupe l\'alimentation puis redémarre.' };
   if (x.tx_ok !== OK) return { tone: TONE.danger, text: 'Détecté, mais l\'émission ne marche pas.' };

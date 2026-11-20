@@ -58,14 +58,14 @@ async function rename(): Promise<void> {
   catch (e) { error.value = e === NAME_EXISTS ? 'Ce nom existe déjà.' : 'Échec du renommage.'; }
 }
 async function changeType(key: string | number): Promise<void> {
-  await api.setType(props.device.id, types()[String(key)]?.code ?? 0);
-  toast('Type changé');
+  try { await api.setType(props.device.id, types()[String(key)]?.code ?? 0); toast('Type changé'); }
+  catch { toast('Refusé : type inchangé'); }
   refresh();
 }
 async function saveOrientation(): Promise<void> {
   const value = orientation.value === '' ? -1 : Math.round(Number(orientation.value)) % 360;
-  await api.setOrientation(props.device.id, value);
-  toast('Orientation enregistrée');
+  try { await api.setOrientation(props.device.id, value); toast('Orientation enregistrée'); }
+  catch { toast('Refusé : orientation non enregistrée'); }
   refresh();
 }
 async function saveZone(): Promise<void> {
@@ -88,7 +88,8 @@ const captureLabel = computed(() => {
 const openCapture = (): void => navigate(`${TAB.remotes}/${SECTION.learn}/${EXISTING_DEVICE}/${encodeURIComponent(props.device.id)}`);
 const saveTx = (txValues: TxValues): Promise<void> => api.saveTxParams({ id: props.device.id, marque: brand.value, ...txValues }).then(refresh);
 async function remove(): Promise<void> {
-  await api.deleteDevice(props.device.id);
+  try { await api.deleteDevice(props.device.id); }
+  catch { toast('Refusé : appareil non supprimé'); confirming.value = false; return; }
   toast('Appareil supprimé');
   emit('deleted');
   refresh();

@@ -52,7 +52,15 @@ async function load(): Promise<void> {
   if (c.paired) { stopPolling(); qr.value = null; }
   if (c.paired && c.enabled && !c.connected) reloadTimer = setTimeout(() => { if (!document.hidden) load(); }, RELOAD_MS);
 }
-onMounted(load);
+/* Un appairage par QR deja demande (avant un changement d'onglet ou un rechargement) : le boitier interroge le portail
+   lui-meme et redonne le code et l'adresse tant qu'il attend ; l'ecran reprend le QR et le suivi. */
+async function resumeGrant(): Promise<void> {
+  const g = await api.cloudPollGrant().catch(() => null);
+  if (!mounted || qr.value || cloud.value?.paired || g?.state !== GRANT_STATE.pending || !g.uri) return;
+  showQr(g.uri, g.user_code ?? '');
+  pollTimer = setTimeout(pollGrant, POLL_MS);
+}
+onMounted(async () => { await load(); if (cloud.value && !cloud.value.paired) resumeGrant(); });
 onUnmounted(() => { mounted = false; clearTimeout(reloadTimer); stopPolling(); });
 
 function stopPolling(): void { clearTimeout(pollTimer); pollTimer = undefined; }
@@ -65,6 +73,14 @@ async function pollGrant(): Promise<void> {
   if (qr.value) qr.value.state = (g && QR_STATES[g.state]) || QR_STATES[GRANT_STATE.error] || '';
 }
 
+function showQr(uri: string, userCode: string): void {
+  const q = qrcode(0, 'M');
+  q.addData(uri);
+  q.make();
+  let host = uri;
+  try { const u = new URL(uri); host = u.host + u.pathname; } catch { /* adresse brute */ }
+  qr.value = { svg: q.createSvgTag({ cellSize: 5, margin: 4, scalable: true }), host, code: userCode, state: 'En attente de votre confirmation…' };
+}
 /* Appairage par QR code (« a la Netflix ») : le boitier demande un code au portail, on affiche le QR et le code
    court, puis on suit l'etat jusqu'a la confirmation sur le telephone. */
 async function pairByQr(): Promise<void> {
@@ -74,12 +90,7 @@ async function pairByQr(): Promise<void> {
     const r = await api.cloudRequestGrant(server.value.trim());
     if (r?.err === CLOUD_ALREADY_PAIRED) { toast('Déjà appairé : « Oublier » d\'abord pour réappairer'); load(); return; }
     if (!r?.uri) { toast(`Portail injoignable (${r?.status || '?'})`); return; }
-    const q = qrcode(0, 'M');
-    q.addData(r.uri);
-    q.make();
-    let host = r.uri;
-    try { const u = new URL(r.uri); host = u.host + u.pathname; } catch { /* adresse brute */ }
-    qr.value = { svg: q.createSvgTag({ cellSize: 5, margin: 4, scalable: true }), host, code: r.user_code ?? '', state: 'En attente de votre confirmation…' };
+    showQr(r.uri, r.user_code ?? '');
     pollTimer = setTimeout(pollGrant, POLL_MS);
   } catch { toast('Échec de la demande'); }
   finally { busy.value = BUSY.none; }

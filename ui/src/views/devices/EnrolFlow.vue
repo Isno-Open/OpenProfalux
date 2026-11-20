@@ -1,18 +1,36 @@
-<script setup lang="ts">
+<script lang="ts">
 // Creer une telecommande virtuelle (enrolement) : le boitier devient une nouvelle telecommande, que le moteur
 // apprend. Cinq etapes : capturer la telecommande d'origine (le boitier attribue une identite, nouvelle si le
 // moteur est inconnu, la meme s'il est deja connu), emettre la trame d'apprentissage (~5 s), faire les gestes,
-// tester apres le delai de confirmation du moteur (~10 s), enregistrer comme volet. L'etat vit dans le boitier
+// tester apres le delai de confirmation du moteur (~10 s), enregistrer comme volet. L'identite vit dans le boitier
 // (/api/pfx) : une identite en cours se reprend apres un F5. La marque choisie dans la pyramide est dans l'adresse
 // (#remotes/enrol/<index>).
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { ref } from 'vue';
+import type { Tone } from '../../domain';
+
+interface Message { tone: Tone; text: string; running?: boolean; more?: string; help?: boolean }
+/* L'avancement vit hors de l'ecran, qui est demonte a chaque changement d'onglet : emission faite, gestes faits et
+   delai du moteur ne se refont pas pour un aller-retour, comme dans l'ancienne interface, ou le panneau restait dans
+   la page. Il appartient a l'identite du boitier (owner) : une autre identite, ou plus aucune, le remet a zero. */
+const owner = ref('');                    // serial de l'identite a laquelle appartient l'avancement
+const captureMsg = ref<Message | null>(null);
+const renewable = ref(false);
+const emission = ref<Message | null>(null);
+const gestures = ref(false);              // emission finie : les gestes sont a faire
+const testAllowedAt = ref(0);             // instant ou le test est permis (gestes faits + delai du moteur) ; 0 = gestes pas faits
+const name = ref('');
+const done = ref<Message | null>(null);
+</script>
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted } from 'vue';
 import { route, navigate } from '../../router';
 import { state, refresh, toast } from '../../store';
 import { profiles, types, hasComma, mhz } from '../../profiles';
 import api from '../../api/index';
 import type { PfxCaptureReply, PfxState, Profile } from '../../api/types';
 import {
-  BUTTON, COMMAND, DEVICE_TYPE, FAILURE, FLOW, NO_SERIAL, SECTION, TAB, TONE, TRISTATE, type Command, type Tone,
+  BUTTON, COMMAND, DEVICE_TYPE, FAILURE, FLOW, NO_SERIAL, SECTION, TAB, TONE, TRISTATE, type Command,
 } from '../../domain';
 import { ICON } from '../../icons';
 import OpCard from '../../components/base/OpCard.vue';
@@ -44,23 +62,21 @@ const EMISSION_S = 5;
 const PFX_RC = { ok: 0, full: -1, nothing: -3 } as const;
 const DEFAULT_DPAD: Partial<Record<Command, string>> = { [COMMAND.up]: 'Montée', [COMMAND.stop]: 'Stop', [COMMAND.down]: 'Descente' };
 
-interface Message { tone: Tone; text: string; running?: boolean; more?: string; help?: boolean }
+const COUNTDOWN_TICK_MS = 250;
+/* L'adresse est lue une fois : l'ecran est reconstruit a chaque adresse (DevicesView). */
+const profileIndex = parseInt(route.rest[0] ?? '', 10);
 const profile = computed<Profile | null>(() => {
-  const p = profiles()[parseInt(route.rest[0] ?? '', 10)];
+  const p = profiles()[profileIndex];
   return p && p.flow === FLOW.enrolPfx ? p : null;
 });
 const pfx = ref<PfxState | null>(null);   // /api/pfx
 const model = ref<string | number>(0);
 const panel = ref<InstanceType<typeof TxParamsPanel> | null>(null);
-const captureMsg = ref<Message | null>(null);
-const renewable = ref(false);
-const emission = ref<Message | null>(null);
-const gestures = ref(false);              // emission finie : les gestes sont a faire
-const countdown = ref(-1);                // secondes restantes ; 0 = test permis ; -1 = gestes pas encore faits
-const name = ref('');
-const done = ref<Message | null>(null);
 const sending = ref<Command | ''>('');
-let timer: ReturnType<typeof setInterval> | undefined;
+/* Secondes avant le test, d'apres l'echeance : 0 = test permis ; -1 = gestes pas encore faits. */
+const now = ref(Date.now());
+let clock: ReturnType<typeof setInterval> | undefined;
+const countdown = computed(() => (testAllowedAt.value ? Math.max(0, Math.ceil((testAllowedAt.value - now.value) / 1000)) : -1));
 
 const models = computed(() => pfx.value?.models ?? []);
 const modelOptions = computed(() => models.value.map((m, i) => ({ value: i, label: `${m.name} · ${m.routine}` })));
@@ -79,8 +95,11 @@ async function read(): Promise<void> {
   if (!d) return;
   pfx.value = d;
   if (d.active) model.value = d.model ?? 0;
+  const serial = d.active ? d.serial ?? '' : '';
+  if (serial !== owner.value) { owner.value = serial; gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
 }
 onMounted(async () => {
+  clock = setInterval(() => { now.value = Date.now(); }, COUNTDOWN_TICK_MS);
   await read();
   const p = profile.value;
   if (!active.value && p) {
@@ -88,7 +107,7 @@ onMounted(async () => {
     if (i >= 0) model.value = i;
   }
 });
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => clearInterval(clock));
 
 /* Reglages du panneau -> corps de /api/pfx/capture : le firmware lit des booleens, une option absente reste
    « heriter », une frequence ou un TE a 0 n'est pas envoye. */
@@ -101,7 +120,7 @@ function captureBody(): Record<string, unknown> {
   if (profile.value?.marque) body.marque = profile.value.marque;
   return body;
 }
-function restart(): void { gestures.value = false; countdown.value = -1; emission.value = null; clearInterval(timer); }
+function restart(): void { gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
 
 function captureOutcome(d: PfxCaptureReply & { used_by?: string }): Message {
   if (d.rc === PFX_RC.ok && d.new) return { tone: TONE.ok, text: `Nouveau moteur : identité ${d.serial} attribuée (télécommande ${d.remote})` };
@@ -146,7 +165,7 @@ async function renew(): Promise<void> {
 async function sendLearnFrame(): Promise<void> {
   if (state.radioBusy) { toast('Radio occupée, réessaie dans un instant'); return; }
   state.radioBusy = true;
-  gestures.value = false; countdown.value = -1;
+  gestures.value = false; testAllowedAt.value = 0;
   let n = EMISSION_S;
   const text = (): string => `Émission ~5 s : ne touche à rien… ${n} s`;
   emission.value = { tone: TONE.neutral, text: text(), running: true };
@@ -160,11 +179,11 @@ async function sendLearnFrame(): Promise<void> {
   } catch { emission.value = { tone: TONE.danger, text: 'Radio occupée, réessaie dans un instant.' }; }
   finally { clearInterval(ticker); state.radioBusy = false; await read(); }
 }
-/* Gestes faits : le delai de confirmation du moteur (~10 s) passe avant d'autoriser le test. */
+/* Gestes faits : le delai de confirmation du moteur (~10 s) passe avant d'autoriser le test. Une echeance, et non un
+   compte a rebours de l'ecran : elle court aussi pendant un passage sur un autre onglet. */
 function gesturesDone(): void {
-  countdown.value = MOTOR_DELAY_S;
-  clearInterval(timer);
-  timer = setInterval(() => { countdown.value = Math.max(0, countdown.value - 1); if (countdown.value === 0) clearInterval(timer); }, 1000);
+  now.value = Date.now();
+  testAllowedAt.value = now.value + MOTOR_DELAY_S * 1000;
 }
 async function test(cmd: Command): Promise<void> {
   if (countdown.value !== 0 || state.radioBusy) return;

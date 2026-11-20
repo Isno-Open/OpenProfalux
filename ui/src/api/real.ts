@@ -44,7 +44,7 @@ export default {
   status: (signal?: AbortSignal) => json<Status>('/api/status', { signal }),
   profiles: (signal?: AbortSignal) => json<Profiles>('/profiles.json', { signal }),
   sendShutter: (order: ShutterOrder) => post<ShutterReply>('/api/shutter', order),
-  saveDisplayOrder: (ids: string[]) => post('/api/volet/order', { ids }),
+  saveDisplayOrder: (ids: string[]) => requireOk(post('/api/volet/order', { ids })),
 
   /* ── Appareils ── */
   radios: () => json<{ radios?: RadioSummary[] }>('/api/radios').then(d => d.radios || []),
@@ -71,10 +71,11 @@ export default {
     /* Un volet clone rejoue les trames d'UNE telecommande ; un volet virtuel en suit plusieurs. */
     if (!virtual && knownSerials.length && !knownSerials.includes(r.serial)) return Promise.reject({ otherRemote: r.serial } satisfies OtherRemote);
     if (remoteName) await post('/api/remote', { serial: r.serial, name: remoteName });
-    await post('/api/learn/assign', { id, action, bits: r.bits });
+    /* Refus du boitier (liste des appareils pleine) : rien n'est enregistre, la capture n'a pas abouti. */
+    await requireOk(post('/api/learn/assign', { id, action, bits: r.bits }));
     return r;
   },
-  moveCapture: ({ id, from, to }: { id: string; from: Command; to: Command }) => post('/api/learn/reassign', { id, from, to }),
+  moveCapture: ({ id, from, to }: { id: string; from: Command; to: Command }) => requireOk(post('/api/learn/reassign', { id, from, to })),
   /* « Caler sur ma telecommande » : balayage autour de la porteuse ; rend { status, center_khz, from_khz,
      peak_dbm, floor_dbm }, status SWEEP_STATUS. */
   async tuneToRemote(radio: number): Promise<Sweep> {
@@ -85,8 +86,8 @@ export default {
   saveTxParams: (body: Record<string, unknown>) => requireOk(post('/api/volet/txparams', body)),
   rename: (id: string, name: string) => requireOk(post('/api/volet/rename', { id, name })),
   setType: (id: string, type: number) => requireOk(post('/api/volet/type', { id, type })),
-  deleteDevice: (id: string) => post('/api/volet/delete', { id }),
-  setOrientation: (id: string, value: number) => post('/api/volet/orientation', { id, orientation: value }),
+  deleteDevice: (id: string) => requireOk(post('/api/volet/delete', { id })),
+  setOrientation: (id: string, value: number) => requireOk(post('/api/volet/orientation', { id, orientation: value })),
   setFollowers: (id: string, members: string[]) => requireOk(post('/api/volet/followers', { id, members })),
 
   /* Telecommande virtuelle (enrolement) */
@@ -98,18 +99,18 @@ export default {
   },
   pfxRenew: () => post<PfxRenewReply>('/api/pfx/renew'),
   pfxLearn: () => post('/api/pfx/learn'),
-  pfxCommand: (cmd: Command) => post('/api/pfx/cmd', { cmd }),
+  pfxCommand: (cmd: Command) => requireOk(post('/api/pfx/cmd', { cmd })),
   pfxSave: (id: string) => requireOk(post('/api/pfx/save_volet', { id })),
   pfxForget: () => post('/api/pfx/forget'),
 
   somfyCreate: (body: { id: string; address: string; [key: string]: unknown }) => requireOk(post('/api/somfy/create', body)),
   saveCentral: ({ id, members }: { id: string; members: string[] }) => requireOk(post('/api/central', { id, members })),
-  calibrate: (body: { id: string; travel_up_ms: number; travel_down_ms: number }) => post('/api/calibrate', body),
+  calibrate: (body: { id: string; travel_up_ms: number; travel_down_ms: number }) => requireOk(post('/api/calibrate', body)),
 
   /* Telecommandes captees */
   remoteRename: (serial: string, name: string) => post('/api/remote', { serial, name }),
   remoteDelete: (serial: string) => postWithText<OkReply>('/api/remote/delete', { serial }),
   remoteIgnore: (serial: string) => postWithText<OkReply>('/api/remote/ignore', { serial }),
-  remoteUnignore: (serial: string) => post('/api/remote/unignore', { serial }),
+  remoteUnignore: (serial: string) => requireOk(post('/api/remote/unignore', { serial })),
   deviceFromRemote: (serial: string, name: string) => postWithText<DeviceFromRemoteReply>('/api/remote/create_volet', { serial, name }),
 };

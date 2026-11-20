@@ -2,9 +2,10 @@
 // Systeme › Appareil : nom, mot de passe de l'interface, options d'ecoute et de pilotage, puis les reglages de
 // reception de chaque radio.
 import { onMounted, reactive, ref } from 'vue';
+import { useConfig } from '../../config';
 import { toast, sessionClosed, protectionRemoved } from '../../store';
 import api from '../../api/index';
-import type { Config, RadioDetail } from '../../api/types';
+import type { RadioDetail } from '../../api/types';
 import { BUTTON, TONE, isFlagOn } from '../../domain';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
@@ -16,21 +17,23 @@ import RadioCard from '../../components/domain/RadioCard.vue';
 
 type OptionKey = 'log_frames' | 'mqtt_obey' | 'debug';
 const SESSION_CLOSE_DELAY_MS = 1000;
-const config = ref<Config | null>(null);
 const name = ref('');
 const password = ref('');
 const options = reactive<Record<OptionKey, boolean>>({ log_frames: true, mqtt_obey: true, debug: false });
 const reboot = ref(false);
 const radios = ref<RadioDetail[]>([]);
-async function load(): Promise<void> {
-  const c = await api.config();
-  config.value = c;
+const { config, failed, load } = useConfig(c => {
   name.value = c.device || '';
   /* Le firmware envoie 0 / 1 ; mqtt_obey absent (firmware d'avant) = oui. */
   Object.assign(options, { log_frames: isFlagOn(c.log_frames, false), mqtt_obey: isFlagOn(c.mqtt_obey, true), debug: isFlagOn(c.debug, false) });
-  radios.value = (await api.radioDetails()).radios ?? [];
+});
+/* Les radios, lues a part : un echec de l'une des lectures ne bloque pas l'autre. */
+async function loadRadios(): Promise<void> {
+  const r = await api.radioDetails().catch(() => null);
+  if (r) radios.value = r.radios ?? [];
 }
-onMounted(load);
+onMounted(loadRadios);
+function reload(): void { load(); loadRadios(); }
 const OPTIONS: { key: OptionKey; label: string; help: string }[] = [
   { key: 'log_frames', label: 'Écoute RF permanente', help: 'Active les trames en direct, le suivi de position par la vraie télécommande et le dataset MQTT. Coupée : radio libre, moins de bruit.' },
   { key: 'mqtt_obey', label: 'Obéir aux ordres MQTT', help: 'Cette carte émet-elle quand Home Assistant commande un volet ? À couper sur une carte secondaire qui partage les mêmes volets : une seule émet.' },
@@ -51,7 +54,7 @@ async function save(): Promise<void> {
     return;
   }
   toast(reboot.value ? 'Enregistré, redémarrage…' : 'Enregistré');
-  load();
+  reload();
 }
 const confirmRemove = ref(false);
 async function removeProtection(): Promise<void> {
@@ -59,7 +62,7 @@ async function removeProtection(): Promise<void> {
   await api.saveConfig({ ui_pass: '' }).catch(() => {});
   toast('Protection retirée : interface ouverte');
   protectionRemoved();
-  load();
+  reload();
 }
 </script>
 
@@ -67,6 +70,8 @@ async function removeProtection(): Promise<void> {
   <div class="grid">
     <OpCard title="Appareil">
       <div class="form">
+      <OpStatline v-if="failed" :tone="TONE.danger"><b>Configuration non lue</b> : rien ne peut être enregistré pour l'instant.
+        <OpButton small @click="load">Réessayer</OpButton></OpStatline>
         <OpField label="Nom de l'appareil" control="sys-name" hint="Son nom dans Home Assistant et son adresse sur le réseau (.local).">
           <input id="sys-name" v-model="name" class="op-input" :placeholder="config?.mdns_default || 'openprofalux'">
         </OpField>
@@ -90,7 +95,7 @@ async function removeProtection(): Promise<void> {
         </div>
         <div class="row end">
           <OpSwitch v-model="reboot">Redémarrer après</OpSwitch>
-          <OpButton :variant="BUTTON.primary" @click="save">Enregistrer</OpButton>
+          <OpButton :variant="BUTTON.primary" :disabled="!config" @click="save">Enregistrer</OpButton>
         </div>
       </div>
     </OpCard>
@@ -100,7 +105,7 @@ async function removeProtection(): Promise<void> {
         <!-- Une carte a une seule radio : rien a repartir, la liste ne sert pas (comme aujourd'hui). -->
         <RadioList v-if="radios.length > 1" :radios="radios" />
         <div class="grid two">
-          <RadioCard v-for="r in radios" :key="r.idx" :radio="r" :several="radios.length > 1" @saved="load" />
+          <RadioCard v-for="r in radios" :key="r.idx" :radio="r" :several="radios.length > 1" @saved="reload" />
         </div>
       </div>
     </OpCard>
