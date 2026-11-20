@@ -21,6 +21,7 @@ Sur isno.fr, chaque article n'affiche que sa langue ; ici sur GitHub, les deux s
 | Eveno | Zuni-R (OPY Zuni R) | ![Eveno Zuni-R, photo @azriek](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/eveno-zuni-r.webp) | 868,33 MHz (profil Eveno), à trouver au calage // 868.33 MHz (Eveno profile), found by auto-tuning | oui | NA | #3, #100 |
 | FranciaFlex | M4G | ![FranciaFlex M4g, photo @lecanard38](https://raw.githubusercontent.com/Isno-Open/OpenProfalux/main/docs/images/remotes/m4g.webp) | 868 MHz | NA | oui | forum HACF // HACF forum |
 | Somfy | récepteur Soliris RTS + moteur J4 WT (appairage PROG) // Soliris RTS receiver + J4 WT motor (PROG pairing) |  | 433,42 MHz (Somfy RTS) // 433.42 MHz (Somfy RTS) | NA | oui | #73 |
+| CAME | portail, récepteur AF43S // gate, AF43S receiver | TOP-432 (EV/EE/NA) | 433,92 MHz (code fixe OOK) // 433.92 MHz (fixed OOK code) | oui | NA | #102 |
 
 Colonnes Rejeu et Enrôlement : « oui » = confirmé par un retour, « non » = testé sans succès,
 NA = non renseigné (non testé).
