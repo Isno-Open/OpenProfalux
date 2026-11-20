@@ -8,7 +8,8 @@
 **Piloter ses volets roulants Profalux depuis Home Assistant avec un ESP32 à ~15 €, sans la clé constructeur.**
 
 Firmware ESP32 + CC1101 open-source pour les volets **Profalux 868 MHz** (moteurs MAI-EMPX /
-MAI-EMNOE). Tout reste local : pas de cloud, pas de passerelle propriétaire, aucun fil à tirer.
+MAI-EMNOE). Tout marche en local : pas de passerelle propriétaire, aucun fil à tirer. Le pilotage à
+distance par le cloud est **en option** et s'ajoute au local sans rien lui retirer ([docs/CLOUD.md](docs/CLOUD.md)).
 
 Le cœur, c'est Profalux (volets roulants). Le même boîtier pilote aussi des **portails CAME**
 (433,92 MHz, par rejeu) et sait émettre en **Somfy RTS (433,42 MHz)**, pour un foyer qui mélange
