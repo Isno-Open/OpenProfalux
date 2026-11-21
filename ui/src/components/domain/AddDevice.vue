@@ -6,7 +6,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { route, navigate } from '../../router';
 import { radios } from '../../store';
-import { profiles, types, typeIcon, methodRoute, bandLabel } from '../../profiles';
+import { profiles, types, typeIcon, methodRoute, bandLabel, bandColor } from '../../profiles';
 import type { Profile } from '../../api/types';
 import { SECTION, TAB } from '../../domain';
 import OpCard from '../base/OpCard.vue';
@@ -27,10 +27,17 @@ const brand = computed(() => readPart(1));
 const step = computed(() => (!type.value ? 0 : !brand.value ? 1 : 2));
 const detecting = ref(false);
 
-const typeList = computed(() => Object.entries(types()).map(([key, t]) => ({ key, label: t.label, count: available.value.filter(p => p.type === key).length })));
+/* Un type que la carte ne sait pas piloter reste visible, grise, avec la bande qui le rendrait possible : il dit ce qui
+   manque (un portail CAME en 433 sur une carte 868 seule : « disponible en 433 MHz »). */
+const typeList = computed(() => Object.entries(types()).map(([key, t]) => ({
+  key, label: t.label, count: available.value.filter(p => p.type === key).length,
+  bands: [...new Set(profiles().filter(p => p.type === key && p.band).map(p => String(p.band)))],
+})));
+const typeHint = (t: { count: number; bands: string[] }): string => (t.count ? (t.count > 1 ? `${t.count} méthodes` : '1 méthode')
+  : t.bands.length ? `disponible en ${t.bands.map(bandLabel).join(' ou ')}` : 'bientôt');
 const brands = computed(() => {
   const list = available.value.filter(p => p.type === type.value);
-  return [...new Set(list.map(p => p.marque))].map(name => ({ name, band: list.find(p => p.marque === name)?.band, count: list.filter(p => p.marque === name).length }));
+  return [...new Set(list.map(p => p.marque))].map(name => ({ name, band: list.find(p => p.marque === name)?.band }));
 });
 const methods = computed(() => available.value.filter(p => p.type === type.value && p.marque === brand.value));
 const typeLabel = (key: string | null): string => (key ? types()[key]?.label ?? key : '');
@@ -61,7 +68,7 @@ const chooseMethod = (p: Profile): void => navigate(methodRoute(p));
             <button v-for="t in typeList" :key="t.key" type="button" class="tile" :disabled="!t.count" @click="navigate(`${ADD_ROUTE}/${enc(t.key)}`)">
               <OpIcon :name="typeIcon(t.key)" size="2.6em" />
               <b>{{ t.label }}</b>
-              <span class="hint">{{ t.count ? `${t.count} méthode${t.count > 1 ? 's' : ''}` : 'bientôt' }}</span>
+              <span class="hint">{{ typeHint(t) }}</span>
             </button>
           </div>
           <p class="hint">Tu ne connais pas la marque ?
@@ -71,9 +78,10 @@ const chooseMethod = (p: Profile): void => navigate(methodRoute(p));
         <template v-else-if="step === 1">
           <p class="question">Quelle marque ?</p>
           <div class="tiles brands">
-            <button v-for="b in brands" :key="b.name" type="button" class="tile brand" @click="chooseBrand(b.name)">
+            <button v-for="b in brands" :key="b.name" type="button" class="tile brand" :style="b.band ? { '--band': bandColor(b.band) } : undefined"
+                    @click="chooseBrand(b.name)">
               <b>{{ b.name }}</b>
-              <span class="meta"><OpBadge v-if="b.band">{{ bandLabel(b.band) }}</OpBadge><span class="hint">{{ b.count > 1 ? `${b.count} méthodes` : '1 méthode' }}</span></span>
+              <OpBadge v-if="b.band" class="band">{{ bandLabel(b.band) }}</OpBadge>
             </button>
           </div>
         </template>
@@ -97,8 +105,12 @@ const chooseMethod = (p: Profile): void => navigate(methodRoute(p));
 .tile{display:grid;justify-items:center;gap:6px;padding:22px 14px;border:1px solid var(--border);border-radius:16px;background:var(--surface-2);color:var(--text);font:inherit;cursor:pointer;transition:.12s}
 .tile:hover:not(:disabled){border-color:var(--accent);transform:translateY(-1px)}
 .tile:disabled{opacity:.45;cursor:default}
-.tile.brand{justify-items:start;padding:16px 18px}
-.meta{display:flex;align-items:center;gap:8px}
+/* Tuile de marque : le nom puis la bande, centres, toutes de meme hauteur ; la couleur de la bande (bandColor) en
+   lisere du haut et sur le badge. */
+.tile.brand{--band:var(--border);align-content:center;gap:10px;padding:22px 14px;min-height:104px;text-align:center;border-top:3px solid var(--band)}
+.tile.brand:hover{border-top-color:var(--band)}
+.tile.brand > b{font-size:1.06rem}
+.tile.brand .band{color:var(--band);border-color:color-mix(in srgb,var(--band) 45%,var(--border));background:color-mix(in srgb,var(--band) 12%,var(--surface-2))}
 .list{display:grid;gap:9px}
 .link{background:none;border:0;padding:0;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline}
 </style>

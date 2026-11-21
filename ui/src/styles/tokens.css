@@ -9,6 +9,8 @@
   --text:#ecf2fb; --muted:#8c9dbd;
   --accent:#3d8bff; --accent-fg:#ffffff; --accent-weak:rgba(61,139,255,.16); --accent-line:rgba(61,139,255,.42);
   --ok:#34d17a; --warn:#ffb547; --danger:#ff6b62;
+  /* Couleur de chaque bande radio (tuiles de marque) : a part des couleurs d'etat, meme si le 433 en reprend la teinte. */
+  --band-868:#3d8bff; --band-433:#ffb547;
   --shadow:0 12px 32px rgba(0,0,0,.38);
   --surface-grad:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,0) 60%);
   --radius:18px; --radius-sm:12px; --radius-btn:12px;
@@ -24,6 +26,7 @@
   --text:#0b1730; --muted:#5b6d90;
   --accent:#1d6fe0; --accent-fg:#ffffff; --accent-weak:rgba(29,111,224,.10); --accent-line:rgba(29,111,224,.32);
   --ok:#22a061; --warn:#9a6b00; --danger:#d64545;
+  --band-868:#1d6fe0; --band-433:#9a6b00;
   --shadow:0 10px 28px rgba(20,35,60,.08);
   --surface-grad:none;
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // « Mes appareils » : la liste, filtree par type (les types de profiles.json), et l'edition sous la ligne. Le
 // pilotage reste dans l'onglet Volets.
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { state } from '../../store';
 import { types, typeKey, typeIcon } from '../../profiles';
 import { navigate } from '../../router';
@@ -15,7 +15,16 @@ import DeviceEdit from '../../components/domain/DeviceEdit.vue';
 const ALL = '';
 const filter = ref<string | string[]>(ALL);
 const open = ref('');
-const filters = computed<ChipOption[]>(() => [{ value: ALL, label: 'Tous' }, ...Object.entries(types()).map(([key, t]) => ({ value: key, label: t.label, icon: typeIcon(key) }))]);
+/* Une puce par type d'appareil PRESENT dans le boitier, pas par type declare : un type sans appareil ne filtrerait
+   rien. Ce n'est pas ce que la carte sait piloter (Ajouter un appareil) : un appareil d'un type qu'elle ne pilote pas
+   (sauvegarde restauree) reste liste et filtrable. Un seul type : rien a filtrer, la barre disparait. */
+const presentTypes = computed(() => {
+  const keys = new Set((state.status?.volets ?? []).filter(d => !d.central && !d.zone).map(d => typeKey(d)));
+  return Object.entries(types()).filter(([key]) => keys.has(key));
+});
+const filters = computed<ChipOption[]>(() => [{ value: ALL, label: 'Tous' }, ...presentTypes.value.map(([key, t]) => ({ value: key, label: t.label, icon: typeIcon(key) }))]);
+/* Le type filtre n'a plus d'appareil (le dernier vient d'etre supprime) : retour a « Tous ». */
+watch(presentTypes, list => { if (filter.value !== ALL && !list.some(([key]) => key === filter.value)) filter.value = ALL; });
 /* Nombre d'appareils et plafond du firmware (profiles.json, devices_max). */
 const total = computed(() => state.status?.volets.length ?? 0);
 const max = computed(() => state.profiles?.devices_max);
@@ -27,7 +36,7 @@ const toggle = (id: string): void => { open.value = open.value === id ? '' : id;
   <OpCard title="Mes appareils" sub="Tes volets et télécommandes. Modifier règle l'émission (fréquence, TE, bit de répétition, RMT) propre à un appareil, ou le supprime.">
     <template #actions><OpBadge v-if="max" :tone="total >= max ? TONE.danger : TONE.neutral">{{ total }} / {{ max }}</OpBadge></template>
     <div class="devices">
-      <ChipPicker v-model="filter" :options="filters" label="Filtrer par type" @update:model-value="open = ''" />
+      <ChipPicker v-if="presentTypes.length > 1" v-model="filter" :options="filters" label="Filtrer par type" @update:model-value="open = ''" />
       <div v-for="d in list" :key="d.id" class="block">
         <DeviceRow :device="d" :open="open === d.id" @edit="toggle(d.id)" />
         <DeviceEdit v-if="open === d.id" :device="d" @renamed="n => (open = n)" @deleted="open = ''" />

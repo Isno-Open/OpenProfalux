@@ -30,7 +30,10 @@ async function calibrate(): Promise<void> {
     gain.value = result;
     message.value = `✓ Calibré : gain ${hex(result)} (enregistré)`;
     emit('calibrated', result);
-  } catch (e) { message.value = e === FAILURE.busy ? '' : '✗ Aucune trame captée. Vérifie l\'antenne, ou essaie un autre module CC1101.'; }
+  } catch (e) {
+    message.value = e === FAILURE.busy ? '' : e === FAILURE.start ? '✗ Calibration non lancée par le boîtier : réessaie dans un instant.'
+      : '✗ Aucune trame captée. Vérifie l\'antenne, ou essaie un autre module CC1101.';
+  }
   finally { running.value = false; }
 }
 </script>

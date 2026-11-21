@@ -2,7 +2,7 @@
 // Les telecommandes captees par le boitier (meme celle d'un voisin), et celles qu'il ignore. Une telecommande
 // supprimee revient si elle est de nouveau captee ; une telecommande ignoree ne revient plus.
 import { computed, reactive, ref } from 'vue';
-import { state, refresh, toast } from '../../store';
+import { state, refresh, toast, renameFailureText } from '../../store';
 import { hasComma } from '../../profiles';
 import api from '../../api/index';
 import { BUTTON, COMMAND, TONE, type MoveCommand } from '../../domain';
@@ -47,7 +47,7 @@ async function createDevice(serial: string): Promise<void> {
    boitier une fois enregistre. */
 const drafts = reactive<Record<string, string>>({});
 async function rename(serial: string, name: string): Promise<void> {
-  await api.remoteRename(serial, name.trim()).catch(() => toast('Échec du renommage'));
+  await api.remoteRename(serial, name.trim()).catch(e => toast(renameFailureText(e)));
   await refresh();
   delete drafts[serial];
 }

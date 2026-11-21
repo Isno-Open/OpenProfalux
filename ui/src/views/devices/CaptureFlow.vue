@@ -6,7 +6,7 @@
 // apprendre la telecommande d'origine d'un volet virtuel pour suivre sa position.
 import { computed, ref, watch } from 'vue';
 import { route, navigate } from '../../router';
-import { state, withRadio, radioFor, refresh, toast, remoteName } from '../../store';
+import { state, withRadio, radioFor, refresh, toast, remoteName, renameFailureText } from '../../store';
 import { profiles, types, typeKey, mechanism, deviceIcon, profileOf, isSomfy, hasComma, mhz } from '../../profiles';
 import api from '../../api/index';
 import { isOtherRemote, type CaptureRequest } from '../../api/real';
@@ -80,7 +80,7 @@ watch(() => `${id.value}|${remoteSerial.value}`, () => {
 }, { immediate: true });
 async function renameRemote(): Promise<void> {
   try { await api.remoteRename(remoteSerial.value, remoteNameDraft.value.trim()); toast('Télécommande renommée'); }
-  catch { toast('Échec du renommage'); }
+  catch (e) { toast(renameFailureText(e)); }
   refresh();
 }
 
@@ -132,7 +132,8 @@ async function capture(cmd: Command): Promise<void> {
       if (p?.marque) body.marque = p.marque;
       if (Object.keys(body).length > 1) await api.saveTxParams(body).catch(() => {});
     }
-    toast('n' in r ? `✓ ${label} captée (${r.n} impulsions)` : `✓ ${label} apprise (0x${r.button}, ${r.rssi} dBm)`);
+    toast('n' in r ? `✓ ${label} captée (${r.n} impulsions)`
+      : `✓ ${label} apprise (0x${r.button}, ${r.rssi} dBm)${r.remoteNameRefused ? ' · nom de la télécommande non enregistré : liste des télécommandes pleine' : ''}`);
     if (isNew && choiceId.value === NEW_DEVICE) choice.value = target;
     await refresh();
   } catch (e) {

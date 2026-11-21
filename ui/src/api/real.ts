@@ -25,7 +25,10 @@ export interface CaptureRequest {
   knownSerials?: string[];
   virtual: boolean;
 }
-export type CaptureResult = ReplayCaptureReply | LearnPoll;
+/* Une commande apprise. remoteNameRefused : le nom donne a la telecommande n'a pas ete enregistre (liste des
+   telecommandes pleine), la trame l'a ete. */
+export interface LearnedCapture extends LearnPoll { remoteNameRefused?: boolean }
+export type CaptureResult = ReplayCaptureReply | LearnedCapture;
 
 /* Les routes des telecommandes captees repondent par un texte quand elles refusent : on le garde pour le
    message (« Refuse : ... »). */
@@ -70,10 +73,12 @@ export default {
       .catch(e => Promise.reject(e === HTTP_UNAUTHORIZED ? HTTP_UNAUTHORIZED : FAILURE.nothing));
     /* Un volet clone rejoue les trames d'UNE telecommande ; un volet virtuel en suit plusieurs. */
     if (!virtual && knownSerials.length && !knownSerials.includes(r.serial)) return Promise.reject({ otherRemote: r.serial } satisfies OtherRemote);
-    if (remoteName) await post('/api/remote', { serial: r.serial, name: remoteName });
+    /* Le nom est facultatif : refuse (liste des telecommandes pleine, {"ok":0} en HTTP 200) ou perdu, il ne fait pas
+       echouer la capture ; l'ecran le dit. */
+    const named = !remoteName || await requireOk(post('/api/remote', { serial: r.serial, name: remoteName })).then(() => true, () => false);
     /* Refus du boitier (liste des appareils pleine) : rien n'est enregistre, la capture n'a pas abouti. */
     await requireOk(post('/api/learn/assign', { id, action, bits: r.bits }));
-    return r;
+    return named ? r : { ...r, remoteNameRefused: true };
   },
   moveCapture: ({ id, from, to }: { id: string; from: Command; to: Command }) => requireOk(post('/api/learn/reassign', { id, from, to })),
   /* « Caler sur ma telecommande » : balayage autour de la porteuse ; rend { status, center_khz, from_khz,
@@ -108,7 +113,7 @@ export default {
   calibrate: (body: { id: string; travel_up_ms: number; travel_down_ms: number }) => requireOk(post('/api/calibrate', body)),
 
   /* Telecommandes captees */
-  remoteRename: (serial: string, name: string) => post('/api/remote', { serial, name }),
+  remoteRename: (serial: string, name: string) => requireOk(post('/api/remote', { serial, name })),
   remoteDelete: (serial: string) => postWithText<OkReply>('/api/remote/delete', { serial }),
   remoteIgnore: (serial: string) => postWithText<OkReply>('/api/remote/ignore', { serial }),
   remoteUnignore: (serial: string) => requireOk(post('/api/remote/unignore', { serial })),

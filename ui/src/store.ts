@@ -174,6 +174,10 @@ export async function saveOrder(ids: string[]): Promise<void> {
   await api.saveDisplayOrder(ids).catch(() => toast('Ordre non enregistré'));
 }
 
+/* Renommer une telecommande : le boitier refuse ({"ok":0}, raison en texte) quand sa liste des telecommandes est
+   pleine ; une erreur reseau ou HTTP n'est pas un refus. */
+export const renameFailureText = (e: unknown): string => (typeof e === 'string' ? 'Refusé : liste des télécommandes pleine, nom non enregistré' : 'Échec du renommage');
+
 /* Nom a afficher pour un serial : nom de la telecommande, sinon le serial. */
 export const remoteName = (serial: string): string => state.status?.remotes[serial] || serial;
 

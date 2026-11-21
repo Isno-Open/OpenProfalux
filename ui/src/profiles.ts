@@ -104,6 +104,10 @@ export const METHOD_SENTENCE: Record<string, string> = {
   [FLOW.createSomfy]: 'Pas besoin de télécommande d\'origine : le boîtier choisit une adresse et le moteur l\'apprend en mode appairage.',
 };
 
-const BAND_LABEL: Record<string, string> = { [BAND.mhz868]: '868 MHz', [BAND.mhz433]: '433 MHz' };
-export const bandLabel = (band: string): string => BAND_LABEL[band] ?? `${band} MHz`;
+/* Espace insecable entre le nombre et l'unite : « MHz » ne passe jamais seul a la ligne. */
+const BAND_LABEL: Record<string, string> = { [BAND.mhz868]: '868\u00a0MHz', [BAND.mhz433]: '433\u00a0MHz' };
+export const bandLabel = (band: string): string => BAND_LABEL[band] ?? `${band}\u00a0MHz`;
+/* Couleur d'une bande (tuiles de marque) : une variable par bande, declaree dans styles/tokens.css. */
+const BAND_COLOR: Record<string, string> = { [BAND.mhz868]: 'var(--band-868)', [BAND.mhz433]: 'var(--band-433)' };
+export const bandColor = (band: string): string => BAND_COLOR[band] ?? 'var(--muted)';
 export const hasComma = (s: string): boolean => String(s).includes(',');   // un nom sert d'identifiant dans des listes a virgules

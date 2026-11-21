@@ -46,7 +46,9 @@ export default {
   radioDetails: () => json<RadiosReply>('/api/radios'),
   /* Calibration du gain : le boitier essaie chaque gain pendant qu'on presse la telecommande. */
   async calibrateGain(radio: number, onGain: (gain: number | undefined) => void): Promise<GainCalibration> {
-    await post(`/api/rx/calibrate?radio=${radio}`).catch(() => null);
+    /* Refus ({"ok":0}) : la calibration n'a pas demarre ; il n'y a rien a suivre. */
+    const r = await post(`/api/rx/calibrate?radio=${radio}`).catch(() => null);
+    if (r && r.ok === 0) return Promise.reject(FAILURE.start);
     const s = await poll<GainCalibration>('/api/rx/calibrate', d => d.state !== SCAN_STATE.running, 40, 1000,
       d => { if (d.state === SCAN_STATE.running) onGain(d.testing); });
     return s.state === SCAN_STATE.done ? s : Promise.reject(FAILURE.nothing);
@@ -104,7 +106,10 @@ export default {
   /* Le boitier telecharge et flashe ; on suit /api/ota/status. Injoignable trois fois de suite, ou etat
      OTA_STATE.rebooting : il redemarre. Etat OTA_STATE.failed : echec. */
   async otaInstall(onProgress: Progress, url: string): Promise<OtaInstallReply> {
-    post('/api/ota/pull', { url }).catch(() => {});
+    /* Refus ({"ok":0} : adresse non HTTPS, ou tache de telechargement impossible a lancer, faute de memoire) : rien ne
+       demarre, le suivi attendrait sans fin. Sans reponse, on suit l'etat comme avant. */
+    const r = await post('/api/ota/pull', { url }).catch(() => null);
+    if (r && r.ok === 0) return Promise.reject('le boîtier n\'a pas pu lancer le téléchargement');
     let missed = 0;
     for (;;) {
       await wait(800);
