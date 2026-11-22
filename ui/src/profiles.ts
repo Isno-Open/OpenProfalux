@@ -41,9 +41,11 @@ export function kindOf(device: Device): { label: string; hasTx: boolean } {
   return { label: 'télécommande clonée', hasTx: true };
 }
 
-/* Profil d'un appareil : la marque gravee dans sa fiche, sinon deduite du protocole. */
+/* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas de profiles.json. */
+export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
+/* Profil d'un appareil : celui de sa marque et de son mecanisme. */
 export function profileOf(device: Device): Profile | null {
-  const brand = device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
+  const brand = brandOf(device);
   const mech = mechanism(device);
   return profiles().find(p => p.marque === brand && p.mecanisme === mech) ?? profiles().find(p => p.marque === brand) ?? null;
 }

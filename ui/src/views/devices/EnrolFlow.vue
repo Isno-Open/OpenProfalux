@@ -23,7 +23,7 @@ const done = ref<Message | null>(null);
 </script>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, refresh, toast } from '../../store';
 import { profiles, types, hasComma, mhz } from '../../profiles';
@@ -98,15 +98,23 @@ async function read(): Promise<void> {
   const serial = d.active ? d.serial ?? '' : '';
   if (serial !== owner.value) { owner.value = serial; gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
 }
-onMounted(async () => {
+onMounted(() => {
   clock = setInterval(() => { now.value = Date.now(); }, COUNTDOWN_TICK_MS);
-  await read();
-  const p = profile.value;
-  if (!active.value && p) {
-    const i = models.value.findIndex(m => m.name.includes(p.marque));
-    if (i >= 0) model.value = i;
-  }
+  read();
 });
+/* Modele du moteur : celui de l'identite active (pose par read), sinon celui de la marque choisie dans la pyramide. Pose
+   des que l'etat du boitier, le profil et le catalogue des modeles sont la (profiles.json peut arriver apres /api/pfx),
+   une seule fois : ensuite, c'est le choix de l'utilisateur. */
+const modelSet = ref(false);
+watch([pfx, profile], () => {
+  if (modelSet.value || !pfx.value) return;
+  if (pfx.value.active) { modelSet.value = true; return; }
+  const p = profile.value;
+  if (!p || !models.value.length) return;
+  const i = models.value.findIndex(m => m.name.includes(p.marque));
+  if (i >= 0) model.value = i;
+  modelSet.value = true;
+}, { immediate: true });
 onUnmounted(() => clearInterval(clock));
 
 /* Reglages du panneau -> corps de /api/pfx/capture : le firmware lit des booleens, une option absente reste
@@ -226,7 +234,7 @@ const subtitle = computed(() => (profile.value ? `${profile.value.nom}${profile.
       <section class="step" :class="{ done: step > 0 }">
         <h3 class="section-title">Identifier le moteur</h3>
         <OpField label="Modèle de moteur" control="pfx-model">
-          <OpSelect id="pfx-model" v-model="model" :options="modelOptions" />
+          <OpSelect id="pfx-model" v-model="model" :options="modelOptions" @update:model-value="modelSet = true" />
         </OpField>
         <TxParamsPanel ref="panel" :profile="profile" tune />
         <div class="row">

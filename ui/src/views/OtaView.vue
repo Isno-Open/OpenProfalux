@@ -22,6 +22,7 @@ import api from '../api/index';
 import type { OtaStatus } from '../api/types';
 import type { Progress } from '../api/real-system';
 import { withoutV, isNewer, updateAvailable } from '../versions';
+import { useConfig } from '../config';
 import {
   BUTTON, CHECK_PHASE, FAILURE, FLAG, HTTP_CONFLICT, OTA_CONFIRM, OTA_IMAGE, OTA_SOURCE, TONE, bootInstant, isFlagOn,
   type OtaConfirm, type OtaSource,
@@ -48,10 +49,13 @@ async function readStatus(): Promise<void> {
   clearTimeout(recheck);
   if (status.value?.img === OTA_IMAGE.trial) recheck = setTimeout(readStatus, TRIAL_RECHECK_MS);
 }
+/* La verification automatique vient de la config : tant qu'elle n'est pas lue, l'interrupteur reste grise, plutot que
+   d'afficher « active » par defaut sur un boitier ou elle est coupee. */
+const { config, failed: configFailed, load: loadConfig } = useConfig(c => {
+  auto.value = isFlagOn(c.update_auto, true);   // le firmware envoie 0 / 1 ; absent (firmware d'avant) = active
+});
 onMounted(async () => {
   await readStatus();
-  const c = await api.config().catch(() => null);
-  auto.value = isFlagOn(c?.update_auto, true);   // le firmware envoie 0 / 1 ; absent (firmware d'avant) = active
   const s = status.value;
   if (s && updateAvailable(s) && !checking.value) check.value = { tone: TONE.warning, text: `Installée ${withoutV(s.version)}, disponible ${withoutV(s.latest)}.` };
 });
@@ -154,7 +158,9 @@ function onFileChosen(f: File | null): void { file.value = f; confirm.value = OT
       <OpStatline v-if="confirm === OTA_CONFIRM.github" :tone="TONE.warning">Le boîtier va télécharger la mise à jour puis <b>redémarrer</b> (environ 30 s).
         <OpButton small :variant="BUTTON.primary" @click="install(OTA_SOURCE.github)">Confirmer</OpButton><OpButton small @click="confirm = OTA_CONFIRM.none">Annuler</OpButton></OpStatline>
       <div class="option">
-        <OpSwitch v-model="auto" @update:model-value="toggleAuto">Vérification automatique</OpSwitch>
+        <OpSwitch v-model="auto" :disabled="!config" @update:model-value="toggleAuto">Vérification automatique</OpSwitch>
+        <OpStatline v-if="configFailed" :tone="TONE.danger"><b>Configuration non lue</b> : réglage indisponible pour l'instant.
+          <OpButton small @click="loadConfig">Réessayer</OpButton></OpStatline>
         <p class="hint">Le boîtier interroge GitHub toutes les 6 h (entité de mise à jour Home Assistant). Désactivée, il ne le fait que sur le bouton ci-dessus.</p>
       </div>
 

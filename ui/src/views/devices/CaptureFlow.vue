@@ -37,6 +37,9 @@ const compatible = computed(() => devices.value.filter(d => !d.central
   && (!profile.value || (!d.zone && typeKey(d) === profile.value.type && mechanism(d) === profile.value.mecanisme))));
 const preselected = routeRest[1] ? decodeURIComponent(routeRest[1]) : '';
 const choice = ref<string | string[]>(preselected || (profile.value ? NEW_DEVICE : ''));
+/* Depuis la pyramide, « nouvel appareil » est propose d'emblee. Le profil peut arriver apres l'ouverture (profiles.json
+   en retard) : on le propose alors, tant que rien n'a ete choisi. */
+watch(profile, p => { if (p && !choice.value) choice.value = NEW_DEVICE; });
 const choiceId = computed(() => (typeof choice.value === 'string' ? choice.value : ''));
 const name = ref('');
 const id = computed(() => (choiceId.value === NEW_DEVICE ? name.value.trim() : choiceId.value));

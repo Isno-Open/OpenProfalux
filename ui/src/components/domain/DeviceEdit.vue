@@ -4,7 +4,7 @@
 import { computed, ref, watch } from 'vue';
 import { state, refresh, toast } from '../../store';
 import { navigate } from '../../router';
-import { profiles, types, typeKey, kindOf, profileOf, mechanism, isSomfy, hasComma } from '../../profiles';
+import { profiles, types, typeKey, kindOf, profileOf, brandOf, mechanism, isSomfy, hasComma } from '../../profiles';
 import api from '../../api/index';
 import type { Device } from '../../api/types';
 import { BUTTON, EXISTING_DEVICE, SECTION, TAB, TONE } from '../../domain';
@@ -24,6 +24,9 @@ const kind = computed(() => kindOf(props.device));
 const uid = props.device.id.replace(/\W/g, '') || 'dev';
 const name = ref(props.device.id);
 const chosenType = ref<string | number>(typeKey(props.device));
+/* Le type affiche suit celui de l'appareil : profiles.json peut arriver apres l'ouverture (un portail s'afficherait en
+   volet). Seul un choix de l'utilisateur l'envoie au boitier (changeType). */
+watch(() => typeKey(props.device), key => { chosenType.value = key; });
 const typeOptions = computed(() => Object.entries(types()).map(([key, t]) => ({ value: key, label: t.label })));
 const isPositional = (d: Device): boolean => !d.central && !d.zone && !!types()[typeKey(d)]?.positional;
 const positional = computed(() => isPositional(props.device));
@@ -31,7 +34,9 @@ const positional = computed(() => isPositional(props.device));
 /* Profils interchangeables : meme mecanisme et meme bande (un enrole Profalux 868 peut devenir Eveno ou NeoSol ;
    l'identite et le compteur restent). */
 const savedProfile = computed(() => profileOf(props.device));
-const brand = ref<string | number>(savedProfile.value ? savedProfile.value.marque : '');
+/* La marque de la fiche, lue sans attendre profiles.json : un brouillon vide l'effacerait a l'enregistrement des reglages
+   d'emission (le firmware recopie la marque recue). */
+const brand = ref<string | number>(brandOf(props.device));
 const compatible = computed(() => profiles().filter(p => savedProfile.value && p.mecanisme === mechanism(props.device) && p.band === savedProfile.value.band));
 const profile = computed(() => compatible.value.find(p => p.marque === brand.value) ?? savedProfile.value);
 const values = computed<TxValues>(() => (profile.value && savedProfile.value && profile.value.marque !== savedProfile.value.marque ? {}
