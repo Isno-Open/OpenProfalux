@@ -7,6 +7,8 @@
 #define SHUTTERS_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include "esp_err.h"
 #include <stdint.h>
 #include <time.h>
 
@@ -106,10 +108,19 @@ int  shutters_replay_frame(const char *serial, uint32_t hop);
 typedef struct { char serial[SH_SERIAL_LEN]; uint32_t hop, t; uint8_t button; int8_t rssi; } shutters_rf_item_t;
 int  shutters_rf_page(int offset, int limit, shutters_rf_item_t *out, int *nout);
 
-/* JSON /api/status, alloue a sa taille : a liberer par l'appelant (NULL si plus de
- * memoire). Plus de tampon fixe : celui de 4 Ko tronquait l'etat au-dela de ~9 volets,
- * et l'UI recevait un JSON invalide. */
-char *shutters_status_json(void);
+/* Une construction JSON peut tomber pendant un pic de memoire passager : la verification GitHub
+ * (connexion TLS de plus) prend ~15 Ko pendant 2 a 3 s. Mesure sur l'ATOM Lite le 2026-11-14 :
+ * un 500 "mem" sur /api/status par verification. On reessaie donc le temps que le pic passe, en
+ * restant sous les 4 s apres lesquelles l'UI abandonne et compte le boitier comme injoignable. */
+#define SH_BUILD_RETRIES   10    /* 10 x 250 ms = 2,5 s au plus */
+#define SH_BUILD_RETRY_MS  250
+
+/* Recoit un morceau de reponse ; ESP_OK pour continuer. */
+typedef esp_err_t (*shutters_emit_t)(const char *buf, size_t len, void *ctx);
+/* JSON /api/status, envoye morceau par morceau a emit (un appareil a la fois) : le pic de memoire
+ * ne depend plus du nombre d'appareils (issue #137). ESP_ERR_NO_MEM si un morceau n'a pas pu etre
+ * construit malgre les reessais : la reponse est alors tronquee, a l'appelant d'abandonner. */
+esp_err_t shutters_status_stream(shutters_emit_t emit, void *ctx);
 
 /* ── Integration Home Assistant (MQTT) ── */
 /* Publie la discovery HA (1 cover par volet) + l'etat courant. A appeler apres connexion MQTT. */

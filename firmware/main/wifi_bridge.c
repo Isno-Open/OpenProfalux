@@ -411,7 +411,7 @@ bool wifi_bridge_is_connected(void) {
 }
 
 int wifi_bridge_rssi(void) {
-    wifi_ap_record_t ap;   /* pas d'appel au pilote hors connexion (voir shutters_status_json) */
+    wifi_ap_record_t ap;   /* pas d'appel au pilote hors connexion (voir status_tail_json, shutters.c) */
     return wifi_bridge_is_connected() && esp_wifi_sta_get_ap_info(&ap) == 0 ? ap.rssi : 0;
 }
 
