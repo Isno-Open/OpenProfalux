@@ -18,7 +18,7 @@ et io restent **expérimentaux** : détails plus bas.
 
 📖 **Montage pas à pas, photos et l'histoire complète du reverse** : [www.isno.fr/projets/openprofalux](https://www.isno.fr/projets/openprofalux)
 
-🔌 **Sans rien câbler** : je fais fabriquer une carte qui intègre tout d'origine (ESP32-S3, radio 868 MHz, antenne SMA, USB-C, protections ESD) et qui tourne avec ce même firmware. Prototypes en fabrication, pas encore en vente : [liste d'attente sur isno.fr](https://www.isno.fr/liste-attente).
+🔌 **Sans rien câbler** : je fais fabriquer une carte qui intègre tout d'origine (ESP32-S3, radio 868 MHz, antenne SMA, USB-C, protections ESD) et qui tourne avec ce même firmware. En précommande : [ISNO Super sur isno.fr](https://www.isno.fr/boutique/isno-super).
 
 ## Le principe : cloner une télécommande, pas casser la crypto
 
