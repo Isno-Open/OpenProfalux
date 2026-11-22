@@ -2041,8 +2041,15 @@ static void add_cmd_json(cJSON *cmd, const char *key, const char *bits, uint8_t 
 }
 
 /* ── Status JSON ── */
-char *shutters_status_json(void) {
-    LOCK();
+/* /api/status part MORCEAU PAR MORCEAU (issue #137) : un objet pour la tete (telecommandes), un
+ * par appareil, un par trame recente, un pour la queue (Wi-Fi, MQTT). Construit d'un bloc, l'etat
+ * prenait ~33 Ko pour 10 appareils (7 volets + 3 centrales, mesure sur ESP32-C3) : le plancher
+ * WORK_FLOOR_BYTES, fixe, ne suit pas le nombre d'appareils, et la construction tombait en 500
+ * « mem » en continu. Morceau par morceau, le pic ne depend plus du nombre d'appareils : il vaut
+ * celui du plus gros morceau, un appareil. */
+
+/* Tete : telecommandes connues, refusees, ignorees, piles. Sous LOCK. */
+static cJSON *status_head_json(void) {
     cJSON *root = cJSON_CreateObject();
     cJSON *rem = cJSON_AddObjectToObject(root, "remotes");
     for (int i = 0; i < s_nremotes; i++) cJSON_AddStringToObject(rem, s_remotes[i].serial, s_remotes[i].name);
@@ -2057,83 +2064,86 @@ char *shutters_status_json(void) {
         cJSON_AddBoolToObject(b, "low", s_remotes[i].batt.low);
         cJSON_AddNumberToObject(b, "t", s_remotes[i].batt_t);
     }
-    cJSON *vols = cJSON_AddArrayToObject(root, "volets");
-    for (int i = 0; i < s_nvolets; i++) {
-        volet_t *v = &s_volets[i];
-        cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "id", v->id);
-        cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
-        if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
-            cJSON_AddBoolToObject(o, "virt", true);
-            bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
-            cJSON_AddStringToObject(o, "proto", somfy ? "somfy" : "profalux");
-            char vhex[SH_SERIAL_LEN];
-            /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
-            snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
-                     (unsigned)(somfy ? (v->virt_serial & SOMFY_RTS_ADDR_MAX) : v->virt_serial));
-            cJSON_AddStringToObject(o, "virt_serial", vhex);
-        }
-        if (v->central) cJSON_AddBoolToObject(o, "central", true);
-        if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");   /* centrale : membres ; zone : suiveurs */
-        if (is_zone(v)) cJSON_AddBoolToObject(o, "zone", true);
-        if (zone_of(v)) {   /* zones que ce volet suit (il peut en suivre plusieurs) */
-            cJSON *fl = cJSON_AddArrayToObject(o, "follows");
-            for (int k = 0; k < s_nvolets; k++)
-                if (is_zone(&s_volets[k]) && in_members(s_volets[k].members, v->id)) cJSON_AddItemToArray(fl, cJSON_CreateString(s_volets[k].id));
-        }
-        cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
-        cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);     /* pour reafficher la calibration dans l'UI */
-        cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
-        cJSON_AddNumberToObject(o, "orientation", v->orientation);       /* azimut facade (-1 = non defini) */
-        cJSON_AddNumberToObject(o, "order", v->order);                   /* rang d'affichage UI (-1 = non range) */
-        /* Parametres d'emission PAR APPAREIL (etage 2, issue #111) : pour le panneau avance de l'UI
-         * (affichage + edition). tx_rpt/tx_rmt = tri-etat tx_override_t (0 heriter, 1 off, 2 on). */
-        if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
-        cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
-        cJSON_AddNumberToObject(o, "te_us",    v->te_us);
-        cJSON_AddNumberToObject(o, "tx_rpt",   v->tx_rpt);
-        cJSON_AddNumberToObject(o, "tx_rmt",   v->tx_rmt);
-        cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
-        cJSON *sr = cJSON_AddArrayToObject(o, "serials");
-        for (int j = 0; j < v->n_serials; j++) cJSON_AddItemToArray(sr, cJSON_CreateString(v->serials[j]));
-        /* etat des 3 commandes : bouton appris (nibble) si le slot est rempli, absent sinon.
-         * Permet a l'UI d'apprentissage centree-volet d'afficher appris / a capturer. */
-        cJSON *cmd = cJSON_AddObjectToObject(o, "cmd");
-        add_cmd_json(cmd, "up",   v->up,   v->up_btn);
-        add_cmd_json(cmd, "stop", v->stop, v->stop_btn);
-        add_cmd_json(cmd, "down", v->down, v->down_btn);
-        /* Rejeu brut (CAME et code fixe) : l'ecran de capture unifie en a besoin pour distinguer
-         * le moteur (rejeu vs clone KeeLoq) et montrer quelles commandes sont deja captees. Le cadre
-         * brut est range dans v->rejeu (JSON {f, up, stop, down}) ; on expose juste les commandes
-         * presentes, pas les impulsions. */
-        if (v->rejeu) {
-            cJSON_AddBoolToObject(o, "rejeu", true);
-            cJSON *rc = cJSON_AddObjectToObject(o, "rejeu_cmds");
-            cJSON *rj = cJSON_Parse(v->rejeu);
-            if (rj) {
-                for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c; c++) {
-                    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, *c));
-                    if (s && *s) cJSON_AddBoolToObject(rc, *c, true);
-                }
-                cJSON_Delete(rj);
+    return root;
+}
+
+/* Un appareil. Sous LOCK. */
+static cJSON *status_volet_json(const volet_t *v) {
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "id", v->id);
+    cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
+    if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
+        cJSON_AddBoolToObject(o, "virt", true);
+        bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
+        cJSON_AddStringToObject(o, "proto", somfy ? "somfy" : "profalux");
+        char vhex[SH_SERIAL_LEN];
+        /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
+        snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
+                 (unsigned)(somfy ? (v->virt_serial & SOMFY_RTS_ADDR_MAX) : v->virt_serial));
+        cJSON_AddStringToObject(o, "virt_serial", vhex);
+    }
+    if (v->central) cJSON_AddBoolToObject(o, "central", true);
+    if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");   /* centrale : membres ; zone : suiveurs */
+    if (is_zone(v)) cJSON_AddBoolToObject(o, "zone", true);
+    if (zone_of(v)) {   /* zones que ce volet suit (il peut en suivre plusieurs) */
+        cJSON *fl = cJSON_AddArrayToObject(o, "follows");
+        for (int k = 0; k < s_nvolets; k++)
+            if (is_zone(&s_volets[k]) && in_members(s_volets[k].members, v->id)) cJSON_AddItemToArray(fl, cJSON_CreateString(s_volets[k].id));
+    }
+    cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
+    cJSON_AddNumberToObject(o, "travel_up_ms", v->travel_up_ms);     /* pour reafficher la calibration dans l'UI */
+    cJSON_AddNumberToObject(o, "travel_down_ms", v->travel_down_ms);
+    cJSON_AddNumberToObject(o, "orientation", v->orientation);       /* azimut facade (-1 = non defini) */
+    cJSON_AddNumberToObject(o, "order", v->order);                   /* rang d'affichage UI (-1 = non range) */
+    /* Parametres d'emission PAR APPAREIL (etage 2, issue #111) : pour le panneau avance de l'UI
+     * (affichage + edition). tx_rpt/tx_rmt = tri-etat tx_override_t (0 heriter, 1 off, 2 on). */
+    if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
+    cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
+    cJSON_AddNumberToObject(o, "te_us",    v->te_us);
+    cJSON_AddNumberToObject(o, "tx_rpt",   v->tx_rpt);
+    cJSON_AddNumberToObject(o, "tx_rmt",   v->tx_rmt);
+    cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
+    cJSON *sr = cJSON_AddArrayToObject(o, "serials");
+    for (int j = 0; j < v->n_serials; j++) cJSON_AddItemToArray(sr, cJSON_CreateString(v->serials[j]));
+    /* etat des 3 commandes : bouton appris (nibble) si le slot est rempli, absent sinon.
+     * Permet a l'UI d'apprentissage centree-volet d'afficher appris / a capturer. */
+    cJSON *cmd = cJSON_AddObjectToObject(o, "cmd");
+    add_cmd_json(cmd, "up",   v->up,   v->up_btn);
+    add_cmd_json(cmd, "stop", v->stop, v->stop_btn);
+    add_cmd_json(cmd, "down", v->down, v->down_btn);
+    /* Rejeu brut (CAME et code fixe) : l'ecran de capture unifie en a besoin pour distinguer
+     * le moteur (rejeu vs clone KeeLoq) et montrer quelles commandes sont deja captees. Le cadre
+     * brut est range dans v->rejeu (JSON {f, up, stop, down}) ; on expose juste les commandes
+     * presentes, pas les impulsions. */
+    if (v->rejeu) {
+        cJSON_AddBoolToObject(o, "rejeu", true);
+        cJSON *rc = cJSON_AddObjectToObject(o, "rejeu_cmds");
+        cJSON *rj = cJSON_Parse(v->rejeu);
+        if (rj) {
+            for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c; c++) {
+                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, *c));
+                if (s && *s) cJSON_AddBoolToObject(rc, *c, true);
             }
+            cJSON_Delete(rj);
         }
-        cJSON_AddItemToArray(vols, o);
     }
-    cJSON *rf = cJSON_AddArrayToObject(root, "rf");   /* recentes seulement ; les 300 via /api/rf */
-    for (int k = 0; k < STATUS_RF_SHOW; k++) {
-        int idx = (s_rfhead - 1 - k + 2 * s_rf_n) % s_rf_n;
-        rfrec_t *r = &s_rf[idx];
-        if (!r->serial[0]) continue;
-        cJSON *f = cJSON_CreateObject();
-        cJSON_AddNumberToObject(f, "t", r->t);
-        cJSON_AddStringToObject(f, "serial", r->serial);
-        char hx[10]; snprintf(hx, sizeof(hx), "%X", r->button); cJSON_AddStringToObject(f, "button", hx);
-        snprintf(hx, sizeof(hx), "%08X", (unsigned)r->hop); cJSON_AddStringToObject(f, "hop", hx);
-        cJSON_AddNumberToObject(f, "rssi", r->rssi);
-        cJSON_AddItemToArray(rf, f);
-    }
-    UNLOCK();
+    return o;
+}
+
+/* Une trame recente du ring. Sous LOCK. */
+static cJSON *status_rf_json(const rfrec_t *r) {
+    cJSON *f = cJSON_CreateObject();
+    cJSON_AddNumberToObject(f, "t", r->t);
+    cJSON_AddStringToObject(f, "serial", r->serial);
+    char hx[10]; snprintf(hx, sizeof(hx), "%X", r->button); cJSON_AddStringToObject(f, "button", hx);
+    snprintf(hx, sizeof(hx), "%08X", (unsigned)r->hop); cJSON_AddStringToObject(f, "hop", hx);
+    cJSON_AddNumberToObject(f, "rssi", r->rssi);
+    return f;
+}
+
+/* Queue : Wi-Fi, MQTT, ecoute, uptime. Hors LOCK. */
+static cJSON *status_tail_json(void) {
+    cJSON *root = cJSON_CreateObject();
     /* Statut Wi-Fi + MQTT (pour l'UI : pastilles + force du signal) */
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
     wifi_ap_record_t ap;
@@ -2158,9 +2168,79 @@ char *shutters_status_json(void) {
     cJSON_AddBoolToObject(root, "mqtt", s_mqtt_ready);
     cJSON_AddBoolToObject(root, "listening", s_log_frames);   /* ecoute permanente = position fiable */
     cJSON_AddNumberToObject(root, "uptime", (double)(esp_timer_get_time() / 1000000));   /* s depuis boot : date les trames RF cote UI */
-    char *js = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
+    return root;
+}
+
+/* Quel morceau construire. L'indice sert aux appareils et aux trames. */
+typedef enum { PART_HEAD, PART_VOLET, PART_RF, PART_TAIL } status_part_t;
+
+/* Construit puis imprime un morceau. NULL si l'element n'existe plus (appareil supprime entre deux
+ * morceaux, case vide du ring) : *gone le dit, pour ne pas le confondre avec un manque de memoire. */
+static char *status_part_print(status_part_t part, int idx, bool *gone) {
+    cJSON *o = NULL;
+    *gone = false;
+    if (part == PART_TAIL) {
+        o = status_tail_json();
+    } else {
+        LOCK();
+        if (part == PART_HEAD) {
+            o = status_head_json();
+        } else if (part == PART_VOLET) {
+            if (idx < s_nvolets) o = status_volet_json(&s_volets[idx]); else *gone = true;
+        } else {
+            rfrec_t *r = &s_rf[(s_rfhead - 1 - idx + 2 * s_rf_n) % s_rf_n];
+            if (r->serial[0]) o = status_rf_json(r); else *gone = true;
+        }
+        UNLOCK();
+    }
+    if (!o) return NULL;
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
     return js;
+}
+
+/* Envoie un morceau. Un manque de memoire passager (pic de la verification GitHub) se reessaie,
+ * comme le faisait la construction d'un bloc : une fois l'en-tete parti, plus de 500 possible.
+ * inner : l'objet est verse dans l'objet englobant, sans ses accolades. Rend ESP_ERR_NOT_FOUND si
+ * l'element n'existe pas, ce qui n'est pas une erreur. */
+static esp_err_t status_part_emit(status_part_t part, int idx, bool inner, const char *prefix,
+                                  shutters_emit_t emit, void *ctx) {
+    bool gone = false;
+    char *js = status_part_print(part, idx, &gone);
+    for (int t = 0; !js && !gone && t < SH_BUILD_RETRIES; t++) {
+        vTaskDelay(pdMS_TO_TICKS(SH_BUILD_RETRY_MS));
+        js = status_part_print(part, idx, &gone);
+    }
+    if (gone) return ESP_ERR_NOT_FOUND;
+    if (!js) return ESP_ERR_NO_MEM;
+    size_t n = strlen(js);
+    esp_err_t e = prefix[0] ? emit(prefix, strlen(prefix), ctx) : ESP_OK;
+    if (e == ESP_OK) e = inner ? (n > 2 ? emit(js + 1, n - 2, ctx) : ESP_OK) : emit(js, n, ctx);
+    free(js);
+    return e;
+}
+
+esp_err_t shutters_status_stream(shutters_emit_t emit, void *ctx) {
+    esp_err_t e = emit("{", 1, ctx);
+    /* tete puis queue jamais vides (remotes, wifi toujours presents) : les virgules tombent juste */
+    if (e == ESP_OK) e = status_part_emit(PART_HEAD, 0, true, "", emit, ctx);
+    if (e == ESP_OK) e = emit(",\"volets\":[", 11, ctx);
+    bool first = true;
+    for (int i = 0; e == ESP_OK; i++) {
+        e = status_part_emit(PART_VOLET, i, false, first ? "" : ",", emit, ctx);
+        if (e == ESP_ERR_NOT_FOUND) { e = ESP_OK; break; }   /* fin de la liste */
+        first = false;
+    }
+    if (e == ESP_OK) e = emit("],\"rf\":[", 8, ctx);   /* recentes seulement ; le reste via /api/rf */
+    first = true;
+    for (int k = 0; e == ESP_OK && k < STATUS_RF_SHOW; k++) {
+        e = status_part_emit(PART_RF, k, false, first ? "" : ",", emit, ctx);
+        if (e == ESP_ERR_NOT_FOUND) { e = ESP_OK; continue; }   /* case vide du ring */
+        first = false;
+    }
+    if (e == ESP_OK) e = status_part_emit(PART_TAIL, 0, true, "],", emit, ctx);
+    if (e == ESP_OK) e = emit("}", 1, ctx);
+    return e;
 }
 
 /* ── Sauvegarde / restauration (telecommandes + noms + trames de reference + calibration) ── */

@@ -324,29 +324,27 @@ static esp_err_t h_profiles(httpd_req_t *r) { return send_asset(r, "application/
 static esp_err_t h_icon (httpd_req_t *r) { return send_asset(r, "image/png",       icon_png_start,   icon_png_end,   false); }
 
 /* Une reponse construite d'un bloc (cJSON) peut tomber pendant un pic de memoire passager :
- * la verification GitHub (connexion TLS de plus) prend ~15 Ko pendant 2 a 3 s. Mesure sur
- * l'ATOM Lite le 2026-11-14 : un 500 "mem" sur /api/status par verification. On reessaie
- * donc le temps que le pic passe, en restant sous les 4 s apres lesquelles l'UI abandonne
- * (app.js, loadStatus) et compte le boitier comme injoignable. */
-#define BUILD_RETRIES   10    /* 10 x 250 ms = 2,5 s au plus */
-#define BUILD_RETRY_MS  250
+ * on reessaie (SH_BUILD_RETRIES, shutters.h). */
 static char *build_with_retry(char *(*build)(void)) {
     char *js = build();
-    for (int t = 0; !js && t < BUILD_RETRIES; t++) {
-        vTaskDelay(pdMS_TO_TICKS(BUILD_RETRY_MS));
+    for (int t = 0; !js && t < SH_BUILD_RETRIES; t++) {
+        vTaskDelay(pdMS_TO_TICKS(SH_BUILD_RETRY_MS));
         js = build();
     }
     return js;
 }
 
 /* ── /api/status ── */
+static esp_err_t status_emit(const char *buf, size_t len, void *ctx) {
+    return httpd_resp_send_chunk((httpd_req_t *)ctx, buf, (ssize_t)len);
+}
 static esp_err_t h_status(httpd_req_t *r) {
-    char *js = build_with_retry(shutters_status_json);
-    if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "mem");
     httpd_resp_set_type(r, "application/json");
-    esp_err_t e = httpd_resp_send(r, js, HTTPD_RESP_USE_STRLEN);
-    free(js);
-    return e;
+    esp_err_t e = shutters_status_stream(status_emit, r);
+    /* En echec, pas de morceau final : la connexion tombe, et l'UI voit une requete en echec,
+     * pas un JSON tronque qui aurait l'air complet. */
+    if (e != ESP_OK) return ESP_FAIL;
+    return httpd_resp_send_chunk(r, NULL, 0);
 }
 
 /* ── /api/shutter ── */
@@ -869,8 +867,8 @@ static esp_err_t h_rf(httpd_req_t *req) {
      * seule la page demandee est copiee : shutters_rf_page. Plus de tableau statique de
      * 24 Ko pour les 1000 trames, dont 100 au plus etaient renvoyees. */
     shutters_rf_item_t *items = malloc((size_t)limit * sizeof(*items));
-    for (int t = 0; !items && t < BUILD_RETRIES; t++) {   /* meme pic passager que /api/status */
-        vTaskDelay(pdMS_TO_TICKS(BUILD_RETRY_MS));
+    for (int t = 0; !items && t < SH_BUILD_RETRIES; t++) {   /* meme pic passager que /api/status */
+        vTaskDelay(pdMS_TO_TICKS(SH_BUILD_RETRY_MS));
         items = malloc((size_t)limit * sizeof(*items));
     }
     int c = 0, n = items ? shutters_rf_page(offset, limit, items, &c) : -1;
