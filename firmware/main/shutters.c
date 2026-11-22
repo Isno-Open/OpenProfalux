@@ -2068,7 +2068,7 @@ static cJSON *status_head_json(void) {
 }
 
 /* Un appareil. Sous LOCK. */
-static cJSON *status_volet_json(const volet_t *v) {
+static cJSON *status_device_json(const volet_t *v) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
     cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
@@ -2172,7 +2172,7 @@ static cJSON *status_tail_json(void) {
 }
 
 /* Quel morceau construire. L'indice sert aux appareils et aux trames. */
-typedef enum { PART_HEAD, PART_VOLET, PART_RF, PART_TAIL } status_part_t;
+typedef enum { PART_HEAD, PART_DEVICE, PART_RF, PART_TAIL } status_part_t;
 
 /* Construit puis imprime un morceau. NULL si l'element n'existe plus (appareil supprime entre deux
  * morceaux, case vide du ring) : *gone le dit, pour ne pas le confondre avec un manque de memoire. */
@@ -2185,8 +2185,8 @@ static char *status_part_print(status_part_t part, int idx, bool *gone) {
         LOCK();
         if (part == PART_HEAD) {
             o = status_head_json();
-        } else if (part == PART_VOLET) {
-            if (idx < s_nvolets) o = status_volet_json(&s_volets[idx]); else *gone = true;
+        } else if (part == PART_DEVICE) {
+            if (idx < s_nvolets) o = status_device_json(&s_volets[idx]); else *gone = true;
         } else {
             rfrec_t *r = &s_rf[(s_rfhead - 1 - idx + 2 * s_rf_n) % s_rf_n];
             if (r->serial[0]) o = status_rf_json(r); else *gone = true;
@@ -2227,7 +2227,7 @@ esp_err_t shutters_status_stream(shutters_emit_t emit, void *ctx) {
     if (e == ESP_OK) e = emit(",\"volets\":[", 11, ctx);
     bool first = true;
     for (int i = 0; e == ESP_OK; i++) {
-        e = status_part_emit(PART_VOLET, i, false, first ? "" : ",", emit, ctx);
+        e = status_part_emit(PART_DEVICE, i, false, first ? "" : ",", emit, ctx);
         if (e == ESP_ERR_NOT_FOUND) { e = ESP_OK; break; }   /* fin de la liste */
         first = false;
     }
