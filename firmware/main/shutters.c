@@ -2130,7 +2130,7 @@ static cJSON *status_device_json(const volet_t *v) {
     return o;
 }
 
-/* Une trame recente du ring. Sous LOCK. */
+/* Une trame recente, deja copiee hors du ring. */
 static cJSON *status_rf_json(const rfrec_t *r) {
     cJSON *f = cJSON_CreateObject();
     cJSON_AddNumberToObject(f, "t", r->t);
@@ -2171,25 +2171,24 @@ static cJSON *status_tail_json(void) {
     return root;
 }
 
-/* Quel morceau construire. L'indice sert aux appareils et aux trames. */
+/* Quel morceau construire. L'indice sert aux appareils, rec aux trames. */
 typedef enum { PART_HEAD, PART_DEVICE, PART_RF, PART_TAIL } status_part_t;
 
-/* Construit puis imprime un morceau. NULL si l'element n'existe plus (appareil supprime entre deux
- * morceaux, case vide du ring) : *gone le dit, pour ne pas le confondre avec un manque de memoire. */
-static char *status_part_print(status_part_t part, int idx, bool *gone) {
+/* Construit puis imprime un morceau. NULL si l'appareil n'existe plus (supprime entre deux
+ * morceaux) : *gone le dit, pour ne pas le confondre avec un manque de memoire. */
+static char *status_part_print(status_part_t part, int idx, const rfrec_t *rec, bool *gone) {
     cJSON *o = NULL;
     *gone = false;
     if (part == PART_TAIL) {
         o = status_tail_json();
+    } else if (part == PART_RF) {
+        o = status_rf_json(rec);
     } else {
         LOCK();
         if (part == PART_HEAD) {
             o = status_head_json();
-        } else if (part == PART_DEVICE) {
-            if (idx < s_nvolets) o = status_device_json(&s_volets[idx]); else *gone = true;
         } else {
-            rfrec_t *r = &s_rf[(s_rfhead - 1 - idx + 2 * s_rf_n) % s_rf_n];
-            if (r->serial[0]) o = status_rf_json(r); else *gone = true;
+            if (idx < s_nvolets) o = status_device_json(&s_volets[idx]); else *gone = true;
         }
         UNLOCK();
     }
@@ -2203,13 +2202,13 @@ static char *status_part_print(status_part_t part, int idx, bool *gone) {
  * comme le faisait la construction d'un bloc : une fois l'en-tete parti, plus de 500 possible.
  * inner : l'objet est verse dans l'objet englobant, sans ses accolades. Rend ESP_ERR_NOT_FOUND si
  * l'element n'existe pas, ce qui n'est pas une erreur. */
-static esp_err_t status_part_emit(status_part_t part, int idx, bool inner, const char *prefix,
-                                  shutters_emit_t emit, void *ctx) {
+static esp_err_t status_part_emit(status_part_t part, int idx, const rfrec_t *rec, bool inner,
+                                  const char *prefix, shutters_emit_t emit, void *ctx) {
     bool gone = false;
-    char *js = status_part_print(part, idx, &gone);
+    char *js = status_part_print(part, idx, rec, &gone);
     for (int t = 0; !js && !gone && t < SH_BUILD_RETRIES; t++) {
         vTaskDelay(pdMS_TO_TICKS(SH_BUILD_RETRY_MS));
-        js = status_part_print(part, idx, &gone);
+        js = status_part_print(part, idx, rec, &gone);
     }
     if (gone) return ESP_ERR_NOT_FOUND;
     if (!js) return ESP_ERR_NO_MEM;
@@ -2223,22 +2222,29 @@ static esp_err_t status_part_emit(status_part_t part, int idx, bool inner, const
 esp_err_t shutters_status_stream(shutters_emit_t emit, void *ctx) {
     esp_err_t e = emit("{", 1, ctx);
     /* tete puis queue jamais vides (remotes, wifi toujours presents) : les virgules tombent juste */
-    if (e == ESP_OK) e = status_part_emit(PART_HEAD, 0, true, "", emit, ctx);
+    if (e == ESP_OK) e = status_part_emit(PART_HEAD, 0, NULL, true, "", emit, ctx);
     if (e == ESP_OK) e = emit(",\"volets\":[", 11, ctx);
     bool first = true;
     for (int i = 0; e == ESP_OK; i++) {
-        e = status_part_emit(PART_DEVICE, i, false, first ? "" : ",", emit, ctx);
+        e = status_part_emit(PART_DEVICE, i, NULL, false, first ? "" : ",", emit, ctx);
         if (e == ESP_ERR_NOT_FOUND) { e = ESP_OK; break; }   /* fin de la liste */
         first = false;
     }
     if (e == ESP_OK) e = emit("],\"rf\":[", 8, ctx);   /* recentes seulement ; le reste via /api/rf */
-    first = true;
-    for (int k = 0; e == ESP_OK && k < STATUS_RF_SHOW; k++) {
-        e = status_part_emit(PART_RF, k, false, first ? "" : ",", emit, ctx);
-        if (e == ESP_ERR_NOT_FOUND) { e = ESP_OK; continue; }   /* case vide du ring */
-        first = false;
+    /* Les trames recentes sont FIGEES d'un coup sous LOCK (revue Codex #138) : relues dans le ring
+     * morceau par morceau, une reception entre deux morceaux avancait la tete, et la liste sortait
+     * avec une trame en double et une autre perdue. Cout fixe : STATUS_RF_SHOW enregistrements. */
+    rfrec_t recent[STATUS_RF_SHOW];
+    int nrecent = 0;
+    LOCK();
+    for (int k = 0; k < STATUS_RF_SHOW; k++) {
+        const rfrec_t *r = &s_rf[(s_rfhead - 1 - k + 2 * s_rf_n) % s_rf_n];
+        if (r->serial[0]) recent[nrecent++] = *r;
     }
-    if (e == ESP_OK) e = status_part_emit(PART_TAIL, 0, true, "],", emit, ctx);
+    UNLOCK();
+    for (int k = 0; e == ESP_OK && k < nrecent; k++)
+        e = status_part_emit(PART_RF, 0, &recent[k], false, k ? "," : "", emit, ctx);
+    if (e == ESP_OK) e = status_part_emit(PART_TAIL, 0, NULL, true, "],", emit, ctx);
     if (e == ESP_OK) e = emit("}", 1, ctx);
     return e;
 }
