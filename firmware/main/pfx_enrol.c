@@ -380,7 +380,10 @@ static int burst_frames(void) { return s_prof && s_prof->enrol_frames_per_burst 
 static int emit(uint8_t button, uint16_t counter) {
     if (!s_id.active) return -1;
     char bits[68]; frame_with_key(s_id.serial, s_id.key, button, counter, bits);
-    radio_tx_device(bits, burst_frames(), &s_tx);   /* rafale, compteur figé sur toute la rafale */
+    if (radio_tx_device(bits, burst_frames(), &s_tx) != 0) {   /* garde de bande : rien n'est parti */
+        ESP_LOGE(TAG, "TX 0x067 REFUSEE serial=0x%07X btn=0x%X cnt=%u : rien emis", (unsigned)s_id.serial, button, counter);
+        return -1;
+    }
     ESP_LOGW(TAG, "TX 0x067 serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)s_id.serial, button, counter, (unsigned)cc1101_get_tx_te());
     return 0;
@@ -405,7 +408,10 @@ int pfx_enrol_emit_learn(void) {
     char bits[68];
     frame_with_key(s_id.serial, s_id.key, code, cnt, bits);
     for (int i = 0; i < rounds; i++) {
-        radio_tx_device(bits, burst_frames(), &s_tx);
+        if (radio_tx_device(bits, burst_frames(), &s_tx) != 0) {   /* garde de bande : la frequence de la session est hors bande */
+            ESP_LOGE(TAG, "TX 0x067 APPRENTISSAGE REFUSE serial=0x%07X : rien emis", (unsigned)s_id.serial);
+            return -1;
+        }
         vTaskDelay(pdMS_TO_TICKS(15));
     }
     ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x%X cnt=%u (%d salves de %d, profil %s) te=%u",
