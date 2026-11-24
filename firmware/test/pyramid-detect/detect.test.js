@@ -23,14 +23,22 @@ const DOC = JSON.parse(
   fs.readFileSync(path.join(__dirname, '../../main/web/profiles.json'), 'utf8')
 );
 
-const BAND = 'radio.band';
+/* Les valeurs du domaine que ce banc observe ou attend, declarees une fois (AGENTS.md : pas de texte
+ * compare a la main). Ce sont des valeurs du fil, celles de profiles.json. */
+const TRAIT = { band: 'radio.band', modulation: 'radio.modulation', code: 'code', add: 'add', engine: 'engine' };
+const BAND = { mhz433: '433', mhz868: '868', unknown: '915' };
+const CODE = { fixed: 'fixed' };
+const MODULATION = { fsk: 'FSK' };
+const ADD = { enrol: 'enrol' };
+const BRAND = { came: 'CAME', somfy: 'Somfy RTS' };
+const PROFILE_ID = { profaluxCopy: 'profalux-copy' };
 const brands = (r) => r.proposed.map((c) => c.profile.brand).sort();
 const inRanked = (r, brand) => r.ranked.some((c) => c.profile.brand === brand);
 
 test('traits certains filtrants, mais seule la bande est detectable', () => {
   const t = traits(DOC);
-  assert.deepEqual(t.certain.sort(), ['add', 'code', 'engine', 'radio.band', 'radio.modulation']);
-  assert.deepEqual(t.detect, [BAND]); /* modulation, code, methode, moteur : certains mais non detectables */
+  assert.deepEqual(t.certain.sort(), [TRAIT.add, TRAIT.code, TRAIT.engine, TRAIT.band, TRAIT.modulation].sort());
+  assert.deepEqual(t.detect, [TRAIT.band]); /* modulation, code, methode, moteur : certains mais non detectables */
 });
 
 test('chaque trait declare existe dans au moins un profil (un trait mal ecrit ne filtrerait rien)', () => {
@@ -40,32 +48,32 @@ test('chaque trait declare existe dans au moins un profil (un trait mal ecrit ne
 });
 
 test('bande 433 seule : CAME et Somfy proposes, utilisateur choisit', () => {
-  const r = rankProfiles({ [BAND]: '433' }, DOC);
+  const r = rankProfiles({ [TRAIT.band]: BAND.mhz433 }, DOC);
   assert.equal(r.ambiguous, true);
-  assert.deepEqual(brands(r), ['CAME', 'Somfy RTS']);
+  assert.deepEqual(brands(r), [BRAND.came, BRAND.somfy].sort());
 });
 
 test('bande 433 + code fixe connu : CAME seul, Somfy ecarte (code incompatible)', () => {
-  const r = rankProfiles({ [BAND]: '433', code: 'fixed' }, DOC);
+  const r = rankProfiles({ [TRAIT.band]: BAND.mhz433, [TRAIT.code]: CODE.fixed }, DOC);
   assert.equal(r.confident, true);
-  assert.equal(r.proposed[0].profile.brand, 'CAME');
-  assert.equal(inRanked(r, 'Somfy RTS'), false);
+  assert.equal(r.proposed[0].profile.brand, BRAND.came);
+  assert.equal(inRanked(r, BRAND.somfy), false);
 });
 
 test('bande 868 : toute la famille KeeLoq 868 proposee (Profalux copie et nouvelle, Franciaflex, Eveno, NeoSol)', () => {
-  const r = rankProfiles({ [BAND]: '868' }, DOC);
+  const r = rankProfiles({ [TRAIT.band]: BAND.mhz868 }, DOC);
   assert.equal(r.proposed.length, 5);
-  assert.ok(r.proposed.every((c) => c.profile.radio.band === '868'));
+  assert.ok(r.proposed.every((c) => c.profile.radio.band === BAND.mhz868));
 });
 
 test('bande 868 + enrolement : la copie Profalux est ecartee', () => {
-  const r = rankProfiles({ [BAND]: '868', add: 'enrol' }, DOC);
-  assert.ok(r.proposed.every((c) => c.profile.add === 'enrol'));
-  assert.equal(r.ranked.some((c) => c.profile.id === 'profalux-copy'), false);
+  const r = rankProfiles({ [TRAIT.band]: BAND.mhz868, [TRAIT.add]: ADD.enrol }, DOC);
+  assert.ok(r.proposed.every((c) => c.profile.add === ADD.enrol));
+  assert.equal(r.ranked.some((c) => c.profile.id === PROFILE_ID.profaluxCopy), false);
 });
 
 test('bande inconnue : aucune proposition forcee', () => {
-  const r = rankProfiles({ [BAND]: '915' }, DOC);
+  const r = rankProfiles({ [TRAIT.band]: BAND.unknown }, DOC);
   assert.equal(r.proposed.length, 0);
   assert.equal(r.confident, false);
 });
@@ -76,6 +84,6 @@ test('rien de connu : toute la pyramide est proposee (choix manuel complet)', ()
 });
 
 test('modulation FSK connue : aucun profil OOK impose', () => {
-  const r = rankProfiles({ 'radio.modulation': 'FSK' }, DOC);
+  const r = rankProfiles({ [TRAIT.modulation]: MODULATION.fsk }, DOC);
   assert.equal(r.proposed.length, 0);
 });
