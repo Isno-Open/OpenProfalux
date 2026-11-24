@@ -10,6 +10,8 @@ import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src
 import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
 import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
 import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById, buildFileRequest, awaitBoxFile } from "../opencloudapp/server/src/device-families.js";
+/** Types d'appareils du firmware (cles de profiles.json « types ») que ce banc nomme. */
+const DEVICE_TYPE = { gate: "portail" } as const;
 
 const ROOT = "openprofalux";
 const BOX = "opf-2d5efba03f";
@@ -89,7 +91,7 @@ test("un portail (non positionnel) n'a ni position affichee ni commande de posit
   // offerte, comme sur sa telecommande ; « fermer » n'est plus un bouton du portail
   assert.ok("topic" in buildCommand(f, { box: BOX, device: "Portail" }, "up", null));
   assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, "down", null));
-  const gateKind = (kindsOf(profiles()) as { id: string; controls: { id: string }[] }[]).find((k) => k.id === "portail")!;
+  const gateKind = (kindsOf(profiles()) as { id: string; controls: { id: string }[] }[]).find((k) => k.id === DEVICE_TYPE.gate)!;
   assert.deepEqual(gateKind.controls.map((c) => c.id), ["up"], "un seul bouton, celui que le type declare");
 });
 
