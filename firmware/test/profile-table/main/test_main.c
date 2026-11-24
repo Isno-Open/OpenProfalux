@@ -85,10 +85,10 @@ int main(void) {
           "T17 code de bouton : celui du profil, -1 s'il n'en declare pas");
 
     /* Lot 4 : les types que le firmware connait (dev_type_t) sont declares, avec leur classe Home Assistant. */
-    const type_def_t *volet = type_find(TYPE_VOLET), *gate = type_find(TYPE_PORTAIL);
-    check(volet && gate && volet->ha_device_class[0] && gate->ha_device_class[0] && !type_find(200),
+    const type_def_t *shutter = type_find(TYPE_VOLET), *gate = type_find(TYPE_PORTAIL);
+    check(shutter && gate && shutter->ha_device_class[0] && gate->ha_device_class[0] && !type_find(200),
           "T18 chaque type du firmware est declare, avec sa classe Home Assistant");
-    check(volet && volet->positional && gate && !gate->positional, "T19 le volet a une position, le portail n'en a pas");
+    check(shutter && shutter->positional && gate && !gate->positional, "T19 le volet a une position, le portail n'en a pas");
 
     printf(g_fail ? "ECHEC : %d\n" : "OK\n", g_fail);
     return g_fail ? 1 : 0;
