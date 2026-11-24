@@ -38,6 +38,20 @@ typedef struct {
 extern const profile_def_t PROFILE_TABLE[];
 extern const int PROFILE_TABLE_COUNT;
 
+/* Un type d'appareil (profiles.json « types »), engendre de meme : ce que le firmware en a besoin pour s'annoncer. */
+typedef struct {
+    const char *key;              /* cle du type : "volet", "portail" (valeur du fil, MQTT et portail cloud) */
+    uint8_t     code;             /* dev_type_t */
+    bool        positional;       /* a une position (temps de course) */
+    const char *ha_device_class;  /* classe de l'appareil dans Home Assistant : "shutter", "gate"... */
+} type_def_t;
+
+extern const type_def_t TYPE_TABLE[];
+extern const int TYPE_TABLE_COUNT;
+
+/* Le type de code `code`, ou NULL. */
+const type_def_t *type_find(uint8_t code);
+
 /* Les moteurs que ce firmware execute. PROFILE_ENGINE_UNKNOWN : un profil d'une version plus recente,
  * dont le moteur n'est pas ici. */
 typedef enum {
