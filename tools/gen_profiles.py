@@ -58,6 +58,8 @@ def check(doc):
         require(isinstance(t.get("code"), int) and 0 <= t["code"] <= 255, where, "code entier de 0 a 255 requis")
         require(t["code"] not in codes, where, f"code {t['code']} deja pris par le type {codes.get(t['code'])}")
         codes[t["code"]] = key
+        require(isinstance(t.get("ha_device_class"), str) and t["ha_device_class"], where, "ha_device_class requis (classe de l'appareil dans Home Assistant)")
+        require(isinstance(t.get("positional", False), bool), where, "positional : booleen")
         buttons = t.get("buttons")
         require(isinstance(buttons, list) and buttons, where, "au moins un bouton requis")
         seen = set()
@@ -143,7 +145,16 @@ def check(doc):
     return out
 
 
-def render(profiles, source):
+def render_types(types):
+    lines = ["const type_def_t TYPE_TABLE[] = {"]
+    for key, t in types.items():
+        lines.append(f"    {{ .key = {c_string(key)}, .code = {t['code']}, .positional = {'true' if t.get('positional') else 'false'}, "
+                     f".ha_device_class = {c_string(t['ha_device_class'])} }},")
+    lines += ["};", f"const int TYPE_TABLE_COUNT = {len(types)};", ""]
+    return lines
+
+
+def render(profiles, source, types):
     lines = [
         f"/* ENGENDRE par tools/gen_profiles.py depuis {source} : ne pas modifier, ne pas commettre. */",
         '#include "profile_table.h"',
@@ -163,6 +174,7 @@ def render(profiles, source):
             f".repeats = {p['repeats']}, .gap_us = {p['gap_us']}, {enrol} }},"
         )
     lines += ["};", f"const int PROFILE_TABLE_COUNT = {len(profiles)};", ""]
+    lines += render_types(types)
     return "\n".join(lines)
 
 
@@ -178,7 +190,7 @@ def main(argv):
     except (OSError, json.JSONDecodeError, CatalogError) as e:
         print(f"gen_profiles.py : {src} refuse : {e}", file=sys.stderr)
         return 1
-    text = render(profiles, "firmware/main/web/profiles.json")
+    text = render(profiles, "firmware/main/web/profiles.json", doc["types"])
     try:
         with open(dst, encoding="utf-8") as f:
             if f.read() == text:

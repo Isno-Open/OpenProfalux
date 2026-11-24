@@ -960,8 +960,14 @@ _Static_assert(COVER_NAME_MAX == SH_ID_LEN - 1, "COVER_NAME_MAX (profiles.json n
 /* Rang d'affichage (1..N) d'un volet range, 0 sinon : l'ordre stocke est 0-base, -1 = non range. */
 static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
 
+/* Classe Home Assistant et position : celles que le TYPE de l'appareil declare (profiles.json types, #134). Un type
+ * inconnu du catalogue (fiche d'une version plus recente) est traite comme un volet, le type par defaut. */
+static const char HA_DEVICE_CLASS_FALLBACK[] = "shutter";
+static const type_def_t *type_of(const volet_t *v) { return type_find(v->type); }
+
 static bool volet_positional(const volet_t *v) {
-    return s_log_frames && !v->central && !is_zone(v)
+    const type_def_t *t = type_of(v);
+    return s_log_frames && !v->central && !is_zone(v) && (!t || t->positional)   /* un portail n'a pas de position */
         && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
 }
 
@@ -1112,7 +1118,7 @@ static void announce_one(volet_t *v) {
      * C'est le cas reel : le moteur ne renvoie rien, l'etat est suppose. HA continue de lire
      * state_topic ; il affiche juste l'etat vise des l'envoi, avant celui du boitier. */
     snprintf(pl, 1536,
-        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"shutter\","
+        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"%s\","
         "\"command_topic\":\"openprofalux/cover/%s/set\","
         "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"optimistic\":true,"
         "%s"
@@ -1120,7 +1126,7 @@ static void announce_one(volet_t *v) {
         "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
         "\"device\":{\"identifiers\":[\"openprofalux\"],\"name\":\"%s\","
         "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
-        v->id, slug, slug, slug, pos, slug, s_device, devname, cu);
+        v->id, slug, slug, type_of(v) ? type_of(v)->ha_device_class : HA_DEVICE_CLASS_FALLBACK, slug, pos, slug, s_device, devname, cu);
     pub_defer(topic, pl, 1, 1);
     free(pl);
     publish_volet_state(v);
