@@ -20,6 +20,8 @@ import sys
 ID_MAX = 23
 # Commandes qui ont un emplacement de code de bouton dans profile_def_t (code_up, code_stop, code_down).
 CODE_SLOTS = ("up", "stop", "down")
+# Source d'une trame de bouton : la capture de la telecommande d'origine (frames.<bouton>.source).
+FRAME_SOURCE_CAPTURE = "capture"
 
 
 class CatalogError(Exception):
@@ -106,8 +108,8 @@ def check(doc):
         require(isinstance(frames, dict), where, "frames : objet attendu")
         for bid, f in frames.items():
             require(bid in buttons, where, f"frames.{bid} : le type {p['type']} n'a pas ce bouton")
-            require(isinstance(f, dict) and len(f) == 1 and (f.get("source") == "capture" or "code" in f), where,
-                    f"frames.{bid} : {{ \"source\": \"capture\" }} ou {{ \"code\": n }} attendu")
+            require(isinstance(f, dict) and len(f) == 1 and (f.get("source") == FRAME_SOURCE_CAPTURE or "code" in f), where,
+                    f"frames.{bid} : {{ \"source\": \"{FRAME_SOURCE_CAPTURE}\" }} ou {{ \"code\": n }} attendu")
             if "code" in f:
                 require(isinstance(f["code"], int) and 0 <= f["code"] <= 15, where, f"frames.{bid}.code : entier de 0 a 15")
                 cmd = buttons[bid]["cmd"]
