@@ -4,7 +4,7 @@
 import { computed, ref, watch } from 'vue';
 import { state, refresh, toast } from '../../store';
 import { navigate } from '../../router';
-import { profiles, types, typeKey, kindOf, profileOf, brandOf, mechanism, isSomfy, hasComma } from '../../profiles';
+import { profiles, types, typeKey, kindOf, profileOf, brandOf, methodOf, sameMethod, isSomfy, hasComma } from '../../profiles';
 import api from '../../api/index';
 import type { Device } from '../../api/types';
 import { BUTTON, EXISTING_DEVICE, SECTION, TAB, TONE } from '../../domain';
@@ -31,15 +31,15 @@ const typeOptions = computed(() => Object.entries(types()).map(([key, t]) => ({ 
 const isPositional = (d: Device): boolean => !d.central && !d.zone && !!types()[typeKey(d)]?.positional;
 const positional = computed(() => isPositional(props.device));
 
-/* Profils interchangeables : meme mecanisme et meme bande (un enrole Profalux 868 peut devenir Eveno ou NeoSol ;
+/* Profils interchangeables : meme methode (ajout + moteur) et meme bande (un enrole Profalux 868 peut devenir Eveno ou NeoSol ;
    l'identite et le compteur restent). */
 const savedProfile = computed(() => profileOf(props.device));
 /* La marque de la fiche, lue sans attendre profiles.json : un brouillon vide l'effacerait a l'enregistrement des reglages
    d'emission (le firmware recopie la marque recue). */
 const brand = ref<string | number>(brandOf(props.device));
-const compatible = computed(() => profiles().filter(p => savedProfile.value && p.mecanisme === mechanism(props.device) && p.band === savedProfile.value.band));
-const profile = computed(() => compatible.value.find(p => p.marque === brand.value) ?? savedProfile.value);
-const values = computed<TxValues>(() => (profile.value && savedProfile.value && profile.value.marque !== savedProfile.value.marque ? {}
+const compatible = computed(() => profiles().filter(p => savedProfile.value && sameMethod(p, methodOf(props.device)) && p.radio.band === savedProfile.value.radio.band));
+const profile = computed(() => compatible.value.find(p => p.brand === brand.value) ?? savedProfile.value);
+const values = computed<TxValues>(() => (profile.value && savedProfile.value && profile.value.brand !== savedProfile.value.brand ? {}
   : { freq_khz: props.device.freq_khz || 0, te_us: props.device.te_us || 0, tx_rpt: props.device.tx_rpt || 0, tx_rmt: props.device.tx_rmt || 0, frame_bits: props.device.frame_bits || 0 }));
 
 const orientation = ref<number | ''>((props.device.orientation ?? -1) >= 0 ? (props.device.orientation ?? '') : '');
@@ -119,9 +119,9 @@ async function remove(): Promise<void> {
       </OpField>
       <OpField v-if="kind.hasTx && compatible.length > 1" label="Profil (marque)" :control="`${uid}-profile`"
                hint="La fréquence et les réglages par défaut suivent. L'identité et le compteur sont gardés.">
-        <OpSelect :id="`${uid}-profile`" v-model="brand" :options="compatible.map(p => ({ value: p.marque, label: p.nom }))" />
+        <OpSelect :id="`${uid}-profile`" v-model="brand" :options="compatible.map(p => ({ value: p.brand, label: p.name }))" />
       </OpField>
-      <OpField v-else-if="kind.hasTx" label="Profil"><p class="value">{{ profile ? profile.nom : (device.marque || 'non défini') }}</p></OpField>
+      <OpField v-else-if="kind.hasTx" label="Profil"><p class="value">{{ profile ? profile.name : (device.marque || 'non défini') }}</p></OpField>
     </div>
 
     <OpField v-if="positional" label="Orientation de la façade (azimut)" :control="`${uid}-orientation`" hint="Pour les automatisations soleil. Nord 0 · Est 90 · Sud 180 · Ouest 270. Vide : non défini.">

@@ -6,7 +6,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { route, navigate } from '../../router';
 import { radios } from '../../store';
-import { profiles, types, typeIcon, methodRoute, bandLabel, bandColor } from '../../profiles';
+import { profiles, types, typeIcon, methodRoute, flowOf, bandLabel, bandColor } from '../../profiles';
 import type { Profile } from '../../api/types';
 import { SECTION, TAB } from '../../domain';
 import OpCard from '../base/OpCard.vue';
@@ -20,7 +20,9 @@ const ADD_ROUTE = `${TAB.remotes}/${SECTION.add}`;
 const bands = ref<Set<string> | null>(null);
 onMounted(async () => { const r = await radios(); bands.value = r ? new Set(r.map(x => String(x.band))) : null; });
 
-const available = computed(() => profiles().filter(p => !p.band || !bands.value || bands.value.has(String(p.band))));
+/* Profils proposes : ceux qu'une radio de la carte sait emettre, et dont le moteur a un parcours dans cette
+   interface (un moteur a venir, io-homecontrol par exemple, n'est pas propose). */
+const available = computed(() => profiles().filter(p => flowOf(p) !== null && (!bands.value || bands.value.has(String(p.radio.band)))));
 const readPart = (i: number): string | null => { const part = route.rest[i]; return part ? decodeURIComponent(part) : null; };
 const type = computed(() => readPart(0));
 const brand = computed(() => readPart(1));
@@ -31,20 +33,20 @@ const detecting = ref(false);
    manque (un portail CAME en 433 sur une carte 868 seule : « disponible en 433 MHz »). */
 const typeList = computed(() => Object.entries(types()).map(([key, t]) => ({
   key, label: t.label, count: available.value.filter(p => p.type === key).length,
-  bands: [...new Set(profiles().filter(p => p.type === key && p.band).map(p => String(p.band)))],
+  bands: [...new Set(profiles().filter(p => p.type === key && p.radio.band).map(p => String(p.radio.band)))],
 })));
 const typeHint = (t: { count: number; bands: string[] }): string => (t.count ? (t.count > 1 ? `${t.count} méthodes` : '1 méthode')
   : t.bands.length ? `disponible en ${t.bands.map(bandLabel).join(' ou ')}` : 'bientôt');
 const brands = computed(() => {
   const list = available.value.filter(p => p.type === type.value);
-  return [...new Set(list.map(p => p.marque))].map(name => ({ name, band: list.find(p => p.marque === name)?.band }));
+  return [...new Set(list.map(p => p.brand))].map(name => ({ name, band: list.find(p => p.brand === name)?.radio.band }));
 });
-const methods = computed(() => available.value.filter(p => p.type === type.value && p.marque === brand.value));
+const methods = computed(() => available.value.filter(p => p.type === type.value && p.brand === brand.value));
 const typeLabel = (key: string | null): string => (key ? types()[key]?.label ?? key : '');
 
 const enc = encodeURIComponent;
 function chooseBrand(name: string): void {
-  const matching = available.value.filter(p => p.type === type.value && p.marque === name);
+  const matching = available.value.filter(p => p.type === type.value && p.brand === name);
   const only = matching.length === 1 ? matching[0] : undefined;
   navigate(only ? methodRoute(only) : `${ADD_ROUTE}/${enc(type.value ?? '')}/${enc(name)}`);
 }
@@ -89,7 +91,7 @@ const chooseMethod = (p: Profile): void => navigate(methodRoute(p));
         <template v-else>
           <p class="question">Comment l'ajouter ?</p>
           <div class="list">
-            <ProfileChoice v-for="p in methods" :key="p.nom" :profile="p" @choose="chooseMethod" />
+            <ProfileChoice v-for="p in methods" :key="p.name" :profile="p" @choose="chooseMethod" />
           </div>
         </template>
       </template>
