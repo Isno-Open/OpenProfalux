@@ -4,7 +4,10 @@
  *   - chaque profil du catalogue a un moteur et une methode que ce firmware reconnait ;
  *   - une fiche anterieure retrouve le bon profil d'apres sa marque et sa methode (migration) ;
  *   - un profil donne explicitement est garde tant qu'il reste coherent, et suivi s'il ne l'est plus.
- * Mutation : faire rendre PROFILE_ENGINE_UNKNOWN a profile_engine_of casse T1 et T3..T9.
+ *   - (lot 2b) chaque profil est complet pour son moteur, et ses valeurs sont celles que le firmware
+ *     emettait avant (comportement inchange).
+ * Mutation : faire rendre PROFILE_ENGINE_UNKNOWN a profile_engine_of casse T1 et T3..T9 ; retirer un
+ * code de bouton d'un profil d'enrolement dans profiles.json casse T15 et T16.
  */
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +25,12 @@ static const char ID_PFX_ENROL[] = "profalux-enrol", ID_PFX_COPY[] = "profalux-c
                   ID_FRANCIAFLEX[] = "franciaflex-enrol", ID_SOMFY[] = "somfy-rts-enrol", ID_CAME[] = "came-replay",
                   ID_UNKNOWN[] = "inconnu", ID_REMOVED[] = "disparu";
 static const char BRAND_PFX[] = "Profalux", BRAND_EVENO[] = "Eveno", BRAND_FRANCIAFLEX[] = "Franciaflex", NO_BRAND[] = "";
+
+/* Ce que le firmware emettait AVANT le lot 2b, quand ces valeurs etaient des constantes du C (PRESS_REPEATS,
+ * PFX_BTN_*, BTN_LEARN, PFX_BURST, PFX_LEARN_ROUNDS, compteur de depart, REJEU_REPEATS, REJEU_GAP_US) : les profils
+ * livres doivent les reproduire, sinon le comportement change. */
+enum { OLD_PRESS = 10, OLD_UP = 0x2, OLD_STOP = 0x4, OLD_DOWN = 0x8, OLD_LEARN = 0x5, OLD_BURST = 9, OLD_ROUNDS = 5,
+       OLD_COUNTER = 3, OLD_REJEU_REPEATS = 8, OLD_REJEU_GAP_US = 12000 };
 
 int main(void) {
     int known = PROFILE_TABLE_COUNT > 0;
@@ -48,6 +57,31 @@ int main(void) {
     check(is(profile_for_device(ID_PFX_ENROL, BRAND_PFX, false, false, false), ID_PFX_COPY), "T12 methode changee (enrole -> clone) : le profil suit");
     check(is(profile_for_device(ID_REMOVED, BRAND_PFX, true, false, false), ID_PFX_ENROL), "T13 profil inconnu (retire du catalogue) : retrouve");
     check(is(profile_for_device(ID_PFX_ENROL, NO_BRAND, true, false, false), ID_PFX_ENROL), "T14 fiche sans marque : le profil grave est garde");
+
+    /* Lot 2b : complet pour son moteur, et comportement inchange. */
+    int ready = 1;
+    for (int i = 0; i < PROFILE_TABLE_COUNT; i++) {
+        const char *why = NULL;
+        if (!profile_engine_ready(&PROFILE_TABLE[i], &why)) { printf("       profil %s : %s\n", PROFILE_TABLE[i].id, why); ready = 0; }
+    }
+    check(ready, "T15 chaque profil est complet pour son moteur");
+    int same = 1;
+    for (int i = 0; i < PROFILE_TABLE_COUNT; i++) {
+        const profile_def_t *p = &PROFILE_TABLE[i];
+        if (profile_engine_of(p) == PROFILE_ENGINE_KEELOQ) {
+            same &= p->frames_per_press == OLD_PRESS;
+            if (profile_add_of(p) == PROFILE_ADD_ENROL)
+                same &= p->code_up == OLD_UP && p->code_stop == OLD_STOP && p->code_down == OLD_DOWN && p->enrol_code == OLD_LEARN
+                     && p->enrol_frames_per_burst == OLD_BURST && p->enrol_bursts == OLD_ROUNDS && p->enrol_counter_start == OLD_COUNTER;
+        }
+        if (profile_engine_of(p) == PROFILE_ENGINE_REPLAY) same &= p->repeats == OLD_REJEU_REPEATS && p->gap_us == OLD_REJEU_GAP_US;
+        if (!same) { printf("       profil %s : valeurs differentes des anciennes constantes\n", p->id); break; }
+    }
+    check(same, "T16 les profils livres reproduisent les anciennes constantes (comportement inchange)");
+    const profile_def_t *enrol = profile_find(ID_PFX_ENROL);
+    check(profile_button_code(enrol, PROFILE_CMD_UP) == OLD_UP && profile_button_code(enrol, PROFILE_CMD_DOWN) == OLD_DOWN
+          && profile_button_code(profile_find(ID_PFX_COPY), PROFILE_CMD_UP) == -1 && profile_button_code(NULL, PROFILE_CMD_STOP) == -1,
+          "T17 code de bouton : celui du profil, -1 s'il n'en declare pas");
 
     printf(g_fail ? "ECHEC : %d\n" : "OK\n", g_fail);
     return g_fail ? 1 : 0;
