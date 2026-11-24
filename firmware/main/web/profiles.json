@@ -1,5 +1,5 @@
 {
-  "_contract": "Catalogue des appareils : SOURCE UNIQUE de l'ecran 'Ajouter un appareil' et du pilotage. PYRAMIDE type -> marque -> profil (issue #134). Un TYPE porte ses boutons (nombre, comportement, position sur la telecommande dessinee). Un PROFIL declare ses deux axes : 'add' (copy = on reprend la telecommande d'origine, enrol = le boitier devient une nouvelle telecommande) et 'engine' (le moteur de protocole du firmware : rejeu-brut, keeloq, somfy-rts ; ook-fixe et io-homecontrol a venir). Seuls les moteurs sont du code : un profil ne contient jamais de cle ni d'identite (ce fichier est public, servi sur /profiles.json). 'description' : la phrase montree a l'utilisateur ; 'note' : note de developpeur, jamais montree. Les valeurs 'brand' sont gravees dans les fiches des appareils (champ marque) : elles ne se renomment pas sans migration.",
+  "_contract": "Catalogue des appareils : SOURCE UNIQUE de l'ecran 'Ajouter un appareil' et du pilotage. PYRAMIDE type -> marque -> profil (issue #134). Un TYPE porte ses boutons (nombre, comportement, position sur la telecommande dessinee). Un PROFIL declare ses deux axes : 'add' (copy = on reprend la telecommande d'origine, enrol = le boitier devient une nouvelle telecommande) et 'engine' (le moteur de protocole du firmware : rejeu-brut, keeloq, somfy-rts ; ook-fixe et io-homecontrol a venir). Le profil dit QUOI emettre : 'frames' pose une trame sur chaque bouton de son type (source capture = la trame captee de la telecommande d'origine ; code = le code du bouton dans la trame du moteur), 'tx.frames_per_press' le nombre de trames par appui, 'enrol' la trame d'apprentissage (code, trames par rafale, rafales, compteur de depart). Seuls les moteurs sont du code : un profil ne contient jamais de cle ni d'identite (ce fichier est public, servi sur /profiles.json). 'description' : la phrase montree a l'utilisateur ; 'note' : note de developpeur, jamais montree. Les valeurs 'brand' sont gravees dans les fiches des appareils (champ marque) : elles ne se renomment pas sans migration.",
   "devices_max": 24,
   "name_max": 23,
   "roles": {
@@ -52,9 +52,10 @@
       "type": "portail", "brand": "CAME",
       "add": "copy", "engine": "rejeu-brut", "code": "fixed",
       "radio": { "band": "433", "freq_khz": 433920, "modulation": "OOK", "rx": { "datarate_baud": 3800, "bandwidth_khz": 135 } },
-      "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640, "repeats": 8, "gap_us": 11500 },
+      "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640, "repeats": 8, "gap_us": 12000 },
+      "frames": { "main": { "source": "capture" } },
       "test": { "status": "tested" },
-      "note": "Rejeu BRUT de la capture (shutters.c rejeu_emit), code fixe OOK. rx (3800/135) est lu par la capture de rejeu (web_ui.c h_rejeu_capture). tx.encoder, short_us, long_us : DECLARES, lus nulle part (encodeur CAME ecrit mais non cable, moteur ook-fixe de #134). tx.repeats et tx.gap_us : declares, mais le rejeu emet encore ses constantes REJEU_REPEATS/REJEU_GAP_US (lot 2 de #134). Valide par Pascal."
+      "note": "Rejeu BRUT de la capture (shutters.c rejeu_emit), code fixe OOK. rx (3800/135) est lu par la capture de rejeu (web_ui.c h_rejeu_capture). tx.encoder, short_us, long_us : DECLARES, lus nulle part (encodeur CAME ecrit mais non cable, moteur ook-fixe de #134). tx.repeats et tx.gap_us : lus par le rejeu (shutters.c rejeu_emit) ; gap_us = 12000, le silence que le firmware a toujours emis (la periode CAME est d'environ 11,5 ms). Valide par Pascal."
     },
     {
       "id": "profalux-copy",
@@ -63,7 +64,8 @@
       "type": "volet", "brand": "Profalux",
       "add": "copy", "engine": "keeloq", "code": "rolling",
       "radio": { "band": "868", "freq_khz": 868425, "modulation": "OOK" },
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true, "frames_per_press": 10 },
+      "frames": { "up": { "source": "capture" }, "stop": { "source": "capture" }, "down": { "source": "capture" } },
       "test": { "status": "tested" },
       "note": "Generation KeeLoq depuis l'identite APPRISE de la telecommande d'origine. Pas de rx (on ne capture pas pour piloter, code roulant)."
     },
@@ -74,7 +76,9 @@
       "type": "volet", "brand": "Profalux",
       "add": "enrol", "engine": "keeloq", "code": "rolling",
       "radio": { "band": "868", "freq_khz": 868425, "modulation": "OOK" },
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true, "frames_per_press": 10 },
+      "frames": { "up": { "code": 2 }, "stop": { "code": 4 }, "down": { "code": 8 } },
+      "enrol": { "code": 5, "frames_per_burst": 9, "bursts": 5, "counter_start": 3 },
       "test": { "status": "tested" },
       "note": "Genere une identite virtuelle 0x067 neuve. te_us=400 nominal HCS300. repeat_bit=true = defaut famille KeeLoq (INVERSE l'usine, ne touche QUE les nouveaux enrolements). rmt=true = implementation."
     },
@@ -85,7 +89,9 @@
       "type": "volet", "brand": "Franciaflex",
       "add": "enrol", "engine": "keeloq", "code": "rolling",
       "radio": { "band": "868", "freq_khz": 868425, "modulation": "OOK" },
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true, "frames_per_press": 10 },
+      "frames": { "up": { "code": 2 }, "stop": { "code": 4 }, "down": { "code": 8 } },
+      "enrol": { "code": 5, "frames_per_burst": 9, "bursts": 5, "counter_start": 3 },
       "test": { "status": "tested" },
       "note": "Meme famille KeeLoq 0x067 que Profalux : volets Franciaflex pilotes jusqu'ici par le profil Profalux (moteur FranciaFlex M4G, routine R6). Porteuse 868425 = celle du profil Profalux utilise sur le terrain, A RELEVER par 'Caler sur ma telecommande' (la frequence calee vit dans la fiche de l'appareil)."
     },
@@ -96,7 +102,9 @@
       "type": "volet", "brand": "Eveno",
       "add": "enrol", "engine": "keeloq", "code": "rolling",
       "radio": { "band": "868", "freq_khz": 868330, "modulation": "OOK" },
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true, "frames_per_press": 10 },
+      "frames": { "up": { "code": 2 }, "stop": { "code": 4 }, "down": { "code": 8 } },
+      "enrol": { "code": 5, "frames_per_burst": 9, "bursts": 5, "counter_start": 3 },
       "test": { "status": "tested" },
       "note": "Famille KeeLoq basse, PHY commune Profalux, porteuse 868,330 (confirmee terrain via 'Caler sur ma telecommande'). Coexiste avec Profalux (868,425) sur la radio 868 : d'ou la frequence PAR APPAREIL."
     },
@@ -107,7 +115,9 @@
       "type": "volet", "brand": "NeoSol",
       "add": "enrol", "engine": "keeloq", "code": "rolling",
       "radio": { "band": "868", "freq_khz": 868330, "modulation": "OOK" },
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
+      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true, "frames_per_press": 10 },
+      "frames": { "up": { "code": 2 }, "stop": { "code": 4 }, "down": { "code": 8 } },
+      "enrol": { "code": 5, "frames_per_burst": 9, "bursts": 5, "counter_start": 3 },
       "test": { "status": "untested" },
       "note": "Ligne Profalux solaire (famille KeeLoq). Porteuse 868,330 mesuree sur le terrain (= Eveno a n=1, deux marques distinctes, surchargeable par appareil). Guidage specifique : position de reference AVANT, geste haut/bas/haut, delai (voir #35). repeat_bit recommande."
     },
