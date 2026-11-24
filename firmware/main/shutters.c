@@ -1764,6 +1764,12 @@ int shutters_set_orientation(const char *id, int orientation) {
  * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
 int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
                            int rpt, int rmt, int frame_bits, const char *marque) {
+    /* Garde de bande a l'enregistrement (#134, etape 10) : une porteuse qu'aucune radio de la carte ne couvre est
+     * refusee ici, avant de devenir celle de l'appareil. La garde d'emission (cc1101.c) reste la derniere barriere. */
+    if (freq_khz && cc1101_radio_for_khz(freq_khz) < 0) {
+        ESP_LOGE(TAG, "'%s' : frequence %u kHz refusee, hors des bandes de la carte", id ? id : "?", (unsigned)freq_khz);
+        return -2;
+    }
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
