@@ -7,7 +7,7 @@
 import { computed, ref, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, withRadio, radioFor, refresh, toast, remoteName, renameFailureText } from '../../store';
-import { profiles, types, typeKey, mechanism, deviceIcon, profileOf, isSomfy, hasComma, mhz } from '../../profiles';
+import { profiles, profileById, methodRoute, types, typeKey, methodOf, sameMethod, flowOf, buttonsOf, deviceIcon, profileOf, isSomfy, hasComma, mhz } from '../../profiles';
 import api from '../../api/index';
 import { isOtherRemote, type CaptureRequest } from '../../api/real';
 import type { Profile } from '../../api/types';
@@ -28,13 +28,13 @@ const SHUTTER_ACTIONS: CaptureAction[] = [{ cmd: COMMAND.up, label: 'Montée' },
    reconstruit a chaque adresse (DevicesView), et quitter l'onglet pendant une capture ne doit pas lui retirer son
    profil. */
 const routeRest = [...route.rest];
-const profileIndex = parseInt(routeRest[0] ?? '', 10);
-const profile = computed<Profile | null>(() => (Number.isNaN(profileIndex) ? null : profiles()[profileIndex] ?? null));
+const profileId = routeRest[0] ? decodeURIComponent(routeRest[0]) : '';
+const profile = computed<Profile | null>(() => profileById(profileId));
 const devices = computed(() => state.status?.volets ?? []);
-/* Avec un profil : les appareils du meme type et du meme mecanisme (on ne clone pas un volet enrole). Sans
+/* Avec un profil : les appareils du meme type et de la meme methode (on ne clone pas un volet enrole). Sans
    profil : tous, sauf les centrales (pas de telecommande propre). */
 const compatible = computed(() => devices.value.filter(d => !d.central
-  && (!profile.value || (!d.zone && typeKey(d) === profile.value.type && mechanism(d) === profile.value.mecanisme))));
+  && (!profile.value || (!d.zone && typeKey(d) === profile.value.type && sameMethod(profile.value, methodOf(d))))));
 const preselected = routeRest[1] ? decodeURIComponent(routeRest[1]) : '';
 const choice = ref<string | string[]>(preselected || (profile.value ? NEW_DEVICE : ''));
 /* Depuis la pyramide, « nouvel appareil » est propose d'emblee. Le profil peut arriver apres l'ouverture (profiles.json
@@ -48,16 +48,16 @@ const options = computed(() => compatible.value.map(d => ({ value: d.id, label: 
 const typeKeyOf = computed(() => (profile.value ? profile.value.type : device.value ? typeKey(device.value) : DEVICE_TYPE.shutter));
 const newLabel = computed(() => `+ Nouveau ${(types()[typeKeyOf.value]?.label ?? 'volet').toLowerCase()}`);
 
-const replay = computed(() => (profile.value ? profile.value.flow === FLOW.replay : !!device.value?.rejeu));
+const replay = computed(() => (profile.value ? flowOf(profile.value) === FLOW.replay : !!device.value?.rejeu));
 const virtual = computed(() => !!device.value?.virt);
 const somfy = computed(() => virtual.value && isSomfy(device.value));
 /* Le profil qui donne radio et frequence : celui de l'adresse, sinon celui de la fiche de l'appareil. */
 const effectiveProfile = computed(() => profile.value ?? (device.value ? profileOf(device.value) : null));
 const actions = computed<CaptureAction[]>(() => {
   if (somfy.value) return [];
-  const declared = types()[typeKeyOf.value]?.capture;
-  if (!declared) return SHUTTER_ACTIONS;
-  return declared.flatMap(a => (isCommand(a.cmd) ? [{ cmd: a.cmd, label: a.label }] : []));
+  const declared = buttonsOf(types()[typeKeyOf.value]);
+  if (!declared.length) return SHUTTER_ACTIONS;
+  return declared.flatMap(b => (isCommand(b.cmd) ? [{ cmd: b.cmd, label: b.label }] : []));
 });
 
 const learned = computed<Partial<Record<Command, string | true>>>(() => {
@@ -96,14 +96,14 @@ const panel = ref<InstanceType<typeof TxParamsPanel> | null>(null);
 const frequency = computed(() => {
   const r = panel.value ? panel.value.read() : {};
   const saved = device.value?.freq_khz;
-  const brand = effectiveProfile.value?.freq_khz;
+  const brand = effectiveProfile.value?.radio.freq_khz;
   return r.freq_khz || (profile.value ? brand || saved : saved || brand) || 0;
 });
 /* L'enrolement n'est propose comme alternative que si la marque en declare un (pas CAME). */
 const enrolment = computed(() => {
   const p = effectiveProfile.value;
   if (!p || replay.value || virtual.value) return null;
-  return profiles().find(x => x.marque === p.marque && x.flow === FLOW.enrolPfx) ?? null;
+  return profiles().find(x => x.brand === p.brand && flowOf(x) === FLOW.enrolPfx) ?? null;
 });
 
 async function capture(cmd: Command): Promise<void> {
@@ -121,18 +121,18 @@ async function capture(cmd: Command): Promise<void> {
   const target = id.value, isNew = choiceId.value === NEW_DEVICE;
   const targetSerial = current?.serials[0] ?? '';
   const request: Omit<CaptureRequest, 'radio'> = {
-    id: target, action: cmd, replay: replay.value, type: types()[typeKeyOf.value]?.code ?? 0, brand: p?.marque,
-    freq_khz: frequency.value, rx: p?.rx, exists: !!current, remoteName: remoteSerial.value ? '' : remoteNameDraft.value.trim(),
+    id: target, action: cmd, replay: replay.value, type: types()[typeKeyOf.value]?.code ?? 0, brand: p?.brand,
+    freq_khz: frequency.value, rx: p?.radio.rx, exists: !!current, remoteName: remoteSerial.value ? '' : remoteNameDraft.value.trim(),
     knownSerials: current?.serials ?? [], virtual: virtual.value,
   };
   busy.value = cmd;
   try {
-    const r = await withRadio(async () => api.capture({ ...request, radio: await radioFor(p?.band) }));
+    const r = await withRadio(async () => api.capture({ ...request, radio: await radioFor(p?.radio.band) }));
     /* Les reglages avances (ajout depuis la pyramide) passent a l'appareil, comme la capture les a utilises. */
     if (fromPyramid) {
       const body: Record<string, unknown> = { id: target };
       for (const [k, v] of Object.entries(settings)) if (v) body[k] = v;
-      if (p?.marque) body.marque = p.marque;
+      if (p?.brand) body.marque = p.brand;
       if (Object.keys(body).length > 1) await api.saveTxParams(body).catch(() => {});
     }
     toast('n' in r ? `✓ ${label} captée (${r.n} impulsions)`
@@ -154,7 +154,7 @@ async function moveCapture(from: Command, to: Command): Promise<void> {
   refresh();
 }
 
-const title = computed(() => (profile.value ? profile.value.nom : 'Cloner une télécommande'));
+const title = computed(() => (profile.value ? profile.value.name : 'Cloner une télécommande'));
 const sub = computed(() => (!profile.value
   ? 'Tu as ta télécommande d\'origine : choisis un volet (ou crée-le), puis capture chaque commande en appuyant dessus.'
   : replay.value
@@ -177,14 +177,14 @@ const serialsLine = computed<{ tone: Tone; text: string } | null>(() => {
 const back = computed(() => (profile.value
   ? { route: `${TAB.remotes}/${SECTION.add}/${profile.value.type}`, text: '‹ Ajouter un appareil' }
   : { route: `${TAB.remotes}/${SECTION.devices}`, text: '‹ Mes appareils' }));
-const enrolmentRoute = (p: Profile): string => `${TAB.remotes}/${SECTION.enrol}/${profiles().indexOf(p)}`;
+const enrolmentRoute = (p: Profile): string => methodRoute(p);
 </script>
 
 <template>
   <OpCard :title="title" :sub="sub">
     <template #before><button type="button" class="back-link" @click="navigate(back.route)">{{ back.text }}</button></template>
     <div class="flow">
-      <OpStatline v-if="!replay && frequency" :tone="TONE.neutral">Capture sur la fréquence de <b>{{ profile ? (profile.marque || profile.nom) : (id || 'cet appareil') }}</b> :
+      <OpStatline v-if="!replay && frequency" :tone="TONE.neutral">Capture sur la fréquence de <b>{{ profile ? (profile.brand || profile.name) : (id || 'cet appareil') }}</b> :
         <b>{{ mhz(frequency) }}</b>.<template v-if="profile"> Ajuste-la en bas (Réglages avancés, ou « Caler sur ma télécommande »).</template></OpStatline>
       <OpField :label="profile ? `${types()[typeKeyOf]?.label ?? 'Appareil'} à compléter` : 'Volet'" :hint="profile ? 'Un appareil déjà commencé, ou un nouveau.' : ''">
         <ChipPicker v-model="choice" :options="options" :add="profile ? newLabel : ''" :disabled="!!busy" label="Appareil" empty="Aucun appareil pour l'instant." />

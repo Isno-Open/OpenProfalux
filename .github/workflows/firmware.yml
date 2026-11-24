@@ -432,6 +432,21 @@ jobs:
              -o cover_attrs_host_test
           ./cover_attrs_host_test ../../main/web/profiles.json
 
+  # Detection de profil de la pyramide « Ajouter un appareil » (pyramid-detect.js), sur le VRAI
+  # profiles.json : traits en chemins, filtre dur sur un trait certain, rien d'impose. Voir
+  # firmware/test/pyramid-detect. Node seul, sans dependance.
+  banc-pyramid-detect:
+    name: Banc de test de la detection de profil
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 26.13.1
+      - name: pyramid-detect (node --test), contre le vrai profiles.json
+        run: node --test firmware/test/pyramid-detect/detect.test.js
+
   # Plugin de la famille OpenProfalux pour OpenCloudApp (cloud-plugin/) : types d'appareils engendres
   # depuis profiles.json, lecture de messages REELS d'un boitier, commandes, verification par le vrai
   # registre d'OpenCloudApp (sous-module fige). Un profiles.json qui casse le plugin echoue ici.

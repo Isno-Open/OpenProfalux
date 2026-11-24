@@ -1,5 +1,6 @@
 // Les routes du firmware (web_ui.c) pour la session, le pilotage et les appareils. Memes appels et memes
 // corps que l'interface d'avant (app.js) : le firmware n'a rien a changer.
+import { parseProfiles } from '../lib/catalog';
 import { FAILURE, HTTP_UNAUTHORIZED, SCAN_STATE, type Command } from '../domain';
 import { json, post, requireOk, poll } from './http';
 import type {
@@ -45,7 +46,12 @@ export default {
     .then(r => r.ok, () => false),
   logout: (): Promise<unknown> => fetch('/api/logout', { method: 'POST' }),
   status: (signal?: AbortSignal) => json<Status>('/api/status', { signal }),
-  profiles: (signal?: AbortSignal) => json<Profiles>('/profiles.json', { signal }),
+  /* Le catalogue est verifie a la lecture (lib/catalog.ts) : un profil inconnu est ecarte et signale, pas avale. */
+  profiles: (signal?: AbortSignal): Promise<Profiles> => json<unknown>('/profiles.json', { signal }).then(raw => {
+    const { profiles, rejected } = parseProfiles(raw);
+    for (const reason of rejected) console.warn(`profiles.json : profil ecarte, ${reason}`);
+    return profiles;
+  }),
   sendShutter: (order: ShutterOrder) => post<ShutterReply>('/api/shutter', order),
   saveDisplayOrder: (ids: string[]) => requireOk(post('/api/volet/order', { ids })),
 

@@ -46,7 +46,7 @@ function fill(fromProfile: boolean): void {
 }
 /* Le statut est relu toutes les 3 s : on ne reremplit que si le profil ou la fiche ont vraiment change, sinon la
    saisie en cours serait effacee. */
-watch(() => JSON.stringify([props.profile?.marque, props.values]), () => fill(false), { immediate: true });
+watch(() => JSON.stringify([props.profile?.brand, props.values]), () => fill(false), { immediate: true });
 
 /* Valeurs a envoyer : tri-etat non / oui pour les interrupteurs, comme la fiche du firmware. */
 function read(): TxValues {
@@ -72,7 +72,7 @@ async function save(): Promise<void> {
 async function tuneToRemote(): Promise<void> {
   tuning.value = { tone: TONE.neutral, text: 'Appuie et tiens un bouton de ta télécommande, à 1 ou 2 m du boîtier…', running: true };
   try {
-    const r = await withRadio(async () => api.tuneToRemote(await radioFor(props.profile?.band)));
+    const r = await withRadio(async () => api.tuneToRemote(await radioFor(props.profile?.radio.band)));
     if (!(r && r.status === SWEEP_STATUS.found && r.center_khz)) throw FAILURE.nothing;
     numbers[TX_FIELD.frequency] = r.center_khz;
     opened.value = true;
@@ -91,8 +91,8 @@ const canTune = computed(() => props.tune && fields.value.some(f => f.name === T
       <OpProgress v-if="tuning?.running" label="Recherche de la porteuse" />
       <OpStatline v-if="tuning" :tone="tuning.tone">{{ tuning.text }}</OpStatline>
     </div>
-    <OpDetails v-model:open="opened" :title="`Réglages avancés d'émission · ${profile.marque}`" :icon="ICON.system">
-      <p class="hint">Pré-réglé depuis le profil <b>{{ profile.marque }}</b> : {{ fields.map(defaultSummary).join(' · ') }}.
+    <OpDetails v-model:open="opened" :title="`Réglages avancés d'émission · ${profile.brand}`" :icon="ICON.system">
+      <p class="hint">Pré-réglé depuis le profil <b>{{ profile.brand }}</b> : {{ fields.map(defaultSummary).join(' · ') }}.
         Une valeur changée ne vaut que pour cet appareil, même sur la même radio.</p>
       <div class="fields">
         <OpField v-for="f in fields" :key="f.name" :label="f.label" :hint="f.help || ''" :control="`${uid}-${f.name}`">

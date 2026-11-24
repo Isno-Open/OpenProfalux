@@ -85,7 +85,12 @@ test("un portail (non positionnel) n'a ni position affichee ni commande de posit
   applyMessage(`${ROOT}/${BOX}/cover/Portail/attrs`, '{"type":"portail","positional":false}', true, 1);
   const f = familyById("openprofalux")!;
   assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, "position", 10));
-  assert.equal(buildCommand(f, { box: BOX, device: "Portail" }, "down", null) && "topic" in buildCommand(f, { box: BOX, device: "Portail" }, "down", null), true);
+  // le portail a UN bouton pas a pas (profiles.json types.portail.buttons, #134) : c'est la seule commande
+  // offerte, comme sur sa telecommande ; « fermer » n'est plus un bouton du portail
+  assert.ok("topic" in buildCommand(f, { box: BOX, device: "Portail" }, "up", null));
+  assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, "down", null));
+  const portail = (kindsOf(profiles()) as { id: string; controls: { id: string }[] }[]).find((k) => k.id === "portail")!;
+  assert.deepEqual(portail.controls.map((c) => c.id), ["up"], "un seul bouton, celui que le type declare");
 });
 
 test("pile faible : une alerte quand elle est vue en direct, pas au branchement (message retenu)", () => {
