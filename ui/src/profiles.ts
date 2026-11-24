@@ -51,8 +51,11 @@ export function kindOf(device: Device): { label: string; hasTx: boolean } {
 
 /* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas de profiles.json. */
 export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
-/* Profil d'un appareil : celui de sa marque et de sa methode (ajout + moteur). */
+/* Profil d'un appareil : celui que sa fiche porte (grave par le firmware, #134), sinon celui de sa marque et de sa
+   methode (ajout + moteur), pour un firmware anterieur qui ne le grave pas encore. */
 export function profileOf(device: Device): Profile | null {
+  const own = profileById(device.profile);
+  if (own) return own;
   const brand = brandOf(device);
   const method = methodOf(device);
   return profiles().find(p => p.brand === brand && sameMethod(p, method)) ?? profiles().find(p => p.brand === brand) ?? null;

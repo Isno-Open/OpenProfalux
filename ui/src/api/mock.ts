@@ -23,10 +23,10 @@ const devices: Device[] = [
   { id: 'Général', central: true, members: 'Salon,Cuisine,Chambre,Bureau', order: 0, serials: ['0x0A1B2E0'], cmd: {} },
   { id: 'Salon', type: 0, marque: 'Profalux', ...TX_INHERIT, position: 0, order: 1, orientation: 180, serials: ['0x0A1B2C3'], cmd: threeCommands('0x0A1B2C3'), travel_up_ms: 21000, travel_down_ms: 19500 },
   { id: 'Cuisine', type: 0, marque: 'Profalux', ...TX_INHERIT, position: 65, order: 2, orientation: 90, serials: ['0x0A1B2D7'], cmd: threeCommands('0x0A1B2D7'), travel_up_ms: 18000, travel_down_ms: 17000 },
-  { id: 'Chambre', type: 0, marque: 'Profalux', ...TX_INHERIT, te_us: 400, tx_rpt: 2, position: 100, order: 3, orientation: -1, virt: true, proto: 'profalux', virt_serial: '0x0670012', serials: ['0x0B44A10'], cmd: {}, travel_up_ms: 20000, travel_down_ms: 19000 },
+  { id: 'Chambre', type: 0, marque: 'Profalux', profile: 'profalux-enrol', ...TX_INHERIT, te_us: 400, tx_rpt: 2, position: 100, order: 3, orientation: -1, virt: true, proto: 'profalux', virt_serial: '0x0670012', serials: ['0x0B44A10'], cmd: {}, travel_up_ms: 20000, travel_down_ms: 19000 },
   { id: 'Bureau', type: 0, marque: 'Profalux', ...TX_INHERIT, freq_khz: 868330, position: 40, order: 4, orientation: -1, serials: ['0x0B44A21'], cmd: { up: { b: 2, s: '0x0B44A21' }, down: { b: 8, s: '0x0B44A21' } }, travel_up_ms: 16000, travel_down_ms: 15000 },
   { id: 'Étage', type: 0, zone: true, members: 'Chambre,Bureau', order: 5, serials: ['0x0B44A30'], cmd: {} },
-  { id: 'Portail entrée', type: 1, marque: 'CAME', ...TX_INHERIT, freq_khz: 433920, rejeu: true, rejeu_cmds: { up: true }, order: 6, serials: [], cmd: {} },
+  { id: 'Portail entrée', type: 1, marque: 'CAME', profile: 'came-replay', ...TX_INHERIT, freq_khz: 433920, rejeu: true, rejeu_cmds: { up: true }, order: 6, serials: [], cmd: {} },
 ];
 const remotes: Record<string, string> = {
   '0x0A1B2E0': 'Télécommande générale', '0x0A1B2C3': 'Salon', '0x0A1B2D7': 'Cuisine', '0x0B44A10': 'Chambre', '0x0B44A21': 'Bureau',

@@ -29,6 +29,21 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_JSON}" "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py")
 endif()
 
+# La table des profils du firmware (profile_table.h) est ENGENDREE a la configuration depuis
+# web/profiles.json, comme board_pins.h : les profils ne vivent que dans profiles.json (issue #134).
+# tools/gen_profiles.py refuse un catalogue incoherent, et la construction s'arrete avec sa raison.
+set(PROFILES_JSON "${CMAKE_CURRENT_LIST_DIR}/web/profiles.json")
+set(PROFILES_GEN_DIR "${CMAKE_BINARY_DIR}/profiles")
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    file(MAKE_DIRECTORY "${PROFILES_GEN_DIR}")
+    execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_profiles.py" "${PROFILES_JSON}" "${PROFILES_GEN_DIR}/profiles_gen.c"
+                    RESULT_VARIABLE r)
+    if(NOT r EQUAL 0)
+        message(FATAL_ERROR "gen_profiles.py a refuse ${PROFILES_JSON}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROFILES_JSON}" "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_profiles.py")
+endif()
+
 # L'interface web est embarquee COMPRESSEE (gzip), envoyee telle quelle (Content-Encoding: gzip, voir
 # send_asset). Les .gz sont engendres a la configuration dans le dossier de construction, comme
 # board_pins.h ; modifier un fichier de l'interface relance la configuration, donc la compression.
@@ -101,6 +116,8 @@ idf_component_register(
         "log_ring.c"
         "crash_trace.c"
         "cloud_grant.c"
+        "profile_table.c"
+        "${PROFILES_GEN_DIR}/profiles_gen.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES
         "${WEB_GZ_DIR}/index.html.gz"
