@@ -56,7 +56,7 @@ const applyGain = (g: number): Promise<boolean> => send({ rx_gain: g }, 'Gain en
   <section class="radio-card">
     <header><h3 class="title">Radio {{ radio.band }} MHz</h3><OpBadge v-if="several" :tone="radio.primary ? TONE.accent : TONE.neutral">{{ radio.primary ? 'primaire' : 'secondaire' }}</OpBadge></header>
     <FreqProfile v-model:profile="profile" v-model:frequency="frequency" :radio="radio" @apply="applyFrequency" />
-    <RxGain v-model="gain" :radio="radio.idx" @calibrated="applyGain" />
+    <RxGain v-model="gain" :radio="radio.idx" :save="applyGain" />
     <div class="row end"><OpButton :variant="BUTTON.primary" small @click="save">Enregistrer cette radio</OpButton></div>
   </section>
 </template>

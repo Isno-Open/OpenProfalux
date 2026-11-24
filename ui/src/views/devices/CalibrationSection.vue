@@ -2,7 +2,7 @@
 // Calibrer la position : le moteur ne renvoie pas sa position, on mesure le temps de course pour estimer le
 // pourcentage. Au chronometre (demarrer, puis « arrive ») ou a la main. Le chronometre part AU CLIC, et « Arrive »
 // envoie STOP : comme l'interface d'avant, sans attendre la radio (un STOP ne doit pas etre avale).
-import { ref } from 'vue';
+import { reactive, ref } from 'vue';
 import { COMMAND } from '../../domain';
 
 type Direction = typeof COMMAND.up | typeof COMMAND.down;
@@ -10,13 +10,18 @@ type Direction = typeof COMMAND.up | typeof COMMAND.down;
    « Arrive » doit encore pouvoir arreter le chrono et envoyer STOP au retour, comme dans l'ancienne interface, ou le
    panneau restait dans la page. Il garde le volet mesure : STOP et le temps vont toujours a celui-la. */
 const stopwatch = ref<{ direction: Direction; start: number; id: string } | null>(null);
+/* Les temps mesures ou saisis et pas encore enregistres, par volet, vivent aussi hors de l'ecran : au retour, une
+   remesure en cours ne doit pas retrouver l'ancien temps de l'autre direction (l'enregistrement melerait les deux).
+   Un temps absent montre celui du boitier ; ils s'effacent une fois l'enregistrement relu. */
+const drafts = reactive<Record<string, Partial<Record<Direction, string>>>>({});
 </script>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, watch } from 'vue';
+import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { state, refresh, toast, typeOf } from '../../store';
 import { navigate } from '../../router';
 import api from '../../api/index';
+import type { Device } from '../../api/types';
 import { BUTTON, SECTION, TAB, TONE } from '../../domain';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
@@ -30,13 +35,15 @@ const shutters = computed(() => (state.status?.volets ?? []).filter(d => !d.cent
 const id = ref<string | number>(stopwatch.value?.id ?? '');
 watch(shutters, list => { const first = list[0]; if (!id.value && first) id.value = first.id; }, { immediate: true });
 const shutter = computed(() => shutters.value.find(x => x.id === id.value) ?? null);
-const times = reactive<Record<Direction, string>>({ up: '', down: '' });   // en secondes, texte des champs
-/* Les champs reprennent les temps enregistres quand on change de volet, pas a chaque relecture du statut (sinon
-   une saisie ou un chrono en cours serait efface). */
-watch(() => !!shutter.value && id.value, () => {
-  const x = shutter.value;
-  if (x) Object.assign(times, { up: x.travel_up_ms ? (x.travel_up_ms / 1000).toFixed(1) : '', down: x.travel_down_ms ? (x.travel_down_ms / 1000).toFixed(1) : '' });
-}, { immediate: true });
+/* Temps d'une direction, en secondes (texte des champs) : le brouillon du volet, sinon le temps enregistre. */
+const savedTime = (x: Device | null, direction: Direction): string => {
+  const ms = x ? (direction === COMMAND.up ? x.travel_up_ms : x.travel_down_ms) : 0;
+  return ms ? (ms / 1000).toFixed(1) : '';
+};
+const timeOf = (direction: Direction): string => drafts[String(id.value)]?.[direction] ?? savedTime(shutter.value, direction);
+function setTime(shutterId: string, direction: Direction, value: string): void { (drafts[shutterId] ??= {})[direction] = value; }
+const upTime = computed({ get: () => timeOf(COMMAND.up), set: (v: string) => setTime(String(id.value), COMMAND.up, String(v)) });
+const downTime = computed({ get: () => timeOf(COMMAND.down), set: (v: string) => setTime(String(id.value), COMMAND.down, String(v)) });
 
 const elapsed = ref(0);
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -57,22 +64,23 @@ function arrived(): void {
   clearInterval(timer);
   const run = stopwatch.value;
   if (!run) return;
-  if (String(id.value) === run.id) times[run.direction] = ((performance.now() - run.start) / 1000).toFixed(1);
+  setTime(run.id, run.direction, ((performance.now() - run.start) / 1000).toFixed(1));   // au volet mesure, meme si on en a choisi un autre
   stopwatch.value = null;
   api.sendShutter({ id: run.id, cmd: COMMAND.stop }).catch(() => {});
 }
 /* Bornes du temps de course, declarees par le type dans profiles.json (travel_s). */
 const bounds = computed(() => (shutter.value ? typeOf(shutter.value).travel_s : undefined) ?? DEFAULT_TRAVEL_S);
-const valid = computed(() => Number(times.up) > 0 && Number(times.down) > 0);
+const valid = computed(() => Number(upTime.value) > 0 && Number(downTime.value) > 0);
 async function save(): Promise<void> {
   const { min, max } = bounds.value;
-  const outOfBounds = [times.up, times.down].some(t => Number(t) < min || Number(t) > max);
-  if (outOfBounds) { toast(`Temps de course entre ${min} et ${max} s`); return; }
+  const target = String(id.value), up = upTime.value, down = downTime.value;
+  if ([up, down].some(t => Number(t) < min || Number(t) > max)) { toast(`Temps de course entre ${min} et ${max} s`); return; }
   try {
-    await api.calibrate({ id: String(id.value), travel_up_ms: Math.round(Number(times.up) * 1000), travel_down_ms: Math.round(Number(times.down) * 1000) });
+    await api.calibrate({ id: target, travel_up_ms: Math.round(Number(up) * 1000), travel_down_ms: Math.round(Number(down) * 1000) });
     toast('Calibration enregistrée');
-  } catch { toast('Refusé : calibration non enregistrée'); }
-  refresh();
+  } catch { toast('Refusé : calibration non enregistrée'); refresh(); return; }
+  await refresh();
+  delete drafts[target];   // le statut relu porte maintenant ces temps
 }
 const seconds = (x: number): string => `${x.toFixed(1).replace('.', ',')} s`;
 const STOPWATCHES: { direction: Direction; symbol: string; go: string; stop: string }[] = [
@@ -80,7 +88,7 @@ const STOPWATCHES: { direction: Direction; symbol: string; go: string; stop: str
   { direction: COMMAND.up, symbol: '▲', go: 'Démarrer la montée', stop: 'Arrivé en haut' },
 ];
 const shown = (direction: Direction): string => (stopwatch.value?.direction === direction ? seconds(elapsed.value)
-  : (times[direction] ? `${String(times[direction]).replace('.', ',')} s` : '0,0 s'));
+  : (timeOf(direction) ? `${timeOf(direction).replace('.', ',')} s` : '0,0 s'));
 </script>
 
 <template>
@@ -104,8 +112,8 @@ const shown = (direction: Direction): string => (stopwatch.value?.direction === 
       </div>
       <OpField label="Ou saisis les temps à la main (secondes)">
         <div class="grid two">
-          <input v-model="times.up" class="op-input mono" type="number" step="0.1" min="0" placeholder="Montée (s)" aria-label="Temps de montée en secondes">
-          <input v-model="times.down" class="op-input mono" type="number" step="0.1" min="0" placeholder="Descente (s)" aria-label="Temps de descente en secondes">
+          <input v-model="upTime" class="op-input mono" type="number" step="0.1" min="0" placeholder="Montée (s)" aria-label="Temps de montée en secondes">
+          <input v-model="downTime" class="op-input mono" type="number" step="0.1" min="0" placeholder="Descente (s)" aria-label="Temps de descente en secondes">
         </div>
       </OpField>
       <div class="row end"><OpButton :variant="BUTTON.primary" :disabled="!valid || !!stopwatch" @click="save">Enregistrer la calibration</OpButton></div>
