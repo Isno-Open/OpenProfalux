@@ -39,34 +39,34 @@ const profile_def_t *profile_find(const char *id) {
 }
 
 /* La methode deduite de la fiche (voir profile_resolve). */
-static void method_of(bool virt, bool somfy, bool rejeu, profile_add_t *add, profile_engine_t *engine) {
+static void method_of(bool virt, bool somfy, bool replay, profile_add_t *add, profile_engine_t *engine) {
     *add    = virt ? PROFILE_ADD_ENROL : PROFILE_ADD_COPY;
     *engine = virt ? (somfy ? PROFILE_ENGINE_SOMFY : PROFILE_ENGINE_KEELOQ)
-                   : (rejeu ? PROFILE_ENGINE_REPLAY : PROFILE_ENGINE_KEELOQ);
+                   : (replay ? PROFILE_ENGINE_REPLAY : PROFILE_ENGINE_KEELOQ);
 }
 
-const profile_def_t *profile_resolve(const char *marque, bool virt, bool somfy, bool rejeu) {
+const profile_def_t *profile_resolve(const char *brand, bool virt, bool somfy, bool replay) {
     profile_add_t add; profile_engine_t engine;
-    method_of(virt, somfy, rejeu, &add, &engine);
-    const char *brand = (marque && *marque) ? marque
-                      : (virt && somfy) ? BRAND_SOMFY : (!virt && rejeu) ? BRAND_REPLAY : BRAND_KEELOQ;
+    method_of(virt, somfy, replay, &add, &engine);
+    const char *wanted = (brand && *brand) ? brand
+                       : (virt && somfy) ? BRAND_SOMFY : (!virt && replay) ? BRAND_REPLAY : BRAND_KEELOQ;
     const profile_def_t *first = NULL;
     for (int i = 0; i < PROFILE_TABLE_COUNT; i++) {
         const profile_def_t *p = &PROFILE_TABLE[i];
         if (profile_add_of(p) != add || profile_engine_of(p) != engine) continue;
-        if (!strcmp(p->brand, brand)) return p;
+        if (!strcmp(p->brand, wanted)) return p;
         if (!first) first = p;
     }
     return first;
 }
 
-const profile_def_t *profile_for_device(const char *current, const char *marque, bool virt, bool somfy, bool rejeu) {
+const profile_def_t *profile_for_device(const char *current, const char *brand, bool virt, bool somfy, bool replay) {
     const profile_def_t *p = profile_find(current);
     if (p) {
         profile_add_t add; profile_engine_t engine;
-        method_of(virt, somfy, rejeu, &add, &engine);
-        bool same_brand = !marque || !*marque || !strcmp(p->brand, marque);
+        method_of(virt, somfy, replay, &add, &engine);
+        bool same_brand = !brand || !*brand || !strcmp(p->brand, brand);
         if (profile_add_of(p) == add && profile_engine_of(p) == engine && same_brand) return p;
     }
-    return profile_resolve(marque, virt, somfy, rejeu);
+    return profile_resolve(brand, virt, somfy, replay);
 }

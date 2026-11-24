@@ -9,6 +9,7 @@ import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
 import type { Device, LearnedCommand, OkReply, PfxState, Profiles, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
+import { profileForDevice } from '../lib/device-profile';
 
 const WRONG_PASSWORD = 'faux';   // le seul mot de passe refuse en mode mock (essai de l'ecran de connexion)
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -180,7 +181,12 @@ export default {
     return { state: 2, status: 0, from_khz, center_khz: radio === 1 ? 433905 : 868338, peak_dbm: -47, floor_dbm: -103 };
   },
   async saveTxParams({ id, ...values }: Record<string, unknown>) {
-    if (typeof id === 'string') Object.assign(mustFind(id), values);
+    if (typeof id !== 'string') return ok();
+    const device = mustFind(id);
+    Object.assign(device, values);
+    // comme le boitier (sync_profiles) : une marque changee fait suivre le profil
+    const profile = profileForDevice(PROFILES.profiles, device);
+    if (profile) device.profile = profile.id;
     return ok();
   },
   async rename(id: string, name: string) {

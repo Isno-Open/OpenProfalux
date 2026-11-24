@@ -3,10 +3,11 @@
 // profileForDevice, deviceKind), rassemblee en un seul module.
 import type { Device, Profile, TypeButton, TypeEntry } from './api/types';
 import {
-  ADD_METHOD, BAND, BRAND, DEVICE_TYPE, ENGINE, FIELD_KIND, FLOW, PROTOCOL, SECTION, TAB, TX_FIELD,
-  type AddMethod, type Command, type Engine, type FieldKind, type Flow, type TxFieldName,
+  ADD_METHOD, BAND, DEVICE_TYPE, ENGINE, FIELD_KIND, FLOW, SECTION, TAB, TX_FIELD,
+  type Command, type FieldKind, type Flow, type TxFieldName,
 } from './domain';
 import { ICON, type IconName } from './icons';
+import { isSomfy, profileForDevice } from './lib/device-profile';
 import { state } from './store';
 
 export const profiles = (): Profile[] => state.profiles?.profiles ?? [];
@@ -29,17 +30,7 @@ export function deviceIcon(device: Device): IconName {
   return typeIcon(typeKey(device));
 }
 
-export const isSomfy = (device: Pick<Device, 'proto'> | null | undefined): boolean => device?.proto === PROTOCOL.somfy;
-
-/* Les deux axes d'un appareil, deduits de sa fiche : enrole (virtuel, Somfy ou KeeLoq), rejeu brut, ou clone
-   (KeeLoq capture). La fiche ne porte pas encore l'id de son profil (etape 2 de #134). */
-export interface Method { add: AddMethod; engine: Engine }
-export function methodOf(device: Device): Method {
-  if (device.virt) return { add: ADD_METHOD.enrol, engine: isSomfy(device) ? ENGINE.somfy : ENGINE.keeloq };
-  return { add: ADD_METHOD.copy, engine: device.rejeu ? ENGINE.replay : ENGINE.keeloq };
-}
-export const sameMethod = (p: Profile, m: Method): boolean => p.add === m.add && p.engine === m.engine;
-
+export { isSomfy, methodOf, sameMethod, brandOf, type Method } from './lib/device-profile';
 /* Ce qu'est l'appareil, en mots, et s'il porte des reglages d'emission. */
 export function kindOf(device: Device): { label: string; hasTx: boolean } {
   if (device.central) return { label: 'centrale', hasTx: false };
@@ -49,17 +40,9 @@ export function kindOf(device: Device): { label: string; hasTx: boolean } {
   return { label: 'télécommande clonée', hasTx: true };
 }
 
-/* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas de profiles.json. */
-export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
-/* Profil d'un appareil : celui que sa fiche porte (grave par le firmware, #134), sinon celui de sa marque et de sa
-   methode (ajout + moteur), pour un firmware anterieur qui ne le grave pas encore. */
-export function profileOf(device: Device): Profile | null {
-  const own = profileById(device.profile);
-  if (own) return own;
-  const brand = brandOf(device);
-  const method = methodOf(device);
-  return profiles().find(p => p.brand === brand && sameMethod(p, method)) ?? profiles().find(p => p.brand === brand) ?? null;
-}
+/* Profil d'un appareil : celui que sa fiche porte s'il reste coherent (le firmware le grave, #134), sinon celui de sa
+   marque et de sa methode (fiche d'un firmware anterieur). Meme regle que le boitier (lib/device-profile.ts). */
+export const profileOf = (device: Device): Profile | null => profileForDevice(profiles(), device);
 
 /* Les boutons d'un type, dans l'ordre de leur position (ligne, puis colonne). */
 export function buttonsOf(entry: TypeEntry | null | undefined): TypeButton[] {

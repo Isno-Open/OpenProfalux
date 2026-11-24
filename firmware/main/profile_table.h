@@ -55,10 +55,10 @@ const profile_def_t *profile_find(const char *id);
  *   rejeu brut -> copy + rejeu-brut ; sinon -> copy + keeloq (clone).
  * Sans marque, celle du protocole (Somfy RTS, CAME pour un rejeu, Profalux sinon). Si aucun profil de la
  * marque n'a cette methode, le premier de la methode. NULL si aucun profil ne convient. */
-const profile_def_t *profile_resolve(const char *marque, bool virt, bool somfy, bool rejeu);
+const profile_def_t *profile_resolve(const char *brand, bool virt, bool somfy, bool replay);
 
 /* Le profil a garder dans la fiche d'un appareil : `current` (l'id deja grave) s'il est connu et reste
  * coherent avec la fiche (meme methode, et meme marque quand la fiche en porte une), sinon celui que
  * retrouve profile_resolve. Un profil donne explicitement est donc garde, et une fiche dont la marque ou
  * la methode change suit son nouveau profil. */
-const profile_def_t *profile_for_device(const char *current, const char *marque, bool virt, bool somfy, bool rejeu);
+const profile_def_t *profile_for_device(const char *current, const char *brand, bool virt, bool somfy, bool replay);
