@@ -432,6 +432,18 @@ jobs:
              -o cover_attrs_host_test
           ./cover_attrs_host_test ../../main/web/profiles.json
 
+  # Table des profils du firmware (profile_table.c), contre la table ENGENDREE depuis le vrai
+  # profiles.json par tools/gen_profiles.py (le meme appel que la construction) : chaque profil a un
+  # moteur connu, une fiche anterieure retrouve le sien. Voir firmware/test/profile-table.
+  banc-profile-table:
+    name: Banc de test de la table des profils
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: profile_table (gcc + AddressSanitizer + UBSan), table engendree depuis profiles.json
+        run: firmware/test/profile-table/run.sh
+
   # Detection de profil de la pyramide « Ajouter un appareil » (pyramid-detect.js), sur le VRAI
   # profiles.json : traits en chemins, filtre dur sur un trait certain, rien d'impose. Voir
   # firmware/test/pyramid-detect. Node seul, sans dependance.

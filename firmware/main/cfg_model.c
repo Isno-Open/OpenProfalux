@@ -92,6 +92,7 @@ static cJSON *volet_to_json(const volet_t *v) {
     if (v->tx_rmt)   cJSON_AddNumberToObject(o, "tx_rmt", v->tx_rmt);
     if (v->frame_bits) cJSON_AddNumberToObject(o, "frame_bits", v->frame_bits);
     if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
+    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);   /* absent d'une config anterieure : migre au boot */
     return o;
 }
 /* En-tete : tout ce qui n'est pas un volet. */
@@ -213,6 +214,7 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     cJSON *xm = cJSON_GetObjectItem(o, "tx_rmt");   if (xm) v->tx_rmt   = (uint8_t)cJSON_GetNumberValue(xm);
     cJSON *fb = cJSON_GetObjectItem(o, "frame_bits"); if (fb) v->frame_bits = (uint8_t)cJSON_GetNumberValue(fb);
     strlcpy(v->marque, cJSON_GetStringValue(cJSON_GetObjectItem(o, "marque")) ?: "", SH_ID_LEN);
+    strlcpy(v->profile, cJSON_GetStringValue(cJSON_GetObjectItem(o, "profile")) ?: "", SH_ID_LEN);
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);
