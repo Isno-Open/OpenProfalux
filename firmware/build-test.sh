@@ -37,13 +37,17 @@ export OPF_VERSION="$FULL"
 OPF_COMMIT="${OPF_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)}"
 export OPF_COMMIT
 
+# L'interface web (ui/, Vue) se construit ICI, hors du conteneur ESP-IDF qui n'a pas Node :
+# tools/build_ui.sh (npm, sinon Docker). Le conteneur la trouve ensuite dans ui/dist.
+if [ "${OPF_UI_BUILT:-0}" != "1" ]; then ../tools/build_ui.sh; export OPF_UI_BUILT=1; fi
+
 # Deux facons d'executer, pour la meme sortie : un environnement ESP-IDF v6.1 actif, ou a
 # defaut le conteneur officiel (meme version que la CI). OPF_VERSION est passe au conteneur.
 if ! command -v idf.py >/dev/null; then
   [ "${ISNO_NO_DOCKER:-0}" = "1" ] && { echo "idf.py absent et docker interdit"; exit 1; }
   command -v docker >/dev/null || { echo "ni idf.py ni docker : active l'environnement ESP-IDF v6.1"; exit 1; }
   echo ">> idf.py absent, on passe par ${IDF_IMAGE:-espressif/idf:v6.1}"
-  exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_VERSION="$FULL" -e OPF_COMMIT="$OPF_COMMIT" \
+  exec docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e OPF_UI_BUILT=1 -e OPF_VERSION="$FULL" -e OPF_COMMIT="$OPF_COMMIT" \
     -e OPF_SDKCONFIG_EXTRA="${OPF_SDKCONFIG_EXTRA:-}" \
     -v "$(cd .. && pwd)":/project -w /project/firmware \
     "${IDF_IMAGE:-espressif/idf:v6.1}" bash build-test.sh "$@"

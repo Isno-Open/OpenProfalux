@@ -111,7 +111,13 @@ Conventions (comme OpenXtraflame) : fichiers ≤ 150-200 lignes, CSS externe (pa
 
 ## 8. UI web (calquée OpenXtraflame)
 
-Single-file `web/index.html` + `style.css`, vanilla JS (tabs `data-tab`, `fetch /api/*.json`).
+Vue 3 (`ui/`, construite par `tools/build_ui.sh` en `index.html` + `app.js` + `style.css`, embarqués compressés),
+rendu côté navigateur, sur l'API REST de `web_ui.c`. Composants génériques dans `ui/src/components/base`,
+composants OpenProfalux dans `ui/src/components/domain`, une seule couche d'accès au boîtier (`ui/src/api`), en
+TypeScript strict.
+Tables lues à l'exécution : `firmware/main/web/profiles.json` (types, marques, méthodes). Détails : `ui/README.md`.
+
+Plan d'origine (historique) :
 
 ```
 📊 Dashboard    : volets, position live, up/down/stop/%

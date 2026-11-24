@@ -29,20 +29,28 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_JSON}" "${CMAKE_CURRENT_LIST_DIR}/../../tools/gen_board.py")
 endif()
 
-# L'interface web est embarquee COMPRESSEE (gzip) : ~113 Ko de sources tiennent en ~35 Ko
-# de flash, envoyes tels quels (Content-Encoding: gzip, voir send_asset). Les .gz sont
-# engendres a la configuration dans le dossier de construction, comme board_pins.h ;
-# modifier un fichier de web/ relance la configuration, donc la compression.
-set(WEB_SRCS "${CMAKE_CURRENT_LIST_DIR}/web/index.html"
-             "${CMAKE_CURRENT_LIST_DIR}/web/style.css"
-             "${CMAKE_CURRENT_LIST_DIR}/web/app.js"
-             "${CMAKE_CURRENT_LIST_DIR}/web/app-capture.js"
-             "${CMAKE_CURRENT_LIST_DIR}/web/pyramid-detect.js"
-             "${CMAKE_CURRENT_LIST_DIR}/web/qrcode.js"
+# L'interface web est embarquee COMPRESSEE (gzip), envoyee telle quelle (Content-Encoding: gzip, voir
+# send_asset). Les .gz sont engendres a la configuration dans le dossier de construction, comme
+# board_pins.h ; modifier un fichier de l'interface relance la configuration, donc la compression.
+#
+# index.html, app.js et style.css sont CONSTRUITS depuis ui/ (Vue + Vite) par tools/build_ui.sh, dans
+# ui/dist : rien d'engendre n'est commis. profiles.json (lu aussi par le plugin cloud et les bancs) et le
+# manifeste restent des sources dans web/.
+set(UI_DIST "${CMAKE_CURRENT_LIST_DIR}/../../ui/dist")
+set(WEB_SRCS "${UI_DIST}/index.html"
+             "${UI_DIST}/style.css"
+             "${UI_DIST}/app.js"
              "${CMAKE_CURRENT_LIST_DIR}/web/manifest.webmanifest"
              "${CMAKE_CURRENT_LIST_DIR}/web/profiles.json")
 set(WEB_GZ_DIR "${CMAKE_BINARY_DIR}/web")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    foreach(f ${WEB_SRCS})
+        if(NOT EXISTS "${f}")
+            message(FATAL_ERROR "Interface web absente : ${f}\n"
+                                "Construis-la d'abord, depuis la racine du depot : tools/build_ui.sh "
+                                "(npm s'il est installe, sinon Docker). Voir BUILD.md.")
+        endif()
+    endforeach()
     execute_process(COMMAND python3 "${CMAKE_CURRENT_LIST_DIR}/../../tools/gzip_web.py" "${WEB_GZ_DIR}" ${WEB_SRCS}
                     RESULT_VARIABLE r)
     if(NOT r EQUAL 0)
@@ -98,9 +106,6 @@ idf_component_register(
         "${WEB_GZ_DIR}/index.html.gz"
         "${WEB_GZ_DIR}/style.css.gz"
         "${WEB_GZ_DIR}/app.js.gz"
-        "${WEB_GZ_DIR}/app-capture.js.gz"
-        "${WEB_GZ_DIR}/pyramid-detect.js.gz"
-        "${WEB_GZ_DIR}/qrcode.js.gz"
         "${WEB_GZ_DIR}/manifest.webmanifest.gz"
         "${WEB_GZ_DIR}/profiles.json.gz"
         "web/icon-192.png"

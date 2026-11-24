@@ -3,28 +3,27 @@
 
 Pourquoi : decide par Olivier le 2026-11-16, ces boites sortent du style de l'interface et
 certains navigateurs integres les bloquent sans un mot (confirm rend alors false : le bouton
-« Oublier » ne faisait plus rien). L'interface confirme par sa propre fenetre, ask() dans app.js.
+« Oublier » ne faisait plus rien). L'interface confirme dans la page, a cote du bouton (voir ui/).
 
-Usage : check_web_dialogs.py [dossier]   (par defaut firmware/main/web)
+Usage : check_web_dialogs.py [dossier...]   (par defaut ui/src et firmware/main/web)
 """
 import pathlib
 import re
 import sys
 
-# Bibliotheques tierces recopiees telles quelles : on ne les reecrit pas.
-VENDORED = {"qrcode.js"}
 DIALOG_CALL = re.compile(r"\b(?:window\.)?(alert|confirm|prompt)\s*\(")
+SUFFIXES = {".js", ".ts", ".vue", ".html"}
 
-root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "firmware/main/web")
-found = []
-for f in sorted(list(root.glob("*.js")) + list(root.glob("*.html"))):
-    if f.name in VENDORED:
-        continue
-    for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-        if DIALOG_CALL.search(line):
-            found.append(f"{f}:{n}: {line.strip()}")
+roots = [pathlib.Path(a) for a in sys.argv[1:]] or [pathlib.Path("ui/src"), pathlib.Path("firmware/main/web")]
+found, seen = [], 0
+for root in roots:
+    for f in sorted(p for p in root.rglob("*") if p.suffix in SUFFIXES and "node_modules" not in p.parts):
+        seen += 1
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if DIALOG_CALL.search(line):
+                found.append(f"{f}:{n}: {line.strip()}")
 if found:
-    print("Boite du navigateur interdite, utiliser ask() ou toast() :")
+    print("Boite du navigateur interdite, confirmer dans la page ou toast() :")
     print("\n".join(found))
     sys.exit(1)
-print(f"aucune boite du navigateur dans {root}")
+print(f"aucune boite du navigateur dans {' et '.join(map(str, roots))} ({seen} fichiers)")

@@ -34,7 +34,11 @@ Chamberlain US 5686904.
 
 ## Composants tiers embarqués
 
-- `firmware/main/web/qrcode.js` : QR Code Generator for JavaScript 2.0.4, Copyright (c) 2009
-  Kazuhiko Arase, licence MIT (https://github.com/kazuhikoarase/qrcode-generator). Embarqué tel
-  quel, avec son en-tête, pour dessiner le QR code de l'appairage cloud dans l'interface du boîtier.
+L'interface du boîtier (`ui/`) est construite avec Vite ; deux bibliothèques y sont embarquées, dans
+`app.js`, qui rappelle leurs avis en tête de fichier. Versions figées par `ui/package-lock.json`.
+
+- Vue 3.5.44 (https://github.com/vuejs/core), Copyright (c) 2018-present Yuxi (Evan) You and Vue
+  contributors, licence MIT : le cadre de l'interface.
+- qrcode-generator 2.0.4, QR Code Generator for JavaScript, Copyright (c) 2009 Kazuhiko Arase, licence
+  MIT (https://github.com/kazuhikoarase/qrcode-generator) : le QR code de l'appairage cloud.
   « QR Code » est une marque déposée de DENSO WAVE INCORPORATED.
