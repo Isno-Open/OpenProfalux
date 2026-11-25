@@ -26,7 +26,7 @@ const done = ref<Message | null>(null);
 import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, refresh, toast } from '../../store';
-import { profileById, flowOf, types, commandLabels, hasComma, mhz } from '../../profiles';
+import { profiles, types, hasComma, mhz } from '../../profiles';
 import api from '../../api/index';
 import type { PfxCaptureReply, PfxState, Profile } from '../../api/types';
 import {
@@ -64,10 +64,10 @@ const DEFAULT_DPAD: Partial<Record<Command, string>> = { [COMMAND.up]: 'Montée'
 
 const COUNTDOWN_TICK_MS = 250;
 /* L'adresse est lue une fois : l'ecran est reconstruit a chaque adresse (DevicesView). */
-const profileId = route.rest[0] ? decodeURIComponent(route.rest[0]) : '';
+const profileIndex = parseInt(route.rest[0] ?? '', 10);
 const profile = computed<Profile | null>(() => {
-  const p = profileById(profileId);
-  return p && flowOf(p) === FLOW.enrolPfx ? p : null;
+  const p = profiles()[profileIndex];
+  return p && p.flow === FLOW.enrolPfx ? p : null;
 });
 const pfx = ref<PfxState | null>(null);   // /api/pfx
 const model = ref<string | number>(0);
@@ -82,7 +82,7 @@ const models = computed(() => pfx.value?.models ?? []);
 const modelOptions = computed(() => models.value.map((m, i) => ({ value: i, label: `${m.name} · ${m.routine}` })));
 const routine = computed(() => models.value[Number(model.value)]?.routine ?? DEFAULT_ROUTINE);
 const active = computed(() => !!pfx.value?.active);
-const dpad = computed(() => { const labels = commandLabels(types()[DEVICE_TYPE.shutter]); return Object.keys(labels).length ? labels : DEFAULT_DPAD; });
+const dpad = computed(() => types()[DEVICE_TYPE.shutter]?.dpad ?? DEFAULT_DPAD);
 const step = computed(() => (done.value?.tone === TONE.ok ? 5 : !active.value ? 0 : !gestures.value ? 1 : countdown.value !== 0 ? 2 : 3));
 const identityLine = computed(() => {
   const d = pfx.value;
@@ -111,8 +111,7 @@ watch([pfx, profile], () => {
   if (pfx.value.active) { modelSet.value = true; return; }
   const p = profile.value;
   if (!p || !models.value.length) return;
-  const brand = p.brand.toLowerCase();
-  const i = models.value.findIndex(m => m.name.toLowerCase().includes(brand));   // « FranciaFlex M4G » pour la marque Franciaflex
+  const i = models.value.findIndex(m => m.name.includes(p.marque));
   if (i >= 0) model.value = i;
   modelSet.value = true;
 }, { immediate: true });
@@ -126,7 +125,7 @@ function captureBody(): Record<string, unknown> {
   if (v.te_us) body.te_us = v.te_us;
   if (v.tx_rpt) body.tx_repeat_bit = v.tx_rpt === TRISTATE.yes;
   if (v.tx_rmt) body.tx_rmt = v.tx_rmt === TRISTATE.yes;
-  if (profile.value?.brand) body.marque = profile.value.brand;
+  if (profile.value?.marque) body.marque = profile.value.marque;
   return body;
 }
 function restart(): void { gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
@@ -219,7 +218,7 @@ async function forget(): Promise<void> {
   restart(); captureMsg.value = null; done.value = null;
   await read();
 }
-const subtitle = computed(() => (profile.value ? `${profile.value.name}${profile.value.radio.freq_khz ? ` · ${mhz(profile.value.radio.freq_khz)}` : ''}` : ''));
+const subtitle = computed(() => (profile.value ? `${profile.value.nom}${profile.value.freq_khz ? ` · ${mhz(profile.value.freq_khz)}` : ''}` : ''));
 </script>
 
 <template>

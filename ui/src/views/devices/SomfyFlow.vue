@@ -21,7 +21,7 @@ function startOver(): void {
 import { computed } from 'vue';
 import { navigate } from '../../router';
 import { state, sendCommand, refresh, typeOf } from '../../store';
-import { commandLabels, hasComma } from '../../profiles';
+import { hasComma } from '../../profiles';
 import api from '../../api/index';
 import { BUTTON, COMMAND, DEVICE_TYPE, DEVICE_TYPE_CODE, SECTION, TAB, TONE, type Command } from '../../domain';
 import { ICON } from '../../icons';
@@ -38,7 +38,7 @@ const ADDRESS_MAX = 0xFFFFFF;
 /* Le volet en cours a ete supprime entre-temps (Appareils) : plus rien a appairer. */
 if (created.value && state.status && !state.status.volets.some(d => d.id === created.value)) startOver();
 const step = computed(() => (!created.value ? 0 : !paired.value ? 1 : 2));
-const dpad = computed(() => commandLabels(typeOf({ type: DEVICE_TYPE_CODE.shutter })));
+const dpad = computed(() => typeOf({ type: DEVICE_TYPE_CODE.shutter }).dpad ?? {});
 const sending = computed<Command | ''>(() => (state.sending && state.sending.id === created.value ? state.sending.cmd : ''));
 
 function generate(): void {

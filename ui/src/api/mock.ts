@@ -3,7 +3,6 @@
 // centrale entraine ses volets, une zone ses suiveurs. Position en % de FERMETURE, comme le firmware (0 =
 // ouvert, 100 = ferme). Les captures, l'enrolement et le calage reussissent apres un court delai, comme si on
 // appuyait bien sur la telecommande.
-import { parseProfiles } from '../lib/catalog';
 import profilesTable from '../../../firmware/main/web/profiles.json';   // la vraie table, source unique
 import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
 import type realApi from './real';
@@ -104,11 +103,8 @@ function newDevice(fields: Partial<Device> & { id: string }): Device {
 const copy = <T>(o: T): T => JSON.parse(JSON.stringify(o));
 const ok = (): OkReply => ({ ok: 1 });
 const okWith = <T extends object>(extra: T): OkReply & T => ({ ok: 1, ...extra });
-/* La table passe par la meme verification que sur le boitier (lib/catalog.ts) : en mode demo, un profil ecarte
-   casse l'interface au lieu d'etre avale, pour qu'on le voie tout de suite. */
-const parsedTable = parseProfiles(profilesTable);
-if (parsedTable.rejected.length) throw new Error(`profiles.json : ${parsedTable.rejected.join(' ; ')}`);
-const PROFILES: Profiles = parsedTable.profiles;
+/* La table est verifiee contre le contrat : un champ de profiles.json qui s'en ecarte casse la verification. */
+const PROFILES: Profiles = profilesTable;
 
 export default {
   async session() { return { ...session }; },

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Les commandes a capturer d'un appareil, une ligne chacune : etat, bouton Capturer / Recapturer, et pour un
 // clone, « deplacer » une trame rangee sur la mauvaise commande. Les commandes viennent du type (profiles.json
-// types[].buttons) : trois pour un volet, une pour un portail.
+// types[].capture) : trois pour un volet, une pour un portail.
 import OpButton from '../base/OpButton.vue';
 import OpSelect, { type SelectOption } from '../base/OpSelect.vue';
 import OpProgress from '../base/OpProgress.vue';

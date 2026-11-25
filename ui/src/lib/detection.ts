@@ -14,7 +14,7 @@ function detection(): PyramidDetect {
   if (!found) throw new Error('pyramid-detect.js introuvable');
   return found;
 }
-export function rankProfiles<P>(observed: Record<string, unknown> | null, doc: { profiles: P[] } | null): Ranking<P> {
+export function rankProfiles<P>(observed: Record<string, unknown> | null, doc: { profils: P[] } | null): Ranking<P> {
   return detection().rankProfiles(observed, doc);
 }
 export function traits(doc: object | null): { certain: string[]; detect: string[] } {

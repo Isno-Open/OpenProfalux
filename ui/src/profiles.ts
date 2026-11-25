@@ -1,16 +1,15 @@
 // Lecture de profiles.json, la source unique des types, marques et methodes. Les ecrans ne codent en dur aucun
 // type ni aucune marque : ils demandent ici. Meme logique que l'interface d'avant (profileFields,
 // profileForDevice, deviceKind), rassemblee en un seul module.
-import type { Device, Profile, TypeButton, TypeEntry } from './api/types';
+import type { Device, Profile, TypeEntry } from './api/types';
 import {
-  ADD_METHOD, BAND, BRAND, DEVICE_TYPE, ENGINE, FIELD_KIND, FLOW, PROTOCOL, SECTION, TAB, TX_FIELD,
-  type AddMethod, type Command, type Engine, type FieldKind, type Flow, type TxFieldName,
+  BAND, BRAND, DEVICE_TYPE, FIELD_KIND, FLOW, MECHANISM, PROTOCOL, SECTION, TAB, TX_FIELD,
+  type FieldKind, type Mechanism, type TxFieldName,
 } from './domain';
 import { ICON, type IconName } from './icons';
 import { state } from './store';
 
-export const profiles = (): Profile[] => state.profiles?.profiles ?? [];
-export const profileById = (id: string | undefined): Profile | null => (id ? profiles().find(p => p.id === id) ?? null : null);
+export const profiles = (): Profile[] => state.profiles?.profils ?? [];
 export const types = (): Record<string, TypeEntry> => state.profiles?.types ?? {};
 
 /* Icone du sprite pour un type declare ; un type inconnu prend celle du volet. */
@@ -29,16 +28,9 @@ export function deviceIcon(device: Device): IconName {
   return typeIcon(typeKey(device));
 }
 
+/* Mecanisme d'un appareil : enrole (virtuel), rejeu brut, ou clone (KeeLoq capture). */
+export const mechanism = (device: Device): Mechanism => (device.virt ? MECHANISM.enrolment : device.rejeu ? MECHANISM.replay : MECHANISM.clone);
 export const isSomfy = (device: Pick<Device, 'proto'> | null | undefined): boolean => device?.proto === PROTOCOL.somfy;
-
-/* Les deux axes d'un appareil, deduits de sa fiche : enrole (virtuel, Somfy ou KeeLoq), rejeu brut, ou clone
-   (KeeLoq capture). La fiche ne porte pas encore l'id de son profil (etape 2 de #134). */
-export interface Method { add: AddMethod; engine: Engine }
-export function methodOf(device: Device): Method {
-  if (device.virt) return { add: ADD_METHOD.enrol, engine: isSomfy(device) ? ENGINE.somfy : ENGINE.keeloq };
-  return { add: ADD_METHOD.copy, engine: device.rejeu ? ENGINE.replay : ENGINE.keeloq };
-}
-export const sameMethod = (p: Profile, m: Method): boolean => p.add === m.add && p.engine === m.engine;
 
 /* Ce qu'est l'appareil, en mots, et s'il porte des reglages d'emission. */
 export function kindOf(device: Device): { label: string; hasTx: boolean } {
@@ -51,20 +43,11 @@ export function kindOf(device: Device): { label: string; hasTx: boolean } {
 
 /* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas de profiles.json. */
 export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
-/* Profil d'un appareil : celui de sa marque et de sa methode (ajout + moteur). */
+/* Profil d'un appareil : celui de sa marque et de son mecanisme. */
 export function profileOf(device: Device): Profile | null {
   const brand = brandOf(device);
-  const method = methodOf(device);
-  return profiles().find(p => p.brand === brand && sameMethod(p, method)) ?? profiles().find(p => p.brand === brand) ?? null;
-}
-
-/* Les boutons d'un type, dans l'ordre de leur position (ligne, puis colonne). */
-export function buttonsOf(entry: TypeEntry | null | undefined): TypeButton[] {
-  return [...(entry?.buttons ?? [])].sort((a, b) => a.position.row - b.position.row || a.position.col - b.position.col);
-}
-/* Libelle de chaque commande d'un type, tire de ses boutons (ce qui etait le « dpad »). */
-export function commandLabels(entry: TypeEntry | null | undefined): Partial<Record<Command, string>> {
-  return Object.fromEntries(buttonsOf(entry).map(b => [b.cmd, b.label]));
+  const mech = mechanism(device);
+  return profiles().find(p => p.marque === brand && p.mecanisme === mech) ?? profiles().find(p => p.marque === brand) ?? null;
 }
 
 /* Un champ d'emission reglable d'un profil. */
@@ -82,8 +65,7 @@ export interface TxField {
 export function txFields(profile: Profile | null | undefined): TxField[] {
   if (!profile) return [];
   const tx = profile.tx ?? {}, fields: TxField[] = [];
-  const freq = profile.radio.freq_khz;
-  if (freq) fields.push({ name: TX_FIELD.frequency, label: 'Fréquence porteuse (kHz)', kind: FIELD_KIND.number, defaultValue: freq, fixed: profile.engine === ENGINE.somfy });
+  if (profile.freq_khz) fields.push({ name: TX_FIELD.frequency, label: 'Fréquence porteuse (kHz)', kind: FIELD_KIND.number, defaultValue: profile.freq_khz, fixed: profile.marque === BRAND.somfy });
   if (tx.te_us !== undefined) fields.push({ name: TX_FIELD.te, label: "TE d'émission (µs)", kind: FIELD_KIND.number, defaultValue: tx.te_us });
   if (tx.repeat_bit !== undefined) fields.push({ name: TX_FIELD.repeat, label: 'Bit de répétition', help: 'Émettre comme la télécommande d\'origine.', kind: FIELD_KIND.toggle, defaultValue: tx.repeat_bit });
   if (tx.rmt !== undefined) fields.push({ name: TX_FIELD.rmt, label: 'Émission matérielle (RMT)', kind: FIELD_KIND.toggle, defaultValue: tx.rmt });
@@ -105,26 +87,14 @@ export function defaultSummary(field: TxField): string {
   }
 }
 
-/* Parcours d'ajout d'un profil : il se deduit de ses deux axes. Un moteur sans parcours dans cette interface
-   (ook-fixe, io-homecontrol a venir) rend null : son profil n'est pas propose. */
-export function flowOf(profile: Pick<Profile, 'add' | 'engine'>): Flow | null {
-  if (profile.add === ADD_METHOD.copy && profile.engine === ENGINE.replay) return FLOW.replay;
-  if (profile.add === ADD_METHOD.copy && profile.engine === ENGINE.keeloq) return FLOW.learn;
-  if (profile.add === ADD_METHOD.enrol && profile.engine === ENGINE.keeloq) return FLOW.enrolPfx;
-  if (profile.add === ADD_METHOD.enrol && profile.engine === ENGINE.somfy) return FLOW.createSomfy;
-  return null;
-}
-
-/* Ou mene une methode de la pyramide, avec l'id du profil pour qu'un F5 garde la marque choisie (l'enrolement la
-   perdait). L'id ne depend pas de l'ordre des profils : ajouter un profil ne casse aucune adresse. */
+/* Ou mene une methode de la pyramide : les adresses d'aujourd'hui, avec l'index du profil pour qu'un F5 garde
+   la marque choisie (l'enrolement la perdait). */
 export function methodRoute(profile: Profile): string {
-  const id = encodeURIComponent(profile.id);
-  switch (flowOf(profile)) {
-    case FLOW.learn: case FLOW.replay: return `${TAB.remotes}/${SECTION.learn}/${id}`;
-    case FLOW.enrolPfx: return `${TAB.remotes}/${SECTION.enrol}/${id}`;
-    case FLOW.createSomfy: return `${TAB.remotes}/${SECTION.somfy}/${id}`;
-    default: return `${TAB.remotes}/${SECTION.add}`;
-  }
+  const i = profiles().indexOf(profile);
+  if (profile.flow === FLOW.learn || profile.flow === FLOW.replay) return `${TAB.remotes}/${SECTION.learn}/${i}`;
+  if (profile.flow === FLOW.enrolPfx) return `${TAB.remotes}/${SECTION.enrol}/${i}`;
+  if (profile.flow === FLOW.createSomfy) return `${TAB.remotes}/${SECTION.somfy}/${i}`;
+  return `${TAB.remotes}/${SECTION.add}`;
 }
 
 /* Phrase de repli par methode, pour un profil sans champ description (les « note » de profiles.json sont des

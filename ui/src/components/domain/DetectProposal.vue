@@ -9,8 +9,6 @@ import { bandLabel } from '../../profiles';
 import api from '../../api/index';
 import type { Profile } from '../../api/types';
 import { BAND, TONE } from '../../domain';
-/* Le trait de la bande dans profiles.json « traits » : un chemin dans le profil. */
-const BAND_TRAIT = 'radio.band';
 import OpProgress from '../base/OpProgress.vue';
 import OpStatline from '../base/OpStatline.vue';
 import ProfileChoice from './ProfileChoice.vue';
@@ -38,8 +36,8 @@ onMounted(async () => {
 /* Proposition de pyramid-detect.js, limitee aux methodes que la carte sait faire. Confiant = un seul profil. */
 const candidates = computed<Profile[]>(() => {
   if (!heard.value || !state.profiles) return [];
-  const ranking = rankProfiles({ [BAND_TRAIT]: heard.value.band }, state.profiles);
-  return ranking.proposed.map(c => c.profile).filter(p => props.available.includes(p) || props.available.some(d => d.name === p.name));
+  const ranking = rankProfiles({ band: heard.value.band }, state.profiles);
+  return ranking.proposed.map(c => c.profil).filter(p => props.available.includes(p) || props.available.some(d => d.nom === p.nom));
 });
 </script>
 
@@ -54,7 +52,7 @@ const candidates = computed<Profile[]>(() => {
       <p class="sub">Entendu sur la bande <b>{{ bandLabel(heard.band) }}</b> ({{ heard.rssi }} dBm).
         {{ candidates.length > 1 ? 'Plusieurs profils possibles, choisis :' : 'Profil proposé, confirme ou choisis autrement :' }}</p>
       <div class="list">
-        <ProfileChoice v-for="p in candidates" :key="p.name" :profile="p" :proposed="candidates.length === 1" @choose="emit('choose', p)" />
+        <ProfileChoice v-for="p in candidates" :key="p.nom" :profile="p" :proposed="candidates.length === 1" @choose="emit('choose', p)" />
       </div>
     </template>
     <OpStatline v-else :tone="TONE.warning">Rien entendu. Rapproche la télécommande du boîtier et réessaie, ou choisis toi-même le type et la marque.</OpStatline>

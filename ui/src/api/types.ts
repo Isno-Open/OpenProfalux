@@ -1,7 +1,7 @@
 // Les contrats echanges avec le firmware (web_ui.c, shutters.c, ota.c...) : un type par reponse ou par corps
 // envoye. Les noms de champs sont ceux du JSON du firmware (des donnees, pas des identifiants : ils restent tels
 // quels). Les fausses donnees (mock*.ts) sont verifiees contre ces memes types.
-import type { AddMethod, ButtonBehavior, Command, Engine, Flag, TestStatus } from '../domain';
+import type { Command, Flag } from '../domain';
 
 /* Refus metier commun a beaucoup de routes : { ok: 0, err }. */
 export interface OkReply { ok?: number; err?: string }
@@ -60,47 +60,36 @@ export interface Status {
 export interface ShutterOrder { id: string; cmd: Command; value?: number }
 export interface ShutterReply extends OkReply { busy?: boolean }
 
-/* profiles.json : types d'appareil (et leurs boutons), profils (type, marque, methode d'ajout, moteur), roles et bornes. */
-export interface TypeButton {
-  id: string;              // identifiant stable du bouton dans le type
-  cmd: Command;            // commande du firmware qu'il envoie (et emplacement de capture)
-  behavior: ButtonBehavior;
-  label: string;
-  en?: string;
-  position: { row: number; col: number };
-}
+/* profiles.json : types d'appareil, profils (marque, methode), roles et bornes. */
 export interface TypeEntry {
   label: string;
   code: number;
   icon?: string;
   positional?: boolean;
-  en?: { label: string };
+  dpad?: Partial<Record<Command, string>>;
   travel_s?: { min: number; max: number };
-  buttons: TypeButton[];
+  capture?: { cmd: string; label: string }[];
 }
-export interface ProfileTx { te_us?: number; repeat_bit?: boolean; rmt?: boolean; frame_bits?: number; repeats?: number; gap_us?: number }
-export interface ProfileRadio { band: string; freq_khz?: number; modulation?: string; rx?: { datarate_baud?: number; bandwidth_khz?: number } }
+export interface ProfileTx { te_us?: number; repeat_bit?: boolean; rmt?: boolean; frame_bits?: number }
 export interface Profile {
-  id: string;
-  name: string;
-  description?: string;
+  nom: string;
+  marque: string;
   type: string;          // une cle de types (DEVICE_TYPE)
-  brand: string;         // valeur gravee dans la fiche de l'appareil (champ marque)
-  add: AddMethod;
-  engine: Engine;
-  code?: string;
-  radio: ProfileRadio;
+  mecanisme: string;     // MECHANISM
+  flow: string;          // FLOW
+  band: string;
+  freq_khz?: number;
+  description?: string;
+  rx?: { datarate_baud?: number; bandwidth_khz?: number };
   tx?: ProfileTx;
-  test?: { status: TestStatus };
 }
 export interface RoleEntry { label?: string; members_label?: string; members?: string[]; positional_only?: boolean; list_first?: boolean }
 export interface Profiles {
   types: Record<string, TypeEntry>;   // cles : DEVICE_TYPE, et celles qu'une version future ajoutera
-  profiles: Profile[];
+  profils: Profile[];
   roles?: { central?: RoleEntry; zone?: RoleEntry };
   name_max?: number;
   devices_max?: number;
-  traits?: Record<string, unknown>;   // traits de detection (pyramid-detect.js), lus tels quels
 }
 
 /* /api/radios. */
