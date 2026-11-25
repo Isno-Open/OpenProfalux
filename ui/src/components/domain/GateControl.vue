@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Le controle d'un portail CAME : une seule commande, rejouee telle quelle (code fixe), comme le bouton de la
-// telecommande d'origine. Le libelle vient du type « portail » de profiles.json.
+// Le controle d'un portail CAME : un appui du bouton pas a pas, rejoue tel quel (code fixe), comme le bouton de la
+// telecommande d'origine ; la carte du moteur decide s'il ouvre, arrete ou ferme. Le libelle vient du type « portail ».
 import { COMMAND, type Command } from '../../domain';
 withDefaults(defineProps<{ label?: string; sending?: boolean; disabled?: boolean }>(), { label: 'Bouton du portail' });
 defineEmits<{ command: [cmd: Command] }>();
@@ -8,7 +8,7 @@ defineEmits<{ command: [cmd: Command] }>();
 
 <template>
   <div class="gate">
-    <button type="button" :class="{ sending }" :disabled="disabled && !sending" @click="$emit('command', COMMAND.up)">
+    <button type="button" :class="{ sending }" :disabled="disabled && !sending" @click="$emit('command', COMMAND.step)">
       <svg viewBox="0 0 24 24" class="sym" aria-hidden="true"><path d="M7 5.5a7.5 7.5 0 1 0 10 0M12 3v8" /></svg>
       Actionner le portail
     </button>

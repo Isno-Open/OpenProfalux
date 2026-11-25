@@ -64,7 +64,7 @@ const send = (cmd: Command, value?: number): Promise<void> =>
       </span>
     </header>
 
-    <GateControl v-if="isGate" :label="gateLabel" :sending="sending === COMMAND.up" :disabled="busy" @command="cmd => send(cmd)" />
+    <GateControl v-if="isGate" :label="gateLabel" :sending="sending === COMMAND.step" :disabled="busy" @command="cmd => send(cmd)" />
     <ShutterControl v-else :labels="commandLabels(type)" :sending="sending" :disabled="busy" @command="cmd => send(cmd)" />
 
     <PositionBar v-if="positional" :position="device.position" :disabled="busy" @choose="p => send(COMMAND.position, p)" />

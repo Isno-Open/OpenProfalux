@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
+import { CONTROL_ID } from "../src/ids.js";
 import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
 import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
 import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById, buildFileRequest, awaitBoxFile } from "../opencloudapp/server/src/device-families.js";
@@ -78,7 +79,8 @@ test("commandes : celles que le firmware attend, sous le prefixe du boitier", ()
   assert.deepEqual(buildCommand(f, target, "position", 42), { topic: `${ROOT}/${BOX}/cover/Chambre_Parents/set_position`, payload: "58", retain: false },
     "42 % de fermeture = 58 % d'ouverture, ce qu'attend le firmware");
   // la mise a jour du boitier entier : voir le test « mises a jour » (seulement quand elle est possible)
-  assert.deepEqual(Object.keys(ACTION_PAYLOAD).sort(), ["down", "stop", "up"]);
+  // les commandes que le firmware attend sur cover/<id>/set (shutters.c) : OPEN, STOP, CLOSE, et STEP pour un portail
+  assert.deepEqual(Object.values(ACTION_PAYLOAD).sort(), ["CLOSE", "OPEN", "STEP", "STOP"]);
 });
 
 test("un portail (non positionnel) n'a ni position affichee ni commande de position", () => {
@@ -89,10 +91,13 @@ test("un portail (non positionnel) n'a ni position affichee ni commande de posit
   assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, "position", 10));
   // le portail a UN bouton pas a pas (profiles.json types.portail.buttons, #134) : c'est la seule commande
   // offerte, comme sur sa telecommande ; « fermer » n'est plus un bouton du portail
-  assert.ok("topic" in buildCommand(f, { box: BOX, device: "Portail" }, "up", null));
-  assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, "down", null));
+  // ce bouton est un APPUI (STEP) : c'est le boitier qui suit le cycle de la carte du moteur
+  const press = buildCommand(f, { box: BOX, device: "Portail" }, CONTROL_ID.step, null);
+  assert.ok("topic" in press && press.payload === ACTION_PAYLOAD[CONTROL_ID.step]);
+  assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, CONTROL_ID.up, null));
+  assert.ok("error" in buildCommand(f, { box: BOX, device: "Portail" }, CONTROL_ID.down, null));
   const gateKind = (kindsOf(profiles()) as { id: string; controls: { id: string }[] }[]).find((k) => k.id === DEVICE_TYPE.gate)!;
-  assert.deepEqual(gateKind.controls.map((c) => c.id), ["up"], "un seul bouton, celui que le type declare");
+  assert.deepEqual(gateKind.controls.map((c) => c.id), [CONTROL_ID.step], "un seul bouton, celui que le type declare");
 });
 
 test("pile faible : une alerte quand elle est vue en direct, pas au branchement (message retenu)", () => {

@@ -364,8 +364,37 @@ static bool sync_profiles(void) {
     return changed;
 }
 
+/* Trame du bouton pas a pas : rangee sous "step". Une fiche anterieure l'a rangee sous la commande que le bouton du
+ * portail envoyait alors ("up") ; on la renomme, pour que l'interface la voie captee. Rend true si une fiche a change.
+ * (Un portail est un appareil de rejeu a une trame : on ne renomme que s'il n'en a qu'une.) */
+static const profile_def_t *step_profile(const volet_t *v);
+static bool migrate_step_frames(void) {
+    bool changed = false;
+    const char *step = profile_cmd_name(PROFILE_CMD_STEP);
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        if (!v->rejeu || !step_profile(v)) continue;
+        cJSON *j = cJSON_Parse(v->rejeu);
+        cJSON *only = NULL; int n = 0;
+        for (int c = 0; j && c < PROFILE_CMD_COUNT; c++) {
+            cJSON *f = cJSON_GetObjectItem(j, profile_cmd_name((profile_cmd_t)c));
+            if (cJSON_IsString(f)) { only = f; n++; }
+        }
+        char *out = NULL;
+        if (n == 1 && strcmp(only->string, step)) {
+            ESP_LOGW(TAG, "migration #134 : trame du portail '%s' rangee sous %s (etait %s)", v->id, step, only->string);
+            cJSON_AddItemToObject(j, step, cJSON_DetachItemViaPointer(j, only));
+            out = cJSON_PrintUnformatted(j);
+        }
+        cJSON_Delete(j);
+        if (out) { free(v->rejeu); v->rejeu = out; changed = true; }
+    }
+    return changed;
+}
+
 static esp_err_t save_cfg(void) {
     sync_profiles();
+    migrate_step_frames();
     char key[8] = "";
     esp_err_t e = cfg_model_save(&s_model, key);
     if (e != ESP_OK)
@@ -580,7 +609,8 @@ static cfg_layout_t load_cfg(void) {
     migrate_tx_overrides();
     /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
      * methode, et on l'enregistre une fois. */
-    if (sync_profiles()) { ESP_LOGW(TAG, "migration #134 : profil grave dans les fiches"); save_cfg(); }
+    bool profiles_changed = sync_profiles();
+    if (profiles_changed | migrate_step_frames()) { ESP_LOGW(TAG, "migration #134 : profil et trames graves dans les fiches"); save_cfg(); }
     if (sanitize_freqs()) save_cfg();
     for (int i = 0; i < s_nvolets; i++) {   /* un profil incomplet pour son moteur emettrait avec les replis */
         const char *why = NULL;
@@ -954,7 +984,9 @@ static void freeze(volet_t *v) { v->dir = 0; v->target = -1; v->own_move = false
  * refermeture automatique : l'une ou l'autre le decale jusqu'a la prochaine fin de course qu'il croit atteindre. */
 static const profile_def_t *step_profile(const volet_t *v) {
     const profile_def_t *p = profile_of(v);
-    return (!v->central && profile_has_step(p)) ? p : NULL;
+    /* Le bouton pas a pas est celui du TYPE du profil : un volet a rejeu suit le profil de rejeu (celui du portail
+     * CAME) sans en avoir le bouton, et garde son pave monter / stop / descendre. */
+    return (!v->central && profile_has_step(p) && p->type_code == v->type) ? p : NULL;
 }
 static step_state_t step_state(const volet_t *v) {
     return (step_state_t){ .dir = v->dir, .at_open = v->dir == 0 && v->position <= 1, .at_closed = v->dir == 0 && v->position >= 99 };

@@ -29,7 +29,7 @@ import { CONTROL_ID, SETTING_ID, roleKindId } from "./ids.js";
 import { REMOTE_KINDS, REMOTE_NAME, readRemote, remoteCommand, remoteConfigure } from "./remotes.js";
 
 /** Actions de la carte -> charge que le firmware attend sur cover/<id>/set. */
-export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE" };
+export const ACTION_PAYLOAD: Readonly<Record<string, string>> = { [CONTROL_ID.up]: "OPEN", [CONTROL_ID.stop]: "STOP", [CONTROL_ID.down]: "CLOSE", [CONTROL_ID.step]: "STEP" };
 /** Presence telle que le firmware l'annonce (mqtt_bridge.c, PRESENCE_ONLINE / PRESENCE_OFFLINE /
  *  PRESENCE_DISABLED : cloud coupe sur le boitier, annonce avant de partir). */
 export const PRESENCE = { online: "online", offline: "offline", disabled: "disabled", forgotten: "forgotten" } as const;

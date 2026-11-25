@@ -79,7 +79,7 @@ export interface TypeEntry {
   travel_s?: { min: number; max: number };
   buttons: TypeButton[];
 }
-export interface ProfileTx { te_us?: number; repeat_bit?: boolean; rmt?: boolean; frame_bits?: number; repeats?: number; gap_us?: number }
+export interface ProfileTx { te_us?: number; repeat_bit?: boolean; rmt?: boolean; frame_bits?: number }
 export interface ProfileRadio { band: string; freq_khz?: number; modulation?: string; rx?: { datarate_baud?: number; bandwidth_khz?: number } }
 export interface Profile {
   id: string;
