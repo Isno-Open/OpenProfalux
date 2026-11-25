@@ -18,10 +18,21 @@ import sys
 
 # Taille d'un identifiant dans la fiche d'un appareil (SH_ID_LEN de shutters.h, NUL compris).
 ID_MAX = 23
+# Commandes d'un bouton, dans l'ordre de profile_cmd_t (profile_table.h) : indices des tableaux par commande.
+CMD_SLOTS = ("up", "stop", "down", "step")
 # Commandes qui ont un emplacement de code de bouton dans profile_def_t (code_up, code_stop, code_down).
 CODE_SLOTS = ("up", "stop", "down")
 # Source d'une trame de bouton : la capture de la telecommande d'origine (frames.<bouton>.source).
 FRAME_SOURCE_CAPTURE = "capture"
+# Le bouton pas a pas : son comportement et sa commande vont ensemble (types[].buttons[]).
+STEP_BEHAVIOR = "step"
+STEP_CMD = "step"
+# Actions d'un cycle pas a pas (frames.<bouton>.cycle) et leur constante C (step_cycle.h, step_act_t).
+STEP_ACTIONS = {"open": "STEP_ACT_OPEN", "stop": "STEP_ACT_STOP", "close": "STEP_ACT_CLOSE"}
+STEP_CYCLE_MAX = 4   # STEP_CYCLE_MAX de step_cycle.h
+STEP_OPEN = "open"   # l'action que tout cycle contient : un portail qu'on ne peut pas ouvrir n'a rien a piloter
+# Champs d'une trame captee, en plus de sa source.
+CAPTURE_FIELDS = {"source", "repeats", "gap_us", "cycle", "press_gap_ms"}
 
 
 class CatalogError(Exception):
@@ -70,6 +81,9 @@ def check(doc):
             seen.add(b["id"])
             for field in ("cmd", "behavior", "label"):
                 require(isinstance(b.get(field), str) and b[field], f"{bw} ({b['id']})", f"{field} requis")
+            require(b["cmd"] in CMD_SLOTS, f"{bw} ({b['id']})", f"cmd {b['cmd']} inconnue ({', '.join(CMD_SLOTS)})")
+            require((b["behavior"] == STEP_BEHAVIOR) == (b["cmd"] == STEP_CMD), f"{bw} ({b['id']})",
+                    f"le comportement {STEP_BEHAVIOR} et la commande {STEP_CMD} vont ensemble")
             pos = b.get("position")
             require(isinstance(pos, dict) and isinstance(pos.get("row"), int) and isinstance(pos.get("col"), int),
                     f"{bw} ({b['id']})", "position { row, col } entiere requise")
@@ -104,25 +118,48 @@ def check(doc):
         seen_keys[key] = pid
         # Trames par bouton : chaque cle est un bouton du type, chaque valeur une capture ou un code de bouton.
         # Le code se range sous la commande du bouton (up, stop, down) : c'est elle que le firmware emet.
-        buttons = {b["id"]: b for b in types[p["type"]]["buttons"]}
-        codes = {}
-        frames = p.get("frames", {})
-        require(isinstance(frames, dict), where, "frames : objet attendu")
-        for bid, f in frames.items():
-            require(bid in buttons, where, f"frames.{bid} : le type {p['type']} n'a pas ce bouton")
-            require(isinstance(f, dict) and len(f) == 1 and (f.get("source") == FRAME_SOURCE_CAPTURE or "code" in f), where,
-                    f"frames.{bid} : {{ \"source\": \"{FRAME_SOURCE_CAPTURE}\" }} ou {{ \"code\": n }} attendu")
-            if "code" in f:
-                require(isinstance(f["code"], int) and 0 <= f["code"] <= 15, where, f"frames.{bid}.code : entier de 0 a 15")
-                cmd = buttons[bid]["cmd"]
-                require(cmd in CODE_SLOTS, where, f"frames.{bid} : la commande {cmd} n'a pas d'emplacement de code")
-                codes[cmd] = f["code"]
-        tx = p.get("tx", {})
-        require(isinstance(tx, dict), where, "tx : objet attendu")
         def count(obj, key, lo, hi, label):
             v = obj.get(key, 0)
             require(isinstance(v, int) and (v == 0 or lo <= v <= hi), where, f"{label} : entier de {lo} a {hi}")
             return v
+        buttons = {b["id"]: b for b in types[p["type"]]["buttons"]}
+        codes, repeats, gaps, step = {}, {}, {}, None
+        frames = p.get("frames", {})
+        require(isinstance(frames, dict), where, "frames : objet attendu")
+        for bid, f in frames.items():
+            require(bid in buttons, where, f"frames.{bid} : le type {p['type']} n'a pas ce bouton")
+            cmd, behavior = buttons[bid]["cmd"], buttons[bid]["behavior"]
+            require(isinstance(f, dict), where, f"frames.{bid} : objet attendu")
+            if "code" in f:
+                require(len(f) == 1, where, f"frames.{bid} : une trame de code n'a que {{ \"code\": n }}")
+                require(isinstance(f["code"], int) and 0 <= f["code"] <= 15, where, f"frames.{bid}.code : entier de 0 a 15")
+                require(cmd in CODE_SLOTS, where, f"frames.{bid} : la commande {cmd} n'a pas d'emplacement de code")
+                codes[cmd] = f["code"]
+                continue
+            require(f.get("source") == FRAME_SOURCE_CAPTURE and set(f) <= CAPTURE_FIELDS, where,
+                    f"frames.{bid} : {{ \"source\": \"{FRAME_SOURCE_CAPTURE}\" }} (et repeats, gap_us, cycle, press_gap_ms) ou {{ \"code\": n }} attendu")
+            # Rejeu : repetitions et silence de CE bouton, ensemble ou pas du tout.
+            require(("repeats" in f) == ("gap_us" in f), where, f"frames.{bid} : repeats et gap_us vont ensemble")
+            if "repeats" in f:
+                repeats[cmd] = count(f, "repeats", 1, 50, f"frames.{bid}.repeats")
+                gaps[cmd] = count(f, "gap_us", 1000, 100000, f"frames.{bid}.gap_us")
+                require(repeats[cmd] and gaps[cmd], where, f"frames.{bid} : repeats et gap_us non nuls")
+            # Pas a pas : le cycle de la carte du moteur, sur le bouton pas a pas et lui seul.
+            if behavior == STEP_BEHAVIOR:
+                require(step is None, where, "un seul bouton pas a pas par profil")
+                cycle = f.get("cycle")
+                require(isinstance(cycle, list) and 1 <= len(cycle) <= STEP_CYCLE_MAX and all(a in STEP_ACTIONS for a in cycle),
+                        where, f"frames.{bid}.cycle : 1 a {STEP_CYCLE_MAX} actions parmi {', '.join(STEP_ACTIONS)}")
+                require(STEP_OPEN in cycle, where, f"frames.{bid}.cycle : un appui au moins doit ouvrir")
+                gap = count(f, "press_gap_ms", 100, 10000, f"frames.{bid}.press_gap_ms")
+                require(gap, where, f"frames.{bid}.press_gap_ms requis (delai entre deux appuis)")
+                step = {"cycle": cycle, "press_gap_ms": gap}
+            else:
+                require("cycle" not in f and "press_gap_ms" not in f, where,
+                        f"frames.{bid} : cycle et press_gap_ms sont ceux d'un bouton {STEP_BEHAVIOR}")
+        tx = p.get("tx", {})
+        require(isinstance(tx, dict), where, "tx : objet attendu")
+        require("repeats" not in tx and "gap_us" not in tx, where, "tx.repeats et tx.gap_us : par bouton, dans frames.<bouton>")
         enrol = p.get("enrol")
         require(enrol is None or isinstance(enrol, dict), where, "enrol : objet attendu")
         if enrol is not None:
@@ -132,9 +169,7 @@ def check(doc):
             "id": pid, "brand": p["brand"], "type_code": types[p["type"]]["code"],
             "add": p["add"], "engine": p["engine"], "band": radio["band"], "freq_khz": freq,
             "frames_per_press": count(tx, "frames_per_press", 1, 50, "tx.frames_per_press"),
-            "codes": codes,
-            "repeats": count(tx, "repeats", 1, 50, "tx.repeats"),
-            "gap_us": count(tx, "gap_us", 1000, 100000, "tx.gap_us"),
+            "codes": codes, "repeats": repeats, "gaps": gaps, "step": step,
             "enrol": None if enrol is None else {
                 "code": count(enrol, "code", 0, 15, "enrol.code"),
                 "frames_per_burst": count(enrol, "frames_per_burst", 1, 50, "enrol.frames_per_burst"),
@@ -166,12 +201,16 @@ def render(profiles, source, types):
         e = p["enrol"]
         enrol = (f".has_enrol = true, .enrol_code = {e['code']}, .enrol_frames_per_burst = {e['frames_per_burst']}, "
                  f".enrol_bursts = {e['bursts']}, .enrol_counter_start = {e['counter_start']}") if e else ".has_enrol = false"
+        per_cmd = lambda d: "{ " + ", ".join(str(d.get(c, 0)) for c in CMD_SLOTS) + " }"
+        st = p["step"]
+        step = (f".step = {{ .len = {len(st['cycle'])}, .act = {{ {', '.join(STEP_ACTIONS[a] for a in st['cycle'])} }} }}, "
+                f".step_press_gap_ms = {st['press_gap_ms']}") if st else ".step = { .len = 0 }"
         lines.append(
             f"    {{ .id = {c_string(p['id'])}, .brand = {c_string(p['brand'])}, .type_code = {p['type_code']}, "
             f".add = {c_string(p['add'])}, .engine = {c_string(p['engine'])}, .band = {c_string(p['band'])}, "
             f".freq_khz = {p['freq_khz']}, .frames_per_press = {p['frames_per_press']}, "
             f".code_up = {code('up')}, .code_stop = {code('stop')}, .code_down = {code('down')}, "
-            f".repeats = {p['repeats']}, .gap_us = {p['gap_us']}, {enrol} }},"
+            f".repeats = {per_cmd(p['repeats'])}, .gap_us = {per_cmd(p['gaps'])}, {step}, {enrol} }},"
         )
     lines += ["};", f"const int PROFILE_TABLE_COUNT = {len(profiles)};", ""]
     lines += render_types(types)

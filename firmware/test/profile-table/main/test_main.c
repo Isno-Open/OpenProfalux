@@ -6,6 +6,7 @@
  *   - un profil donne explicitement est garde tant qu'il reste coherent, et suivi s'il ne l'est plus.
  *   - (lot 2b) chaque profil est complet pour son moteur, et ses valeurs sont celles que le firmware
  *     emettait avant (comportement inchange).
+ * (lot 5) le bouton pas a pas : le cycle du portail CAME, et le nombre d'appuis vers chaque etat (T20..T28).
  * Mutation : faire rendre PROFILE_ENGINE_UNKNOWN a profile_engine_of casse T1 et T3..T9 ; retirer un
  * code de bouton d'un profil d'enrolement dans profiles.json casse T15 et T16.
  */
@@ -75,7 +76,10 @@ int main(void) {
                 same &= p->code_up == OLD_UP && p->code_stop == OLD_STOP && p->code_down == OLD_DOWN && p->enrol_code == OLD_LEARN
                      && p->enrol_frames_per_burst == OLD_BURST && p->enrol_bursts == OLD_ROUNDS && p->enrol_counter_start == OLD_COUNTER;
         }
-        if (profile_engine_of(p) == PROFILE_ENGINE_REPLAY) same &= p->repeats == OLD_REJEU_REPEATS && p->gap_us == OLD_REJEU_GAP_US;
+        if (profile_engine_of(p) == PROFILE_ENGINE_REPLAY)
+            for (int c = 0; c < PROFILE_CMD_COUNT; c++)
+                if (profile_replay_repeats(p, (profile_cmd_t)c))
+                    same &= profile_replay_repeats(p, (profile_cmd_t)c) == OLD_REJEU_REPEATS && profile_replay_gap_us(p, (profile_cmd_t)c) == OLD_REJEU_GAP_US;
         if (!same) { printf("       profil %s : valeurs differentes des anciennes constantes\n", p->id); break; }
     }
     check(same, "T16 les profils livres reproduisent les anciennes constantes (comportement inchange)");
@@ -89,6 +93,46 @@ int main(void) {
     check(shutter && gate && shutter->ha_device_class[0] && gate->ha_device_class[0] && !type_find(200),
           "T18 chaque type du firmware est declare, avec sa classe Home Assistant");
     check(shutter && shutter->positional && gate && !gate->positional, "T19 le volet a une position, le portail n'en a pas");
+
+    /* Bouton pas a pas (#134, section 4 bis). Le profil CAME declare le cycle ouvre-stop-ferme-stop des cartes CAME
+     * (DIP 2 sur ON, notice de la serie Z) ; le rejeu de son bouton garde les anciennes valeurs. */
+    const profile_def_t *came = profile_find(ID_CAME);
+    const step_cycle_t osfs = { .len = 4, .act = { STEP_ACT_OPEN, STEP_ACT_STOP, STEP_ACT_CLOSE, STEP_ACT_STOP } };
+    check(came && profile_has_step(came) && !memcmp(&came->step, &osfs, sizeof osfs) && came->step_press_gap_ms > 0
+          && profile_replay_repeats(came, PROFILE_CMD_STEP) == OLD_REJEU_REPEATS && !profile_has_step(enrol),
+          "T20 le portail CAME declare son cycle ouvre-stop-ferme-stop et le rejeu de son bouton");
+    check(profile_cmd_of("step") == PROFILE_CMD_STEP && profile_cmd_of("up") == PROFILE_CMD_UP && profile_cmd_of("x") == -1
+          && !strcmp(profile_cmd_name(PROFILE_CMD_STEP), "step"), "T21 commandes : nom du fil <-> profile_cmd_t");
+
+    /* Le cycle, appui par appui, sur ouvre-stop-ferme-stop : ferme -> ouvre -> stop -> ferme -> stop -> ouvre. */
+    uint8_t n = step_next_at_rest(&osfs, true);
+    step_act_t seq[5];
+    for (int i = 0; i < 5; i++) seq[i] = step_press(&osfs, &n);
+    check(seq[0] == STEP_ACT_OPEN && seq[1] == STEP_ACT_STOP && seq[2] == STEP_ACT_CLOSE && seq[3] == STEP_ACT_STOP && seq[4] == STEP_ACT_OPEN,
+          "T22 appuis successifs : ouvre, stop, ferme, stop, ouvre");
+    /* Fin de course : en butee, la carte saute le stop, l'appui suivant repart dans l'autre sens. */
+    n = step_next_at_rest(&osfs, true); step_press(&osfs, &n);   /* ouverture en cours, prochain = stop */
+    step_travel_end(&osfs, &n);
+    check(step_press(&osfs, &n) == STEP_ACT_CLOSE, "T23 ouvert en butee : l'appui suivant ferme");
+
+    /* Nombre d'appuis vers l'etat voulu. */
+    const step_state_t opening = { .dir = +1 }, closing = { .dir = -1 }, closed = { .at_closed = true }, open_ = { .at_open = true }, halted = { 0 };
+    uint8_t after_open = 1, after_close = 3, at_rest_closed = 0, at_rest_open = 2;   /* positions du cycle osfs */
+    check(step_presses(&osfs, at_rest_closed, closed, STEP_ACT_OPEN) == 1 && step_presses(&osfs, at_rest_closed, closed, STEP_ACT_CLOSE) == 0
+          && step_presses(&osfs, at_rest_open, open_, STEP_ACT_CLOSE) == 1 && step_presses(&osfs, at_rest_open, open_, STEP_ACT_OPEN) == 0,
+          "T24 au repos en butee : un appui vers l'autre butee, aucun vers la sienne");
+    check(step_presses(&osfs, after_open, opening, STEP_ACT_CLOSE) == 2 && step_presses(&osfs, after_open, opening, STEP_ACT_STOP) == 1
+          && step_presses(&osfs, after_open, opening, STEP_ACT_OPEN) == 0 && step_presses(&osfs, after_close, closing, STEP_ACT_OPEN) == 2,
+          "T25 en mouvement : stop puis sens inverse (2 appuis), stop (1), deja dans le sens voulu (0)");
+    check(step_presses(&osfs, at_rest_open, halted, STEP_ACT_STOP) == 0 && step_presses(&osfs, at_rest_open, halted, STEP_ACT_OPEN) == 3,
+          "T26 arrete en chemin apres ouverture : rouvrir demande ferme, stop, ouvre");
+    /* Les autres logiques de carte : ouvre-ferme (pas d'arret possible), ouverture seule (pas de fermeture). */
+    const step_cycle_t oc = { .len = 2, .act = { STEP_ACT_OPEN, STEP_ACT_CLOSE } }, oo = { .len = 1, .act = { STEP_ACT_OPEN } };
+    check(step_presses(&oc, 1, opening, STEP_ACT_STOP) == -1 && step_presses(&oc, 1, opening, STEP_ACT_CLOSE) == 1
+          && step_presses(&oo, 0, open_, STEP_ACT_CLOSE) == -1 && step_presses(&oo, 0, closed, STEP_ACT_OPEN) == 1,
+          "T27 ouvre-ferme : stop impossible ; ouverture seule : fermer impossible");
+    check(step_presses(NULL, 0, closed, STEP_ACT_OPEN) == -1 && step_press(NULL, &n) == STEP_ACT_NONE,
+          "T28 sans cycle : rien a faire");
 
     printf(g_fail ? "ECHEC : %d\n" : "OK\n", g_fail);
     return g_fail ? 1 : 0;

@@ -223,6 +223,8 @@ static void move_one(store_t *s, int m) {
 /* Marque et profil d'un volet Somfy, valeurs de profiles.json (#134) : declarees une fois, pour l'aller-retour. */
 static const char BRAND_SOMFY[] = "Somfy RTS";
 static const char PROFILE_SOMFY[] = "somfy-rts-enrol";
+/* Position du cycle pas a pas d'un portail : une valeur non nulle, pour qu'une perte (remise a 0) se voie. */
+enum { GATE_STEP_NEXT = 2 };
 
 static bool volet_equal(const volet_t *a, const volet_t *b) {
     if (strcmp(a->id, b->id) || a->n_serials != b->n_serials) return false;
@@ -426,6 +428,8 @@ int main(void) {
         v->virt = true; v->virt_serial = 0x0670123; v->virt_counter = 4321;
         v->proto = VOLET_PROTO_SOMFY_RTS;   /* protocole non-Profalux : doit survivre a l'aller-retour */
         snprintf(v->marque, SH_ID_LEN, "%s", BRAND_SOMFY); snprintf(v->profile, SH_ID_LEN, "%s", PROFILE_SOMFY);   /* #134 */
+        volet_t *g = mk_volet(&g_ref, "Portail", 10, 0, 0);                       /* portail pas a pas (#134) */
+        g->type = TYPE_PORTAIL; g->step_known = true; g->step_next = GATE_STEP_NEXT;
         volet_t *z = mk_volet(&g_ref, "Zone salon", 9, 0, 0);                     /* zone : volet appris + suiveurs */
         cfg_volet_set_members(z, "Volet du salon,Volet cuisine");
         char *js = cfg_model_export(&g_ref.m);
@@ -442,6 +446,11 @@ int main(void) {
             for (int i = 0; i < g_tmp.nvolets; i++) if (!strcmp(g_tmp.volets[i].id, "Virtuel")) e = &g_tmp.volets[i];
             CHECK(e && !strcmp(e->marque, BRAND_SOMFY) && !strcmp(e->profile, PROFILE_SOMFY),
                   "la marque ou le profil d'un volet est perdu a l'aller-retour");
+            /* Cycle pas a pas (#134) : la position suivie survit, et une fiche qui ne l'a jamais suivie le reste. */
+            volet_t *gt = NULL;
+            for (int i = 0; i < g_tmp.nvolets; i++) if (!strcmp(g_tmp.volets[i].id, "Portail")) gt = &g_tmp.volets[i];
+            CHECK(gt && gt->step_known && gt->step_next == GATE_STEP_NEXT && e && !e->step_known,
+                  "la position du cycle pas a pas d'un portail est perdue (ou inventee) a l'aller-retour");
         }
         /* proto d'emission : ecrit seulement s'il n'est pas Profalux (0). Un seul volet en
          * porte un ici, donc "proto" doit apparaitre exactement une fois ; les volets
