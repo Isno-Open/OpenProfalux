@@ -12,7 +12,6 @@
 #pragma once
 #include "cJSON.h"
 #include "radio.h"   /* tx_params_t : params d'emission par appareil (issue #111) */
-#include "profile_table.h"   /* profil de la session d'enrolement (issue #134) */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -35,7 +34,6 @@ const pfx_model_t  *pfx_enrol_model(int id);   /* NULL si hors borne */
  * Retourne 0 si serial valide (famille 0x067), -1 sinon. Utilisé aussi par shutters
  * pour générer les trames d'un volet virtuel (compteur roulant géré par l'appelant). */
 int pfx_enrol_frame(uint32_t serial, uint8_t button, uint16_t counter, char out[68]);
-
 
 /* Identité virtuelle courante. */
 typedef struct {
@@ -88,8 +86,5 @@ int  pfx_enrol_emit_learn(void);
 /* Pose les params d'emission de la session d'enrolement (porteuse de la marque, TE, bit de repetition,
  * RMT), issus du profil choisi. p=NULL remet les defauts. A appeler avant capture/apprentissage. */
 void pfx_enrol_set_tx_params(const tx_params_t *p);
-/* Profil de la session d'enrolement (issue #134) : trame d'apprentissage (code, trames par rafale, rafales, compteur
- * de depart) et codes des boutons d'essai. NULL ou profil sans 'enrol' = les replis de terrain. */
-void pfx_enrol_set_profile(const profile_def_t *p);
 /* Émet une commande après enrôlement : "up" | "stop" | "down" (compteur roulant). 0 si OK. */
 int  pfx_enrol_cmd(const char *cmd);

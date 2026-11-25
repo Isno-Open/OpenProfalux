@@ -328,9 +328,6 @@ int shutters_remote_dump(int i, int from, char *serial, int sser, char *name, in
  * marque y passent, sans un appel a placer dans chacun. Une centrale n'a pas de profil (elle diffuse les
  * commandes de ses membres, sans emettre pour elle-meme) ; une zone, si : c'est une telecommande clonee qui a
  * des suiveurs. Rend true si une fiche a change. */
-/* Le profil d'un appareil (grave dans sa fiche, remis en accord par sync_profiles), ou NULL. */
-static const profile_def_t *profile_of(const volet_t *v) { return v ? profile_find(v->profile) : NULL; }
-
 static bool sync_profiles(void) {
     bool changed = false;
     for (int i = 0; i < s_nvolets; i++) {
@@ -564,29 +561,12 @@ static cfg_layout_t load_cfg(void) {
     /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
      * methode, et on l'enregistre une fois. */
     if (sync_profiles()) { ESP_LOGW(TAG, "migration #134 : profil grave dans les fiches"); save_cfg(); }
-    for (int i = 0; i < s_nvolets; i++) {   /* un profil incomplet pour son moteur emettrait avec les replis */
-        const char *why = NULL;
-        const profile_def_t *p = profile_of(&s_volets[i]);
-        if (p && !profile_engine_ready(p, &why)) ESP_LOGE(TAG, "'%s' : profil '%s' incomplet : %s", s_volets[i].id, p->id, why);
-    }
     return lay;
 }
 
 /* ── RF ── */
-/* Trames par "appui" : le profil de l'appareil le declare (tx.frames_per_press, issue #134). Ce REPLI ne sert
- * qu'a une trame RF brute sans appareil (rejeu de debug) et a une fiche dont le profil est introuvable : plus de
- * repetitions = plus de chances qu'une passe propre survive a une preemption du bit-bang par le WiFi. */
-#define PRESS_REPEATS_FALLBACK 10
-
-
-/* Trames par appui d'un appareil : celles de son profil, sinon le repli (journalise : une fiche sans profil
- * est une anomalie depuis la migration #134). */
-static int press_frames(const volet_t *v) {
-    const profile_def_t *p = profile_of(v);
-    if (p && p->frames_per_press) return p->frames_per_press;
-    if (v) ESP_LOGW(TAG, "'%s' : profil '%s' sans trames par appui, repli %d", v->id, v->profile, PRESS_REPEATS_FALLBACK);
-    return PRESS_REPEATS_FALLBACK;
-}
+#define PRESS_REPEATS 10   /* nb de trames par "appui" : le bit-bang peut etre preempte par le WiFi
+                              (trame corrompue) ; plus de repetitions = plus de chances qu'une passe propre */
 /* Params d'emission RESOLUS depuis la fiche (defini plus bas) : porteuse/TE/rpt/rmt par appareil. */
 static tx_params_t tx_params_of(const volet_t *v);
 
@@ -606,13 +586,13 @@ static void emit_press(const volet_t *v, const char *bits) {
         for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
         for (int i = 0; i < 4;  i++) if (bits[60 + i] == '1') btn |= (1u << i);
         ESP_LOGW(TAG, "TX serial=0x%07X bouton=0x%X hop=0x%08X (%d bits, rafale x%d)",
-                 (unsigned)ser, btn, (unsigned)hop, n, press_frames(v));
+                 (unsigned)ser, btn, (unsigned)hop, n, PRESS_REPEATS);
     }
     if (v) {
         tx_params_t p = tx_params_of(v);
-        radio_tx_device(bits, press_frames(v), &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche, trames du profil */
+        radio_tx_device(bits, PRESS_REPEATS, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
     } else {
-        radio_tx(bits, PRESS_REPEATS_FALLBACK);       /* trame brute sans volet (rejeu RF debug) : pas de profil */
+        radio_tx(bits, PRESS_REPEATS);              /* trame brute sans volet (rejeu RF debug) */
     }
 }
 
@@ -621,10 +601,8 @@ static void emit_press(const volet_t *v, const char *bits) {
  * chaque valeur = impulsions signees +us haut / -us bas). On le rejoue a l'identique, suivi
  * d'un silence inter-trame, repete. Ne touche ni au clone bit-string ni au virtuel. */
 #define REJEU_MAX_PULSES 512
-/* Repetitions et silence inter-trame : ceux du profil (tx.repeats, tx.gap_us, issue #134). REPLI pour une fiche dont
- * le profil est introuvable : les valeurs que le rejeu a toujours emises (le silence couvre la periode CAME, ~11,5 ms). */
-#define REJEU_GAP_US_FALLBACK     12000
-#define REJEU_REPEATS_FALLBACK    8
+#define REJEU_GAP_US     12000   /* silence inter-trame, couvre le CAME (~11,5 ms) */
+#define REJEU_REPEATS    8
 
 /* Rejoue la commande `cmd` ("up"/"stop"/"down") d'un volet a rejeu brut. true si emis. */
 static bool rejeu_emit(volet_t *v, const char *cmd) {
@@ -643,11 +621,6 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
         for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
             csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
     bool ok = false;
-    const profile_def_t *prof = profile_of(v);
-    int repeats = (prof && prof->repeats) ? prof->repeats : REJEU_REPEATS_FALLBACK;
-    uint32_t gap_us = (prof && prof->gap_us) ? prof->gap_us : REJEU_GAP_US_FALLBACK;
-    if (!prof || !prof->repeats || !prof->gap_us)
-        ESP_LOGW(TAG, "'%s' : profil '%s' sans repetitions de rejeu, repli %d x %u us", v->id, v->profile, repeats, (unsigned)gap_us);
     if (csv && *csv && freq) {
         static uint8_t  lvl[REJEU_MAX_PULSES + 1];
         static uint32_t us[REJEU_MAX_PULSES + 1];
@@ -659,9 +632,9 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
             p = end; if (*p == ',') p++;
         }
         if (n >= 2) {
-            lvl[n] = 0; us[n] = gap_us; n++;   /* silence inter-trame */
+            lvl[n] = 0; us[n] = REJEU_GAP_US; n++;   /* silence inter-trame */
             int r = 0;
-            for (int k = 0; k < repeats && r == 0; k++)
+            for (int k = 0; k < REJEU_REPEATS && r == 0; k++)
                 r = radio_tx_ook_pulses(freq, lvl, us, n);
             ESP_LOGW(TAG, "REJEU brut '%s' cmd=%s : %d impulsions a %u kHz, rc=%d",
                      v->id, cmd, n - 1, (unsigned)freq, r);
@@ -786,19 +759,9 @@ static tx_params_t tx_params_of(const volet_t *v) {
     return p;
 }
 
-/* Code du bouton `button` (direction PFX_BTN_*) dans la trame KeeLoq d'un volet virtuel : celui que son profil
- * declare (frames.<bouton>.code, issue #134). Repli : la direction elle-meme, qui est le code Profalux. */
-static uint8_t keeloq_code(const volet_t *v, uint8_t button) {
-    profile_cmd_t cmd = button == PFX_BTN_UP ? PROFILE_CMD_UP : button == PFX_BTN_DOWN ? PROFILE_CMD_DOWN : PROFILE_CMD_STOP;
-    int code = profile_button_code(profile_of(v), cmd);
-    if (code < 0) { ESP_LOGW(TAG, "'%s' : profil '%s' sans code de bouton, repli 0x%X", v->id, v->profile, button); return button; }
-    return (uint8_t)code;
-}
-
-static bool emit_virt_profalux(volet_t *v, uint8_t direction) {
+static bool emit_virt_profalux(volet_t *v, uint8_t button) {
     char bits[68];
     uint16_t cnt = v->virt_counter;
-    uint8_t button = keeloq_code(v, direction);
     if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return false;   /* rien emis */
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre. Un crash entre les
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
@@ -812,7 +775,7 @@ static bool emit_virt_profalux(volet_t *v, uint8_t direction) {
         return false;
     }
     tx_params_t p = tx_params_of(v);
-    radio_tx_device(bits, press_frames(v), &p);
+    radio_tx_device(bits, PRESS_REPEATS, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
     return true;

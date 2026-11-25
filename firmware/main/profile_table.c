@@ -70,34 +70,3 @@ const profile_def_t *profile_for_device(const char *current, const char *brand, 
     }
     return profile_resolve(brand, virt, somfy, replay);
 }
-
-bool profile_engine_ready(const profile_def_t *p, const char **why) {
-    const char *r = NULL;
-    switch (profile_engine_of(p)) {
-    case PROFILE_ENGINE_KEELOQ:
-        if (!p->frames_per_press) r = "keeloq : tx.frames_per_press requis";
-        else if (profile_add_of(p) == PROFILE_ADD_ENROL && (p->code_up < 0 || p->code_stop < 0 || p->code_down < 0))
-            r = "keeloq en enrolement : un code par bouton requis (frames.<bouton>.code)";
-        else if (profile_add_of(p) == PROFILE_ADD_ENROL && !p->has_enrol) r = "keeloq en enrolement : enrol requis";
-        break;
-    case PROFILE_ENGINE_REPLAY:
-        if (!p->repeats || !p->gap_us) r = "rejeu : tx.repeats et tx.gap_us requis";
-        break;
-    case PROFILE_ENGINE_SOMFY:
-        break;   /* codes et repetitions : la norme Somfy, dans somfy_rts.h */
-    default:
-        r = "moteur inconnu de ce firmware";
-    }
-    if (why) *why = r;
-    return r == NULL;
-}
-
-int profile_button_code(const profile_def_t *p, profile_cmd_t cmd) {
-    if (!p) return -1;
-    switch (cmd) {
-    case PROFILE_CMD_UP:   return p->code_up;
-    case PROFILE_CMD_STOP: return p->code_stop;
-    case PROFILE_CMD_DOWN: return p->code_down;
-    }
-    return -1;
-}

@@ -18,10 +18,6 @@ import sys
 
 # Taille d'un identifiant dans la fiche d'un appareil (SH_ID_LEN de shutters.h, NUL compris).
 ID_MAX = 23
-# Commandes qui ont un emplacement de code de bouton dans profile_def_t (code_up, code_stop, code_down).
-CODE_SLOTS = ("up", "stop", "down")
-# Source d'une trame de bouton : la capture de la telecommande d'origine (frames.<bouton>.source).
-FRAME_SOURCE_CAPTURE = "capture"
 
 
 class CatalogError(Exception):
@@ -100,45 +96,9 @@ def check(doc):
         key = (p["brand"], p["add"], p["engine"])
         require(key not in seen_keys, where, f"meme marque, methode et moteur que le profil {seen_keys.get(key)} : indiscernables pour le firmware")
         seen_keys[key] = pid
-        # Trames par bouton : chaque cle est un bouton du type, chaque valeur une capture ou un code de bouton.
-        # Le code se range sous la commande du bouton (up, stop, down) : c'est elle que le firmware emet.
-        buttons = {b["id"]: b for b in types[p["type"]]["buttons"]}
-        codes = {}
-        frames = p.get("frames", {})
-        require(isinstance(frames, dict), where, "frames : objet attendu")
-        for bid, f in frames.items():
-            require(bid in buttons, where, f"frames.{bid} : le type {p['type']} n'a pas ce bouton")
-            require(isinstance(f, dict) and len(f) == 1 and (f.get("source") == FRAME_SOURCE_CAPTURE or "code" in f), where,
-                    f"frames.{bid} : {{ \"source\": \"{FRAME_SOURCE_CAPTURE}\" }} ou {{ \"code\": n }} attendu")
-            if "code" in f:
-                require(isinstance(f["code"], int) and 0 <= f["code"] <= 15, where, f"frames.{bid}.code : entier de 0 a 15")
-                cmd = buttons[bid]["cmd"]
-                require(cmd in CODE_SLOTS, where, f"frames.{bid} : la commande {cmd} n'a pas d'emplacement de code")
-                codes[cmd] = f["code"]
-        tx = p.get("tx", {})
-        require(isinstance(tx, dict), where, "tx : objet attendu")
-        def count(obj, key, lo, hi, label):
-            v = obj.get(key, 0)
-            require(isinstance(v, int) and (v == 0 or lo <= v <= hi), where, f"{label} : entier de {lo} a {hi}")
-            return v
-        enrol = p.get("enrol")
-        require(enrol is None or isinstance(enrol, dict), where, "enrol : objet attendu")
-        if enrol is not None:
-            for key in ("code", "frames_per_burst", "bursts", "counter_start"):
-                require(key in enrol, where, f"enrol.{key} requis")
         out.append({
             "id": pid, "brand": p["brand"], "type_code": types[p["type"]]["code"],
             "add": p["add"], "engine": p["engine"], "band": radio["band"], "freq_khz": freq,
-            "frames_per_press": count(tx, "frames_per_press", 1, 50, "tx.frames_per_press"),
-            "codes": codes,
-            "repeats": count(tx, "repeats", 1, 50, "tx.repeats"),
-            "gap_us": count(tx, "gap_us", 1000, 100000, "tx.gap_us"),
-            "enrol": None if enrol is None else {
-                "code": count(enrol, "code", 0, 15, "enrol.code"),
-                "frames_per_burst": count(enrol, "frames_per_burst", 1, 50, "enrol.frames_per_burst"),
-                "bursts": count(enrol, "bursts", 1, 50, "enrol.bursts"),
-                "counter_start": count(enrol, "counter_start", 0, 65535, "enrol.counter_start"),
-            },
         })
     return out
 
@@ -151,16 +111,10 @@ def render(profiles, source):
         "const profile_def_t PROFILE_TABLE[] = {",
     ]
     for p in profiles:
-        code = lambda cmd: p["codes"].get(cmd, -1)
-        e = p["enrol"]
-        enrol = (f".has_enrol = true, .enrol_code = {e['code']}, .enrol_frames_per_burst = {e['frames_per_burst']}, "
-                 f".enrol_bursts = {e['bursts']}, .enrol_counter_start = {e['counter_start']}") if e else ".has_enrol = false"
         lines.append(
             f"    {{ .id = {c_string(p['id'])}, .brand = {c_string(p['brand'])}, .type_code = {p['type_code']}, "
             f".add = {c_string(p['add'])}, .engine = {c_string(p['engine'])}, .band = {c_string(p['band'])}, "
-            f".freq_khz = {p['freq_khz']}, .frames_per_press = {p['frames_per_press']}, "
-            f".code_up = {code('up')}, .code_stop = {code('stop')}, .code_down = {code('down')}, "
-            f".repeats = {p['repeats']}, .gap_us = {p['gap_us']}, {enrol} }},"
+            f".freq_khz = {p['freq_khz']} }},"
         )
     lines += ["};", f"const int PROFILE_TABLE_COUNT = {len(profiles)};", ""]
     return "\n".join(lines)

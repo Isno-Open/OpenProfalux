@@ -23,16 +23,6 @@ typedef struct {
     const char *engine;    /* moteur : "rejeu-brut", "keeloq", "somfy-rts"... */
     const char *band;      /* bande radio : "868", "433" */
     uint32_t    freq_khz;  /* porteuse par defaut du profil (0 = celle de la radio) */
-    /* Ce que le moteur emet (lot 2b) : 0 ou -1 = non declare par le profil. */
-    uint8_t     frames_per_press;   /* trames par appui (tx.frames_per_press) */
-    int8_t      code_up, code_stop, code_down;   /* code de bouton dans la trame du moteur (frames.<bouton>.code) */
-    uint8_t     repeats;            /* rejeu : repetitions de la trame captee (tx.repeats) */
-    uint32_t    gap_us;             /* rejeu : silence entre deux repetitions (tx.gap_us) */
-    bool        has_enrol;          /* trame d'apprentissage declaree (enrol) */
-    uint8_t     enrol_code;         /* code de bouton de la trame d'apprentissage */
-    uint8_t     enrol_frames_per_burst;
-    uint8_t     enrol_bursts;
-    uint16_t    enrol_counter_start;   /* compteur minimal de la trame d'apprentissage */
 } profile_def_t;
 
 extern const profile_def_t PROFILE_TABLE[];
@@ -72,14 +62,3 @@ const profile_def_t *profile_resolve(const char *brand, bool virt, bool somfy, b
  * retrouve profile_resolve. Un profil donne explicitement est donc garde, et une fiche dont la marque ou
  * la methode change suit son nouveau profil. */
 const profile_def_t *profile_for_device(const char *current, const char *brand, bool virt, bool somfy, bool replay);
-
-/* Ce que le moteur du profil exige pour emettre, verifie par le banc contre le vrai catalogue (et journalise au
- * demarrage par le firmware) : KeeLoq, des trames par appui, et en enrolement les codes de bouton et la trame
- * d'apprentissage ; rejeu, ses repetitions et son silence. Rend true si le profil est complet, sinon false et
- * la raison dans *why. */
-bool profile_engine_ready(const profile_def_t *p, const char **why);
-
-/* Commandes qui ont un code de bouton dans un profil. */
-typedef enum { PROFILE_CMD_UP, PROFILE_CMD_STOP, PROFILE_CMD_DOWN } profile_cmd_t;
-/* Code du bouton `cmd` dans la trame du moteur, ou -1 si le profil n'en declare pas. */
-int profile_button_code(const profile_def_t *p, profile_cmd_t cmd);

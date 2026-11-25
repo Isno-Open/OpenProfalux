@@ -33,8 +33,7 @@
 #include "crash_trace.h"
 #include "cloud_grant.h"
 #include "cc1101.h"
-#include "radio_profile.h"
-#include "profile_table.h"   /* profils du catalogue (issue #134) */   /* profil radio (frequence par marque) */
+#include "radio_profile.h"   /* profil radio (frequence par marque) */
 #include "esp_random.h"
 #include "esp_system.h"      /* esp_reset_reason, tas libre (/api/health) */
 #include "esp_heap_caps.h"
@@ -1378,8 +1377,6 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
     s_enrol_rmt = txovr_of(j, "tx_rmt");
     strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
-    /* Le profil de la marque choisie, en enrolement : il donne la trame d'apprentissage et les codes de bouton (#134). */
-    pfx_enrol_set_profile(profile_resolve(s_enrol_marque, true, false, false));
     tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
                        .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
                        .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
