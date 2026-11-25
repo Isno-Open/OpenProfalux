@@ -1439,9 +1439,6 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
-    /* step sur un appareil sans cycle pas a pas (portail Somfy ou KeeLoq, profil sans bouton pas a pas) : un appui de
-     * son bouton, celui qu'envoyait le portail avant la commande step. */
-    if (profile_cmd_of(cmd) == PROFILE_CMD_STEP) cmd = profile_cmd_name(PROFILE_CMD_UP);
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
     if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
     else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
@@ -1452,6 +1449,12 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         if (value > v->position + 1)      start_move(v, -1, value);   /* plus ferme -> descendre */
         else if (value < v->position - 1) start_move(v, +1, value);   /* plus ouvert -> monter */
         else { v->target = value; v->dir = 0; }
+    }
+    else {
+        /* Commande qu'aucun bouton de l'appareil ne porte (step sans cycle pas a pas dans son profil, commande inconnue) :
+         * refusee, plutot qu'un succes sans emission. Les boutons d'un appareil sont ceux de son profil (#134). */
+        ESP_LOGW(TAG, "CMD %s refusee : '%s' n'a pas de bouton pour cette commande (profil '%s')", cmd, id, v->profile);
+        UNLOCK(); return -1;
     }
     publish_volet_state(v);
     UNLOCK();
