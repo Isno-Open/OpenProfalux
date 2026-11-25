@@ -6,6 +6,10 @@
 #include "freq_sweep.h"
 #include "hardware_config.h"
 #include "rx_confirm.h"
+#include "io/io_radio.h"
+#include "io/io_send.h"
+#include "io/io_store.h"
+#include "io/io_pair.h"
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -198,6 +202,77 @@ int radio_tx_ook_pulses(uint32_t freq_khz, const uint8_t *levels, const uint32_t
 }
 
 void radio_pause_rx(bool pause) { s_paused = pause; }
+
+/* ── io-homecontrol 1W (#87, #118) ──
+ * Session io : SUPPOSE le mutex pris et l'ecoute en pause. Choisit la radio dont la bande couvre la porteuse io
+ * (sur la Super, la radio 868), la passe en FSK io ; io_session_end restaure l'OOK, la porteuse et la radio active. */
+typedef struct { int prev; uint32_t back; } io_session_t;
+static bool io_session_begin(io_session_t *s) {
+    s->prev = cc1101_active_radio();
+    int idx = cc1101_radio_for_khz(io_radio_carrier_khz());
+    if (idx < 0) { ESP_LOGE(TAG, "io : aucune radio de la carte ne couvre %u kHz", (unsigned)io_radio_carrier_khz()); return false; }
+    cc1101_select(idx);
+    s->back = cc1101_get_freq_khz();
+    io_radio_config();                         /* FSK io + canal 1W */
+    return true;
+}
+static void io_session_end(const io_session_t *s) {
+    cc1101_apply_config_ook();                 /* restaure la modulation OOK */
+    if (cc1101_set_freq_khz(s->back) != 0)
+        ESP_LOGE(TAG, "io : porteuse %u kHz non retablie", (unsigned)s->back);
+    cc1101_select(s->prev);
+}
+
+int radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms) {
+    if (!s_mtx || !buf || max <= 0) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    io_session_t s;
+    int n = -1;
+    if (io_session_begin(&s)) { n = io_radio_rx_packet(buf, (size_t)max, timeout_ms); io_session_end(&s); }
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return n;
+}
+
+int radio_io_send(const uint8_t src[3], uint8_t button) {
+    if (!s_mtx || !src) return -1;
+    uint8_t key[16];
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    io_session_t s;
+    int r = -1;
+    if (io_store_get_key(src, key) && io_session_begin(&s)) { r = io_hc_send_shutter_1w(src, key, button); io_session_end(&s); }
+    memset(key, 0, sizeof key);
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
+
+int radio_io_erase(void) {
+    if (!s_mtx) return -1;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    int r = io_store_erase_all();
+    xSemaphoreGive(s_mtx);
+    return r;
+}
+
+int radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
+                    uint8_t man_id, bool tx, int rolling) {
+    if (!s_mtx || !profile || !src || !key || (!tx && rolling < 0)) return -1;
+    bool was = s_paused; s_paused = true;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    io_session_t s;
+    /* La radio d'abord : une carte sans radio io n'enregistre pas une identite qu'elle ne saura jamais emettre. */
+    int r = (tx && cc1101_radio_for_khz(io_radio_carrier_khz()) < 0) ? -1 : (io_store_set(src, key, profile, rolling) ? 0 : -1);
+    if (r == 0 && tx) {
+        r = -1;
+        if (io_session_begin(&s)) { r = io_hc_pair_1w(profile, src, key, man_id); io_session_end(&s); }
+    }
+    xSemaphoreGive(s_mtx);
+    s_paused = was;
+    return r;
+}
 
 /* Relance le self-test TX a la demande (bouton UI), sous mutex/pause pour ne pas
  * entrer en collision avec l'ecoute. Retourne 0 si la puce passe en TX, -1 sinon. */

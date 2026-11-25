@@ -1379,7 +1379,7 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     s_enrol_rmt = txovr_of(j, "tx_rmt");
     strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
     /* Le profil de la marque choisie, en enrolement : il donne la trame d'apprentissage et les codes de bouton (#134). */
-    pfx_enrol_set_profile(profile_resolve(s_enrol_marque, true, false, false));
+    pfx_enrol_set_profile(profile_resolve(s_enrol_marque, true, PROFILE_ENGINE_KEELOQ, false));
     tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
                        .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
                        .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };

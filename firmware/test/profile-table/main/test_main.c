@@ -24,12 +24,14 @@ static int is(const profile_def_t *p, const char *id) { return p && !strcmp(p->i
 /* Les valeurs du domaine que ce banc donne ou attend, declarees une fois : ce sont celles de profiles.json. */
 static const char ID_PFX_ENROL[] = "profalux-enrol", ID_PFX_COPY[] = "profalux-copy", ID_EVENO[] = "eveno-enrol",
                   ID_FRANCIAFLEX[] = "franciaflex-enrol", ID_SOMFY[] = "somfy-rts-enrol", ID_CAME[] = "came-replay",
-                  ID_UNKNOWN[] = "inconnu", ID_REMOVED[] = "disparu";
+                  ID_VELUX[] = "velux-io-enrol", ID_UNKNOWN[] = "inconnu", ID_REMOVED[] = "disparu";
 static const char BRAND_PFX[] = "Profalux", BRAND_EVENO[] = "Eveno", BRAND_FRANCIAFLEX[] = "Franciaflex", NO_BRAND[] = "";
 
 /* Ce que le firmware emettait AVANT le lot 2b, quand ces valeurs etaient des constantes du C (PRESS_REPEATS,
  * PFX_BTN_*, BTN_LEARN, PFX_BURST, PFX_LEARN_ROUNDS, compteur de depart, REJEU_REPEATS, REJEU_GAP_US) : les profils
  * livres doivent les reproduire, sinon le comportement change. */
+/* Code fabricant du transfert de cle io que le Velux accepte, celui qu'emettait la PR #118 validee sur le materiel. */
+enum { VELUX_MAN_ID = 1 };
 enum { OLD_PRESS = 10, OLD_UP = 0x2, OLD_STOP = 0x4, OLD_DOWN = 0x8, OLD_LEARN = 0x5, OLD_BURST = 9, OLD_ROUNDS = 5,
        OLD_COUNTER = 3, OLD_REJEU_REPEATS = 8, OLD_REJEU_GAP_US = 12000 };
 
@@ -44,20 +46,20 @@ int main(void) {
     check(profile_find(ID_PFX_ENROL) && !profile_find(ID_UNKNOWN) && !profile_find(NO_BRAND) && !profile_find(NULL), "T2 profile_find : par id, NULL sinon");
 
     /* Migration : fiche sans id de profil (marque, virtuel, Somfy, rejeu). */
-    check(is(profile_resolve(BRAND_PFX, true, false, false), ID_PFX_ENROL), "T3 virtuel Profalux -> profalux-enrol");
-    check(is(profile_resolve(NO_BRAND, true, false, false), ID_PFX_ENROL), "T4 virtuel sans marque -> profalux-enrol");
-    check(is(profile_resolve(BRAND_EVENO, true, false, false), ID_EVENO), "T5 virtuel Eveno -> eveno-enrol");
-    check(is(profile_resolve(NO_BRAND, true, true, false), ID_SOMFY), "T6 virtuel Somfy -> somfy-rts-enrol");
-    check(is(profile_resolve(NO_BRAND, false, false, true), ID_CAME), "T7 rejeu sans marque -> came-replay");
-    check(is(profile_resolve(NO_BRAND, false, false, false), ID_PFX_COPY), "T8 clone sans marque -> profalux-copy");
-    check(is(profile_resolve(BRAND_EVENO, false, false, false), ID_PFX_COPY), "T9 clone d'une marque sans profil de copie -> le premier de la methode");
+    check(is(profile_resolve(BRAND_PFX, true, PROFILE_ENGINE_KEELOQ, false), ID_PFX_ENROL), "T3 virtuel Profalux -> profalux-enrol");
+    check(is(profile_resolve(NO_BRAND, true, PROFILE_ENGINE_KEELOQ, false), ID_PFX_ENROL), "T4 virtuel sans marque -> profalux-enrol");
+    check(is(profile_resolve(BRAND_EVENO, true, PROFILE_ENGINE_KEELOQ, false), ID_EVENO), "T5 virtuel Eveno -> eveno-enrol");
+    check(is(profile_resolve(NO_BRAND, true, PROFILE_ENGINE_SOMFY, false), ID_SOMFY), "T6 virtuel Somfy -> somfy-rts-enrol");
+    check(is(profile_resolve(NO_BRAND, false, PROFILE_ENGINE_UNKNOWN, true), ID_CAME), "T7 rejeu sans marque -> came-replay");
+    check(is(profile_resolve(NO_BRAND, false, PROFILE_ENGINE_UNKNOWN, false), ID_PFX_COPY), "T8 clone sans marque -> profalux-copy");
+    check(is(profile_resolve(BRAND_EVENO, false, PROFILE_ENGINE_UNKNOWN, false), ID_PFX_COPY), "T9 clone d'une marque sans profil de copie -> le premier de la methode");
 
     /* Coherence d'un profil grave. */
-    check(is(profile_for_device(ID_FRANCIAFLEX, BRAND_FRANCIAFLEX, true, false, false), ID_FRANCIAFLEX), "T10 profil explicite et coherent : garde");
-    check(is(profile_for_device(ID_FRANCIAFLEX, BRAND_EVENO, true, false, false), ID_EVENO), "T11 marque changee : le profil suit");
-    check(is(profile_for_device(ID_PFX_ENROL, BRAND_PFX, false, false, false), ID_PFX_COPY), "T12 methode changee (enrole -> clone) : le profil suit");
-    check(is(profile_for_device(ID_REMOVED, BRAND_PFX, true, false, false), ID_PFX_ENROL), "T13 profil inconnu (retire du catalogue) : retrouve");
-    check(is(profile_for_device(ID_PFX_ENROL, NO_BRAND, true, false, false), ID_PFX_ENROL), "T14 fiche sans marque : le profil grave est garde");
+    check(is(profile_for_device(ID_FRANCIAFLEX, BRAND_FRANCIAFLEX, true, PROFILE_ENGINE_KEELOQ, false), ID_FRANCIAFLEX), "T10 profil explicite et coherent : garde");
+    check(is(profile_for_device(ID_FRANCIAFLEX, BRAND_EVENO, true, PROFILE_ENGINE_KEELOQ, false), ID_EVENO), "T11 marque changee : le profil suit");
+    check(is(profile_for_device(ID_PFX_ENROL, BRAND_PFX, false, PROFILE_ENGINE_UNKNOWN, false), ID_PFX_COPY), "T12 methode changee (enrole -> clone) : le profil suit");
+    check(is(profile_for_device(ID_REMOVED, BRAND_PFX, true, PROFILE_ENGINE_KEELOQ, false), ID_PFX_ENROL), "T13 profil inconnu (retire du catalogue) : retrouve");
+    check(is(profile_for_device(ID_PFX_ENROL, NO_BRAND, true, PROFILE_ENGINE_KEELOQ, false), ID_PFX_ENROL), "T14 fiche sans marque : le profil grave est garde");
 
     /* Lot 2b : complet pour son moteur, et comportement inchange. */
     int ready = 1;
@@ -89,6 +91,15 @@ int main(void) {
     check(shutter && gate && shutter->ha_device_class[0] && gate->ha_device_class[0] && !type_find(200),
           "T18 chaque type du firmware est declare, avec sa classe Home Assistant");
     check(shutter && shutter->positional && gate && !gate->positional, "T19 le volet a une position, le portail n'en a pas");
+
+    /* io-homecontrol (Velux, #118) : un volet virtuel io retrouve son profil, qui porte le code fabricant prouve. */
+    const profile_def_t *velux = profile_find(ID_VELUX);
+    check(is(profile_resolve(NO_BRAND, true, PROFILE_ENGINE_IO, false), ID_VELUX)
+          && is(profile_for_device(NULL, NO_BRAND, true, PROFILE_ENGINE_IO, false), ID_VELUX)
+          && is(profile_for_device(ID_PFX_ENROL, NO_BRAND, true, PROFILE_ENGINE_IO, false), ID_VELUX),
+          "T20 volet virtuel io -> velux-io-enrol (et un profil KeeLoq grave sur un volet io est corrige)");
+    check(velux && profile_engine_of(velux) == PROFILE_ENGINE_IO && profile_add_of(velux) == PROFILE_ADD_ENROL
+          && velux->io_man_id == VELUX_MAN_ID, "T21 le profil Velux io emet le code fabricant 1, celui de #118");
 
     printf(g_fail ? "ECHEC : %d\n" : "OK\n", g_fail);
     return g_fail ? 1 : 0;

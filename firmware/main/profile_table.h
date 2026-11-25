@@ -28,6 +28,7 @@ typedef struct {
     int8_t      code_up, code_stop, code_down;   /* code de bouton dans la trame du moteur (frames.<bouton>.code) */
     uint8_t     repeats;            /* rejeu : repetitions de la trame captee (tx.repeats) */
     uint32_t    gap_us;             /* rejeu : silence entre deux repetitions (tx.gap_us) */
+    int16_t     io_man_id;          /* io-homecontrol : code fabricant du transfert de cle (io.man_id), -1 sinon */
     bool        has_enrol;          /* trame d'apprentissage declaree (enrol) */
     uint8_t     enrol_code;         /* code de bouton de la trame d'apprentissage */
     uint8_t     enrol_frames_per_burst;
@@ -59,6 +60,7 @@ typedef enum {
     PROFILE_ENGINE_REPLAY,   /* "rejeu-brut" : rejoue la capture telle quelle (code fixe) */
     PROFILE_ENGINE_KEELOQ,   /* "keeloq"     : code roulant KeeLoq (Profalux et sa famille) */
     PROFILE_ENGINE_SOMFY,    /* "somfy-rts"  : Somfy RTS */
+    PROFILE_ENGINE_IO,       /* "io-homecontrol" : io-homecontrol 1W (Velux), #87, #118 */
 } profile_engine_t;
 
 typedef enum {
@@ -75,17 +77,18 @@ const profile_def_t *profile_find(const char *id);
 
 /* Le profil d'un appareil qui n'en porte pas encore (fiche anterieure a l'etape 2) : celui de sa marque
  * et de sa methode, deduite de la fiche comme le fait l'interface (profiles.ts, methodOf) :
- *   virtuel Somfy -> enrol + somfy-rts ; virtuel -> enrol + keeloq ;
+ *   virtuel -> enrol + le moteur de son protocole (virt_engine : keeloq, somfy-rts, io-homecontrol) ;
  *   rejeu brut -> copy + rejeu-brut ; sinon -> copy + keeloq (clone).
- * Sans marque, celle du protocole (Somfy RTS, CAME pour un rejeu, Profalux sinon). Si aucun profil de la
- * marque n'a cette methode, le premier de la methode. NULL si aucun profil ne convient. */
-const profile_def_t *profile_resolve(const char *brand, bool virt, bool somfy, bool replay);
+ * Sans marque, celle du protocole (Somfy RTS, Velux, CAME pour un rejeu, Profalux sinon). Si aucun profil de la
+ * marque n'a cette methode, le premier de la methode. NULL si aucun profil ne convient. virt_engine est ignore
+ * pour un appareil qui n'est pas virtuel. */
+const profile_def_t *profile_resolve(const char *brand, bool virt, profile_engine_t virt_engine, bool replay);
 
 /* Le profil a garder dans la fiche d'un appareil : `current` (l'id deja grave) s'il est connu et reste
  * coherent avec la fiche (meme methode, et meme marque quand la fiche en porte une), sinon celui que
  * retrouve profile_resolve. Un profil donne explicitement est donc garde, et une fiche dont la marque ou
  * la methode change suit son nouveau profil. */
-const profile_def_t *profile_for_device(const char *current, const char *brand, bool virt, bool somfy, bool replay);
+const profile_def_t *profile_for_device(const char *current, const char *brand, bool virt, profile_engine_t virt_engine, bool replay);
 
 /* Ce que le moteur du profil exige pour emettre, verifie par le banc contre le vrai catalogue (et journalise au
  * demarrage par le firmware) : KeeLoq, des trames par appui, et en enrolement les codes de bouton et la trame

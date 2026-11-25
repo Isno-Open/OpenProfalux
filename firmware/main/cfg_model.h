@@ -27,6 +27,7 @@
 typedef enum {
     VOLET_PROTO_PROFALUX  = 0,   /* KeeLoq 0x067 : pfx_enrol_frame + compteur roulant */
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
+    VOLET_PROTO_IO        = 2,   /* io-homecontrol 1W : identite, cle et compteur dans io_store (#87, #118) */
 } volet_proto_t;
 
 #include "dev_type.h"   /* dev_type_t : type d'appareil (en-tete sans dependance, teste sur PC) */

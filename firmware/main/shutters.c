@@ -31,6 +31,7 @@
 #include "cJSON.h"
 #include "cc1101.h"
 #include "radio.h"
+#include "io/io_send.h"       /* io_button_for_action : bouton io d'une commande (#118) */
 #include "somfy_tx.h"
 #include "hardware_config.h"
 #include "mqtt_bridge.h"
@@ -348,12 +349,20 @@ static bool sanitize_freqs(void) {
     return changed;
 }
 
+/* Le moteur d'un appareil virtuel, d'apres son protocole d'emission. */
+static profile_engine_t virt_engine_of(const volet_t *v) {
+    switch ((volet_proto_t)v->proto) {
+    case VOLET_PROTO_SOMFY_RTS: return PROFILE_ENGINE_SOMFY;
+    case VOLET_PROTO_IO:        return PROFILE_ENGINE_IO;
+    default:                    return PROFILE_ENGINE_KEELOQ;
+    }
+}
 static bool sync_profiles(void) {
     bool changed = false;
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
         const profile_def_t *p = v->central ? NULL
-            : profile_for_device(v->profile, v->marque, v->virt, (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS, v->rejeu != NULL);
+            : profile_for_device(v->profile, v->marque, v->virt, virt_engine_of(v), v->rejeu != NULL);
         const char *id = p ? p->id : "";
         if (strcmp(v->profile, id)) {
             ESP_LOGI(TAG, "profil de '%s' : '%s' -> '%s'", v->id, v->profile, id);
@@ -876,12 +885,24 @@ static bool emit_virt_somfy(volet_t *v, uint8_t button) {
  * autres. `button` est un code PFX_BTN_*, traduit par protocole. Renvoie true si une trame a
  * ete emise : un protocole non cable (ou une trame Profalux non construite) renvoie false, pour
  * que l'appelant ne simule pas un mouvement qui n'a rien envoye au moteur. */
+/* io-homecontrol 1W (#118) : l'identite est la source 24 bits ; cle, profil et compteur vivent dans io_store. Une
+ * commande = une rafale, sans nouvel essai (batterie des moteurs solaires). */
+static bool emit_virt_io(volet_t *v, uint8_t button) {
+    const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
+    profile_cmd_t c = button == PFX_BTN_UP ? PROFILE_CMD_UP : button == PFX_BTN_DOWN ? PROFILE_CMD_DOWN : PROFILE_CMD_STOP;
+    int r = radio_io_send(src, (uint8_t)io_button_for_action(profile_cmd_name(c)));
+    if (r != 0) ESP_LOGE(TAG, "volet io '%s' : commande %s non emise (identite, compteur ou radio)", v->id, profile_cmd_name(c));
+    return r == 0;
+}
+
 static bool emit_virt(volet_t *v, uint8_t button) {
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:
         return emit_virt_profalux(v, button);
     case VOLET_PROTO_SOMFY_RTS:
         return emit_virt_somfy(v, button);
+    case VOLET_PROTO_IO:
+        return emit_virt_io(v, button);
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
                  v->id, (unsigned)v->proto);
@@ -1280,7 +1301,7 @@ static void sync_pub_busy(uint32_t serial, bool on) {
 static int sync_idx_by_serial(uint32_t serial) {
     int idx = -1; LOCK();
     for (int i = 0; i < s_nvolets; i++)
-        if (s_volets[i].virt && s_volets[i].virt_serial == serial) { idx = i; break; }
+        if (s_volets[i].virt && s_volets[i].proto != VOLET_PROTO_IO && s_volets[i].virt_serial == serial) { idx = i; break; }
     UNLOCK(); return idx;
 }
 
@@ -1292,7 +1313,8 @@ int shutters_cmd_synced(const char *id, const char *cmd, int value) {
     uint32_t serial = 0; int idx = -1;
     LOCK();
     volet_t *v = find_volet(id);
-    if (v && v->virt) { serial = v->virt_serial; idx = (int)(v - s_volets); }
+    /* io : compteur propre a l'identite (io_store), hors des topics partages counter/busy (#118). */
+    if (v && v->virt && v->proto != VOLET_PROTO_IO) { serial = v->virt_serial; idx = (int)(v - s_volets); }
     UNLOCK();
     if (idx >= 0 && !s_self_emit[idx] && s_busy_until[idx] && sync_now_ms() < s_busy_until[idx])
         return SH_CMD_BUSY;                              /* une emission de ce serial est deja en cours */
@@ -1505,6 +1527,38 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
 /* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
  * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
+/* Volet io-homecontrol 1W (#118) : l'identite `src` (24 bits) est deja enregistree dans io_store. Ne convertit jamais
+ * un appareil existant d'un autre protocole ; le meme volet (meme identite) est rendu tel quel. Une identite qui
+ * ressemblerait a une identite Profalux 0x067 est refusee, comme une adresse Somfy (voir plus bas) : un firmware
+ * d'avant le champ proto l'emettrait en KeeLoq. */
+int shutters_create_io_volet(const char *id, uint32_t src, const char *brand) {
+    if (!id || !*id || strlen(id) >= SH_ID_LEN || src > 0xFFFFFF || !(src >> 16)) return -1;
+    if (pfx_key_for_serial(src, NULL, NULL)) {
+        ESP_LOGW(TAG, "volet io '%s' refuse : identite 0x%06X semblable a une identite Profalux", id, (unsigned)src);
+        return -1;
+    }
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (v) {
+        bool same = v->virt && v->proto == VOLET_PROTO_IO && v->virt_serial == src;
+        UNLOCK();
+        return same ? 0 : -1;
+    }
+    v = get_or_create(id);
+    if (!v) { UNLOCK(); return -1; }
+    v->virt = true;
+    v->proto = VOLET_PROTO_IO;
+    v->virt_serial = src;
+    v->virt_counter = 0;   /* io_store est l'unique proprietaire du compteur io */
+    if (brand && *brand) strlcpy(v->marque, brand, SH_ID_LEN);
+    esp_err_t e = save_cfg();
+    if (e == ESP_OK) announce_one(v);
+    else cfg_model_remove(&s_model, (int)(v - s_volets));
+    UNLOCK();
+    pub_flush();
+    return e == ESP_OK ? 0 : -1;
+}
+
 sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address) {
     if (!id || !*id || !address || address > SOMFY_RTS_ADDR_MAX) return SH_SOMFY_INVALID;
     if (strlen(id) >= SH_ID_LEN) return SH_SOMFY_NAME_TOO_LONG;
@@ -2172,11 +2226,11 @@ static cJSON *status_device_json(const volet_t *v) {
     cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
     if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
         cJSON_AddBoolToObject(o, "virt", true);
-        bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
-        cJSON_AddStringToObject(o, "proto", somfy ? "somfy" : "profalux");
+        bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS, io = (volet_proto_t)v->proto == VOLET_PROTO_IO;
+        cJSON_AddStringToObject(o, "proto", io ? "io" : somfy ? "somfy" : "profalux");
         char vhex[SH_SERIAL_LEN];
-        /* Profalux : identite 0x067 sur 7 quartets. Somfy : adresse 24 bits sur 6 quartets. */
-        snprintf(vhex, sizeof(vhex), somfy ? "0x%06X" : "0x%07X",
+        /* Profalux : identite 0x067 sur 7 quartets. Somfy et io : adresse 24 bits sur 6 quartets. */
+        snprintf(vhex, sizeof(vhex), (somfy || io) ? "0x%06X" : "0x%07X",
                  (unsigned)(somfy ? (v->virt_serial & SOMFY_RTS_ADDR_MAX) : v->virt_serial));
         cJSON_AddStringToObject(o, "virt_serial", vhex);
     }
@@ -2658,7 +2712,7 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         uint16_t rx = (uint16_t)atoi(nb);
         LOCK();
         for (int i = 0; i < s_nvolets; i++)
-            if (s_volets[i].virt && s_volets[i].virt_serial == serial) {
+            if (s_volets[i].virt && s_volets[i].proto != VOLET_PROTO_IO && s_volets[i].virt_serial == serial) {
                 uint16_t keep = vc_keep(rx, s_volets[i].virt_counter);
                 if (keep != s_volets[i].virt_counter) { s_volets[i].virt_counter = keep; save_cfg(); }
                 break;

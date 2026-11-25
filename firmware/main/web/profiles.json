@@ -131,6 +131,17 @@
       "tx": { "frame_bits": 56 },
       "test": { "status": "tested" },
       "note": "Generation RTS (adresse 24 bits + code roulant). 433,42 DISTINCTE du CAME 433,92 (meme bande, porteuse differente). frame_bits 56/80 PAR VOLET (le 80 ajoute une extension). Le timing de synchronisation Somfy est une CONSTANTE de la norme, source unique dans somfy_rts.h."
+    },
+    {
+      "id": "velux-io-enrol",
+      "name": "Nouveau volet Velux io",
+      "description": "Le boîtier devient une nouvelle télécommande io du volet. On capte d'abord un appui de la télécommande d'origine, puis on la met en apprentissage (appui long sur RESET) et le boîtier envoie sa clé.",
+      "type": "volet", "brand": "Velux",
+      "add": "enrol", "engine": "io-homecontrol", "code": "rolling",
+      "radio": { "band": "868", "freq_khz": 868950, "modulation": "FSK" },
+      "io": { "man_id": 1 },
+      "test": { "status": "tested" },
+      "note": "io-homecontrol 1W (#87). Prouve par la PR #118 sur un volet roulant solaire Velux (telecommande 3UR B01, type 860963) : montee, descente, stop depuis Home Assistant, telecommande d'origine intacte. io.man_id : code fabricant du transfert de cle 0x30, 1 pour Velux (seul accepte). Trames, rafales et canal 868,95 : la norme io, dans firmware/main/io. Un quartz decale se corrige par le reglage systeme io_freq_offset_khz."
     }
   ]
 }

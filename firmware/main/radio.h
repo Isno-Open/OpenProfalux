@@ -13,6 +13,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "io/io_store.h"   /* io_profile_t (appairage 1W io, #87, #118) */
 
 /* Callback appele (hors mutex) pour chaque trame recue. bits = chaine '0'/'1' ordre du fil. */
 typedef void (*radio_frame_cb_t)(const char *bits, uint32_t serial, uint8_t button,
@@ -53,6 +54,16 @@ int  radio_set_freq_khz(uint32_t khz); /* frequence porteuse a chaud (sous mutex
  * la main a la radio d'avant (issue #95). Pointeur NULL = inchange. 0=OK, -1=idx hors borne. */
 int  radio_apply(int idx, const uint32_t *freq_khz, const uint8_t *rx_gain,
                  const uint32_t *tx_te, const int *tx_rpt, const int *tx_rmt);
+/* ── io-homecontrol 1W (2-FSK 868,95 MHz, #87, #118). Chaque primitive prend la radio de la carte dont la bande
+ * declaree couvre la porteuse io, la passe en FSK io sous le mutex, ecoute permanente en pause, puis RESTAURE la
+ * modulation OOK, la porteuse et la radio active, meme sur echec. -1 si la carte n'a aucune radio pour l'io. ── */
+int  radio_io_sniff(uint8_t *buf, int max, uint32_t timeout_ms);  /* ecoute UNE trame io ; octets recus, <= 0 sinon */
+int  radio_io_send(const uint8_t src[3], uint8_t button);         /* UN appui de bouton io 1W depuis l'identite src */
+int  radio_io_erase(void);                                        /* vide les identites io (sous le mutex des compteurs) */
+/* Enregistre l'identite (cle, profil, compteur) puis, si tx, emet le transfert de cle 0x30. tx=false : reprise d'une
+ * identite deja appairee, sans aucune emission, rolling obligatoire. */
+int  radio_io_enroll(const io_profile_t *profile, const uint8_t src[3], const uint8_t key[16],
+                     uint8_t man_id, bool tx, int rolling);
 int  radio_tx_selftest(void);          /* relance le self-test TX (sous mutex) ; 0=OK, -1=HS */
 int  radio_calibrate_start(void);      /* 0=lance, 1=deja en cours, -1=erreur (radio active) */
 int  radio_calibrate_start_on(int idx);/* idem, mais calibre la radio idx (issue #95) */

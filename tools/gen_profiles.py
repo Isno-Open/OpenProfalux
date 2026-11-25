@@ -123,6 +123,10 @@ def check(doc):
             v = obj.get(key, 0)
             require(isinstance(v, int) and (v == 0 or lo <= v <= hi), where, f"{label} : entier de {lo} a {hi}")
             return v
+        # io-homecontrol : le code fabricant du transfert de cle (io.man_id), propre a la marque.
+        io = p.get("io")
+        require(io is None or (isinstance(io, dict) and isinstance(io.get("man_id"), int) and 0 <= io["man_id"] <= 255),
+                where, "io : { \"man_id\": entier de 0 a 255 } attendu")
         enrol = p.get("enrol")
         require(enrol is None or isinstance(enrol, dict), where, "enrol : objet attendu")
         if enrol is not None:
@@ -132,7 +136,7 @@ def check(doc):
             "id": pid, "brand": p["brand"], "type_code": types[p["type"]]["code"],
             "add": p["add"], "engine": p["engine"], "band": radio["band"], "freq_khz": freq,
             "frames_per_press": count(tx, "frames_per_press", 1, 50, "tx.frames_per_press"),
-            "codes": codes,
+            "codes": codes, "io_man_id": io["man_id"] if io else -1,
             "repeats": count(tx, "repeats", 1, 50, "tx.repeats"),
             "gap_us": count(tx, "gap_us", 1000, 100000, "tx.gap_us"),
             "enrol": None if enrol is None else {
@@ -171,7 +175,7 @@ def render(profiles, source, types):
             f".add = {c_string(p['add'])}, .engine = {c_string(p['engine'])}, .band = {c_string(p['band'])}, "
             f".freq_khz = {p['freq_khz']}, .frames_per_press = {p['frames_per_press']}, "
             f".code_up = {code('up')}, .code_stop = {code('stop')}, .code_down = {code('down')}, "
-            f".repeats = {p['repeats']}, .gap_us = {p['gap_us']}, {enrol} }},"
+            f".repeats = {p['repeats']}, .gap_us = {p['gap_us']}, .io_man_id = {p['io_man_id']}, {enrol} }},"
         )
     lines += ["};", f"const int PROFILE_TABLE_COUNT = {len(profiles)};", ""]
     lines += render_types(types)
