@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
-import { CONTROL_ID } from "../src/ids.js";
+import { CONTROL_ID, SETTING_ID } from "../src/ids.js";
 import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
 import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
 import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById, buildFileRequest, awaitBoxFile } from "../opencloudapp/server/src/device-families.js";
@@ -152,13 +152,14 @@ test("etalonnage : temps de course lus dans la description, envoyes en milliseco
   assert.deepEqual(configure({ box: BOX, device: "x" }, { travel_up_s: 19, rank: 2 }), { path: "cover/x/config", payload: '{"rank":2}' }, "temps de course seul ignore, le rang passe");
 });
 
-test("etalonnage : un volet non etalonne n'a pas de valeurs ; un portail n'a pas de reglages", () => {
+test("etalonnage : un volet non etalonne n'a pas de valeurs ; un portail a son rang et son temps de course", () => {
   clearDeviceFamilies();
   registerDeviceFamily(family);
   applyMessage(`${ROOT}/${BOX}/cover/Chambre_Parents/attrs`, '{"type":"volet","positional":false,"name":"Chambre Parents"}', true, 1);
   assert.equal(boxState("openprofalux", BOX)!.devices.get("Chambre_Parents")!.settings.size, 0);
   const portail = family.kinds.find((k) => k.id === "portail")!;
-  assert.deepEqual(portail.settings!.map((x) => x.key), ["rank"], "un portail : seulement son rang");
+  // le temps de course d'un portail sert a suivre sa fin de course (cycle pas a pas, #134) ; pas d'orientation
+  assert.deepEqual(portail.settings!.map((x) => x.key), [SETTING_ID.rank, SETTING_ID.travelUp, SETTING_ID.travelDown], "un portail : rang et temps de course");
   const volet = family.kinds.find((k) => k.id === "volet")!;
   assert.deepEqual(volet.settings!.map((x) => [x.key, "min" in x ? x.min : null, "max" in x ? x.max : null]),
     [["rank", 1, 24], ["orientation", 0, 359], ["travel_up_s", 1, 180], ["travel_down_s", 1, 180]], "bornes de profiles.json");

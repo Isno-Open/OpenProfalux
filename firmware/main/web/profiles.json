@@ -40,6 +40,7 @@
                  ] },
     "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>",
                  "en": { "label": "Gate" }, "ha_device_class": "gate",
+                 "travel_s": { "min": 1, "max": 180 },
                  "buttons": [
                    { "id": "main", "cmd": "step", "behavior": "step", "label": "Bouton du portail", "en": "Gate button", "position": { "row": 0, "col": 0 } }
                  ] }

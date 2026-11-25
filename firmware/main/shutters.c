@@ -368,6 +368,7 @@ static bool sync_profiles(void) {
  * portail envoyait alors ("up") ; on la renomme, pour que l'interface la voie captee. Rend true si une fiche a change.
  * (Un portail est un appareil de rejeu a une trame : on ne renomme que s'il n'en a qu'une.) */
 static const profile_def_t *step_profile(const volet_t *v);
+static bool settle_steps_at_boot(void);
 static bool migrate_step_frames(void) {
     bool changed = false;
     const char *step = profile_cmd_name(PROFILE_CMD_STEP);
@@ -610,7 +611,7 @@ static cfg_layout_t load_cfg(void) {
     /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
      * methode, et on l'enregistre une fois. */
     bool profiles_changed = sync_profiles();
-    if (profiles_changed | migrate_step_frames()) { ESP_LOGW(TAG, "migration #134 : profil et trames graves dans les fiches"); save_cfg(); }
+    if (profiles_changed | migrate_step_frames() | settle_steps_at_boot()) { ESP_LOGW(TAG, "migration #134 : profil, trames et cycle graves dans les fiches"); save_cfg(); }
     if (sanitize_freqs()) save_cfg();
     for (int i = 0; i < s_nvolets; i++) {   /* un profil incomplet pour son moteur emettrait avec les replis */
         const char *why = NULL;
@@ -977,6 +978,26 @@ static void track_move(volet_t *v, int dir) {
 }
 static void freeze(volet_t *v) { v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true; }
 
+/* Integre le mouvement suivi jusqu'a `now` : la position avance au rythme du temps de course (repli 18 s si non
+ * calibre). Rend true si la butee ou la cible est atteinte. Partagee par la boucle de suivi et par les appuis
+ * successifs d'un portail, qui changent de sens sans attendre la boucle. */
+#define TRAVEL_FALLBACK_MS 18000
+static bool integrate_move(volet_t *v, int64_t now) {
+    if (v->dir == 0) return false;
+    uint32_t travel = v->dir > 0 ? v->travel_up_ms : v->travel_down_ms;
+    if (travel < 500) travel = TRAVEL_FALLBACK_MS;   /* defaut si non calibre */
+    float dms = (now - v->last_tick_us) / 1000.0f;
+    v->last_tick_us = now;
+    /* Convention : position = % de FERMETURE. 0 = ouvert (haut), 100 = ferme (bas).
+     * Monter (dir=+1) DIMINUE la position ; descendre (dir=-1) l'augmente -> d'ou le -=. */
+    v->position -= v->dir * (dms / travel) * 100.0f;
+    if (v->position < 0) v->position = 0;
+    if (v->position > 100) v->position = 100;
+    /* cible atteinte ou butee (monter -> vers 0 ; descendre -> vers 100) */
+    return (v->dir > 0 && (v->position <= 0   || (v->target >= 0 && v->position <= v->target)))
+        || (v->dir < 0 && (v->position >= 100 || (v->target >= 0 && v->position >= v->target)));
+}
+
 /* ── Bouton PAS A PAS (portail a bouton unique, #134 section 4 bis) ──
  * La carte du moteur decide ce que fait chaque appui, selon le cycle que le profil declare (frames.<bouton>.cycle,
  * step_cycle.h). Le boitier suit ce cycle comme la telecommande : un ordre ouvrir/fermer/stop devient le nombre
@@ -999,8 +1020,19 @@ static uint8_t step_next_of(volet_t *v, const profile_def_t *p) {
     }
     return v->step_next;
 }
+/* Fin d'une pleine course que nous avons lancee : en butee ; pour un portail pas a pas, la carte saute le stop qui
+ * suivait le mouvement. */
+static void step_end_of_travel(volet_t *v) {
+    const profile_def_t *sp = step_profile(v);
+    if (sp) { uint8_t n = step_next_of(v, sp); step_travel_end(&sp->step, &n); v->step_next = n; }
+    v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true; radio_pause_rx(false);
+}
 /* Un appui : emet la trame du bouton, avance le cycle et suit ce que fait le portail. false si rien n'est parti. */
 static bool step_press_once(volet_t *v, const profile_def_t *p) {
+    /* Le mouvement en cours avance jusqu'a cet appui : entre deux appuis d'une meme commande, la boucle de suivi
+     * n'a pas la main (verrou), et le deplacement intermediaire serait perdu. S'il a atteint sa butee, la carte a
+     * deja saute le stop. */
+    if (integrate_move(v, esp_timer_get_time())) step_end_of_travel(v);
     radio_pause_rx(true);   /* comme start_move : l'ecoute ne doit pas bloquer le TX */
     bool sent = v->rejeu ? rejeu_emit(v, profile_cmd_name(PROFILE_CMD_STEP)) : (emit_press(v, v->up), true);
     if (!sent) { radio_pause_rx(false); return false; }
@@ -1020,6 +1052,13 @@ static bool step_press_once(volet_t *v, const profile_def_t *p) {
 /* Ordre ouvrir / fermer / stop : autant d'appuis que le cycle en demande, espaces de press_gap_ms. L'attente se fait
  * sous le verrou : quelques secondes au plus (un cycle de 4 appuis), le temps qu'un humain mettrait a la telecommande. */
 static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
+    /* Sans temps de course mesure, la fin de course suivie n'est qu'un repli de 18 s : en deduire plusieurs appuis
+     * risquerait d'arreter un portail qu'on voulait fermer. On envoie alors un appui, comme la telecommande, et le
+     * suivi reste indicatif. */
+    if (!cover_travel_ok(v->travel_up_ms) || !cover_travel_ok(v->travel_down_ms)) {
+        ESP_LOGW(TAG, "pas a pas '%s' : temps de course non etalonne, un seul appui", v->id);
+        return step_press_once(v, p) ? 0 : -1;
+    }
     int k = step_presses(&p->step, step_next_of(v, p), step_state(v), want);
     if (k < 0) {
         ESP_LOGW(TAG, "pas a pas '%s' : ordre refuse, le cycle du profil '%s' n'y mene pas", v->id, p->id);
@@ -1031,6 +1070,25 @@ static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
     }
     return 0;
 }
+/* Redemarrage pendant une course : la fiche a garde le cycle d'un portail EN MOUVEMENT (le prochain appui est le stop
+ * qui suit ce mouvement), mais le suivi repart immobile. La carte du moteur, elle, a fini sa course : on place le
+ * portail en butee, du cote ou il allait, et on saute le stop comme elle. Rend true si une fiche a change. */
+static bool settle_steps_at_boot(void) {
+    bool changed = false;
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        const profile_def_t *p = step_profile(v);
+        if (!p || !v->step_known || v->step_next >= p->step.len || p->step.act[v->step_next] != STEP_ACT_STOP) continue;
+        step_act_t was = (step_act_t)p->step.act[(v->step_next + p->step.len - 1) % p->step.len];
+        if (was != STEP_ACT_OPEN && was != STEP_ACT_CLOSE) continue;
+        v->position = was == STEP_ACT_OPEN ? 0 : 100;
+        step_travel_end(&p->step, &v->step_next);
+        ESP_LOGW(TAG, "pas a pas '%s' : redemarrage pendant une %s, suivi place en butee", v->id, was == STEP_ACT_OPEN ? "ouverture" : "fermeture");
+        changed = true;
+    }
+    return changed;
+}
+
 /* L'action d'un ordre du pave (up / stop / down), STEP_ACT_NONE pour un autre. */
 static step_act_t step_want(int cmd) {
     return cmd == PROFILE_CMD_UP ? STEP_ACT_OPEN : cmd == PROFILE_CMD_DOWN ? STEP_ACT_CLOSE
@@ -1067,6 +1125,21 @@ static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 
 /* Classe Home Assistant et position : celles que le TYPE de l'appareil declare (profiles.json types, #134). Un type
  * inconnu du catalogue (fiche d'une version plus recente) est traite comme un volet, le type par defaut. */
 static const char HA_DEVICE_CLASS_FALLBACK[] = "shutter";
+/* Charges de commande d'un appareil sur openprofalux/cover/<id>/set : celles qu'annonce la decouverte Home Assistant
+ * (OPEN, CLOSE, STOP), et STEP, l'appui du bouton pas a pas d'un portail (portail cloud, #134). Declarees une fois :
+ * la decouverte les annonce, la reception les traduit en commande. */
+static const char COVER_PAYLOAD_OPEN[] = "OPEN", COVER_PAYLOAD_CLOSE[] = "CLOSE", COVER_PAYLOAD_STOP[] = "STOP",
+                  COVER_PAYLOAD_STEP[] = "STEP";
+static const struct { const char *payload; profile_cmd_t cmd; } COVER_PAYLOADS[] = {
+    { COVER_PAYLOAD_OPEN, PROFILE_CMD_UP }, { COVER_PAYLOAD_CLOSE, PROFILE_CMD_DOWN },
+    { COVER_PAYLOAD_STOP, PROFILE_CMD_STOP }, { COVER_PAYLOAD_STEP, PROFILE_CMD_STEP },
+};
+/* La commande d'une charge recue (casse ignoree), ou -1. */
+static int cover_payload_cmd(const char *payload) {
+    for (size_t i = 0; i < sizeof COVER_PAYLOADS / sizeof COVER_PAYLOADS[0]; i++)
+        if (!strcasecmp(payload, COVER_PAYLOADS[i].payload)) return COVER_PAYLOADS[i].cmd;
+    return -1;
+}
 static const type_def_t *type_of(const volet_t *v) { return type_find(v->type); }
 
 static bool volet_positional(const volet_t *v) {
@@ -1224,13 +1297,14 @@ static void announce_one(volet_t *v) {
     snprintf(pl, 1536,
         "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"%s\","
         "\"command_topic\":\"openprofalux/cover/%s/set\","
-        "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"optimistic\":true,"
+        "\"payload_open\":\"%s\",\"payload_close\":\"%s\",\"payload_stop\":\"%s\",\"optimistic\":true,"
         "%s"
         "\"state_topic\":\"openprofalux/cover/%s/state\","
         "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
         "\"device\":{\"identifiers\":[\"openprofalux\"],\"name\":\"%s\","
         "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
-        v->id, slug, slug, type_of(v) ? type_of(v)->ha_device_class : HA_DEVICE_CLASS_FALLBACK, slug, pos, slug, s_device, devname, cu);
+        v->id, slug, slug, type_of(v) ? type_of(v)->ha_device_class : HA_DEVICE_CLASS_FALLBACK, slug,
+        COVER_PAYLOAD_OPEN, COVER_PAYLOAD_CLOSE, COVER_PAYLOAD_STOP, pos, slug, s_device, devname, cu);
     pub_defer(topic, pl, 1, 1);
     free(pl);
     publish_volet_state(v);
@@ -1348,6 +1422,9 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
+    /* step sur un appareil sans cycle pas a pas (portail Somfy ou KeeLoq, profil sans bouton pas a pas) : un appui de
+     * son bouton, celui qu'envoyait le portail avant la commande step. */
+    if (profile_cmd_of(cmd) == PROFILE_CMD_STEP) cmd = profile_cmd_name(PROFILE_CMD_UP);
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
     if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
     else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
@@ -1497,26 +1574,11 @@ static void tick_task(void *arg) {
         for (int i = 0; i < s_nvolets; i++) {
             volet_t *v = &s_volets[i];
             if (v->dir == 0) continue;
-            uint32_t travel = v->dir > 0 ? v->travel_up_ms : v->travel_down_ms;
-            if (travel < 500) travel = 18000;   /* defaut si non calibre */
-            float dms = (now - v->last_tick_us) / 1000.0f;
-            v->last_tick_us = now;
-            /* Convention : position = % de FERMETURE. 0 = ouvert (haut), 100 = ferme (bas).
-             * Monter (dir=+1) DIMINUE la position ; descendre (dir=-1) l'augmente -> d'ou le -=. */
-            v->position -= v->dir * (dms / travel) * 100.0f;
-            if (v->position < 0) v->position = 0;
-            if (v->position > 100) v->position = 100;
-            /* cible atteinte ou butee -> stop (monter -> vers 0 ; descendre -> vers 100) */
-            int reached = (v->dir > 0 && (v->position <= 0   || (v->target >= 0 && v->position <= v->target)))
-                       || (v->dir < 0 && (v->position >= 100 || (v->target >= 0 && v->position >= v->target)));
+            bool reached = integrate_move(v, now);
             if (reached) {
                 if (!v->own_move) freeze(v);                                /* mouvement externe : on fige le suivi */
                 else if (v->target > 0 && v->target < 100) do_stop(v);      /* notre commande vers une position INTERMEDIAIRE : STOP pour figer */
-                else {   /* pleine course : butee, own_move false, retenir la position */
-                    const profile_def_t *sp = step_profile(v);
-                    if (sp) { uint8_t n = step_next_of(v, sp); step_travel_end(&sp->step, &n); v->step_next = n; }   /* en butee, la carte saute le stop */
-                    v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true; radio_pause_rx(false);
-                }
+                else step_end_of_travel(v);   /* pleine course : butee, own_move false, retenir la position */
             }
             /* sinon mouvement en cours : le moteur (le notre, lance par une rafale, ou l'externe)
              * tourne tout seul jusqu'au STOP / butee ; on integre juste la position sans re-emettre */
@@ -2336,9 +2398,10 @@ static cJSON *status_device_json(const volet_t *v) {
         cJSON *rc = cJSON_AddObjectToObject(o, "rejeu_cmds");
         cJSON *rj = cJSON_Parse(v->rejeu);
         if (rj) {
-            for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c; c++) {
-                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, *c));
-                if (s && *s) cJSON_AddBoolToObject(rc, *c, true);
+            for (int c = 0; c < PROFILE_CMD_COUNT; c++) {   /* toutes les commandes d'un bouton, step comprise */
+                const char *name = profile_cmd_name((profile_cmd_t)c);
+                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, name));
+                if (s && *s) cJSON_AddBoolToObject(rc, name, true);
             }
             cJSON_Delete(rj);
         }
@@ -2903,10 +2966,8 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
     char payload[16]; int m = len < 15 ? len : 15; memcpy(payload, data, m); payload[m] = 0;
     if (!s_mqtt_obey) { ESP_LOGW(TAG, "MQTT cmd ignoree (obey=OFF) pour '%s'", id); return; }   /* carte secondaire : une seule carte emet un volet partage */
     if (!strcmp(sub, "set")) {
-        if      (!strcasecmp(payload, "OPEN"))  shutters_cmd_synced(id, "up", 0);
-        else if (!strcasecmp(payload, "CLOSE")) shutters_cmd_synced(id, "down", 0);
-        else if (!strcasecmp(payload, "STOP"))  shutters_cmd_synced(id, "stop", 0);
-        else if (!strcasecmp(payload, "STEP"))  shutters_cmd_synced(id, profile_cmd_name(PROFILE_CMD_STEP), 0);   /* un appui du bouton pas a pas (portail cloud) */
+        int c = cover_payload_cmd(payload);
+        if (c >= 0) shutters_cmd_synced(id, profile_cmd_name((profile_cmd_t)c), 0);
     } else if (!strcmp(sub, "set_position")) {
         shutters_cmd_synced(id, "pos", 100 - atoi(payload));   /* HA envoie le % d'ouverture -> on convertit en fermeture */
     }

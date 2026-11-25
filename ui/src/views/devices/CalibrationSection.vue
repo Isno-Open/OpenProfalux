@@ -26,7 +26,9 @@ import OpStatline from '../../components/base/OpStatline.vue';
 
 const DEFAULT_TRAVEL_S = { min: 1, max: 180 };
 const TICK_MS = 100;
-const shutters = computed(() => (state.status?.volets ?? []).filter(d => !d.central && !d.zone && typeOf(d).positional));
+/* Tout appareil dont le type declare un temps de course (travel_s) : un volet pour sa position, un portail pour suivre
+   sa fin de course (cycle pas a pas, #134). */
+const shutters = computed(() => (state.status?.volets ?? []).filter(d => !d.central && !d.zone && !!typeOf(d).travel_s));
 const id = ref<string | number>(stopwatch.value?.id ?? '');
 watch(shutters, list => { const first = list[0]; if (!id.value && first) id.value = first.id; }, { immediate: true });
 const shutter = computed(() => shutters.value.find(x => x.id === id.value) ?? null);
@@ -59,7 +61,9 @@ function arrived(): void {
   if (!run) return;
   if (String(id.value) === run.id) times[run.direction] = ((performance.now() - run.start) / 1000).toFixed(1);
   stopwatch.value = null;
-  api.sendShutter({ id: run.id, cmd: COMMAND.stop }).catch(() => {});
+  /* Un volet s'arrete sur notre STOP ; un portail s'arrete seul en butee, et un appui de plus le ferait repartir. */
+  const device = shutters.value.find(x => x.id === run.id);
+  if (device && typeOf(device).positional) api.sendShutter({ id: run.id, cmd: COMMAND.stop }).catch(() => {});
 }
 /* Bornes du temps de course, declarees par le type dans profiles.json (travel_s). */
 const bounds = computed(() => (shutter.value ? typeOf(shutter.value).travel_s : undefined) ?? DEFAULT_TRAVEL_S);
