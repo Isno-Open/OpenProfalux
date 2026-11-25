@@ -331,23 +331,6 @@ int shutters_remote_dump(int i, int from, char *serial, int sser, char *name, in
 /* Le profil d'un appareil (grave dans sa fiche, remis en accord par sync_profiles), ou NULL. */
 static const profile_def_t *profile_of(const volet_t *v) { return v ? profile_find(v->profile) : NULL; }
 
-/* Garde de bande sur la config CHARGEE (#134, etape 10) : au demarrage et a la restauration d'une sauvegarde, une
- * porteuse d'appareil qu'aucune radio de la carte ne couvre est remise a 0 (heriter de la radio) et journalisee.
- * L'enregistrement (shutters_set_tx_params) la refuse deja ; une sauvegarde, elle, peut la porter. Rend true si une
- * fiche a change. */
-static bool sanitize_freqs(void) {
-    bool changed = false;
-    for (int i = 0; i < s_nvolets; i++) {
-        volet_t *v = &s_volets[i];
-        if (v->freq_khz && cc1101_radio_for_khz(v->freq_khz) < 0) {
-            ESP_LOGE(TAG, "'%s' : frequence %u kHz hors des bandes de la carte, remise a celle de la radio", v->id, (unsigned)v->freq_khz);
-            v->freq_khz = 0;
-            changed = true;
-        }
-    }
-    return changed;
-}
-
 static bool sync_profiles(void) {
     bool changed = false;
     for (int i = 0; i < s_nvolets; i++) {
@@ -581,7 +564,6 @@ static cfg_layout_t load_cfg(void) {
     /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
      * methode, et on l'enregistre une fois. */
     if (sync_profiles()) { ESP_LOGW(TAG, "migration #134 : profil grave dans les fiches"); save_cfg(); }
-    if (sanitize_freqs()) save_cfg();
     for (int i = 0; i < s_nvolets; i++) {   /* un profil incomplet pour son moteur emettrait avec les replis */
         const char *why = NULL;
         const profile_def_t *p = profile_of(&s_volets[i]);
@@ -628,8 +610,7 @@ static void emit_press(const volet_t *v, const char *bits) {
     }
     if (v) {
         tx_params_t p = tx_params_of(v);
-        if (radio_tx_device(bits, press_frames(v), &p) != 0)   /* par appareil : porteuse/TE/rpt/rmt de la fiche, trames du profil */
-            ESP_LOGE(TAG, "TX '%s' REFUSEE : rien emis (garde de bande)", v->id);
+        radio_tx_device(bits, press_frames(v), &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche, trames du profil */
     } else {
         radio_tx(bits, PRESS_REPEATS_FALLBACK);       /* trame brute sans volet (rejeu RF debug) : pas de profil */
     }
@@ -831,11 +812,7 @@ static bool emit_virt_profalux(volet_t *v, uint8_t direction) {
         return false;
     }
     tx_params_t p = tx_params_of(v);
-    if (radio_tx_device(bits, press_frames(v), &p) != 0) {   /* garde de bande : rien n'est parti */
-        ESP_LOGE(TAG, "TX VIRT REFUSEE serial=0x%07X btn=0x%X cnt=%u (compteur consomme, rien emis)",
-                 (unsigned)v->virt_serial, button, cnt);
-        return false;
-    }
+    radio_tx_device(bits, press_frames(v), &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
     return true;
@@ -1787,12 +1764,6 @@ int shutters_set_orientation(const char *id, int orientation) {
  * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
 int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
                            int rpt, int rmt, int frame_bits, const char *marque) {
-    /* Garde de bande a l'enregistrement (#134, etape 10) : une porteuse qu'aucune radio de la carte ne couvre est
-     * refusee ici, avant de devenir celle de l'appareil. La garde d'emission (cc1101.c) reste la derniere barriere. */
-    if (freq_khz && cc1101_radio_for_khz(freq_khz) < 0) {
-        ESP_LOGE(TAG, "'%s' : frequence %u kHz refusee, hors des bandes de la carte", id ? id : "?", (unsigned)freq_khz);
-        return -2;
-    }
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
@@ -2384,7 +2355,6 @@ int shutters_import_json(const char *js, const char **err) {
     }
     reset_state();
     cfg_model_import(&s_model, root);
-    sanitize_freqs();   /* une sauvegarde peut porter une frequence hors bande : jamais emise, remise a la radio */
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
         if (!v->virt) continue;

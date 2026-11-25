@@ -289,9 +289,7 @@ static void strobe(uint8_t s) {
 
 /* ── Acces mode PAQUET (FIFO + strobes), pour un backend FSK. Transferts burst bornes a 31 octets
  * utiles. Le chemin OOK n'en a pas besoin. ── */
-static int tx_band_guard(void);
-/* Strobe arbitraire : un STX passe lui aussi par la garde de bande (aucune emission ne la contourne). */
-void cc1101_strobe_cmd(uint8_t s) { if (s == CC_STX && tx_band_guard() != 0) return; strobe(s); }
+void cc1101_strobe_cmd(uint8_t s) { strobe(s); }
 
 void cc1101_write_burst(uint8_t addr, const uint8_t *buf, size_t len) {
     if (!buf || len == 0 || len > 31) return;
@@ -508,21 +506,7 @@ static void gdo0_free_test(void) {
     else ESP_LOGW(TAG, "GDO0 tenu a %d par un autre composant : l'emission n'atteindra pas le CC1101", hi);
 }
 
-/* GARDE DE BANDE (issue #134, etape 10) : aucune emission hors de la bande que la carte declare pour la radio active
- * (boards/<carte>.json bands_allowed_khz -> table des radios). C'est le SEUL passage vers l'emission (chaque fonction
- * d'emission l'appelle juste avant CC_STX) : peu importe d'ou vient la frequence (profil, fiche d'un appareil, reglage
- * a la main, calage), une porteuse hors bande n'est jamais emise. Rend 0 si l'emission est permise, sinon -1 et un
- * journal d'erreur ; l'appelant n'emet rien. */
-static int tx_band_guard(void) {
-    const cc1101_radio_cfg_t *r = &s_radios[s_active];
-    if (radio_freq_in_band(s_freq_khz, r->band_low_khz, r->band_high_khz)) return 0;
-    ESP_LOGE(TAG, "EMISSION REFUSEE : %u kHz hors de la bande de la radio %d (%u..%u kHz)",
-             (unsigned)s_freq_khz, s_active, (unsigned)r->band_low_khz, (unsigned)r->band_high_khz);
-    return -1;
-}
-
 int cc1101_tx_selftest(void) {
-    if (tx_band_guard() != 0) return -1;
     gdo0_free_test();
     strobe(CC_STX);
     esp_rom_delay_us(1000);
@@ -540,7 +524,6 @@ int cc1101_tx_selftest(void) {
 }
 
 int cc1101_tx_ook_frame(const uint8_t *frame, size_t bits) {
-    if (tx_band_guard() != 0) return -1;
     strobe(CC_STX);
     esp_rom_delay_us(800);   /* laisse le PLL se caler (FS_AUTOCAL) avant de moduler */
 
@@ -653,7 +636,6 @@ out:
 /* Rejoue une trame brute (chaine de bits '0'/'1' en ordre du fil) en OOK :
  * preambule + entete + symboles HCS30x. Sert au replay d'une trame captee. */
 int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
-    if (tx_band_guard() != 0) return -1;
     memprobe("tx-debut");
     /* UNE seule session TX (un STX, FS_AUTOCAL calibre le PLL), puis `repeats` trames dos-a-dos
      * = une vraie rafale de telecommande. Evite un STX/calibration par trame et rend l'emission
@@ -715,7 +697,6 @@ int cc1101_tx_raw_bits(const char *bits, int n, int repeats) {
  * RX : seule la frequence porteuse compte, et l'appelant l'a deja posee. */
 int cc1101_tx_ook_pulses(const uint8_t *levels, const uint32_t *us, int n) {
     if (!levels || !us || n <= 0) return -1;
-    if (tx_band_guard() != 0) return -1;
     if (s_cap) rmt_disable(s_cap);
     gpio_set_direction(CC1101_PIN_GDO0, GPIO_MODE_INPUT_OUTPUT);
     strobe(CC_STX);

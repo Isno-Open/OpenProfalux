@@ -46,9 +46,9 @@ void radio_tx(const char *bits, int repeats) {
     xSemaphoreGive(s_mtx);
 }
 
-int radio_tx_device(const char *bits, int repeats, const tx_params_t *p) {
-    if (!bits || !bits[0] || !s_mtx) return -1;
-    if (!p) { radio_tx(bits, repeats); return 0; }
+void radio_tx_device(const char *bits, int repeats, const tx_params_t *p) {
+    if (!bits || !bits[0] || !s_mtx) return;
+    if (!p) { radio_tx(bits, repeats); return; }
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     /* Sauve l'etat courant, applique les params de l'appareil, emet, restaure : une autre marque
      * sur la meme radio ne doit jamais heriter de la porteuse ou des options de la precedente. */
@@ -58,13 +58,12 @@ int radio_tx_device(const char *bits, int repeats, const tx_params_t *p) {
     if (p->te_us)    cc1101_set_tx_te(p->te_us);
     if (p->rpt >= 0) cc1101_set_tx_repeat_bit(p->rpt != 0);
     if (p->rmt >= 0) cc1101_set_tx_rmt(p->rmt != 0);
-    int r = cc1101_tx_raw_bits(bits, (int)strlen(bits), repeats);   /* -1 : garde de bande, rien emis */
+    cc1101_tx_raw_bits(bits, (int)strlen(bits), repeats);
     if (p->freq_khz) cc1101_set_freq_khz(f0);
     if (p->te_us)    cc1101_set_tx_te(te0);
     if (p->rpt >= 0) cc1101_set_tx_repeat_bit(rpt0);
     if (p->rmt >= 0) cc1101_set_tx_rmt(rmt0);
     xSemaphoreGive(s_mtx);
-    return r;
 }
 
 /* Coeur de l'ecoute dediee : SUPPOSE le mutex pris et l'ecoute permanente en pause, et travaille
