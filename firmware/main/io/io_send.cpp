@@ -69,6 +69,15 @@ extern "C" int io_hc_send_shutter_1w(const uint8_t src[3], const uint8_t key[16]
     return send_signed_1w(src, key, p.target, CMD_EXECUTE, payload, p.payload_len) ? 0 : -1;
 }
 
+extern "C" int io_button_of(io_action_t action) {
+    switch (action) {
+    case IO_ACTION_UP:   return BTN_UP;
+    case IO_ACTION_DOWN: return BTN_DOWN;
+    case IO_ACTION_STOP: return BTN_STOP;
+    }
+    return -1;
+}
+
 extern "C" int io_button_for_action(const char *action) {
     if (!action) return -1;
     if (!strcmp(action, "up"))   return BTN_UP;     /* ouvrir = monter */

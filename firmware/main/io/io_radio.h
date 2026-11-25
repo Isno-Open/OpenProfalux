@@ -27,7 +27,12 @@ uint32_t io_radio_carrier_khz(void);
 /* Pose le canal io et la correction NVS cfg/io_offset (kHz, defaut 0). */
 void io_radio_set_channel(io_channel_t ch);
 
-/* Applique une nouvelle correction de quartz io (kHz, -100..100) sans relire la NVS. */
+/* Correction de quartz io admise, en kHz (de -IO_FREQ_OFFSET_MAX_KHZ a +IO_FREQ_OFFSET_MAX_KHZ). Un module M5Stack
+ * releve a -58 kHz (PR #118). NVS cfg/io_offset. */
+#define IO_FREQ_OFFSET_MAX_KHZ 100
+#define IO_NVS_KEY_OFFSET "io_offset"   /* cle de la correction dans le namespace NVS cfg */
+
+/* Applique une nouvelle correction de quartz io (kHz, bornee par IO_FREQ_OFFSET_MAX_KHZ) sans relire la NVS. */
 void io_radio_set_freq_offset(int32_t khz);
 
 /* Premiere trame : preambule 500 ms ; suivantes : 10 ms. Une config ouvre une rafale. */

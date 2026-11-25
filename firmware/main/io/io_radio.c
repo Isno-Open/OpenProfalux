@@ -82,7 +82,7 @@ static bool s_offset_loaded;
 uint32_t io_radio_carrier_khz(void) { return IO_CH_KHZ[IO_CH2]; }
 
 void io_radio_set_freq_offset(int32_t khz) {
-    s_offset_khz = (khz < -100 || khz > 100) ? 0 : khz;
+    s_offset_khz = (khz < -IO_FREQ_OFFSET_MAX_KHZ || khz > IO_FREQ_OFFSET_MAX_KHZ) ? 0 : khz;
     s_offset_loaded = true;
 }
 
@@ -92,7 +92,7 @@ void io_radio_set_channel(io_channel_t ch) {
         int32_t offset = 0;
         nvs_handle_t h;
         if (nvs_open("cfg", NVS_READONLY, &h) == ESP_OK) {
-            nvs_get_i32(h, "io_offset", &offset);
+            nvs_get_i32(h, IO_NVS_KEY_OFFSET, &offset);
             nvs_close(h);
         }
         io_radio_set_freq_offset(offset);

@@ -889,9 +889,9 @@ static bool emit_virt_somfy(volet_t *v, uint8_t button) {
  * commande = une rafale, sans nouvel essai (batterie des moteurs solaires). */
 static bool emit_virt_io(volet_t *v, uint8_t button) {
     const uint8_t src[3] = { (uint8_t)(v->virt_serial >> 16), (uint8_t)(v->virt_serial >> 8), (uint8_t)v->virt_serial };
-    profile_cmd_t c = button == PFX_BTN_UP ? PROFILE_CMD_UP : button == PFX_BTN_DOWN ? PROFILE_CMD_DOWN : PROFILE_CMD_STOP;
-    int r = radio_io_send(src, (uint8_t)io_button_for_action(profile_cmd_name(c)));
-    if (r != 0) ESP_LOGE(TAG, "volet io '%s' : commande %s non emise (identite, compteur ou radio)", v->id, profile_cmd_name(c));
+    io_action_t a = button == PFX_BTN_UP ? IO_ACTION_UP : button == PFX_BTN_DOWN ? IO_ACTION_DOWN : IO_ACTION_STOP;
+    int r = radio_io_send(src, (uint8_t)io_button_of(a));
+    if (r != 0) ESP_LOGE(TAG, "volet io '%s' : commande non emise (identite, compteur ou radio)", v->id);
     return r == 0;
 }
 

@@ -11,6 +11,9 @@
 #include <errno.h>
 #include "enrol_gate.h"
 #include "radio.h"
+#include "io/io_pair.h"    /* io-homecontrol 1W : profil capte, identite, transfert de cle (#118) */
+#include "io/io_radio.h"   /* io_radio_set_freq_offset, IO_FREQ_OFFSET_MAX_KHZ */
+#include "profile_table.h"
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
 #include "mqtt_bridge.h"       /* mqtt_cert_write / mqtt_cert_len (certificats TLS en NVS) */
@@ -589,6 +592,10 @@ static esp_err_t h_remote_delete(httpd_req_t *r) {
 static void cfg_get(nvs_handle_t h, const char *k, char *out, size_t cap) {
     size_t sz = cap; out[0] = 0; nvs_get_str(h, k, out, &sz);
 }
+/* Un nombre JSON entier, de lo a hi. */
+static bool json_int_in(const cJSON *v, double lo, double hi) {
+    return cJSON_IsNumber(v) && v->valuedouble >= lo && v->valuedouble <= hi && v->valuedouble == (double)(int64_t)v->valuedouble;
+}
 static esp_err_t h_config_get(httpd_req_t *r) {
     char dev[32] = "", ssid[33] = "", uri[160] = "", user[128] = "", pass[256] = "";
     uint8_t logf = 0, dbg = 0, rg = 0x27, obey = 1;
@@ -630,6 +637,12 @@ static esp_err_t h_config_get(httpd_req_t *r) {
         if (k > 0 && k + 96 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"mdns_host\":\"%s\",\"mdns_default\":\"%s\"}",
                                                      wifi_bridge_hostname(), dflt);
     }
+    {   /* correction de quartz io (#118) : ajoutee en fin d'objet */
+        int32_t io_offset = 0; nvs_handle_t hh;
+        if (nvs_open("cfg", NVS_READONLY, &hh) == ESP_OK) { nvs_get_i32(hh, IO_NVS_KEY_OFFSET, &io_offset); nvs_close(hh); }
+        size_t k = strlen(out);
+        if (k > 0 && k + 32 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"io_freq_offset_khz\":%ld}", (long)io_offset);
+    }
     {   /* verification de mise a jour automatique : ajoutee en fin d'objet */
         size_t k = strlen(out);
         if (k > 0 && k + 24 < sizeof(out)) snprintf(out + k - 1, sizeof(out) - k + 1, ",\"update_auto\":%d}", shutters_get_update_auto() ? 1 : 0);
@@ -656,6 +669,12 @@ static esp_err_t h_config_post(httpd_req_t *r) {
      * indexees (rprofN, rfreqN, rxgN, rteN, rrptN, rrmtN), applique a CETTE puce. La radio 0 garde
      * le chemin historique (cles plates) ci-dessous. Chaque frequence est bornee par la bande de SA
      * radio. */
+    /* Correction de quartz io (#118) : un entier borne, ou rien. Refusee avant d'ecrire quoi que ce soit. */
+    cJSON *io_offset = cJSON_GetObjectItem(j, "io_freq_offset_khz");
+    if (io_offset && !json_int_in(io_offset, -IO_FREQ_OFFSET_MAX_KHZ, IO_FREQ_OFFSET_MAX_KHZ)) {
+        cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "io_freq_offset_khz : entier borne");
+    }
     cJSON *radj = cJSON_GetObjectItem(j, "radio");
     if (cJSON_IsNumber(radj) && radj->valuedouble >= 1) {
         int idx = (int)radj->valuedouble;
@@ -741,6 +760,8 @@ static esp_err_t h_config_post(httpd_req_t *r) {
             nvs_set_u8(h, "debug", on);
             cc1101_set_rx_debug(on);   /* switch DEBUG console : prise en compte immediate */
         }
+        if (io_offset && nvs_set_i32(h, IO_NVS_KEY_OFFSET, (int32_t)io_offset->valuedouble) == ESP_OK)
+            io_radio_set_freq_offset((int32_t)io_offset->valuedouble);   /* prise en compte a la prochaine session io */
         cJSON *uaj = cJSON_GetObjectItem(j, "update_auto");
         if (cJSON_IsBool(uaj) || cJSON_IsNumber(uaj)) {
             uint8_t on = cJSON_IsTrue(uaj) || (cJSON_IsNumber(uaj) && uaj->valuedouble != 0);
@@ -1645,6 +1666,73 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     free(js);
     return e;
 }
+/* ── io-homecontrol 1W (#87, #118) ──
+ * Ajouter un volet io = ENROLER le boitier comme nouvelle telecommande (pas de clone) :
+ *   1. /api/io/sniff : capter UNE commande (0x00) de la telecommande d'origine, pour apprendre sa destination et
+ *      sa charge utile ;
+ *   2. mettre le moteur en apprentissage avec la telecommande d'origine (Velux : appui long sur RESET) ;
+ *   3. /api/io/pair/1w : le boitier envoie son transfert de cle 0x30 et cree le volet.
+ * Une seule rafale par geste, aucun nouvel essai automatique (batterie des moteurs solaires). */
+#define IO_SNIFF_MS 8000   /* fenetre d'ecoute d'une trame : le temps d'appuyer sur un bouton */
+#define IO_FRAME_MAX 32
+static esp_err_t h_io_sniff(httpd_req_t *r) {
+    uint8_t frame[IO_FRAME_MAX];
+    int n = radio_io_sniff(frame, sizeof frame, IO_SNIFF_MS);
+    httpd_resp_set_type(r, "application/json");
+    if (n <= 0) return httpd_resp_sendstr(r, "{\"ok\":0}");
+    char hex[2 * IO_FRAME_MAX + 1];
+    for (int i = 0; i < n && i < IO_FRAME_MAX; i++) snprintf(&hex[i * 2], 3, "%02X", frame[i]);
+    io_profile_t probe;   /* utilisable pour l'appairage : une commande 0x00 complete, CRC juste */
+    bool usable = io_profile_from_capture(frame, n, &probe) == 0;
+    char out[2 * IO_FRAME_MAX + 64];
+    snprintf(out, sizeof out, "{\"ok\":1,\"len\":%d,\"frame\":\"%s\",\"usable\":%d}", n, hex, usable ? 1 : 0);
+    return httpd_resp_sendstr(r, out);
+}
+/* {profile, frame, name?, index?, tx?, rolling?} : profile = id d'un profil io (son code fabricant et sa marque),
+ * frame = la commande 0x00 captee (hexa, CRC compris). tx=0 reprend une identite deja appairee SANS emettre
+ * (apres un reflash), rolling = prochain compteur, obligatoire. */
+static esp_err_t h_io_pair_1w(httpd_req_t *r) {
+    char *body = read_body(r);
+    if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!cJSON_IsObject(j)) { cJSON_Delete(j); return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "objet json attendu"); }
+    const profile_def_t *p = profile_find(jstr(j, "profile"));
+    cJSON *idx = cJSON_GetObjectItem(j, "index"), *txj = cJSON_GetObjectItem(j, "tx"), *roll = cJSON_GetObjectItem(j, "rolling");
+    bool valid = p && profile_engine_of(p) == PROFILE_ENGINE_IO && p->io_man_id >= 0
+              && (!idx || json_int_in(idx, 0, UINT32_MAX)) && (!txj || json_int_in(txj, 0, 1)) && (!roll || json_int_in(roll, 0, UINT16_MAX));
+    bool tx = !txj || txj->valuedouble == 1;
+    const char *hex = jstr(j, "frame");
+    size_t len = hex ? strlen(hex) : 0;
+    uint8_t frame[IO_FRAME_MAX];
+    valid = valid && len >= 2 && len <= 2 * sizeof frame && len % 2 == 0 && (tx || roll);
+    for (size_t i = 0; valid && i < len; i++) valid = isxdigit((unsigned char)hex[i]) != 0;
+    for (size_t i = 0; valid && i < len / 2; i++) { unsigned b; valid = sscanf(hex + 2 * i, "%2x", &b) == 1; frame[i] = (uint8_t)b; }
+    io_profile_t profile;
+    if (!valid || io_profile_from_capture(frame, (int)(len / 2), &profile) != 0) {
+        cJSON_Delete(j);
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "profil io, trame 0x00 ou champs invalides (tx=0 exige rolling)");
+    }
+    char name[SH_ID_LEN] = "";
+    strlcpy(name, jstr(j, "name") ?: "", sizeof name);
+    uint8_t src[3], key[16];
+    bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
+    int rolling = roll ? (int)roll->valuedouble : -1;
+    cJSON_Delete(j);
+    if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
+    if (!name[0]) snprintf(name, sizeof name, "io-%02X%02X%02X", src[0], src[1], src[2]);
+    int rc = radio_io_enroll(&profile, src, key, (uint8_t)p->io_man_id, tx, rolling);
+    memset(key, 0, sizeof key);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "echec io : radio, stockage, compteur (recul ou epuise) ou emission ; pas de nouvel essai");
+    uint32_t serial = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
+    if (shutters_create_io_volet(name, serial, p->brand) != 0)
+        return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite enregistree mais volet non cree (nom pris ?)");
+    ESP_LOGW(TAG, "io : volet '%s' (identite %06X, profil %s) %s", name, (unsigned)serial, p->id,
+             tx ? "appaire, 0x30 emis" : "repris sans emission");
+    char out[SH_ID_LEN + 48];
+    snprintf(out, sizeof out, "{\"ok\":1,\"id\":\"%s\",\"tx\":%d}", name, tx ? 1 : 0);
+    httpd_resp_set_type(r, "application/json");
+    return httpd_resp_sendstr(r, out);
+}
 static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
@@ -1737,7 +1825,7 @@ static esp_err_t h_session(httpd_req_t *r) {
  * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
-#define MAX_ROUTES      72
+#define MAX_ROUTES      80
 #define MAX_OPEN_ROUTES 16
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
@@ -2098,6 +2186,8 @@ void web_ui_start(void) {
     reg(s, "/api/somfy/create", HTTP_POST, h_somfy_create);
     reg(s, "/api/rejeu/create", HTTP_POST, h_rejeu_create);
     reg(s, "/api/rejeu/capture", HTTP_POST, h_rejeu_capture);
+    reg(s, "/api/io/sniff",   HTTP_POST, h_io_sniff);     /* io : capte une commande de la telecommande d'origine (#118) */
+    reg(s, "/api/io/pair/1w", HTTP_POST, h_io_pair_1w);   /* io : enrole le boitier (transfert de cle 0x30) et cree le volet */
     reg(s, "/api/cloud/status", HTTP_GET,  h_cloud_status);   /* controle cloud app.isno.fr */
     reg(s, "/api/cloud/pair",   HTTP_POST, h_cloud_pair);     /* code de pairing -> bundle + demarrage */
     reg(s, "/api/cloud/grant",  HTTP_POST, h_cloud_grant_start);    /* appairage par QR code */
