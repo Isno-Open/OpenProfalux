@@ -1010,12 +1010,6 @@ static const profile_def_t *step_profile(const volet_t *v) {
      * CAME) sans en avoir le bouton, et garde son pave monter / stop / descendre. */
     return (!v->central && profile_has_step(p) && p->type_code == v->type) ? p : NULL;
 }
-/* Le bouton qui porte `cmd` dans la fiche. Un appareil sans cycle pas a pas (portail Somfy ou KeeLoq) n'a pas de bouton
- * step : son bouton unique est range sous up, celui qu'il envoyait avant la commande step. Valable pour l'emission,
- * la capture et le statut, pour qu'ils parlent du meme bouton. */
-static const char *button_slot(const volet_t *v, const char *cmd) {
-    return (profile_cmd_of(cmd) == PROFILE_CMD_STEP && !step_profile(v)) ? profile_cmd_name(PROFILE_CMD_UP) : cmd;
-}
 static step_state_t step_state(const volet_t *v) {
     return (step_state_t){ .dir = v->dir, .at_open = v->dir == 0 && v->position <= 1, .at_closed = v->dir == 0 && v->position >= 99 };
 }
@@ -1447,7 +1441,7 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
     }
     /* step sur un appareil sans cycle pas a pas (portail Somfy ou KeeLoq, profil sans bouton pas a pas) : un appui de
      * son bouton, celui qu'envoyait le portail avant la commande step. */
-    cmd = button_slot(v, cmd);
+    if (profile_cmd_of(cmd) == PROFILE_CMD_STEP) cmd = profile_cmd_name(PROFILE_CMD_UP);
     /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
     if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
     else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
@@ -1628,7 +1622,6 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
-    action = button_slot(v, action);
     uint8_t btn = bits_button(bits);
     if      (!strcmp(action, "up"))   { strlcpy(v->up, bits, SH_BITS_LEN);   v->up_btn = btn; }
     else if (!strcmp(action, "down")) { strlcpy(v->down, bits, SH_BITS_LEN); v->down_btn = btn; }
@@ -1791,7 +1784,7 @@ int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t 
     uint32_t freq = freq_khz ? freq_khz : (cur ? cur : carrier);   /* freq du profil de marque si fournie, sinon porteuse de la radio */
     LOCK();
     volet_t *v = find_volet(id);
-    int rc = v ? rejeu_store(v, button_slot(v, cmd), freq, lvl, us, n) : -1;
+    int rc = v ? rejeu_store(v, cmd, freq, lvl, us, n) : -1;
     if (rc == 0) save_cfg();
     UNLOCK();
     if (rc != 0) return -1;
@@ -2413,8 +2406,6 @@ static cJSON *status_device_json(const volet_t *v) {
     add_cmd_json(cmd, "up",   v->up,   v->up_btn);
     add_cmd_json(cmd, "stop", v->stop, v->stop_btn);
     add_cmd_json(cmd, "down", v->down, v->down_btn);
-    /* step : le bouton qui le porte (button_slot), up pour un appareil sans cycle pas a pas. */
-    if (!step_profile(v)) add_cmd_json(cmd, profile_cmd_name(PROFILE_CMD_STEP), v->up, v->up_btn);
     /* Rejeu brut (CAME et code fixe) : l'ecran de capture unifie en a besoin pour distinguer
      * le moteur (rejeu vs clone KeeLoq) et montrer quelles commandes sont deja captees. Le cadre
      * brut est range dans v->rejeu (JSON {f, up, stop, down}) ; on expose juste les commandes
@@ -2426,7 +2417,7 @@ static cJSON *status_device_json(const volet_t *v) {
         if (rj) {
             for (int c = 0; c < PROFILE_CMD_COUNT; c++) {   /* toutes les commandes d'un bouton, step comprise */
                 const char *name = profile_cmd_name((profile_cmd_t)c);
-                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, button_slot(v, name)));
+                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(rj, name));
                 if (s && *s) cJSON_AddBoolToObject(rc, name, true);
             }
             cJSON_Delete(rj);
