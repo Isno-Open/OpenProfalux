@@ -16,7 +16,6 @@ export interface Device {
   id: string;
   type?: number;
   marque?: string;
-  profile?: string;      // id du profil suivi (profiles.json), grave par le firmware (#134)
   central?: boolean;
   zone?: boolean;
   members?: string;

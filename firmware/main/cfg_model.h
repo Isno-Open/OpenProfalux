@@ -66,8 +66,6 @@ typedef struct {
     uint8_t  tx_rmt;         /* tx_override_t : emission materielle RMT pour cet appareil */
     uint8_t  frame_bits;     /* Somfy RTS : format de trame (0 = defaut 56 ; 56 ou 80, le 80 ajoute une extension) */
     char     marque[SH_ID_LEN];  /* provenance : marque du profil choisi a l'ajout (affichage + resolution des defauts) */
-    char     profile[SH_ID_LEN]; /* id du profil (profiles.json, issue #134) : l'appareil suit son profil. Remis en
-                                  * accord avec la marque et la methode a chaque enregistrement (shutters.c sync_profiles) */
     /* Centrale virtuelle : diffuse ouvrir/fermer/stop a un groupe de volets membres (CSV d'ids). */
     bool     central;
     char    *members;        /* "id1,id2,..." sur le tas, a sa taille ; NULL = aucun membre.

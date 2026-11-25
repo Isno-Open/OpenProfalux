@@ -11,7 +11,6 @@
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
-#include "profile_table.h"  /* profils du catalogue : l'appareil suit le sien (issue #134) */
 #include <string.h>
 #include <ctype.h>
 #include <strings.h>
@@ -323,29 +322,7 @@ int shutters_remote_dump(int i, int from, char *serial, int sser, char *name, in
 /* La serialisation et le rangement sont dans cfg_model.c / cfg_store.c. Les
  * echecs sont journalises : une NVS pleine faisait autrefois echouer TOUTES les
  * sauvegardes sans le moindre message. */
-/* Remet le profil de chaque fiche en accord avec sa marque et sa methode (issue #134, etape 2). Appele avant
- * CHAQUE enregistrement : toutes les creations (clone, rejeu, enrolement, Somfy) et tous les changements de
- * marque y passent, sans un appel a placer dans chacun. Une centrale n'a pas de profil (elle diffuse les
- * commandes de ses membres, sans emettre pour elle-meme) ; une zone, si : c'est une telecommande clonee qui a
- * des suiveurs. Rend true si une fiche a change. */
-static bool sync_profiles(void) {
-    bool changed = false;
-    for (int i = 0; i < s_nvolets; i++) {
-        volet_t *v = &s_volets[i];
-        const profile_def_t *p = v->central ? NULL
-            : profile_for_device(v->profile, v->marque, v->virt, (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS, v->rejeu != NULL);
-        const char *id = p ? p->id : "";
-        if (strcmp(v->profile, id)) {
-            ESP_LOGI(TAG, "profil de '%s' : '%s' -> '%s'", v->id, v->profile, id);
-            strlcpy(v->profile, id, SH_ID_LEN);
-            changed = true;
-        }
-    }
-    return changed;
-}
-
 static esp_err_t save_cfg(void) {
-    sync_profiles();
     char key[8] = "";
     esp_err_t e = cfg_model_save(&s_model, key);
     if (e != ESP_OK)
@@ -558,9 +535,6 @@ static cfg_layout_t load_cfg(void) {
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
     migrate_tx_overrides();
-    /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
-     * methode, et on l'enregistre une fois. */
-    if (sync_profiles()) { ESP_LOGW(TAG, "migration #134 : profil grave dans les fiches"); save_cfg(); }
     return lay;
 }
 
@@ -2124,7 +2098,6 @@ static cJSON *status_device_json(const volet_t *v) {
     /* Parametres d'emission PAR APPAREIL (etage 2, issue #111) : pour le panneau avance de l'UI
      * (affichage + edition). tx_rpt/tx_rmt = tri-etat tx_override_t (0 heriter, 1 off, 2 on). */
     if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
-    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);   /* id du profil suivi (#134) */
     cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
     cJSON_AddNumberToObject(o, "te_us",    v->te_us);
     cJSON_AddNumberToObject(o, "tx_rpt",   v->tx_rpt);
