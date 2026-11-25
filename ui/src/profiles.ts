@@ -98,6 +98,7 @@ export function flowOf(profile: Pick<Profile, 'add' | 'engine'>): Flow | null {
   if (profile.add === ADD_METHOD.copy && profile.engine === ENGINE.keeloq) return FLOW.learn;
   if (profile.add === ADD_METHOD.enrol && profile.engine === ENGINE.keeloq) return FLOW.enrolPfx;
   if (profile.add === ADD_METHOD.enrol && profile.engine === ENGINE.somfy) return FLOW.createSomfy;
+  if (profile.add === ADD_METHOD.enrol && profile.engine === ENGINE.io) return FLOW.enrolIo;
   return null;
 }
 
@@ -109,6 +110,7 @@ export function methodRoute(profile: Profile): string {
     case FLOW.learn: case FLOW.replay: return `${TAB.remotes}/${SECTION.learn}/${id}`;
     case FLOW.enrolPfx: return `${TAB.remotes}/${SECTION.enrol}/${id}`;
     case FLOW.createSomfy: return `${TAB.remotes}/${SECTION.somfy}/${id}`;
+    case FLOW.enrolIo: return `${TAB.remotes}/${SECTION.io}/${id}`;
     default: return `${TAB.remotes}/${SECTION.add}`;
   }
 }
@@ -120,6 +122,7 @@ export const METHOD_SENTENCE: Record<string, string> = {
   [FLOW.replay]: 'Le boîtier enregistre le signal de ta télécommande et le rejoue à l\'identique.',
   [FLOW.enrolPfx]: 'Le boîtier devient une nouvelle télécommande, que le moteur apprend. La télécommande d\'origine sert au geste de validation.',
   [FLOW.createSomfy]: 'Pas besoin de télécommande d\'origine : le boîtier choisit une adresse et le moteur l\'apprend en mode appairage.',
+  [FLOW.enrolIo]: 'Le boîtier devient une nouvelle télécommande io : on capte un appui de la télécommande d\'origine, puis elle met le moteur en apprentissage.',
 };
 
 /* Espace insecable entre le nombre et l'unite : « MHz » ne passe jamais seul a la ligne. */

@@ -4,7 +4,7 @@ import { parseProfiles } from '../lib/catalog';
 import { FAILURE, HTTP_UNAUTHORIZED, SCAN_STATE, type Command } from '../domain';
 import { json, post, requireOk, poll } from './http';
 import type {
-  CaptureLast, DeviceFromRemoteReply, LearnPoll, OkReply, PfxCaptureReply, PfxRenewReply, PfxState, Profiles, RadioSummary,
+  CaptureLast, DeviceFromRemoteReply, IoPairReply, IoPairRequest, IoSniffReply, LearnPoll, OkReply, PfxCaptureReply, PfxRenewReply, PfxState, Profiles, RadioSummary,
   ReplayCaptureReply, Session, ShutterOrder, ShutterReply, Status, Sweep,
 } from './types';
 
@@ -115,6 +115,8 @@ export default {
   pfxForget: () => post('/api/pfx/forget'),
 
   somfyCreate: (body: { id: string; address: string; [key: string]: unknown }) => requireOk(post('/api/somfy/create', body)),
+  ioSniff: () => post<IoSniffReply>('/api/io/sniff'),
+  ioPair: (body: IoPairRequest) => postWithText<IoPairReply>('/api/io/pair/1w', body),
   saveCentral: ({ id, members }: { id: string; members: string[] }) => requireOk(post('/api/central', { id, members })),
   calibrate: (body: { id: string; travel_up_ms: number; travel_down_ms: number }) => requireOk(post('/api/calibrate', body)),
 

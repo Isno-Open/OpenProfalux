@@ -30,10 +30,12 @@ const BAND = { mhz433: '433', mhz868: '868', unknown: '915' };
 const CODE = { fixed: 'fixed' };
 const MODULATION = { fsk: 'FSK' };
 const ADD = { enrol: 'enrol' };
-const BRAND = { came: 'CAME', somfy: 'Somfy RTS' };
+const BRAND = { came: 'CAME', somfy: 'Somfy RTS', velux: 'Velux' };
+const ENGINE = { io: 'io-homecontrol' };
 const PROFILE_ID = { profaluxCopy: 'profalux-copy' };
 const brands = (r) => r.proposed.map((c) => c.profile.brand).sort();
 const inRanked = (r, brand) => r.ranked.some((c) => c.profile.brand === brand);
+const inProposed = (r, brand) => r.proposed.some((c) => c.profile.brand === brand);
 
 test('traits certains filtrants, mais seule la bande est detectable', () => {
   const t = traits(DOC);
@@ -60,10 +62,11 @@ test('bande 433 + code fixe connu : CAME seul, Somfy ecarte (code incompatible)'
   assert.equal(inRanked(r, BRAND.somfy), false);
 });
 
-test('bande 868 : toute la famille KeeLoq 868 proposee (Profalux copie et nouvelle, Franciaflex, Eveno, NeoSol)', () => {
+test('bande 868 : tous les profils 868 proposes (famille KeeLoq et Velux io), et eux seuls', () => {
   const r = rankProfiles({ [TRAIT.band]: BAND.mhz868 }, DOC);
-  assert.equal(r.proposed.length, 5);
+  assert.equal(r.proposed.length, DOC.profiles.filter((p) => p.radio.band === BAND.mhz868).length);
   assert.ok(r.proposed.every((c) => c.profile.radio.band === BAND.mhz868));
+  assert.ok(inProposed(r, BRAND.velux), 'Velux io est un profil 868');
 });
 
 test('bande 868 + enrolement : la copie Profalux est ecartee', () => {
@@ -83,7 +86,8 @@ test('rien de connu : toute la pyramide est proposee (choix manuel complet)', ()
   assert.equal(r.proposed.length, DOC.profiles.length);
 });
 
-test('modulation FSK connue : aucun profil OOK impose', () => {
+test('modulation FSK connue : aucun profil OOK impose, seul l\'io est propose', () => {
   const r = rankProfiles({ [TRAIT.modulation]: MODULATION.fsk }, DOC);
-  assert.equal(r.proposed.length, 0);
+  assert.ok(r.proposed.length > 0);
+  assert.ok(r.proposed.every((c) => c.profile.radio.modulation === MODULATION.fsk && c.profile.engine === ENGINE.io));
 });

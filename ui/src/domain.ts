@@ -24,7 +24,7 @@ export type DeviceType = ValueOf<typeof DEVICE_TYPE>;
 export const DEVICE_TYPE_CODE = { shutter: 0, gate: 1 } as const;
 
 /* Protocole d'un appareil virtuel (champ proto). */
-export const PROTOCOL = { somfy: 'somfy', profalux: 'profalux' } as const;
+export const PROTOCOL = { somfy: 'somfy', profalux: 'profalux', io: 'io' } as const;
 export type Protocol = ValueOf<typeof PROTOCOL>;
 
 /* Methode d'ajout d'un profil (profiles.json « add ») : reprendre la telecommande d'origine (copie : rejeu d'un
@@ -46,11 +46,11 @@ export const TEST_STATUS = { tested: 'tested', untested: 'untested' } as const;
 export type TestStatus = ValueOf<typeof TEST_STATUS>;
 
 /* Parcours d'ajout d'un profil, deduit de sa methode et de son moteur (profiles.ts flowOf). */
-export const FLOW = { learn: 'learn', replay: 'rejeu', enrolPfx: 'enrol-pfx', createSomfy: 'create-somfy' } as const;
+export const FLOW = { learn: 'learn', replay: 'rejeu', enrolPfx: 'enrol-pfx', createSomfy: 'create-somfy', enrolIo: 'enrol-io' } as const;
 export type Flow = ValueOf<typeof FLOW>;
 
 /* Marques nommees par le code (profiles.json « marque »). */
-export const BRAND = { profalux: 'Profalux', somfy: 'Somfy RTS', came: 'CAME' } as const;
+export const BRAND = { profalux: 'Profalux', somfy: 'Somfy RTS', came: 'CAME', velux: 'Velux' } as const;
 
 /* Role d'un appareil (profiles.json « roles », membres permis d'une centrale ou d'une zone). */
 export const ROLE = { simple: 'simple', central: 'central', zone: 'zone' } as const;
@@ -110,7 +110,7 @@ export const TAB = {
 export type TabId = ValueOf<typeof TAB>;
 export const SECTION = {
   add: 'add', devices: 'devices', central: 'central', calibration: 'calib', captured: 'list',
-  learn: 'learn', replay: 'rejeu', enrol: 'enrol', somfy: 'somfy',
+  learn: 'learn', replay: 'rejeu', enrol: 'enrol', somfy: 'somfy', io: 'io',
   wifi: 'wifi', mqtt: 'mqtt', cloud: 'cloud',
   device: 'device', health: 'health', radio: 'radio', backup: 'backup', rf: 'rf', log: 'log',
 } as const;

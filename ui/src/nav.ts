@@ -34,6 +34,7 @@ export const TABS: Tab[] = [
       { id: SECTION.replay, label: 'Capturer', hidden: true, parent: SECTION.add },
       { id: SECTION.enrol, label: 'Télécommande virtuelle', hidden: true, parent: SECTION.add },
       { id: SECTION.somfy, label: 'Somfy RTS', hidden: true, parent: SECTION.add },
+      { id: SECTION.io, label: 'io-homecontrol', hidden: true, parent: SECTION.add },
     ],
   },
   {

@@ -172,6 +172,7 @@ export interface Config {
   radio_profile?: string;
   freq_khz?: number;
   rx_gain?: number;
+  io_freq_offset_khz?: number;   // correction de quartz des canaux io (kHz) ; absent sur un firmware sans io
 }
 /* /api/config (ecriture) : seuls les champs envoyes changent ; radio: N pour une radio secondaire. Les drapeaux
    s'ecrivent en booleen ; ui_auth ne s'ecrit pas (ui_pass). */
@@ -190,6 +191,12 @@ export type ConfigUpdate = Partial<Omit<Config, ConfigLength | ConfigFlag>>
   reboot?: boolean;
 };
 export interface ConfigReply extends OkReply { radio_applied?: number }
+/* io-homecontrol 1W (#118) : une trame captee de la telecommande d'origine (hexa), et si elle sert a l'appairage
+   (commande 0x00 complete, CRC juste). */
+export interface IoSniffReply extends OkReply { frame?: string; len?: number; usable?: Flag }
+/* Appairage : le profil io (code fabricant, marque), la trame captee, le nom du volet. */
+export interface IoPairRequest { profile: string; frame: string; name: string }
+export interface IoPairReply extends OkReply { id?: string }
 export interface MqttDiscovery { uri?: string }
 
 /* Cloud ISNO. */

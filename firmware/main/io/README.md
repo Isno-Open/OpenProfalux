@@ -17,24 +17,29 @@ FIFO longueur fixe.
 - `io_pair.*` : profil d'emission, identite derivee de la MAC, transfert de cle 0x30.
 - `io_store.*` : cle, profil et compteur roulant par source (NVS, namespace `iohc`).
 
-## Appairer un volet io (`POST /api/io/pair/1w`)
+## Appairer un volet io
 
-Champs : `frame` (trame 0x00 complete captee de la telecommande d'origine, hexa, CRC compris),
-`index` (0 par defaut), `man_id` (2 par defaut ; **1 pour un Velux**, seul accepte), `profile`
-(1 seulement). La source et la cle sont derivees de la MAC et de l'index, comme sur
-`feat/io-pair-known-identity` : meme carte + meme index = meme identite.
+Depuis l'interface : Appareils, Ajouter un appareil, profil « Nouveau volet Velux io » (`velux-io-enrol` dans
+`web/profiles.json`). C'est un ENROLEMENT : le boitier devient une nouvelle telecommande, on ne copie pas les touches.
 
-- **Appairage** (`tx` absent ou 1) : mettre le moteur en apprentissage (Velux : appui long sur
-  RESET de la telecommande d'origine jusqu'au va-et-vient), puis la carte envoie une seule rafale
-  0x30 (4 copies identiques) et cree le volet `io-XXXXXX`.
-- **Reprise sans emission** (`"tx":0,"rolling":N`) : apres un reflash ou un effacement NVS,
-  recree la cle, le profil et le volet sans rien emettre. `N` = prochain compteur a emettre, plus
-  grand que le dernier accepte par le moteur. Une valeur inferieure au compteur deja stocke est
-  refusee ; le compteur ne revient jamais a zero (les commandes s'arretent apres 65535).
+1. `POST /api/io/sniff` : capte UNE commande (0x00) de la telecommande d'origine (8 s au plus). Rend la trame en hexa
+   et `usable` (commande complete, CRC juste) : le boitier y lit la destination et la charge utile du volet.
+2. Mettre le moteur en apprentissage avec la telecommande d'origine (Velux : appui long sur RESET, jusqu'au va-et-vient).
+3. `POST /api/io/pair/1w` `{profile, frame, name}` : la carte envoie une seule rafale 0x30 (4 copies identiques) et cree
+   le volet. Le code fabricant (`io.man_id`, 1 pour un Velux, seul accepte) et la marque viennent du PROFIL.
 
-La sauvegarde JSON de la configuration n'exporte pas les cles ni les compteurs io : noter le
-compteur avant d'effacer la NVS. `/api/io/erase` vide les identites mais garde les volets, a
-reprendre avant usage.
+La source et la cle sont derivees de la MAC et d'un index, comme sur `feat/io-pair-known-identity` : meme carte + meme
+index = meme identite. Sans `index`, le boitier prend le premier dont l'identite n'est celle d'aucun de ses volets io :
+deux volets n'ont jamais la meme. La radio est celle de la carte dont la bande declaree couvre 868,95 MHz ; sans elle,
+l'appairage est refuse.
+
+**Reprise sans emission** (`"tx":0,"rolling":N,"index":I`) : apres un reflash ou un effacement NVS, recree la cle, le
+profil et le volet sans rien emettre. `N` = prochain compteur a emettre, plus grand que le dernier accepte par le moteur.
+Une valeur inferieure au compteur deja stocke est refusee ; le compteur ne revient jamais a zero (les commandes
+s'arretent apres 65535).
+
+La sauvegarde JSON de la configuration n'exporte pas les cles ni les compteurs io : noter le compteur avant d'effacer
+la NVS.
 
 ## Commandes et position
 
@@ -48,7 +53,7 @@ rien : la position est estimee, et les appuis sur la telecommande d'origine ne s
 
 ## Correction de frequence
 
-Reglage systeme `io_freq_offset_khz` (`/api/config`, onglet Systeme) : entier de -100 a 100,
+Reglage `io_freq_offset_khz` (`/api/config`, et dans l'ecran d'ajout d'un volet io, « Rien ne passe ? ») : entier de -100 a 100,
 0 par defaut, NVS `cfg/io_offset`. Corrige le quartz du module sur les seuls canaux io ; la
 porteuse OOK n'est pas touchee. Un module M5Stack decale de -58 kHz (868 345 au lieu de 868 403
 en Profalux) ne recoit ni n'est recu en io sans `-58`.

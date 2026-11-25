@@ -58,6 +58,10 @@ const session: Session = { protected: true, authed: !new URLSearchParams(locatio
 interface PfxIdentity { serial: string; idx: number; counter: number; remote: string; model: number; marque?: string }
 let pfx: PfxIdentity | null = null;                // identite virtuelle en cours d'enrolement
 let nextIdentity = 0x0670013;
+/* io : identites 24 bits de demonstration, et une trame de commande d'exemple (pas une vraie capture). */
+let nextIoIdentity = 0xD1A001;
+const MOCK_IO_FRAME = '1600FFFFFF0D1A00000106000000000001020304050607A1B2';
+const hex6 = (n: number): string => `0x${n.toString(16).toUpperCase().padStart(6, '0')}`;
 
 const find = (id: string): Device | undefined => devices.find(x => x.id === id);
 const mustFind = (id: string): Device => { const d = find(id); if (!d) throw 404; return d; };
@@ -240,6 +244,18 @@ export default {
     if (find(id)) throw 'exists';
     newDevice({ id, virt: true, proto: PROTOCOL.somfy, marque: BRAND.somfy, virt_serial: address, freq_khz: 433420, frame_bits: 56 });
     return ok();
+  },
+
+  /* io-homecontrol (#118) : une commande captee (trame d'exemple, fausse), puis l'appairage cree le volet io. */
+  async ioSniff() {
+    await wait(1200);
+    return { ok: FLAG.on, len: MOCK_IO_FRAME.length / 2, frame: MOCK_IO_FRAME, usable: FLAG.on };
+  },
+  async ioPair({ name, profile }: { profile: string; frame: string; name: string }) {
+    await wait(700);
+    if (find(name)) throw 'exists';
+    newDevice({ id: name, virt: true, proto: PROTOCOL.io, marque: BRAND.velux, profile, virt_serial: hex6(nextIoIdentity++) });
+    return { ok: FLAG.on, id: name };
   },
 
   /* Centrale, calibration */

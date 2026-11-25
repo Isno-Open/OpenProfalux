@@ -1559,6 +1559,16 @@ int shutters_create_io_volet(const char *id, uint32_t src, const char *brand) {
     return e == ESP_OK ? 0 : -1;
 }
 
+bool shutters_io_identity_taken(uint32_t src) {
+    if (pfx_key_for_serial(src, NULL, NULL)) return true;
+    bool taken = false;
+    LOCK();
+    for (int i = 0; i < s_nvolets && !taken; i++)
+        taken = s_volets[i].virt && s_volets[i].proto == VOLET_PROTO_IO && s_volets[i].virt_serial == src;
+    UNLOCK();
+    return taken;
+}
+
 sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address) {
     if (!id || !*id || !address || address > SOMFY_RTS_ADDR_MAX) return SH_SOMFY_INVALID;
     if (strlen(id) >= SH_ID_LEN) return SH_SOMFY_NAME_TOO_LONG;

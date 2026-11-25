@@ -6,17 +6,18 @@ import type { Device, Profile } from '../api/types';
 import { ADD_METHOD, BRAND, ENGINE, PROTOCOL, type AddMethod, type Engine } from '../domain';
 
 export const isSomfy = (device: Pick<Device, 'proto'> | null | undefined): boolean => device?.proto === PROTOCOL.somfy;
+export const isIo = (device: Pick<Device, 'proto'> | null | undefined): boolean => device?.proto === PROTOCOL.io;
 
-/* Les deux axes d'un appareil, deduits de sa fiche : enrole (virtuel, Somfy ou KeeLoq), rejeu brut, ou clone. */
+/* Les deux axes d'un appareil, deduits de sa fiche : enrole (virtuel : Somfy, io ou KeeLoq), rejeu brut, ou clone. */
 export interface Method { add: AddMethod; engine: Engine }
 export function methodOf(device: Device): Method {
-  if (device.virt) return { add: ADD_METHOD.enrol, engine: isSomfy(device) ? ENGINE.somfy : ENGINE.keeloq };
+  if (device.virt) return { add: ADD_METHOD.enrol, engine: isSomfy(device) ? ENGINE.somfy : isIo(device) ? ENGINE.io : ENGINE.keeloq };
   return { add: ADD_METHOD.copy, engine: device.rejeu ? ENGINE.replay : ENGINE.keeloq };
 }
 export const sameMethod = (p: Profile, m: Method): boolean => p.add === m.add && p.engine === m.engine;
 
 /* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. */
-export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
+export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : isIo(device) ? BRAND.velux : device.rejeu ? BRAND.came : BRAND.profalux);
 
 /* Le profil a garder pour une fiche : celui qu'elle porte s'il reste coherent (meme methode, et meme marque quand
    la fiche en porte une), sinon celui de sa marque et de sa methode, sinon le premier de sa methode. */

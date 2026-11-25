@@ -444,6 +444,18 @@ jobs:
       - name: profile_table (gcc + AddressSanitizer + UBSan), table engendree depuis profiles.json
         run: firmware/test/profile-table/run.sh
 
+  # io-homecontrol 1W (module io/, PR #118) : trame captee, identite, compteur poids fort en tete, bit LPM sur la
+  # 1re trame seulement, persistance et refus du recul du compteur. NVS, MAC et radio simules. Voir
+  # firmware/test/io-1w.
+  banc-io-1w:
+    name: Banc de test io-homecontrol 1W
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: io 1W (gcc/g++ + AddressSanitizer + UBSan)
+        run: make -C firmware/test/io-1w test
+
   # Detection de profil de la pyramide « Ajouter un appareil » (pyramid-detect.js), sur le VRAI
   # profiles.json : traits en chemins, filtre dur sur un trait certain, rien d'impose. Voir
   # firmware/test/pyramid-detect. Node seul, sans dependance.

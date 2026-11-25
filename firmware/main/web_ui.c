@@ -1675,6 +1675,7 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
  * Une seule rafale par geste, aucun nouvel essai automatique (batterie des moteurs solaires). */
 #define IO_SNIFF_MS 8000   /* fenetre d'ecoute d'une trame : le temps d'appuyer sur un bouton */
 #define IO_FRAME_MAX 32
+#define IO_INDEX_SEARCH_MAX (2 * SH_MAX_VOLETS)   /* index d'identite essayes : toujours un libre pour un boitier plein */
 static esp_err_t h_io_sniff(httpd_req_t *r) {
     uint8_t frame[IO_FRAME_MAX];
     int n = radio_io_sniff(frame, sizeof frame, IO_SNIFF_MS);
@@ -1714,8 +1715,18 @@ static esp_err_t h_io_pair_1w(httpd_req_t *r) {
     }
     char name[SH_ID_LEN] = "";
     strlcpy(name, jstr(j, "name") ?: "", sizeof name);
+    /* Identite derivee de la MAC et d'un index : sans index donne, le premier dont l'identite n'est pas deja celle
+     * d'un volet io de ce boitier (deux volets appaires avec le meme index partageraient leur identite). Un index
+     * donne sert a la reprise d'une identite connue. */
     uint8_t src[3], key[16];
-    bool derived = io_derive_identity(idx ? (uint32_t)idx->valuedouble : 0, src, key);
+    bool derived = false;
+    for (uint32_t i = idx ? (uint32_t)idx->valuedouble : 0; i < (idx ? (uint32_t)idx->valuedouble + 1 : IO_INDEX_SEARCH_MAX); i++) {
+        derived = io_derive_identity(i, src, key);
+        if (!derived || idx) break;
+        uint32_t s = ((uint32_t)src[0] << 16) | ((uint32_t)src[1] << 8) | src[2];
+        if (!shutters_io_identity_taken(s)) break;
+        derived = false;
+    }
     int rolling = roll ? (int)roll->valuedouble : -1;
     cJSON_Delete(j);
     if (!derived) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "identite io non derivee");
