@@ -1,5 +1,5 @@
 {
-  "_contract": "Catalogue des appareils : SOURCE UNIQUE de l'ecran 'Ajouter un appareil' et du pilotage. PYRAMIDE type -> marque -> profil (issue #134). Un TYPE porte ses boutons (nombre, comportement, position sur la telecommande dessinee), dit s'il a une position, et sa classe d'appareil dans Home Assistant (ha_device_class). Un PROFIL declare ses deux axes : 'add' (copy = on reprend la telecommande d'origine, enrol = le boitier devient une nouvelle telecommande) et 'engine' (le moteur de protocole du firmware : rejeu-brut, keeloq, somfy-rts ; ook-fixe et io-homecontrol a venir). Le profil dit QUOI emettre : 'frames' pose une trame sur chaque bouton de son type (source capture = la trame captee de la telecommande d'origine ; code = le code du bouton dans la trame du moteur), 'tx.frames_per_press' le nombre de trames par appui, 'enrol' la trame d'apprentissage (code, trames par rafale, rafales, compteur de depart). Seuls les moteurs sont du code : un profil ne contient jamais de cle ni d'identite (ce fichier est public, servi sur /profiles.json). 'description' : la phrase montree a l'utilisateur ; 'note' : note de developpeur, jamais montree. Les valeurs 'brand' sont gravees dans les fiches des appareils (champ marque) : elles ne se renomment pas sans migration.",
+  "_contract": "Catalogue des appareils : SOURCE UNIQUE de l'ecran 'Ajouter un appareil' et du pilotage. PYRAMIDE type -> marque -> profil (issue #134). Un TYPE porte ses boutons (nombre, comportement, position sur la telecommande dessinee). Un PROFIL declare ses deux axes : 'add' (copy = on reprend la telecommande d'origine, enrol = le boitier devient une nouvelle telecommande) et 'engine' (le moteur de protocole du firmware : rejeu-brut, keeloq, somfy-rts ; ook-fixe et io-homecontrol a venir). Le profil dit QUOI emettre : 'frames' pose une trame sur chaque bouton de son type (source capture = la trame captee de la telecommande d'origine ; code = le code du bouton dans la trame du moteur), 'tx.frames_per_press' le nombre de trames par appui, 'enrol' la trame d'apprentissage (code, trames par rafale, rafales, compteur de depart). Seuls les moteurs sont du code : un profil ne contient jamais de cle ni d'identite (ce fichier est public, servi sur /profiles.json). 'description' : la phrase montree a l'utilisateur ; 'note' : note de developpeur, jamais montree. Les valeurs 'brand' sont gravees dans les fiches des appareils (champ marque) : elles ne se renomment pas sans migration.",
   "devices_max": 24,
   "name_max": 23,
   "roles": {
@@ -31,7 +31,7 @@
   },
   "types": {
     "volet":   { "label": "Volet",   "code": 0, "icon": "🪟", "positional": true,
-                 "en": { "label": "Shutter" }, "ha_device_class": "shutter",
+                 "en": { "label": "Shutter" },
                  "travel_s": { "min": 1, "max": 180 },
                  "buttons": [
                    { "id": "up",   "cmd": "up",   "behavior": "up",   "label": "Montée",   "en": "Up",   "position": { "row": 0, "col": 0 } },
@@ -39,7 +39,7 @@
                    { "id": "down", "cmd": "down", "behavior": "down", "label": "Descente", "en": "Down", "position": { "row": 2, "col": 0 } }
                  ] },
     "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>",
-                 "en": { "label": "Gate" }, "ha_device_class": "gate",
+                 "en": { "label": "Gate" },
                  "buttons": [
                    { "id": "main", "cmd": "up", "behavior": "step", "label": "Bouton du portail", "en": "Gate button", "position": { "row": 0, "col": 0 } }
                  ] }

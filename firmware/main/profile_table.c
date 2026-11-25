@@ -101,9 +101,3 @@ int profile_button_code(const profile_def_t *p, profile_cmd_t cmd) {
     }
     return -1;
 }
-
-const type_def_t *type_find(uint8_t code) {
-    for (int i = 0; i < TYPE_TABLE_COUNT; i++)
-        if (TYPE_TABLE[i].code == code) return &TYPE_TABLE[i];
-    return NULL;
-}

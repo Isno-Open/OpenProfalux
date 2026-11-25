@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "profile_table.h"
-#include "dev_type.h"
 
 static int g_fail = 0;
 static void check(int ok, const char *name) {
@@ -83,12 +82,6 @@ int main(void) {
     check(profile_button_code(enrol, PROFILE_CMD_UP) == OLD_UP && profile_button_code(enrol, PROFILE_CMD_DOWN) == OLD_DOWN
           && profile_button_code(profile_find(ID_PFX_COPY), PROFILE_CMD_UP) == -1 && profile_button_code(NULL, PROFILE_CMD_STOP) == -1,
           "T17 code de bouton : celui du profil, -1 s'il n'en declare pas");
-
-    /* Lot 4 : les types que le firmware connait (dev_type_t) sont declares, avec leur classe Home Assistant. */
-    const type_def_t *shutter = type_find(TYPE_VOLET), *gate = type_find(TYPE_PORTAIL);
-    check(shutter && gate && shutter->ha_device_class[0] && gate->ha_device_class[0] && !type_find(200),
-          "T18 chaque type du firmware est declare, avec sa classe Home Assistant");
-    check(shutter && shutter->positional && gate && !gate->positional, "T19 le volet a une position, le portail n'en a pas");
 
     printf(g_fail ? "ECHEC : %d\n" : "OK\n", g_fail);
     return g_fail ? 1 : 0;
