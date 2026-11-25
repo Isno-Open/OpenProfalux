@@ -1049,6 +1049,11 @@ static bool step_press_once(volet_t *v, const profile_def_t *p) {
              a == STEP_ACT_OPEN ? "ouverture" : a == STEP_ACT_CLOSE ? "fermeture" : "arret", (unsigned)n);
     return true;
 }
+/* Appuis encore necessaires pour obtenir `want`, le mouvement en cours avance jusqu'a maintenant (voir step_presses). */
+static int step_remaining(volet_t *v, const profile_def_t *p, step_act_t want) {
+    if (integrate_move(v, esp_timer_get_time())) step_end_of_travel(v);
+    return step_presses(&p->step, step_next_of(v, p), step_state(v), want);
+}
 /* Ordre ouvrir / fermer / stop : autant d'appuis que le cycle en demande, espaces de press_gap_ms. L'attente se fait
  * sous le verrou : quelques secondes au plus (un cycle de 4 appuis), le temps qu'un humain mettrait a la telecommande. */
 static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
@@ -1064,10 +1069,14 @@ static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
     /* Appui par appui, l'action restante est RECALCULEE : pendant l'attente entre deux appuis, le portail peut
      * atteindre une butee, et la carte saute alors le stop prevu ; un nombre d'appuis fige d'avance finirait par
      * un appui de trop. Au plus la longueur du cycle. */
+    /* L'attente ne precede qu'un appui encore necessaire : un ordre obtenu au dernier appui rend la main aussitot,
+     * sans tenir le verrou press_gap_ms de plus (le suivi des autres appareils en depend). */
     for (int i = 0; ; i++) {
-        if (i) vTaskDelay(pdMS_TO_TICKS(p->step_press_gap_ms));
-        if (integrate_move(v, esp_timer_get_time())) step_end_of_travel(v);
-        int k = step_presses(&p->step, step_next_of(v, p), step_state(v), want);
+        int k = step_remaining(v, p, want);
+        if (k > 0 && i) {   /* un autre appui reste a faire : l'espacer du precedent, puis recompter (butee atteinte entre-temps) */
+            vTaskDelay(pdMS_TO_TICKS(p->step_press_gap_ms));
+            k = step_remaining(v, p, want);
+        }
         if (k == 0) return 0;
         if (k < 0 || i >= p->step.len) {
             ESP_LOGW(TAG, "pas a pas '%s' : ordre refuse, le cycle du profil '%s' n'y mene pas", v->id, p->id);
