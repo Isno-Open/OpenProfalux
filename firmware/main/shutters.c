@@ -368,7 +368,7 @@ static bool sync_profiles(void) {
  * portail envoyait alors ("up") ; on la renomme, pour que l'interface la voie captee. Rend true si une fiche a change.
  * (Un portail est un appareil de rejeu a une trame : on ne renomme que s'il n'en a qu'une.) */
 static const profile_def_t *step_profile(const volet_t *v);
-static bool settle_steps_at_boot(void);
+static void resume_steps_at_boot(void);
 static bool migrate_step_frames(void) {
     bool changed = false;
     const char *step = profile_cmd_name(PROFILE_CMD_STEP);
@@ -611,8 +611,9 @@ static cfg_layout_t load_cfg(void) {
     /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
      * methode, et on l'enregistre une fois. */
     bool profiles_changed = sync_profiles();
-    if (profiles_changed | migrate_step_frames() | settle_steps_at_boot()) { ESP_LOGW(TAG, "migration #134 : profil, trames et cycle graves dans les fiches"); save_cfg(); }
+    if (profiles_changed | migrate_step_frames()) { ESP_LOGW(TAG, "migration #134 : profil, trames et cycle graves dans les fiches"); save_cfg(); }
     if (sanitize_freqs()) save_cfg();
+    resume_steps_at_boot();
     for (int i = 0; i < s_nvolets; i++) {   /* un profil incomplet pour son moteur emettrait avec les replis */
         const char *why = NULL;
         const profile_def_t *p = profile_of(&s_volets[i]);
@@ -1086,22 +1087,23 @@ static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
     }
 }
 /* Redemarrage pendant une course : la fiche a garde le cycle d'un portail EN MOUVEMENT (le prochain appui est le stop
- * qui suit ce mouvement), mais le suivi repart immobile. La carte du moteur, elle, a fini sa course : on place le
- * portail en butee, du cote ou il allait, et on saute le stop comme elle. Rend true si une fiche a change. */
-static bool settle_steps_at_boot(void) {
-    bool changed = false;
+ * qui suit ce mouvement) et la position du dernier appui, mais le suivi repart immobile. La carte du moteur, elle, ne
+ * s'est pas arretee avec le boitier : on REPREND la course depuis cette position, comme si elle se poursuivait depuis
+ * la mise sous tension (last_tick_us = 0, l'instant du demarrage : le temps de demarrage compte). La boucle de suivi
+ * la mene a sa butee et saute alors le stop, comme la carte. Supposer la butee deja atteinte serait faux pour une
+ * course plus longue que le redemarrage : un ordre l'aurait arretee au lieu de l'inverser. L'erreur restante, une
+ * coupure de duree inconnue AVANT le redemarrage, ne fait que prolonger la course suivie. */
+static void resume_steps_at_boot(void) {
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
         const profile_def_t *p = step_profile(v);
         if (!p || !v->step_known || v->step_next >= p->step.len || p->step.act[v->step_next] != STEP_ACT_STOP) continue;
         step_act_t was = (step_act_t)p->step.act[(v->step_next + p->step.len - 1) % p->step.len];
         if (was != STEP_ACT_OPEN && was != STEP_ACT_CLOSE) continue;
-        v->position = was == STEP_ACT_OPEN ? 0 : 100;
-        step_travel_end(&p->step, &v->step_next);
-        ESP_LOGW(TAG, "pas a pas '%s' : redemarrage pendant une %s, suivi place en butee", v->id, was == STEP_ACT_OPEN ? "ouverture" : "fermeture");
-        changed = true;
+        v->dir = was == STEP_ACT_OPEN ? +1 : -1; v->target = was == STEP_ACT_OPEN ? 0 : 100;
+        v->own_move = true; v->last_tick_us = 0;
+        ESP_LOGW(TAG, "pas a pas '%s' : redemarrage pendant une %s, la course suivie reprend", v->id, was == STEP_ACT_OPEN ? "ouverture" : "fermeture");
     }
-    return changed;
 }
 
 /* L'action d'un ordre du pave (up / stop / down), STEP_ACT_NONE pour un autre. */
