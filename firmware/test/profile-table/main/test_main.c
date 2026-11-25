@@ -26,6 +26,8 @@ static int is(const profile_def_t *p, const char *id) { return p && !strcmp(p->i
 static const char ID_PFX_ENROL[] = "profalux-enrol", ID_PFX_COPY[] = "profalux-copy", ID_EVENO[] = "eveno-enrol",
                   ID_FRANCIAFLEX[] = "franciaflex-enrol", ID_SOMFY[] = "somfy-rts-enrol", ID_CAME[] = "came-replay",
                   ID_UNKNOWN[] = "inconnu", ID_REMOVED[] = "disparu";
+/* Noms de fil des commandes d'un bouton (profiles.json types[].buttons[].cmd). */
+static const char CMD_STEP[] = "step", CMD_UP[] = "up", CMD_UNKNOWN[] = "x";
 static const char BRAND_PFX[] = "Profalux", BRAND_EVENO[] = "Eveno", BRAND_FRANCIAFLEX[] = "Franciaflex", NO_BRAND[] = "";
 
 /* Ce que le firmware emettait AVANT le lot 2b, quand ces valeurs etaient des constantes du C (PRESS_REPEATS,
@@ -101,8 +103,8 @@ int main(void) {
     check(came && profile_has_step(came) && !memcmp(&came->step, &osfs, sizeof osfs) && came->step_press_gap_ms > 0
           && profile_replay_repeats(came, PROFILE_CMD_STEP) == OLD_REJEU_REPEATS && !profile_has_step(enrol),
           "T20 le portail CAME declare son cycle ouvre-stop-ferme-stop et le rejeu de son bouton");
-    check(profile_cmd_of("step") == PROFILE_CMD_STEP && profile_cmd_of("up") == PROFILE_CMD_UP && profile_cmd_of("x") == -1
-          && !strcmp(profile_cmd_name(PROFILE_CMD_STEP), "step"), "T21 commandes : nom du fil <-> profile_cmd_t");
+    check(profile_cmd_of(CMD_STEP) == PROFILE_CMD_STEP && profile_cmd_of(CMD_UP) == PROFILE_CMD_UP && profile_cmd_of(CMD_UNKNOWN) == -1
+          && !strcmp(profile_cmd_name(PROFILE_CMD_STEP), CMD_STEP), "T21 commandes : nom du fil <-> profile_cmd_t");
 
     /* Le cycle, appui par appui, sur ouvre-stop-ferme-stop : ferme -> ouvre -> stop -> ferme -> stop -> ouvre. */
     uint8_t n = step_next_at_rest(&osfs, true);

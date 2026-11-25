@@ -1052,6 +1052,8 @@ static bool step_press_once(volet_t *v, const profile_def_t *p) {
 /* Ordre ouvrir / fermer / stop : autant d'appuis que le cycle en demande, espaces de press_gap_ms. L'attente se fait
  * sous le verrou : quelques secondes au plus (un cycle de 4 appuis), le temps qu'un humain mettrait a la telecommande. */
 static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
+    /* Un arret demande a un portail immobile ne fait rien, etalonne ou non : un appui le mettrait en marche. */
+    if (want == STEP_ACT_STOP && v->dir == 0) return 0;
     /* Sans temps de course mesure, la fin de course suivie n'est qu'un repli de 18 s : en deduire plusieurs appuis
      * risquerait d'arreter un portail qu'on voulait fermer. On envoie alors un appui, comme la telecommande, et le
      * suivi reste indicatif. */
@@ -1059,16 +1061,20 @@ static int step_command(volet_t *v, const profile_def_t *p, step_act_t want) {
         ESP_LOGW(TAG, "pas a pas '%s' : temps de course non etalonne, un seul appui", v->id);
         return step_press_once(v, p) ? 0 : -1;
     }
-    int k = step_presses(&p->step, step_next_of(v, p), step_state(v), want);
-    if (k < 0) {
-        ESP_LOGW(TAG, "pas a pas '%s' : ordre refuse, le cycle du profil '%s' n'y mene pas", v->id, p->id);
-        return -1;
-    }
-    for (int i = 0; i < k; i++) {
+    /* Appui par appui, l'action restante est RECALCULEE : pendant l'attente entre deux appuis, le portail peut
+     * atteindre une butee, et la carte saute alors le stop prevu ; un nombre d'appuis fige d'avance finirait par
+     * un appui de trop. Au plus la longueur du cycle. */
+    for (int i = 0; ; i++) {
         if (i) vTaskDelay(pdMS_TO_TICKS(p->step_press_gap_ms));
+        if (integrate_move(v, esp_timer_get_time())) step_end_of_travel(v);
+        int k = step_presses(&p->step, step_next_of(v, p), step_state(v), want);
+        if (k == 0) return 0;
+        if (k < 0 || i >= p->step.len) {
+            ESP_LOGW(TAG, "pas a pas '%s' : ordre refuse, le cycle du profil '%s' n'y mene pas", v->id, p->id);
+            return -1;
+        }
         if (!step_press_once(v, p)) return -1;
     }
-    return 0;
 }
 /* Redemarrage pendant une course : la fiche a garde le cycle d'un portail EN MOUVEMENT (le prochain appui est le stop
  * qui suit ce mouvement), mais le suivi repart immobile. La carte du moteur, elle, a fini sa course : on place le
