@@ -11,7 +11,6 @@
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
-#include "profile_table.h"  /* profils du catalogue : l'appareil suit le sien (issue #134) */
 #include <string.h>
 #include <ctype.h>
 #include <strings.h>
@@ -323,49 +322,7 @@ int shutters_remote_dump(int i, int from, char *serial, int sser, char *name, in
 /* La serialisation et le rangement sont dans cfg_model.c / cfg_store.c. Les
  * echecs sont journalises : une NVS pleine faisait autrefois echouer TOUTES les
  * sauvegardes sans le moindre message. */
-/* Remet le profil de chaque fiche en accord avec sa marque et sa methode (issue #134, etape 2). Appele avant
- * CHAQUE enregistrement : toutes les creations (clone, rejeu, enrolement, Somfy) et tous les changements de
- * marque y passent, sans un appel a placer dans chacun. Une centrale n'a pas de profil (elle diffuse les
- * commandes de ses membres, sans emettre pour elle-meme) ; une zone, si : c'est une telecommande clonee qui a
- * des suiveurs. Rend true si une fiche a change. */
-/* Le profil d'un appareil (grave dans sa fiche, remis en accord par sync_profiles), ou NULL. */
-static const profile_def_t *profile_of(const volet_t *v) { return v ? profile_find(v->profile) : NULL; }
-
-/* Garde de bande sur la config CHARGEE (#134, etape 10) : au demarrage et a la restauration d'une sauvegarde, une
- * porteuse d'appareil qu'aucune radio de la carte ne couvre est remise a 0 (heriter de la radio) et journalisee.
- * L'enregistrement (shutters_set_tx_params) la refuse deja ; une sauvegarde, elle, peut la porter. Rend true si une
- * fiche a change. */
-static bool sanitize_freqs(void) {
-    bool changed = false;
-    for (int i = 0; i < s_nvolets; i++) {
-        volet_t *v = &s_volets[i];
-        if (v->freq_khz && cc1101_radio_for_khz(v->freq_khz) < 0) {
-            ESP_LOGE(TAG, "'%s' : frequence %u kHz hors des bandes de la carte, remise a celle de la radio", v->id, (unsigned)v->freq_khz);
-            v->freq_khz = 0;
-            changed = true;
-        }
-    }
-    return changed;
-}
-
-static bool sync_profiles(void) {
-    bool changed = false;
-    for (int i = 0; i < s_nvolets; i++) {
-        volet_t *v = &s_volets[i];
-        const profile_def_t *p = v->central ? NULL
-            : profile_for_device(v->profile, v->marque, v->virt, (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS, v->rejeu != NULL);
-        const char *id = p ? p->id : "";
-        if (strcmp(v->profile, id)) {
-            ESP_LOGI(TAG, "profil de '%s' : '%s' -> '%s'", v->id, v->profile, id);
-            strlcpy(v->profile, id, SH_ID_LEN);
-            changed = true;
-        }
-    }
-    return changed;
-}
-
 static esp_err_t save_cfg(void) {
-    sync_profiles();
     char key[8] = "";
     esp_err_t e = cfg_model_save(&s_model, key);
     if (e != ESP_OK)
@@ -578,33 +535,12 @@ static cfg_layout_t load_cfg(void) {
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
     migrate_tx_overrides();
-    /* Migration #134 : une fiche anterieure n'a pas d'id de profil ; on lui donne celui de sa marque et de sa
-     * methode, et on l'enregistre une fois. */
-    if (sync_profiles()) { ESP_LOGW(TAG, "migration #134 : profil grave dans les fiches"); save_cfg(); }
-    if (sanitize_freqs()) save_cfg();
-    for (int i = 0; i < s_nvolets; i++) {   /* un profil incomplet pour son moteur emettrait avec les replis */
-        const char *why = NULL;
-        const profile_def_t *p = profile_of(&s_volets[i]);
-        if (p && !profile_engine_ready(p, &why)) ESP_LOGE(TAG, "'%s' : profil '%s' incomplet : %s", s_volets[i].id, p->id, why);
-    }
     return lay;
 }
 
 /* ── RF ── */
-/* Trames par "appui" : le profil de l'appareil le declare (tx.frames_per_press, issue #134). Ce REPLI ne sert
- * qu'a une trame RF brute sans appareil (rejeu de debug) et a une fiche dont le profil est introuvable : plus de
- * repetitions = plus de chances qu'une passe propre survive a une preemption du bit-bang par le WiFi. */
-#define PRESS_REPEATS_FALLBACK 10
-
-
-/* Trames par appui d'un appareil : celles de son profil, sinon le repli (journalise : une fiche sans profil
- * est une anomalie depuis la migration #134). */
-static int press_frames(const volet_t *v) {
-    const profile_def_t *p = profile_of(v);
-    if (p && p->frames_per_press) return p->frames_per_press;
-    if (v) ESP_LOGW(TAG, "'%s' : profil '%s' sans trames par appui, repli %d", v->id, v->profile, PRESS_REPEATS_FALLBACK);
-    return PRESS_REPEATS_FALLBACK;
-}
+#define PRESS_REPEATS 10   /* nb de trames par "appui" : le bit-bang peut etre preempte par le WiFi
+                              (trame corrompue) ; plus de repetitions = plus de chances qu'une passe propre */
 /* Params d'emission RESOLUS depuis la fiche (defini plus bas) : porteuse/TE/rpt/rmt par appareil. */
 static tx_params_t tx_params_of(const volet_t *v);
 
@@ -624,14 +560,13 @@ static void emit_press(const volet_t *v, const char *bits) {
         for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
         for (int i = 0; i < 4;  i++) if (bits[60 + i] == '1') btn |= (1u << i);
         ESP_LOGW(TAG, "TX serial=0x%07X bouton=0x%X hop=0x%08X (%d bits, rafale x%d)",
-                 (unsigned)ser, btn, (unsigned)hop, n, press_frames(v));
+                 (unsigned)ser, btn, (unsigned)hop, n, PRESS_REPEATS);
     }
     if (v) {
         tx_params_t p = tx_params_of(v);
-        if (radio_tx_device(bits, press_frames(v), &p) != 0)   /* par appareil : porteuse/TE/rpt/rmt de la fiche, trames du profil */
-            ESP_LOGE(TAG, "TX '%s' REFUSEE : rien emis (garde de bande)", v->id);
+        radio_tx_device(bits, PRESS_REPEATS, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
     } else {
-        radio_tx(bits, PRESS_REPEATS_FALLBACK);       /* trame brute sans volet (rejeu RF debug) : pas de profil */
+        radio_tx(bits, PRESS_REPEATS);              /* trame brute sans volet (rejeu RF debug) */
     }
 }
 
@@ -640,10 +575,8 @@ static void emit_press(const volet_t *v, const char *bits) {
  * chaque valeur = impulsions signees +us haut / -us bas). On le rejoue a l'identique, suivi
  * d'un silence inter-trame, repete. Ne touche ni au clone bit-string ni au virtuel. */
 #define REJEU_MAX_PULSES 512
-/* Repetitions et silence inter-trame : ceux du profil (tx.repeats, tx.gap_us, issue #134). REPLI pour une fiche dont
- * le profil est introuvable : les valeurs que le rejeu a toujours emises (le silence couvre la periode CAME, ~11,5 ms). */
-#define REJEU_GAP_US_FALLBACK     12000
-#define REJEU_REPEATS_FALLBACK    8
+#define REJEU_GAP_US     12000   /* silence inter-trame, couvre le CAME (~11,5 ms) */
+#define REJEU_REPEATS    8
 
 /* Rejoue la commande `cmd` ("up"/"stop"/"down") d'un volet a rejeu brut. true si emis. */
 static bool rejeu_emit(volet_t *v, const char *cmd) {
@@ -662,11 +595,6 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
         for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
             csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
     bool ok = false;
-    const profile_def_t *prof = profile_of(v);
-    int repeats = (prof && prof->repeats) ? prof->repeats : REJEU_REPEATS_FALLBACK;
-    uint32_t gap_us = (prof && prof->gap_us) ? prof->gap_us : REJEU_GAP_US_FALLBACK;
-    if (!prof || !prof->repeats || !prof->gap_us)
-        ESP_LOGW(TAG, "'%s' : profil '%s' sans repetitions de rejeu, repli %d x %u us", v->id, v->profile, repeats, (unsigned)gap_us);
     if (csv && *csv && freq) {
         static uint8_t  lvl[REJEU_MAX_PULSES + 1];
         static uint32_t us[REJEU_MAX_PULSES + 1];
@@ -678,9 +606,9 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
             p = end; if (*p == ',') p++;
         }
         if (n >= 2) {
-            lvl[n] = 0; us[n] = gap_us; n++;   /* silence inter-trame */
+            lvl[n] = 0; us[n] = REJEU_GAP_US; n++;   /* silence inter-trame */
             int r = 0;
-            for (int k = 0; k < repeats && r == 0; k++)
+            for (int k = 0; k < REJEU_REPEATS && r == 0; k++)
                 r = radio_tx_ook_pulses(freq, lvl, us, n);
             ESP_LOGW(TAG, "REJEU brut '%s' cmd=%s : %d impulsions a %u kHz, rc=%d",
                      v->id, cmd, n - 1, (unsigned)freq, r);
@@ -805,19 +733,9 @@ static tx_params_t tx_params_of(const volet_t *v) {
     return p;
 }
 
-/* Code du bouton `button` (direction PFX_BTN_*) dans la trame KeeLoq d'un volet virtuel : celui que son profil
- * declare (frames.<bouton>.code, issue #134). Repli : la direction elle-meme, qui est le code Profalux. */
-static uint8_t keeloq_code(const volet_t *v, uint8_t button) {
-    profile_cmd_t cmd = button == PFX_BTN_UP ? PROFILE_CMD_UP : button == PFX_BTN_DOWN ? PROFILE_CMD_DOWN : PROFILE_CMD_STOP;
-    int code = profile_button_code(profile_of(v), cmd);
-    if (code < 0) { ESP_LOGW(TAG, "'%s' : profil '%s' sans code de bouton, repli 0x%X", v->id, v->profile, button); return button; }
-    return (uint8_t)code;
-}
-
-static bool emit_virt_profalux(volet_t *v, uint8_t direction) {
+static bool emit_virt_profalux(volet_t *v, uint8_t button) {
     char bits[68];
     uint16_t cnt = v->virt_counter;
-    uint8_t button = keeloq_code(v, direction);
     if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return false;   /* rien emis */
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre. Un crash entre les
      * deux fait au pire sauter un compteur (toléré par la fenêtre KeeLoq), jamais un rejeu. */
@@ -831,11 +749,7 @@ static bool emit_virt_profalux(volet_t *v, uint8_t direction) {
         return false;
     }
     tx_params_t p = tx_params_of(v);
-    if (radio_tx_device(bits, press_frames(v), &p) != 0) {   /* garde de bande : rien n'est parti */
-        ESP_LOGE(TAG, "TX VIRT REFUSEE serial=0x%07X btn=0x%X cnt=%u (compteur consomme, rien emis)",
-                 (unsigned)v->virt_serial, button, cnt);
-        return false;
-    }
+    radio_tx_device(bits, PRESS_REPEATS, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
     return true;
@@ -960,14 +874,8 @@ _Static_assert(COVER_NAME_MAX == SH_ID_LEN - 1, "COVER_NAME_MAX (profiles.json n
 /* Rang d'affichage (1..N) d'un volet range, 0 sinon : l'ordre stocke est 0-base, -1 = non range. */
 static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
 
-/* Classe Home Assistant et position : celles que le TYPE de l'appareil declare (profiles.json types, #134). Un type
- * inconnu du catalogue (fiche d'une version plus recente) est traite comme un volet, le type par defaut. */
-static const char HA_DEVICE_CLASS_FALLBACK[] = "shutter";
-static const type_def_t *type_of(const volet_t *v) { return type_find(v->type); }
-
 static bool volet_positional(const volet_t *v) {
-    const type_def_t *t = type_of(v);
-    return s_log_frames && !v->central && !is_zone(v) && (!t || t->positional)   /* un portail n'a pas de position */
+    return s_log_frames && !v->central && !is_zone(v)
         && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
 }
 
@@ -1118,7 +1026,7 @@ static void announce_one(volet_t *v) {
      * C'est le cas reel : le moteur ne renvoie rien, l'etat est suppose. HA continue de lire
      * state_topic ; il affiche juste l'etat vise des l'envoi, avant celui du boitier. */
     snprintf(pl, 1536,
-        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"%s\","
+        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"shutter\","
         "\"command_topic\":\"openprofalux/cover/%s/set\","
         "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"optimistic\":true,"
         "%s"
@@ -1126,7 +1034,7 @@ static void announce_one(volet_t *v) {
         "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
         "\"device\":{\"identifiers\":[\"openprofalux\"],\"name\":\"%s\","
         "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
-        v->id, slug, slug, type_of(v) ? type_of(v)->ha_device_class : HA_DEVICE_CLASS_FALLBACK, slug, pos, slug, s_device, devname, cu);
+        v->id, slug, slug, slug, pos, slug, s_device, devname, cu);
     pub_defer(topic, pl, 1, 1);
     free(pl);
     publish_volet_state(v);
@@ -1793,12 +1701,6 @@ int shutters_set_orientation(const char *id, int orientation) {
  * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
 int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
                            int rpt, int rmt, int frame_bits, const char *marque) {
-    /* Garde de bande a l'enregistrement (#134, etape 10) : une porteuse qu'aucune radio de la carte ne couvre est
-     * refusee ici, avant de devenir celle de l'appareil. La garde d'emission (cc1101.c) reste la derniere barriere. */
-    if (freq_khz && cc1101_radio_for_khz(freq_khz) < 0) {
-        ESP_LOGE(TAG, "'%s' : frequence %u kHz refusee, hors des bandes de la carte", id ? id : "?", (unsigned)freq_khz);
-        return -2;
-    }
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
@@ -2196,7 +2098,6 @@ static cJSON *status_device_json(const volet_t *v) {
     /* Parametres d'emission PAR APPAREIL (etage 2, issue #111) : pour le panneau avance de l'UI
      * (affichage + edition). tx_rpt/tx_rmt = tri-etat tx_override_t (0 heriter, 1 off, 2 on). */
     if (v->marque[0]) cJSON_AddStringToObject(o, "marque", v->marque);
-    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);   /* id du profil suivi (#134) */
     cJSON_AddNumberToObject(o, "freq_khz", v->freq_khz);
     cJSON_AddNumberToObject(o, "te_us",    v->te_us);
     cJSON_AddNumberToObject(o, "tx_rpt",   v->tx_rpt);
@@ -2390,7 +2291,6 @@ int shutters_import_json(const char *js, const char **err) {
     }
     reset_state();
     cfg_model_import(&s_model, root);
-    sanitize_freqs();   /* une sauvegarde peut porter une frequence hors bande : jamais emise, remise a la radio */
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
         if (!v->virt) continue;

@@ -11,7 +11,7 @@ export type Command = ValueOf<typeof COMMAND>;
 export const MOVE_COMMANDS = [COMMAND.up, COMMAND.stop, COMMAND.down] as const;
 export type MoveCommand = (typeof MOVE_COMMANDS)[number];
 const COMMAND_VALUES: readonly string[] = Object.values(COMMAND);
-/* Une commande lue dans profiles.json (types[].buttons[].cmd) : verifiee avant d'etre envoyee. */
+/* Une commande lue dans profiles.json (types[].capture) : verifiee avant d'etre envoyee. */
 export const isCommand = (value: string): value is Command => COMMAND_VALUES.includes(value);
 /* Serial vide d'une telecommande (aucune trame, aucune identite) dans les reponses du firmware. */
 export const NO_SERIAL = '0x0000000';
@@ -27,25 +27,11 @@ export const DEVICE_TYPE_CODE = { shutter: 0, gate: 1 } as const;
 export const PROTOCOL = { somfy: 'somfy', profalux: 'profalux' } as const;
 export type Protocol = ValueOf<typeof PROTOCOL>;
 
-/* Methode d'ajout d'un profil (profiles.json « add ») : reprendre la telecommande d'origine (copie : rejeu d'un
-   code fixe ou clonage d'un code roulant), ou faire du boitier une nouvelle telecommande que le moteur apprend. */
-export const ADD_METHOD = { copy: 'copy', enrol: 'enrol' } as const;
-export type AddMethod = ValueOf<typeof ADD_METHOD>;
+/* Mecanisme d'un profil (profiles.json « mecanisme ») et d'un appareil. */
+export const MECHANISM = { enrolment: 'enrolement', replay: 'rejeu', clone: 'cloner' } as const;
+export type Mechanism = ValueOf<typeof MECHANISM>;
 
-/* Moteur de protocole d'un profil (profiles.json « engine ») : le seul code, tout le reste est donnee (#134). */
-export const ENGINE = { replay: 'rejeu-brut', keeloq: 'keeloq', somfy: 'somfy-rts', ookFixed: 'ook-fixe', io: 'io-homecontrol' } as const;
-export type Engine = ValueOf<typeof ENGINE>;
-
-/* Comportement d'un bouton (profiles.json « types[].buttons[].behavior ») : ce que fait un appui. step = pas a pas
-   (demarre, arrete, repart dans l'autre sens, comme un portail a un bouton). */
-export const BUTTON_BEHAVIOR = { up: 'up', down: 'down', stop: 'stop', my: 'my', step: 'step', toggle: 'toggle', on: 'on', off: 'off', pulse: 'pulse' } as const;
-export type ButtonBehavior = ValueOf<typeof BUTTON_BEHAVIOR>;
-
-/* Statut de test d'un profil (profiles.json « test.status »). */
-export const TEST_STATUS = { tested: 'tested', untested: 'untested' } as const;
-export type TestStatus = ValueOf<typeof TEST_STATUS>;
-
-/* Parcours d'ajout d'un profil, deduit de sa methode et de son moteur (profiles.ts flowOf). */
+/* Parcours d'ajout d'un profil (profiles.json « flow »). */
 export const FLOW = { learn: 'learn', replay: 'rejeu', enrolPfx: 'enrol-pfx', createSomfy: 'create-somfy' } as const;
 export type Flow = ValueOf<typeof FLOW>;
 

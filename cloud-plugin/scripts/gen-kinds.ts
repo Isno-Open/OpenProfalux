@@ -18,24 +18,9 @@ type Text = { fr: string; en: string };
 type Ctl = { kind: string; id: string; label: Text; icon?: unknown; settable?: boolean };
 /** Un type simple tel que le generateur le construit (positional : pour choisir ceux d'un role). */
 type Simple = { id: string; label: Text; icon: unknown; controls: Ctl[]; settings: unknown[]; positional: boolean };
+type Dpad = { up: string; stop: string; down: string };
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
-/** Glyphe d'un bouton selon son comportement (profiles.json types[].buttons[].behavior). step : pas a pas. */
-const BEHAVIOR_GLYPH: Readonly<Record<string, string>> = { up: "▲", stop: "■", down: "▼", step: "⇅" };
-type Button = { cmd: string; label: string; en: string; behavior: string; row: number; col: number };
-/** Les boutons d'un type, dans l'ordre de leur position. Chacun envoie une commande que le portail connait
- *  (ACTION_IDS) et porte son libelle anglais. */
-function buttonsOf(type: string, raw: unknown): Button[] {
-  if (!Array.isArray(raw) || !raw.length) throw new Error(`type ${type} : boutons requis`);
-  return raw.map((b, i) => {
-    if (!isObj(b) || typeof b.cmd !== "string" || typeof b.label !== "string" || typeof b.behavior !== "string"
-      || !isObj(b.position) || typeof b.position.row !== "number" || typeof b.position.col !== "number")
-      throw new Error(`type ${type}, bouton ${i + 1} : cmd, label, behavior et position requis`);
-    if (typeof b.en !== "string" || !b.en) throw new Error(`type ${type}, bouton ${b.cmd} : libelle anglais requis (en)`);
-    if (!(ACTION_IDS as readonly string[]).includes(b.cmd)) throw new Error(`type ${type}, bouton ${b.cmd} : commande inconnue du portail`);
-    if (!BEHAVIOR_GLYPH[b.behavior]) throw new Error(`type ${type}, bouton ${b.cmd} : comportement ${b.behavior} sans glyphe`);
-    return { cmd: b.cmd, label: b.label, en: b.en, behavior: b.behavior, row: b.position.row, col: b.position.col };
-  }).sort((a, b) => a.row - b.row || a.col - b.col);
-}
+const isDpad = (v: unknown): v is Dpad => isObj(v) && typeof v.up === "string" && typeof v.stop === "string" && typeof v.down === "string";
 
 /** Icone du firmware -> icone du portail : un caractere tel quel, ou le trace d'un SVG a UN seul path
  *  (le portail ne prend jamais de balisage). Autre chose : erreur, plutot qu'une icone fausse. */
@@ -60,14 +45,14 @@ export function kindsOf(profiles: unknown): unknown[] {
   const devicesMax = profiles.devices_max;
   if (typeof devicesMax !== "number" || devicesMax < 1) throw new Error("profiles.json : devices_max (nombre maximal d'appareils) requis");
   const simple: Simple[] = Object.entries(profiles.types).map(([id, t]) => {
-    if (!isObj(t) || typeof t.label !== "string") throw new Error(`type ${id} : label requis`);
+    if (!isObj(t) || typeof t.label !== "string" || !isDpad(t.dpad)) throw new Error(`type ${id} : label et dpad requis`);
     const en = t.en;
-    if (!isObj(en) || typeof en.label !== "string" || !en.label) throw new Error(`type ${id} : libelle anglais requis (en.label)`);
+    if (!isObj(en) || typeof en.label !== "string" || !en.label || !isDpad(en.dpad)) throw new Error(`type ${id} : libelles anglais requis (en.label, en.dpad)`);
+    const dpad = t.dpad, enDpad = en.dpad;
     const text = (fr: string, e: string): Text => ({ fr, en: e });
-    // les commandes du portail sont les boutons que le type declare (#134) : un portail a un bouton pas a pas
-    // n'en montre qu'un, comme sa telecommande
-    const controls: Ctl[] = buttonsOf(id, t.buttons).map((b) => ({
-      kind: CONTROL.action, id: b.cmd, label: text(b.label, b.en), icon: { glyph: BEHAVIOR_GLYPH[b.behavior] },
+    const glyphs: Dpad = { up: "▲", stop: "■", down: "▼" };
+    const controls: Ctl[] = ACTION_IDS.map((k) => ({
+      kind: CONTROL.action, id: k, label: text(dpad[k], enDpad[k]), icon: { glyph: glyphs[k] },
     }));
     // un type positionnel a une position, reglable (decide le 2026-11-14) ; chaque appareil peut la masquer
     if (t.positional === true) controls.push({ kind: CONTROL.position, id: CONTROL_ID.position, label: text("Position", "Position"), settable: true });

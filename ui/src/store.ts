@@ -4,7 +4,7 @@ import { reactive } from 'vue';
 import api from './api/index';
 import { whenUnauthorized } from './api/http';
 import type { Device, OtaStatus, Profiles, RadioSummary, ShutterOrder, Status, TypeEntry } from './api/types';
-import { BUTTON_BEHAVIOR, COMMAND, DEVICE_TYPE, FAILURE, HTTP_UNAUTHORIZED, type Command } from './domain';
+import { COMMAND, DEVICE_TYPE, FAILURE, HTTP_UNAUTHORIZED, type Command } from './domain';
 import { updateAvailable } from './versions';
 
 const STATUS_PERIOD_MS = 3000;          // comme app.js
@@ -182,11 +182,7 @@ export const renameFailureText = (e: unknown): string => (typeof e === 'string' 
 export const remoteName = (serial: string): string => state.status?.remotes[serial] || serial;
 
 /* Le type declare d'un appareil, lu dans profiles.json (source unique) : volet, portail... */
-const DEFAULT_TYPE: TypeEntry = { label: 'Volet', code: 0, buttons: [
-  { id: COMMAND.up, cmd: COMMAND.up, behavior: BUTTON_BEHAVIOR.up, label: 'Montée', position: { row: 0, col: 0 } },
-  { id: COMMAND.stop, cmd: COMMAND.stop, behavior: BUTTON_BEHAVIOR.stop, label: 'Stop', position: { row: 1, col: 0 } },
-  { id: COMMAND.down, cmd: COMMAND.down, behavior: BUTTON_BEHAVIOR.down, label: 'Descente', position: { row: 2, col: 0 } },
-] };
+const DEFAULT_TYPE: TypeEntry = { label: 'Volet', code: 0, dpad: { [COMMAND.up]: 'Montée', [COMMAND.stop]: 'Stop', [COMMAND.down]: 'Descente' } };
 export function typeOf(device: Pick<Device, 'type'> | null | undefined): TypeEntry & { key: string } {
   const types = state.profiles?.types ?? {};
   const code = device?.type ?? 0;

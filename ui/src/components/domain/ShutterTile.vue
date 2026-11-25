@@ -4,7 +4,6 @@
 // volets, sans position propre.
 import { computed } from 'vue';
 import { state, sendCommand, typeOf, remoteName } from '../../store';
-import { buttonsOf, commandLabels } from '../../profiles';
 import type { Device } from '../../api/types';
 import { COMMAND, DEVICE_TYPE, TONE, type Command } from '../../domain';
 import { ICON, type IconName } from '../../icons';
@@ -42,7 +41,7 @@ const signal = computed(() => {
   for (const f of status.value?.rf ?? []) if (props.device.serials.includes(f.serial)) return f.rssi;
   return null;
 });
-const gateLabel = computed(() => buttonsOf(type.value)[0]?.label);
+const gateLabel = computed(() => type.value.capture?.[0]?.label);
 const send = (cmd: Command, value?: number): Promise<void> =>
   sendCommand(value == null ? { id: props.device.id, cmd } : { id: props.device.id, cmd, value });
 </script>
@@ -65,7 +64,7 @@ const send = (cmd: Command, value?: number): Promise<void> =>
     </header>
 
     <GateControl v-if="isGate" :label="gateLabel" :sending="sending === COMMAND.up" :disabled="busy" @command="cmd => send(cmd)" />
-    <ShutterControl v-else :labels="commandLabels(type)" :sending="sending" :disabled="busy" @command="cmd => send(cmd)" />
+    <ShutterControl v-else :labels="type.dpad ?? {}" :sending="sending" :disabled="busy" @command="cmd => send(cmd)" />
 
     <PositionBar v-if="positional" :position="device.position" :disabled="busy" @choose="p => send(COMMAND.position, p)" />
 

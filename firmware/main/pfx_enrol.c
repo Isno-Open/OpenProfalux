@@ -23,17 +23,13 @@
 static const char *TAG    = "pfx_enrol";
 static const char *NVS_NS = "pfx_enrol";
 
-/* La trame d'apprentissage et les commandes d'essai de la session viennent du PROFIL choisi dans la pyramide (enrol,
- * frames.<bouton>.code ; issue #134). Les REPLIS ci-dessous ne servent que sans profil (session ouverte par une ancienne
- * interface) : ce sont les valeurs relevees sur le terrain, rafale par appui ~9 trames (trames reelles Lecanard),
- * compteur fige sur la rafale. */
-#define PFX_BURST_FALLBACK     9
+/* Rafale par appui = ~9 trames (mesuré sur trames réelles Lecanard). Compteur figé sur la rafale. */
+#define PFX_BURST     9
 /* Apprentissage tenu ~5 s (comme STOP-en-P maintenu 5 s) : le moteur ne confirme
  * (va-et-vient) qu'apres ~5 s. ~5 salves de PFX_BURST ~= 5 s. */
-#define PFX_LEARN_ROUNDS_FALLBACK 5
+#define PFX_LEARN_ROUNDS 5
 /* Directions (montée/arrêt/descente) = PFX_BTN_* dans pfx_enrol.h (partagées avec shutters). */
-#define BTN_LEARN_FALLBACK   0x5   /* trame d'apprentissage radio */
-#define LEARN_COUNTER_FALLBACK 3
+#define BTN_LEARN   0x5   /* trame d'apprentissage radio */
 
 /* Catalogue : tous routés canal PFX 0x636f, famille 0x067, même table de clés.
  * Seule la chorégraphie (R6/R7/R8) diffère par modèle ; le TE d'émission est celui du boîtier
@@ -369,21 +365,10 @@ int pfx_enrol_frame(uint32_t serial, uint8_t button, uint16_t counter, char out[
 static tx_params_t s_tx = { 0, 0, -1, -1 };
 void pfx_enrol_set_tx_params(const tx_params_t *p) { s_tx = p ? *p : (tx_params_t){ 0, 0, -1, -1 }; }
 
-/* Profil de la SESSION d'enrolement (issue #134) : sa trame d'apprentissage et ses codes de bouton. */
-static const profile_def_t *s_prof = NULL;
-void pfx_enrol_set_profile(const profile_def_t *p) {
-    s_prof = (p && p->has_enrol) ? p : NULL;
-    if (p && !s_prof) ESP_LOGW(TAG, "profil %s sans trame d'apprentissage : replis", p->id);
-}
-static int burst_frames(void) { return s_prof && s_prof->enrol_frames_per_burst ? s_prof->enrol_frames_per_burst : PFX_BURST_FALLBACK; }
-
 static int emit(uint8_t button, uint16_t counter) {
     if (!s_id.active) return -1;
     char bits[68]; frame_with_key(s_id.serial, s_id.key, button, counter, bits);
-    if (radio_tx_device(bits, burst_frames(), &s_tx) != 0) {   /* garde de bande : rien n'est parti */
-        ESP_LOGE(TAG, "TX 0x067 REFUSEE serial=0x%07X btn=0x%X cnt=%u : rien emis", (unsigned)s_id.serial, button, counter);
-        return -1;
-    }
+    radio_tx_device(bits, PFX_BURST, &s_tx);   /* rafale, compteur figé sur toute la rafale */
     ESP_LOGW(TAG, "TX 0x067 serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)s_id.serial, button, counter, (unsigned)cc1101_get_tx_te());
     return 0;
@@ -399,36 +384,27 @@ int pfx_enrol_emit_learn(void) {
      * le compteur conservé pour un moteur déjà connu. Il était figé à 3, puis les commandes
      * repartaient de 4 : ré-enrôler un moteur connu émettait DERRIÈRE son compteur, rejeté
      * comme un rejeu (issue #45). Réserve-puis-émets, comme pfx_enrol_cmd. */
-    uint16_t start = s_prof ? s_prof->enrol_counter_start : LEARN_COUNTER_FALLBACK;
-    uint8_t  code  = s_prof ? s_prof->enrol_code : BTN_LEARN_FALLBACK;
-    int      rounds = s_prof && s_prof->enrol_bursts ? s_prof->enrol_bursts : PFX_LEARN_ROUNDS_FALLBACK;
-    uint16_t cnt = s_id.counter < start ? start : s_id.counter;
+    uint16_t cnt = s_id.counter < 3 ? 3 : s_id.counter;
     s_id.counter = cnt + 1;   /* commandes à partir du suivant */
     save();
     char bits[68];
-    frame_with_key(s_id.serial, s_id.key, code, cnt, bits);
-    for (int i = 0; i < rounds; i++) {
-        if (radio_tx_device(bits, burst_frames(), &s_tx) != 0) {   /* garde de bande : la frequence de la session est hors bande */
-            ESP_LOGE(TAG, "TX 0x067 APPRENTISSAGE REFUSE serial=0x%07X : rien emis", (unsigned)s_id.serial);
-            return -1;
-        }
+    frame_with_key(s_id.serial, s_id.key, BTN_LEARN, cnt, bits);
+    for (int i = 0; i < PFX_LEARN_ROUNDS; i++) {
+        radio_tx_device(bits, PFX_BURST, &s_tx);
         vTaskDelay(pdMS_TO_TICKS(15));
     }
-    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x%X cnt=%u (%d salves de %d, profil %s) te=%u",
-             (unsigned)s_id.serial, code, cnt, rounds, burst_frames(), s_prof ? s_prof->id : "aucun", (unsigned)cc1101_get_tx_te());
+    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=%u (~5s, %d salves) te=%u",
+             (unsigned)s_id.serial, cnt, PFX_LEARN_ROUNDS, (unsigned)cc1101_get_tx_te());
     return 0;
 }
 
 int pfx_enrol_cmd(const char *cmd) {
     if (!s_id.active || !cmd) return -1;
-    profile_cmd_t c;
-    uint8_t fallback;
-    if      (!strcmp(cmd, "up"))   { c = PROFILE_CMD_UP;   fallback = PFX_BTN_UP; }
-    else if (!strcmp(cmd, "stop")) { c = PROFILE_CMD_STOP; fallback = PFX_BTN_STOP; }
-    else if (!strcmp(cmd, "down")) { c = PROFILE_CMD_DOWN; fallback = PFX_BTN_DOWN; }
+    uint8_t b;
+    if      (!strcmp(cmd, "up"))   b = PFX_BTN_UP;
+    else if (!strcmp(cmd, "stop")) b = PFX_BTN_STOP;
+    else if (!strcmp(cmd, "down")) b = PFX_BTN_DOWN;
     else return -1;
-    int code = profile_button_code(s_prof, c);   /* code du bouton selon le profil de la session (#134) */
-    uint8_t b = code >= 0 ? (uint8_t)code : fallback;
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre (jamais de rejeu
      * au reboot ; au pire un compteur sauté, toléré par la fenêtre KeeLoq du moteur). */
     uint16_t cnt = s_id.counter;
