@@ -55,9 +55,9 @@
       "radio": { "band": "433", "freq_khz": 433920, "modulation": "OOK", "rx": { "datarate_baud": 3800, "bandwidth_khz": 135 } },
       "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640 },
       "frames": { "main": { "source": "capture", "repeats": 8, "gap_us": 12000,
-                            "cycle": ["open", "stop", "close", "stop"], "press_gap_ms": 1000 } },
+                            "cycle": ["open", "stop", "close", "stop"], "press_gap_ms": 3000 } },
       "test": { "status": "tested" },
-      "note": "Rejeu BRUT de la capture (shutters.c rejeu_emit), code fixe OOK. rx (3800/135) est lu par la capture de rejeu (web_ui.c h_rejeu_capture). tx.encoder, short_us, long_us : DECLARES, lus nulle part (encodeur CAME ecrit mais non cable, moteur ook-fixe de #134). frames.main.repeats et gap_us : lus par le rejeu (shutters.c rejeu_emit) ; gap_us = 12000, le silence que le firmware a toujours emis (la periode CAME est d'environ 11,5 ms). Valide par Pascal. frames.main.cycle : la logique ouvre-stop-ferme-stop des cartes CAME (DIP 2 sur ON, notice de la serie Z) ; une carte reglee autrement (ouvre-ferme, ouverture seule) demande un profil derive. press_gap_ms : delai entre deux appuis quand le boitier en enchaine plusieurs, NON MESURE sur un portail."
+      "note": "Rejeu BRUT de la capture (shutters.c rejeu_emit), code fixe OOK. rx (3800/135) est lu par la capture de rejeu (web_ui.c h_rejeu_capture). tx.encoder, short_us, long_us : DECLARES, lus nulle part (encodeur CAME ecrit mais non cable, moteur ook-fixe de #134). frames.main.repeats et gap_us : lus par le rejeu (shutters.c rejeu_emit) ; gap_us = 12000, le silence que le firmware a toujours emis (la periode CAME est d'environ 11,5 ms). Valide par Pascal. frames.main.cycle : la logique ouvre-stop-ferme-stop des cartes CAME (DIP 2 sur ON, notice de la serie Z) ; une carte reglee autrement (ouvre-ferme, ouverture seule) demande un profil derive. press_gap_ms : delai entre deux appuis quand le boitier en enchaine plusieurs, NON MESURE sur un portail (les captures ne contiennent qu'un appui). 3000 car Pascal a vu un second ordre a environ 2 s du premier ne pas passer (mail du 1er novembre) ; a mesurer a 1, 2 et 3 s."
     },
     {
       "id": "profalux-copy",
