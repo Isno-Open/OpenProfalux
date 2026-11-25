@@ -12,6 +12,12 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "step_cycle.h"
+
+/* Commandes d'un bouton (profiles.json types[].buttons[].cmd). up, stop et down ont un code de bouton dans la trame
+ * d'un moteur ; step est l'appui du bouton pas a pas. PROFILE_CMD_COUNT : nombre de commandes (taille des tableaux
+ * par commande de profile_def_t). */
+typedef enum { PROFILE_CMD_UP, PROFILE_CMD_STOP, PROFILE_CMD_DOWN, PROFILE_CMD_STEP, PROFILE_CMD_COUNT } profile_cmd_t;
 
 /* Un profil, tel que la construction l'engendre. Le moteur et la methode restent des chaines : c'est
  * ce module qui les reconnait (profile_engine_of, profile_add_of), pas le generateur. */
@@ -26,8 +32,14 @@ typedef struct {
     /* Ce que le moteur emet (lot 2b) : 0 ou -1 = non declare par le profil. */
     uint8_t     frames_per_press;   /* trames par appui (tx.frames_per_press) */
     int8_t      code_up, code_stop, code_down;   /* code de bouton dans la trame du moteur (frames.<bouton>.code) */
-    uint8_t     repeats;            /* rejeu : repetitions de la trame captee (tx.repeats) */
-    uint32_t    gap_us;             /* rejeu : silence entre deux repetitions (tx.gap_us) */
+    /* Rejeu, PAR BOUTON (frames.<bouton>.repeats et gap_us), range sous la commande du bouton (profile_cmd_t) :
+     * repetitions de la trame captee et silence entre deux repetitions. 0 = non declare. */
+    uint8_t     repeats[PROFILE_CMD_COUNT];
+    uint32_t    gap_us[PROFILE_CMD_COUNT];
+    /* Bouton pas a pas (comportement « step ») : le cycle de la carte du moteur et le delai entre deux appuis
+     * quand il en faut plusieurs (frames.<bouton>.cycle et press_gap_ms). step.len = 0 : pas de bouton pas a pas. */
+    step_cycle_t step;
+    uint16_t    step_press_gap_ms;
     bool        has_enrol;          /* trame d'apprentissage declaree (enrol) */
     uint8_t     enrol_code;         /* code de bouton de la trame d'apprentissage */
     uint8_t     enrol_frames_per_burst;
@@ -93,7 +105,14 @@ const profile_def_t *profile_for_device(const char *current, const char *brand, 
  * la raison dans *why. */
 bool profile_engine_ready(const profile_def_t *p, const char **why);
 
-/* Commandes qui ont un code de bouton dans un profil. */
-typedef enum { PROFILE_CMD_UP, PROFILE_CMD_STOP, PROFILE_CMD_DOWN } profile_cmd_t;
+/* La commande de nom `name` (valeur du fil : "up", "stop", "down", "step"), ou -1. */
+int profile_cmd_of(const char *name);
+/* Le nom de fil de la commande `cmd`, ou NULL. */
+const char *profile_cmd_name(profile_cmd_t cmd);
 /* Code du bouton `cmd` dans la trame du moteur, ou -1 si le profil n'en declare pas. */
 int profile_button_code(const profile_def_t *p, profile_cmd_t cmd);
+/* Rejeu du bouton `cmd` : repetitions et silence (us) declares par le profil, 0 sinon. */
+int profile_replay_repeats(const profile_def_t *p, profile_cmd_t cmd);
+uint32_t profile_replay_gap_us(const profile_def_t *p, profile_cmd_t cmd);
+/* Le profil a un bouton pas a pas (un cycle declare). */
+bool profile_has_step(const profile_def_t *p);

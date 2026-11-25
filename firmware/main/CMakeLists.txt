@@ -117,6 +117,7 @@ idf_component_register(
         "crash_trace.c"
         "cloud_grant.c"
         "profile_table.c"
+        "step_cycle.c"
         "${PROFILES_GEN_DIR}/profiles_gen.c"
     INCLUDE_DIRS "." "${BOARD_HDR_DIR}"
     EMBED_FILES

@@ -57,8 +57,6 @@ function parseTx(raw: Obj): ProfileTx {
   if (typeof raw.repeat_bit === 'boolean') tx.repeat_bit = raw.repeat_bit;
   if (typeof raw.rmt === 'boolean') tx.rmt = raw.rmt;
   if (isNum(raw.frame_bits)) tx.frame_bits = raw.frame_bits;
-  if (isNum(raw.repeats)) tx.repeats = raw.repeats;
-  if (isNum(raw.gap_us)) tx.gap_us = raw.gap_us;
   return tx;
 }
 

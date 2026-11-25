@@ -84,6 +84,10 @@ typedef struct {
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
                               * l'UI place alors le volet a la fin, dans son ordre de creation. */
     float position;          /* 0..100 */
+    /* Bouton pas a pas (portail a bouton unique, #134) : position du cycle de la carte du moteur, c'est-a-dire
+     * l'action que fera le prochain appui. step_known faux : jamais suivi (fiche anterieure), deduit au repos. */
+    bool     step_known;
+    uint8_t  step_next;
     /* ── Etat d'execution, NON persiste ── */
     int   dir;               /* -1 down, 0 stop, +1 up */
     int   target;            /* -1 = aucun, sinon 0..100 */

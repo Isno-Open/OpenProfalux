@@ -18,8 +18,8 @@
     "radio.freq_khz":           { "status": "valide" },
     "radio.rx.datarate_baud":   { "status": "valide" },
     "radio.rx.bandwidth_khz":   { "status": "valide" },
-    "tx.repeats":               { "status": "valide" },
-    "tx.gap_us":                { "status": "valide" },
+    "frames.main.repeats":      { "status": "valide" },
+    "frames.main.gap_us":       { "status": "valide" },
     "tx.te_us":                 { "status": "valide" },
     "tx.repeat_bit":            { "status": "valide" },
     "tx.frame_bits":            { "status": "valide" },
@@ -40,8 +40,9 @@
                  ] },
     "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>",
                  "en": { "label": "Gate" }, "ha_device_class": "gate",
+                 "travel_s": { "min": 1, "max": 180 },
                  "buttons": [
-                   { "id": "main", "cmd": "up", "behavior": "step", "label": "Bouton du portail", "en": "Gate button", "position": { "row": 0, "col": 0 } }
+                   { "id": "main", "cmd": "step", "behavior": "step", "label": "Bouton du portail", "en": "Gate button", "position": { "row": 0, "col": 0 } }
                  ] }
   },
   "profiles": [
@@ -52,10 +53,11 @@
       "type": "portail", "brand": "CAME",
       "add": "copy", "engine": "rejeu-brut", "code": "fixed",
       "radio": { "band": "433", "freq_khz": 433920, "modulation": "OOK", "rx": { "datarate_baud": 3800, "bandwidth_khz": 135 } },
-      "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640, "repeats": 8, "gap_us": 12000 },
-      "frames": { "main": { "source": "capture" } },
+      "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640 },
+      "frames": { "main": { "source": "capture", "repeats": 8, "gap_us": 12000,
+                            "cycle": ["open", "stop", "close", "stop"], "press_gap_ms": 3000 } },
       "test": { "status": "tested" },
-      "note": "Rejeu BRUT de la capture (shutters.c rejeu_emit), code fixe OOK. rx (3800/135) est lu par la capture de rejeu (web_ui.c h_rejeu_capture). tx.encoder, short_us, long_us : DECLARES, lus nulle part (encodeur CAME ecrit mais non cable, moteur ook-fixe de #134). tx.repeats et tx.gap_us : lus par le rejeu (shutters.c rejeu_emit) ; gap_us = 12000, le silence que le firmware a toujours emis (la periode CAME est d'environ 11,5 ms). Valide par Pascal."
+      "note": "Rejeu BRUT de la capture (shutters.c rejeu_emit), code fixe OOK. rx (3800/135) est lu par la capture de rejeu (web_ui.c h_rejeu_capture). tx.encoder, short_us, long_us : DECLARES, lus nulle part (encodeur CAME ecrit mais non cable, moteur ook-fixe de #134). frames.main.repeats et gap_us : lus par le rejeu (shutters.c rejeu_emit) ; gap_us = 12000, le silence que le firmware a toujours emis (la periode CAME est d'environ 11,5 ms). Valide par Pascal. frames.main.cycle : la logique ouvre-stop-ferme-stop des cartes CAME (DIP 2 sur ON, notice de la serie Z) ; une carte reglee autrement (ouvre-ferme, ouverture seule) demande un profil derive. press_gap_ms : delai entre deux appuis quand le boitier en enchaine plusieurs, NON MESURE sur un portail (les captures ne contiennent qu'un appui). 3000 car Pascal a vu un second ordre a environ 2 s du premier ne pas passer (mail du 1er novembre) ; a mesurer a 1, 2 et 3 s."
     },
     {
       "id": "profalux-copy",

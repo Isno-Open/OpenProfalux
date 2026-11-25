@@ -82,8 +82,11 @@ export function kindsOf(profiles: unknown): unknown[] {
       if (!isObj(travel) || typeof travel.min !== "number" || typeof travel.max !== "number" || travel.min >= travel.max)
         throw new Error(`type ${id} : travel_s {min, max} en secondes, min < max`);
       const field = (key: string, fr: string, e: string): unknown => ({ kind: SETTING_KIND.number, key, label: text(fr, e), min: travel.min, max: travel.max,
-        hint: text("Chronométré sur le volet, en secondes.", "Timed on the shutter, in seconds.") });
-      settings.push(field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)"));
+        hint: text("Chronométré sur l'appareil, en secondes.", "Timed on the device, in seconds.") });
+      // un volet monte et descend ; un portail (sans position) s'ouvre et se ferme : son temps de course sert a suivre
+      // sa fin de course (cycle pas a pas, #134)
+      if (t.positional === true) settings.push(field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)"));
+      else settings.push(field(SETTING_ID.travelUp, "Temps d'ouverture (s)", "Opening time (s)"), field(SETTING_ID.travelDown, "Temps de fermeture (s)", "Closing time (s)"));
     }
     return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, settings, positional: t.positional === true };
   });

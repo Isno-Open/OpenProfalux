@@ -14,6 +14,8 @@ static const struct { profile_add_t a; const char *name; } ADDS[] = {
     { PROFILE_ADD_COPY,  "copy" },
     { PROFILE_ADD_ENROL, "enrol" },
 };
+/* Les noms du fil des commandes d'un bouton (profiles.json types[].buttons[].cmd), dans l'ordre de profile_cmd_t. */
+static const char *const CMD_NAMES[PROFILE_CMD_COUNT] = { "up", "stop", "down", "step" };
 /* Marques par defaut d'une fiche sans marque (les memes que l'interface, profiles.ts brandOf). */
 static const char BRAND_SOMFY[] = "Somfy RTS", BRAND_REPLAY[] = "CAME", BRAND_KEELOQ[] = "Profalux";
 
@@ -80,9 +82,18 @@ bool profile_engine_ready(const profile_def_t *p, const char **why) {
             r = "keeloq en enrolement : un code par bouton requis (frames.<bouton>.code)";
         else if (profile_add_of(p) == PROFILE_ADD_ENROL && !p->has_enrol) r = "keeloq en enrolement : enrol requis";
         break;
-    case PROFILE_ENGINE_REPLAY:
-        if (!p->repeats || !p->gap_us) r = "rejeu : tx.repeats et tx.gap_us requis";
+    case PROFILE_ENGINE_REPLAY: {
+        /* Chaque bouton rejoue avec ses repetitions et son silence : l'un sans l'autre n'emet rien de sense, et un
+         * profil sans aucun bouton rejouable n'emet rien du tout. */
+        int buttons = 0;
+        for (int c = 0; c < PROFILE_CMD_COUNT && !r; c++) {
+            if (!p->repeats[c] != !p->gap_us[c]) r = "rejeu : frames.<bouton>.repeats et gap_us vont ensemble";
+            if (p->repeats[c]) buttons++;
+        }
+        if (!r && !buttons) r = "rejeu : au moins un bouton avec frames.<bouton>.repeats et gap_us requis";
+        if (!r && p->step.len && !p->step_press_gap_ms) r = "pas a pas : frames.<bouton>.press_gap_ms requis";
         break;
+    }
     case PROFILE_ENGINE_SOMFY:
         break;   /* codes et repetitions : la norme Somfy, dans somfy_rts.h */
     default:
@@ -98,9 +109,30 @@ int profile_button_code(const profile_def_t *p, profile_cmd_t cmd) {
     case PROFILE_CMD_UP:   return p->code_up;
     case PROFILE_CMD_STOP: return p->code_stop;
     case PROFILE_CMD_DOWN: return p->code_down;
+    default:               return -1;   /* le bouton pas a pas n'a pas de code : sa trame est captee */
     }
+}
+
+int profile_cmd_of(const char *name) {
+    if (name)
+        for (int c = 0; c < PROFILE_CMD_COUNT; c++)
+            if (!strcmp(name, CMD_NAMES[c])) return c;
     return -1;
 }
+
+const char *profile_cmd_name(profile_cmd_t cmd) {
+    return (cmd >= 0 && cmd < PROFILE_CMD_COUNT) ? CMD_NAMES[cmd] : NULL;
+}
+
+int profile_replay_repeats(const profile_def_t *p, profile_cmd_t cmd) {
+    return (p && cmd >= 0 && cmd < PROFILE_CMD_COUNT) ? p->repeats[cmd] : 0;
+}
+
+uint32_t profile_replay_gap_us(const profile_def_t *p, profile_cmd_t cmd) {
+    return (p && cmd >= 0 && cmd < PROFILE_CMD_COUNT) ? p->gap_us[cmd] : 0;
+}
+
+bool profile_has_step(const profile_def_t *p) { return p && p->step.len > 0; }
 
 const type_def_t *type_find(uint8_t code) {
     for (int i = 0; i < TYPE_TABLE_COUNT; i++)
