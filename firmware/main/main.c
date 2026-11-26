@@ -297,9 +297,14 @@ void app_main(void) {
     {
         uint32_t khz;
         if (!radio_profile_resolve(s_radio_prof, s_freq_custom, CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ, &khz)) {
-            ESP_LOGW(TAG, "profil radio %u / %u kHz invalide pour cette carte : profil %s",
-                     s_radio_prof, (unsigned)s_freq_custom, radio_profile_name(RADIO_PROFILE_DEFAULT));
             khz = radio_profile_freq_khz(RADIO_PROFILE_DEFAULT, 0);
+            /* Le profil par defaut (Profalux, 868) est lui-meme hors bande sur une carte dont la
+             * radio primaire est en 433 (kits 433) : on prend alors la porteuse que la carte
+             * declare, jamais une frequence qu'elle n'a pas le droit d'emettre. */
+            if (!radio_freq_in_band(khz, CC1101_BAND_LOW_KHZ, CC1101_BAND_HIGH_KHZ) && CC1101_CARRIER_KHZ)
+                khz = CC1101_CARRIER_KHZ;
+            ESP_LOGW(TAG, "profil radio %u / %u kHz invalide pour cette carte : %u kHz",
+                     s_radio_prof, (unsigned)s_freq_custom, (unsigned)khz);
         }
         cc1101_set_freq_khz(khz);
     }

@@ -77,7 +77,7 @@ if [ -n "${OPF_SDKCONFIG_EXTRA:-}" ]; then
 fi
 for f in "${BOARDS[@]}"; do
   board="$(basename "$f" .json)"
-  target="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcu'])" "$f")"
+  target="$(python3 ../tools/gen_board.py --mcu "$f")"   # heritage resolu (« extends »)
   bdir="build-test-$board"
   echo ">> build $board ($target)"
   rm -rf "$bdir"
