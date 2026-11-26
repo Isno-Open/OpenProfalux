@@ -145,12 +145,12 @@ test("commandes qui donnent acces : celles que profiles.json declare, pas une de
   const p = profiles() as { types: Record<string, Record<string, unknown>> };
   const secureOf = (src: unknown, id: string): string[] =>
     (kindsOf(src) as { id: string; controls: { id: string; secure?: true }[] }[]).find((k) => k.id === id)!.controls.filter((c) => c.secure === true).map((c) => c.id);
-  // un portail a bouton unique rejoue la meme trame pour les trois : les trois donnent acces
-  assert.deepEqual(secureOf(p, "portail"), ["up", "stop", "down"]);
+  // l'ouverture seule : un code sur Stop et Fermer prive Google de l'etat du portail (Test Suite en echec)
+  assert.deepEqual(secureOf(p, "portail"), ["up"]);
   assert.deepEqual(secureOf(p, "volet"), [], "un volet ne declare rien : aucun code");
   const partial = structuredClone(p);
-  partial.types.portail!.secure = ["up"];
-  assert.deepEqual(secureOf(partial, "portail"), ["up"], "la declaration decide, commande par commande");
+  partial.types.portail!.secure = ["up", "down"];
+  assert.deepEqual(secureOf(partial, "portail"), ["up", "down"], "la declaration decide, commande par commande");
   const invalid = structuredClone(p);
   invalid.types.portail!.secure = ["ouvrir"];
   assert.throws(() => kindsOf(invalid), /secure/);

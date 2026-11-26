@@ -35,8 +35,8 @@
                  "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
     "portail": { "label": "Portail", "code": 1, "icon": "gate", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
                  "en": { "label": "Gate", "dpad": { "up": "Open", "stop": "Stop", "down": "Close" } },
-                 "secure": [ "up", "stop", "down" ],
-                 "_secure": "Commandes qui DONNENT ACCES aux lieux : le portail cloud exige un code avant de les envoyer pour un tiers (Google Home). Les trois, parce qu'un portail a bouton unique rejoue la meme trame pour Ouvrir, Stop et Fermer (shutters.c, rejeu_emit) : « fermer » un portail ferme l'ouvre.",
+                 "secure": [ "up" ],
+                 "_secure": "Commandes qui DONNENT ACCES aux lieux : le portail cloud exige un code avant de les envoyer pour un tiers (Google Home). L'ouverture seule : avec un code aussi sur Stop et Fermer (essaye le 2026-11-26), Google ne peut plus lire l'etat d'un portail sans code et sa Test Suite le refuse (etats OpenClose vides). Limite connue : un portail a bouton unique rejoue la meme trame pour les trois (shutters.c, rejeu_emit), « fermer » un portail ferme l'ouvre donc sans code.",
                  "capture": [ { "cmd": "up", "label": "Bouton du portail" } ] }
   },
   "profils": [
