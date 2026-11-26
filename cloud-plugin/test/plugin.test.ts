@@ -141,6 +141,19 @@ test("types engendres depuis profiles.json : volet positionnel, portail sans pos
   assert.deepEqual(family.kinds.map((k) => k.id), [...kinds.map((k) => k.id), "remote", "remote-ignored"], "le plugin porte les types du firmware, puis ses telecommandes");
 });
 
+test("libelles des commandes : ceux que profiles.json declare (types[].commands), en francais et en anglais", () => {
+  const p = profiles() as { types: Record<string, { commands: Record<string, { label: string; en: string }> }> };
+  const kinds = kindsOf(p) as { id: string; controls: { id: string; label?: { fr: string; en: string } }[] }[];
+  for (const id of ["volet", "portail"]) {
+    const kind = kinds.find((k) => k.id === id)!;
+    for (const [cmd, text] of Object.entries(p.types[id]!.commands)) {
+      assert.deepEqual(kind.controls.find((c) => c.id === cmd)?.label, { fr: text.label, en: text.en }, `${id} ${cmd}`);
+    }
+  }
+  const portail = kinds.find((k) => k.id === "portail")!;
+  assert.deepEqual(portail.controls.find((c) => c.id === "up")?.label, { fr: "Ouvrir", en: "Open" });
+});
+
 test("commandes qui donnent acces : celles que profiles.json declare, pas une de plus ; une commande inconnue est refusee", () => {
   const p = profiles() as { types: Record<string, Record<string, unknown>> };
   const secureOf = (src: unknown, id: string): string[] =>
