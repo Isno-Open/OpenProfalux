@@ -119,12 +119,12 @@ test("commandes qui donnent acces : celles que profiles.json declare, pas une de
   // un portail a bouton unique rejoue la meme trame pour les trois : les trois donnent acces
   assert.deepEqual(secureOf(p, "portail"), ["up", "stop", "down"]);
   assert.deepEqual(secureOf(p, "volet"), [], "un volet ne declare rien : aucun code");
-  const partiel = structuredClone(p);
-  partiel.types.portail!.secure = ["up"];
-  assert.deepEqual(secureOf(partiel, "portail"), ["up"], "la declaration decide, commande par commande");
-  const faux = structuredClone(p);
-  faux.types.portail!.secure = ["ouvrir"];
-  assert.throws(() => kindsOf(faux), /secure/);
+  const partial = structuredClone(p);
+  partial.types.portail!.secure = ["up"];
+  assert.deepEqual(secureOf(partial, "portail"), ["up"], "la declaration decide, commande par commande");
+  const invalid = structuredClone(p);
+  invalid.types.portail!.secure = ["ouvrir"];
+  assert.throws(() => kindsOf(invalid), /secure/);
 });
 
 test("types engendres : un type sans libelles anglais, ou une icone SVG a plusieurs traces, sont refuses", () => {
