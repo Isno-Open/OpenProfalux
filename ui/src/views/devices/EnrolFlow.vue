@@ -26,7 +26,7 @@ const done = ref<Message | null>(null);
 import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, refresh, toast } from '../../store';
-import { profileById, profileOfModel, typeView, hasComma, mhz, type ProfileView } from '../../profiles';
+import { profileById, typeView, hasComma, mhz, type ProfileView } from '../../profiles';
 import api from '../../api/index';
 import type { PfxCaptureReply, PfxState } from '../../api/types';
 import {
@@ -66,11 +66,11 @@ let clock: ReturnType<typeof setInterval> | undefined;
 const countdown = computed(() => (testAllowedAt.value ? Math.max(0, Math.ceil((testAllowedAt.value - now.value) / 1000)) : -1));
 
 const models = computed(() => pfx.value?.models ?? []);
-const modelOptions = computed(() => models.value.map((m, i) => ({ value: i, label: `${m.name} · ${m.routine}` })));
+const modelOptions = computed(() => models.value.map((m, i) => ({ value: i, label: m.name })));
 /* Les gestes : ceux du profil qui reconnait le modele choisi, sinon ceux du profil de l'adresse. */
 const instructions = computed(() => {
   const chosen = models.value[Number(model.value)];
-  return (chosen ? profileOfModel(chosen.name) : null)?.instructions ?? profile.value?.instructions ?? {};
+  return (chosen ? profileById(chosen.profile) : null)?.instructions ?? profile.value?.instructions ?? {};
 });
 const active = computed(() => !!pfx.value?.active);
 const dpad = computed(() => typeView(DEVICE_TYPE.shutter).dpad);

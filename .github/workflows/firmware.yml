@@ -172,6 +172,27 @@ jobs:
             firmware/build-ci/*.map
           retention-days: 14
 
+  # Le catalogue (catalog.c) sur le vrai profiles.json : le firmware y lit exactement les valeurs
+  # qu'il avait en dur, et refuse en entier un catalogue faux. Voir firmware/test/catalog/README.md.
+  banc-catalog:
+    name: Banc de test du catalogue lu par le firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: catalog.c sur le vrai profiles.json (cible linux)
+        run: |
+          docker run --rm --name "opf-catalog-$GITHUB_RUN_ID" \
+            -u "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD":/project -w /project/firmware/test/catalog \
+            "$IDF_IMAGE" bash -c "
+              set -e
+              idf.py --preview set-target linux
+              idf.py build
+              ./build/catalog_host_test.elf ../../main/web/profiles.json
+            "
+
   # La persistance de la config (cfg_model.c + cfg_store.c) sur la vraie
   # bibliotheque NVS, partition de 16 Ko emulee, coupures de courant simulees :
   # voir firmware/test/cfg_store/README.md. Une seconde d'execution une fois

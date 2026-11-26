@@ -90,7 +90,8 @@ export interface Sweep { state: number; status: number; center_khz: number; from
 export interface GainCalibration { state: number; testing?: number; result?: number }
 
 /* Telecommande virtuelle (/api/pfx). */
-export interface PfxModel { name: string; routine: string }
+/* Un modele que l'etape identify reconnait, et le profil qui le reconnait (catalogue, profiles[].models). */
+export interface PfxModel { name: string; profile: string }
 export interface PfxState {
   models: PfxModel[];
   active: Flag;

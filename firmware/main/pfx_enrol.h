@@ -3,8 +3,8 @@
  *
  * EXPÉRIMENTAL. Contrairement au clonage (capture + rejeu d'une vraie télécommande), ce module
  * GÉNÈRE une identité virtuelle PFX (famille 0x067, une des 63 clés du pool) et émet la trame
- * d'apprentissage. L'utilisateur choisit son modèle : le modèle fixe le TE d'émission et la
- * chorégraphie de gestes.
+ * d'apprentissage. L'utilisateur choisit son modèle, qui désigne le profil dont l'interface montre
+ * les gestes (catalogue, profiles[].models).
  *
  * Le moteur valide en normal-learn : il dérive la clé du serial émis. L'enrôlement nécessite
  * la télécommande d'origine pour la gestuelle de validation (double accostage en butée).
@@ -15,20 +15,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Catalogue de modèles. L'index = l'id exposé à l'UI. */
-typedef struct {
-    const char *name;      /* libellé affiché */
-    const char *routine;   /* "R6" | "R7" | "R8" : chorégraphie d'apprentissage */
-} pfx_model_t;
-
-int                 pfx_enrol_model_count(void);
-const pfx_model_t  *pfx_enrol_model(int id);   /* NULL si hors borne */
-
-/* Boutons PFX 0x067 : directions corrigées d'après test réel FranciaFlex M4G (2026-08-28).
- * Partagés avec shutters pour piloter un volet virtuel. */
-#define PFX_BTN_UP     0x2
-#define PFX_BTN_STOP   0x4
-#define PFX_BTN_DOWN   0x8
+/* Les modèles reconnus, les codes des boutons, les rafales et la trame d'apprentissage sont dans le
+ * catalogue (catalog.h, protocole « profalux » de profiles.json). Le numéro de modèle d'une identité
+ * est un index dans catalog_model(). */
 
 /* Construit la trame 66 bits on-air ('0'/'1', out[66]=NUL) pour une identité 0x067.
  * Retourne 0 si serial valide (famille 0x067), -1 sinon. Utilisé aussi par shutters

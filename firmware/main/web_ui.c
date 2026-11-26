@@ -5,6 +5,7 @@
 #include "shutters.h"
 #include "cfg_model.h"   /* tx_override_t (TXOVR_*) : tri-etat des options d'emission par appareil */
 #include "pfx_enrol.h"
+#include "catalog.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "somfy_rts.h"  /* SOMFY_RTS_ADDR_MAX */
 #include <ctype.h>
@@ -1437,11 +1438,12 @@ static esp_err_t h_pfx_get(httpd_req_t *r) {
     p += snprintf(out + p, sizeof(out) - p,
                   "{\"active\":%d,\"learn_ok\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
                   active ? 1 : 0, eg_learn_allowed(&s_egate) ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
-    int nm = pfx_enrol_model_count();
-    for (int i = 0; i < nm; i++) {
-        const pfx_model_t *m = pfx_enrol_model(i);
-        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"routine\":\"%s\"}",
-                      i ? "," : "", m->name, m->routine);
+    /* Les modeles du catalogue, et le profil qui reconnait chacun (l'interface y lit les gestes). */
+    int nm = catalog_model_count();
+    for (int i = 0; i < nm && p < (int)sizeof(out); i++) {
+        const catalog_model_t *m = catalog_model(i);
+        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"profile\":\"%s\"}",
+                      i ? "," : "", m->name, m->profile);
     }
     snprintf(out + p, sizeof(out) - p, "]}");
     httpd_resp_set_type(r, "application/json");

@@ -8,7 +8,7 @@ import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
 import type { Catalog } from './catalog.generated';
-import type { Device, LearnedCommand, OkReply, PfxState, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
+import type { Device, LearnedCommand, OkReply, PfxModel, PfxState, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
 
 const WRONG_PASSWORD = 'faux';   // le seul mot de passe refuse en mode mock (essai de l'ecran de connexion)
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -41,12 +41,6 @@ const rfFrames: RfFrame[] = [
 const radios: RadioSummary[] = [
   { idx: 0, band: BAND.mhz868, chip: 'CC1101', freq_khz: 868425, ok: true },
   { idx: 1, band: BAND.mhz433, chip: 'CC1101', freq_khz: 433920, ok: true },
-];
-const PFX_MODELS = [
-  { name: 'Profalux MAI-EMPX / MUR / NOE', routine: 'R6' },
-  { name: 'FranciaFlex M4G', routine: 'R6' },
-  { name: 'Profalux NeoSol', routine: 'R8' },
-  { name: 'Profalux MAI-RDPX / RDTELPX', routine: 'R7' },
 ];
 
 /* Mouvements en cours : position de depart et d'arrivee (% de fermeture, 100 = ferme), debut, duree. */
@@ -108,6 +102,8 @@ const okWith = <T extends object>(extra: T): OkReply & T => ({ ok: 1, ...extra }
 /* La meme frontiere que la vraie route (real.ts, json<Catalog>) : le texte du catalogue, que le generateur a valide
    contre son schema (scripts/gen-catalog.ts). Importe tel quel, le JSON n'aurait que des chaines, pas ses enumerations. */
 const PROFILES: Catalog = JSON.parse(JSON.stringify(profilesTable));
+/* Les modeles reconnus, comme le firmware les lit dans le catalogue (catalog.c) : dans l'ordre des profils. */
+const pfxModels = (): PfxModel[] => PROFILES.profiles.flatMap(p => (p.models ?? []).map(name => ({ name, profile: p.id })));
 
 export default {
   async session() { return { ...session }; },
@@ -205,7 +201,7 @@ export default {
   },
 
   /* Telecommande virtuelle (enrolement) */
-  async pfxState(): Promise<PfxState> { return { models: PFX_MODELS, active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}) }; },
+  async pfxState(): Promise<PfxState> { return { models: pfxModels(), active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}) }; },
   async pfxCapture({ model, marque }: Record<string, unknown>) {
     await wait(2500);
     pfx = { serial: hex7(nextIdentity++), idx: 12, counter: 1, remote: '0x0E5A3B9', model: Number(model) || 0, marque: typeof marque === 'string' ? marque : undefined };

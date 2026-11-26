@@ -26,6 +26,11 @@
 #include "cloud_enroll.h"   /* cloud_want : gate d'activation du cloud (testée) */
 #include "shutters.h"
 #include "pfx_enrol.h"
+#include "catalog.h"
+
+/* Le catalogue embarque en clair (EMBED_TXTFILES : termine par un NUL), a cote de sa copie compressee
+   que l'interface recoit. */
+extern const char profiles_json_txt[] asm("_binary_profiles_json_start");
 #include "web_ui.h"
 #include "ota.h"
 #include <esp_timer.h>
@@ -310,7 +315,16 @@ void app_main(void) {
         ESP_LOGW(TAG, "TX SELFTEST ECHEC : puce NE passe PAS en TX (config/SPI).");
     cc1101_rx_probe();   /* sonde de bruit RX au boot (comparaison module/antenne) */
 
-    /* 4c. Modele cover + arbitre radio (RX permanent gere en interne) */
+    /* 4c. Le catalogue (web/profiles.json, embarque en clair) : les donnees de protocole que les
+     * emetteurs lisent. Illisible, il ne fige pas le boitier : les emetteurs refusent d'emettre, le
+     * reste (interface, reseau, mise a jour) marche, pour qu'on puisse en remettre un bon. */
+    char cat_err[CATALOG_ERR_MAX];
+    if (catalog_load(profiles_json_txt, cat_err, sizeof cat_err) == 0)
+        ESP_LOGI(TAG, "catalogue lu : %d modeles", catalog_model_count());
+    else
+        ESP_LOGE(TAG, "%s : aucune emission possible", cat_err);
+
+    /* 4d. Modele cover + arbitre radio (RX permanent gere en interne) */
     memprobe("boot-radio");
     shutters_set_update_auto(s_upd_auto);   /* avant shutters_init : la 1re verification en tient compte */
     shutters_init();

@@ -1,7 +1,6 @@
 /* somfy_tx : emission radio Somfy RTS (voir somfy_tx.h). */
 #include "somfy_tx.h"
 #include "radio.h"
-#include "pfx_enrol.h"   /* PFX_BTN_UP / PFX_BTN_DOWN / PFX_BTN_STOP */
 #include "esp_log.h"
 
 static const char *TAG = "somfy_tx";
@@ -22,14 +21,6 @@ static int push(int n, uint8_t level, uint32_t us) {
     s_level[n] = level;
     s_us[n] = us;
     return n + 1;
-}
-
-somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn) {
-    switch (pfx_btn) {
-    case PFX_BTN_UP:   return SOMFY_RTS_CMD_UP;
-    case PFX_BTN_DOWN: return SOMFY_RTS_CMD_DOWN;
-    default:           return SOMFY_RTS_CMD_MY;   /* STOP Profalux -> My (stop Somfy) */
-    }
 }
 
 int somfy_tx_emit(const uint8_t frame[SOMFY_RTS_FRAME_BYTES], int repeats, uint32_t freq_khz) {

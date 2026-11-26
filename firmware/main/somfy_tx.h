@@ -18,14 +18,9 @@
 /* Plafond de trames repetees APRES la 1re (borne le train : RAM statique + duree radio). */
 #define SOMFY_RTS_TX_REPEATS_MAX  7
 
-/* Repetitions par appui bref. En 80 bits (format qui ENCLENCHE la course complete sur les
- * moteurs concernes), la vraie telecommande emet 2 trames par appui (#73, Machin77), donc
- * 1 repetition apres la 1re. Ce n'est PAS le nombre de trames qui fait la course complete,
- * c'est le format 80 bits (ma piste "plus de trames", test2, etait fausse). */
-#define SOMFY_RTS_TX_REPEATS  1
-
-/* Traduit un bouton Profalux (PFX_BTN_UP/DOWN/STOP) en commande Somfy RTS. STOP -> My. */
-somfy_rts_cmd_t somfy_tx_cmd_from_button(uint8_t pfx_btn);
+/* Trames par appui bref et codes des commandes : catalogue, protocole « rts » de profiles.json
+ * (press.frames 2 : la vraie telecommande emet 2 trames par appui, #73, Machin77). Ce n'est PAS le
+ * nombre de trames qui fait la course complete, c'est le format 80 bits. */
 
 /* Emet la rafale Somfy RTS de `frame` (7 octets DEJA empaquetes, sortie du codec) :
  * reveil, 1 trame + `repeats` repetitions separees par le silence inter-trame, puis retour

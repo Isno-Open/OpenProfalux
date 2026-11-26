@@ -144,8 +144,6 @@ export function profileOf(device: Device): ProfileView | null {
   const mech = mechanism(device);
   return profiles().find(p => p.brand === brand && p.mechanism === mech) ?? profiles().find(p => p.brand === brand) ?? null;
 }
-/* Le profil dont l'etape « identify » reconnait ce modele de telecommande (profiles[].models). */
-export const profileOfModel = (model: string): ProfileView | null => profiles().find(p => p.models.includes(model)) ?? null;
 
 /* Un champ d'emission reglable d'un profil. */
 export interface TxField {

@@ -167,20 +167,6 @@
       "note": "Ex-variante R6. Identite virtuelle 0x067 neuve. te_us 400 nominal HCS300. repeat_bit true : defaut de la famille, ne touche que les nouveaux enrolements."
     },
     {
-      "id": "profalux-rdpx-enrol",
-      "inherits": "profalux-enrol",
-      "name": "Nouvelle télécommande Profalux (MAI-RDPX, RDTELPX)",
-      "models": ["Profalux MAI-RDPX / RDTELPX"],
-      "instructions": {
-        "gestures": [
-          "Monte → descends ~4 lames → remonte (procédure proche, à confirmer).",
-          "Va-et-vient = enrôlé. S'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub."
-        ]
-      },
-      "test": { "status": "untested" },
-      "note": "Ex-variante R7."
-    },
-    {
       "id": "eveno-enrol",
       "inherits": "profalux-enrol",
       "name": "Nouvelle télécommande Eveno",
@@ -210,6 +196,20 @@
       },
       "test": { "status": "untested" },
       "note": "Ex-variante R8. Ligne Profalux solaire, porteuse 868,330 mesuree sur le terrain. Moteur sur batterie : voir #35."
+    },
+    {
+      "id": "profalux-rdpx-enrol",
+      "inherits": "profalux-enrol",
+      "name": "Nouvelle télécommande Profalux (MAI-RDPX, RDTELPX)",
+      "models": ["Profalux MAI-RDPX / RDTELPX"],
+      "instructions": {
+        "gestures": [
+          "Monte → descends ~4 lames → remonte (procédure proche, à confirmer).",
+          "Va-et-vient = enrôlé. S'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub."
+        ]
+      },
+      "test": { "status": "untested" },
+      "note": "Ex-variante R7."
     },
     {
       "id": "somfy-rts-enrol",

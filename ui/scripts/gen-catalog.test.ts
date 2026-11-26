@@ -137,15 +137,12 @@ test('profils : un modele reconnu par deux profils est refuse', () => {
   refuses(doc, /profils profalux-enrol et neosol-enrol : meme modele FranciaFlex M4G/);
 });
 
-/* Double definition tant que le firmware ne lit pas le catalogue (#134, etape 2) : les modeles que l'etape identify
-   reconnait sont aussi dans pfx_enrol.c (MODELS[]). Chacun doit designer un et un seul profil du catalogue. */
-test('modeles : chaque modele du firmware est reconnu par un profil, et le catalogue n\'en invente pas', () => {
-  const source = readFileSync(fileURLToPath(new URL('../../firmware/main/pfx_enrol.c', import.meta.url)), 'utf8');
-  const block = source.slice(source.indexOf('MODELS[] = {'), source.indexOf('};', source.indexOf('MODELS[] = {')));
-  const firmware = [...block.matchAll(/\{\s*"([^"]+)"\s*,/g)].map(m => m[1]).sort();
-  const catalog = real().profiles.flatMap((p: Json) => p.models ?? []).sort();
-  assert.ok(firmware.length > 0, 'MODELS[] introuvable dans pfx_enrol.c');
-  assert.deepEqual(catalog, firmware);
+/* L'ordre des modeles est un contrat : une identite d'enrolement garde en NVS le NUMERO de son modele
+   (pfx_enrol.c), lu dans le catalogue (catalog.c) dans l'ordre des profils. Ces quatre-la etaient dans
+   cet ordre avant le catalogue (v0.2.16) : on ajoute a la fin, on ne reordonne pas. */
+test('modeles : les numeros gardes en NVS designent toujours le meme modele', () => {
+  const catalog = real().profiles.flatMap((p: Json) => p.models ?? []);
+  assert.deepEqual(catalog.slice(0, 4), ['Profalux MAI-EMPX / MUR / NOE', 'FranciaFlex M4G', 'Profalux NeoSol', 'Profalux MAI-RDPX / RDTELPX']);
 });
 
 /* Les appels : le generateur lui-meme refuse, sort en erreur et n'engendre rien. */

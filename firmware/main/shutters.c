@@ -8,6 +8,7 @@
 #include "cfg_model.h"
 #include "remote_battery.h"
 #include "pfx_enrol.h"
+#include "catalog.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
@@ -531,8 +532,14 @@ static cfg_layout_t load_cfg(void) {
 }
 
 /* ── RF ── */
-#define PRESS_REPEATS 10   /* nb de trames par "appui" : le bit-bang peut etre preempte par le WiFi
-                              (trame corrompue) ; plus de repetitions = plus de chances qu'une passe propre */
+/* Trames par "appui" : catalogue, protocole de l'encodeur (press.frames). Pour KeeLoq, le bit-bang peut
+ * etre preempte par le WiFi (trame corrompue) : plus de repetitions = plus de chances d'une passe propre.
+ * Le catalogue ne donnant rien, on n'emet pas : 0 trame. */
+static int press_frames(catalog_encoder_t enc) {
+    const catalog_protocol_t *p = catalog_protocol(enc);
+    if (!p || !p->press_frames) ESP_LOGE(TAG, "catalogue sans press.frames pour l'encodeur %d : rien emis", (int)enc);
+    return p ? p->press_frames : 0;
+}
 /* Params d'emission RESOLUS depuis la fiche (defini plus bas) : porteuse/TE/rpt/rmt par appareil. */
 static tx_params_t tx_params_of(const volet_t *v);
 
@@ -541,8 +548,10 @@ static tx_params_t tx_params_of(const volet_t *v);
  * `v` (optionnel) porte la fiche : si present, emission PAR APPAREIL (porteuse/TE/rpt/rmt de la
  * fiche, appliques puis restaures par radio_tx_device) -> une marque clonee garde SA frequence sur
  * une radio partagee (bug terrain Eveno/Profalux). `v==NULL` = rejeu de trame RF brute sans volet. */
-static void emit_press(const volet_t *v, const char *bits) {
-    if (!bits || !bits[0]) return;
+static bool emit_press(const volet_t *v, const char *bits) {
+    if (!bits || !bits[0]) return false;
+    int frames = press_frames(CAT_ENC_KEELOQ);
+    if (!frames) return false;
     /* Log de CE QU'ON EMET (serial/bouton/hop decodes de la trame), symetrique du log RX.
      * Permet de verifier qu'on rejoue bien la trame captee (et de voir le hop emis). */
     int n = (int)strlen(bits);
@@ -552,14 +561,15 @@ static void emit_press(const volet_t *v, const char *bits) {
         for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
         for (int i = 0; i < 4;  i++) if (bits[60 + i] == '1') btn |= (1u << i);
         ESP_LOGW(TAG, "TX serial=0x%07X bouton=0x%X hop=0x%08X (%d bits, rafale x%d)",
-                 (unsigned)ser, btn, (unsigned)hop, n, PRESS_REPEATS);
+                 (unsigned)ser, btn, (unsigned)hop, n, frames);
     }
     if (v) {
         tx_params_t p = tx_params_of(v);
-        radio_tx_device(bits, PRESS_REPEATS, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
+        radio_tx_device(bits, frames, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
     } else {
-        radio_tx(bits, PRESS_REPEATS);              /* trame brute sans volet (rejeu RF debug) */
+        radio_tx(bits, frames);              /* trame brute sans volet (rejeu RF debug) */
     }
+    return true;
 }
 
 /* ── Rejeu BRUT par commande (code fixe OOK, agnostique : CAME, 433 cheap...) ──
@@ -567,8 +577,8 @@ static void emit_press(const volet_t *v, const char *bits) {
  * chaque valeur = impulsions signees +us haut / -us bas). On le rejoue a l'identique, suivi
  * d'un silence inter-trame, repete. Ne touche ni au clone bit-string ni au virtuel. */
 #define REJEU_MAX_PULSES 512
-#define REJEU_GAP_US     12000   /* silence inter-trame, couvre le CAME (~11,5 ms) */
-#define REJEU_REPEATS    8
+/* Trames par appui et silence inter-trame : catalogue, protocole de l'encodeur de rejeu (press.frames,
+ * press.gap_us ; 12 ms couvrent le CAME, ~11,5 ms). */
 
 /* Rejoue la commande `cmd` ("up"/"stop"/"down") d'un volet a rejeu brut. true si emis. */
 static bool rejeu_emit(volet_t *v, const char *cmd) {
@@ -587,7 +597,10 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
         for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
             csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
     bool ok = false;
-    if (csv && *csv && freq) {
+    const catalog_protocol_t *proto = catalog_protocol(CAT_ENC_RAW_REPLAY);
+    if (!proto || !proto->press_frames || !proto->press_gap_us)
+        ESP_LOGE(TAG, "catalogue sans press.frames ni press.gap_us pour le rejeu : rien emis");
+    else if (csv && *csv && freq) {
         static uint8_t  lvl[REJEU_MAX_PULSES + 1];
         static uint32_t us[REJEU_MAX_PULSES + 1];
         int n = 0;
@@ -598,9 +611,9 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
             p = end; if (*p == ',') p++;
         }
         if (n >= 2) {
-            lvl[n] = 0; us[n] = REJEU_GAP_US; n++;   /* silence inter-trame */
+            lvl[n] = 0; us[n] = proto->press_gap_us; n++;   /* silence inter-trame */
             int r = 0;
-            for (int k = 0; k < REJEU_REPEATS && r == 0; k++)
+            for (int k = 0; k < proto->press_frames && r == 0; k++)
                 r = radio_tx_ook_pulses(freq, lvl, us, n);
             ESP_LOGW(TAG, "REJEU brut '%s' cmd=%s : %d impulsions a %u kHz, rc=%d",
                      v->id, cmd, n - 1, (unsigned)freq, r);
@@ -725,7 +738,10 @@ static tx_params_t tx_params_of(const volet_t *v) {
     return p;
 }
 
-static bool emit_virt_profalux(volet_t *v, uint8_t button) {
+static bool emit_virt_profalux(volet_t *v, catalog_cmd_t cmd) {
+    int code = catalog_code(CAT_ENC_KEELOQ, cmd), frames = press_frames(CAT_ENC_KEELOQ);
+    if (code == CATALOG_NO_CODE || !frames) { ESP_LOGE(TAG, "catalogue : pas de code KeeLoq pour la commande %d, rien emis", (int)cmd); return false; }
+    uint8_t button = (uint8_t)code;
     char bits[68];
     uint16_t cnt = v->virt_counter;
     if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return false;   /* rien emis */
@@ -741,7 +757,7 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
         return false;
     }
     tx_params_t p = tx_params_of(v);
-    radio_tx_device(bits, PRESS_REPEATS, &p);
+    radio_tx_device(bits, frames, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
     return true;
@@ -752,7 +768,10 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
  * d'adresse (24 bits) et virt_counter de code roulant : memes champs que la telecommande
  * virtuelle Profalux, reinterpretes par protocole. Reserve-puis-emet comme Profalux : on
  * persiste le PROCHAIN code AVANT d'emettre (au pire un code saute, jamais un rejeu). */
-static bool somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
+static bool somfy_emit_cmd(volet_t *v, catalog_cmd_t command) {
+    int c = catalog_code(CAT_ENC_SOMFY_RTS, command), frames = press_frames(CAT_ENC_SOMFY_RTS);
+    if (c == CATALOG_NO_CODE || !frames) { ESP_LOGE(TAG, "catalogue : pas de code Somfy pour la commande %d, rien emis", (int)command); return false; }
+    somfy_rts_cmd_t cmd = (somfy_rts_cmd_t)c;
     uint16_t code = v->virt_counter;
     somfy_rts_remote_t r = { .address = v->virt_serial & SOMFY_RTS_ADDR_MAX, .rolling_code = code };
     uint8_t frame[SOMFY_RTS_FRAME_BYTES];
@@ -767,27 +786,24 @@ static bool somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
      * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
      * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
      * courte fait la course complete dans les deux cas. frame_bits 0 (defaut memset) = 56. */
-    if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS, v->freq_khz);
-    else                     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS, v->freq_khz);
+    if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, frames - 1, v->freq_khz);   /* repetitions apres la 1re */
+    else                     somfy_tx_emit(frame, frames - 1, v->freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & SOMFY_RTS_ADDR_MAX), cmd, (unsigned)code);
     return true;
 }
-static bool emit_virt_somfy(volet_t *v, uint8_t button) {
-    return somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
-}
 
 /* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
  * (issue #73) sont cables ; chaque protocole porte sa propre radio, sans toucher aux
- * autres. `button` est un code PFX_BTN_*, traduit par protocole. Renvoie true si une trame a
+ * autres. `cmd` est traduite en code par le catalogue, protocole par protocole. Renvoie true si une trame a
  * ete emise : un protocole non cable (ou une trame Profalux non construite) renvoie false, pour
  * que l'appelant ne simule pas un mouvement qui n'a rien envoye au moteur. */
-static bool emit_virt(volet_t *v, uint8_t button) {
+static bool emit_virt(volet_t *v, catalog_cmd_t cmd) {
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:
-        return emit_virt_profalux(v, button);
+        return emit_virt_profalux(v, cmd);
     case VOLET_PROTO_SOMFY_RTS:
-        return emit_virt_somfy(v, button);
+        return somfy_emit_cmd(v, cmd);
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
                  v->id, (unsigned)v->proto);
@@ -806,7 +822,7 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
 static void start_move(volet_t *v, int dir, int target) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
     bool sent;
-    if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
+    if (v->virt) sent = emit_virt(v, dir > 0 ? CAT_CMD_UP : CAT_CMD_DOWN);
     else if (v->rejeu) sent = rejeu_emit(v, dir > 0 ? "up" : "down");   /* rejeu brut par commande */
     else       { emit_press(v, dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise, par appareil */
     if (!sent) {
@@ -822,7 +838,7 @@ static void start_move(volet_t *v, int dir, int target) {
 }
 static void do_stop(volet_t *v) {
     bool sent = true;
-    if (v->virt) sent = emit_virt(v, PFX_BTN_STOP);
+    if (v->virt) sent = emit_virt(v, CAT_CMD_STOP);
     else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
     else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
     if (!sent && v->dir) {
@@ -1128,7 +1144,8 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
             UNLOCK(); return -1;
         }
         radio_pause_rx(true);
-        bool sent = somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
+        const catalog_protocol_t *rts = catalog_protocol(CAT_ENC_SOMFY_RTS);   /* commande d'appairage : enrol.command */
+        bool sent = rts && rts->enrol.command >= 0 && somfy_emit_cmd(v, (catalog_cmd_t)rts->enrol.command);
         radio_pause_rx(false);
         UNLOCK();
         return sent ? 0 : -1;
@@ -1635,15 +1652,18 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
 }
 
 /* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste) : pour chaque
- * commande, la trame la plus recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les
+ * commande, la trame la plus recente de ce serial dans le journal RF (codes KeeLoq du catalogue). Les
  * commandes absentes du journal restent a apprendre. *learned recoit "up,stop,down" (celles
  * trouvees). Refuse un nom deja pris : on ne reecrit pas un volet existant. */
 int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
     *why = NULL; if (cap) learned[0] = 0;
     if (!id || !*id) { *why = "nom manquant"; return -1; }
     if (!serial || !*serial) { *why = "serial manquant"; return -1; }
-    static const struct { const char *action; uint8_t btn; } CMD[] = {
-        { "up", PFX_BTN_UP }, { "stop", PFX_BTN_STOP }, { "down", PFX_BTN_DOWN } };
+    /* Codes des boutons d'une telecommande KeeLoq : catalogue (protocole de l'encodeur KeeLoq). */
+    const struct { const char *action; int btn; } CMD[] = {
+        { "up",   catalog_code(CAT_ENC_KEELOQ, CAT_CMD_UP) },
+        { "stop", catalog_code(CAT_ENC_KEELOQ, CAT_CMD_STOP) },
+        { "down", catalog_code(CAT_ENC_KEELOQ, CAT_CMD_DOWN) } };
     char bits[3][SH_BITS_LEN] = {{0}};
     LOCK();
     if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
