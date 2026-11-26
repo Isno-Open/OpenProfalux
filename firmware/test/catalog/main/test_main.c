@@ -97,6 +97,8 @@ int main(int argc, char **argv) {
     CHECK(catalog_profile_infer(CAT_ENC_KEELOQ, false, "") && !catalog_profile_infer(CAT_ENC_KEELOQ, false, "")->enrol,
           "C21 copie et enrolement ne se confondent pas");
     CHECK(catalog_profile_infer(CAT_ENC_SOMFY_RTS, false, "") == NULL, "C22 aucun profil de cet encodeur et de cette methode : NULL");
+    CHECK(catalog_profile_infer(CAT_ENC_COUNT, true, "") == NULL && catalog_profile_infer(CAT_ENC_COUNT, true, EVENO_BRAND) == NULL,
+          "C23 protocole inconnu de ce firmware (io d'une autre branche) : aucun profil, meme avec une marque");
 
     printf("Un catalogue faux est refuse en entier :\n");
     refused("{", "JSON illisible", "R1 JSON illisible");

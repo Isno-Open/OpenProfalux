@@ -291,10 +291,16 @@ static volet_t *get_or_create(const char *id) {
 
 /* ── Profil d'un appareil (catalogue) ── */
 static const catalog_profile_t *profile_of(const volet_t *v) { return catalog_profile(v->profile); }
-/* Ce que l'appareil dit de lui-meme : son encodeur, et s'il est enrole (sinon copie). */
+/* Ce que l'appareil dit de lui-meme : son encodeur, et s'il est enrole (sinon copie). Un protocole que ce
+ * firmware ne connait pas (une fiche ecrite par une autre branche, io par exemple) n'a pas d'encodeur :
+ * CAT_ENC_COUNT, et l'appareil reste sans profil plutot que de passer pour un Profalux. */
 static catalog_encoder_t encoder_of(const volet_t *v) {
-    if (v->virt) return (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS ? CAT_ENC_SOMFY_RTS : CAT_ENC_KEELOQ;
-    return v->rejeu ? CAT_ENC_RAW_REPLAY : CAT_ENC_KEELOQ;
+    if (!v->virt) return v->rejeu ? CAT_ENC_RAW_REPLAY : CAT_ENC_KEELOQ;
+    switch ((volet_proto_t)v->proto) {
+    case VOLET_PROTO_PROFALUX:  return CAT_ENC_KEELOQ;
+    case VOLET_PROTO_SOMFY_RTS: return CAT_ENC_SOMFY_RTS;
+    default:                    return CAT_ENC_COUNT;
+    }
 }
 /* Donne son profil a un appareil : celui demande s'il existe et convient a son encodeur et a sa methode,
  * sinon (s'il n'en a pas) celui de sa marque. Son type, s'il n'en a pas, est celui du profil. Une
