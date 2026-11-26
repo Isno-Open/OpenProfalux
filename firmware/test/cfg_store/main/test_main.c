@@ -105,6 +105,7 @@ const char *__asan_default_options(void) { return "detect_leaks=0"; }
 /* Cles du catalogue que ce banc nomme. */
 #define GATE_KEY        "portail"
 #define PROFALUX_ENROL  "profalux-enrol"
+#define CAME_REPLAY     "came-replay"
 #define UNKNOWN_KEY     "garage"
 #define NVS_MAX 0x8000                      /* taille maximale geree par le banc */
 static const esp_partition_t *s_part;
@@ -440,7 +441,7 @@ int main(void) {
         const volet_t *a = &g_tmp.volets[0], *b = &g_tmp.volets[1], *c = &g_tmp.volets[2], *d = &g_tmp.volets[3], *e = &g_tmp.volets[4];
         CHECK(!strcmp(a->type, gate), "ancien numero 1 : lu comme la cle du portail (%s)", a->type);
         CHECK(!strcmp(b->type, shutter), "ancienne fiche sans type : celle du numero 0 (%s)", b->type);
-        CHECK(!strcmp(c->type, GATE_KEY) && !strcmp(c->profile, "came-replay"), "cle et profil lus tels quels");
+        CHECK(!strcmp(c->type, GATE_KEY) && !strcmp(c->profile, CAME_REPLAY), "cle et profil lus tels quels");
         CHECK(!strcmp(d->type, UNKNOWN_KEY), "cle inconnue du catalogue : gardee (version plus recente)");
         CHECK(e->type[0] == 0, "numero qu'aucun type ne porte : type vide, rien d'invente");
         char *js = cfg_model_export(&g_tmp.m);
@@ -452,7 +453,7 @@ int main(void) {
         CHECK(!cJSON_GetObjectItem(vb, "type"), "type par defaut : pas ecrit (la NVS n'a que 16 Ko)");
         CHECK(js && !strstr(js, "\"type\":1") && !strstr(js, "\"type\":0"), "aucun numero de type dans l'export");
         const cJSON *vc = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 2);
-        CHECK(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(vc, "profile")) ?: "", "came-replay"), "le profil est ecrit");
+        CHECK(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(vc, "profile")) ?: "", CAME_REPLAY), "le profil est ecrit");
         cJSON_Delete(out); free(js);
 
         /* Ce qu'emet un appareil : la fiche, sinon le profil */

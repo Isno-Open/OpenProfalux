@@ -13,6 +13,9 @@ static const char *const COMMAND_NAME[CAT_CMD_COUNT] = {
     [CAT_CMD_UP] = "up", [CAT_CMD_STOP] = "stop", [CAT_CMD_DOWN] = "down", [CAT_CMD_PROG] = "prog",
 };
 
+/* Methode d'ajout d'un profil (« add ») qui fait apprendre le boitier au moteur ; l'autre est la copie. */
+#define ADD_ENROL "enrol"
+
 static catalog_protocol_t s_proto[CAT_ENC_COUNT];
 static catalog_model_t    s_models[CATALOG_MODELS_MAX];
 static int                s_n_models;
@@ -146,7 +149,7 @@ static int read_profile(const cJSON *p, const cJSON *protocols, char *err, size_
     const char *type = cJSON_GetStringValue(cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(p, "types"), 0));
     if (type) snprintf(out->type, sizeof out->type, "%s", type);
     const char *add = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(p, "add"));
-    if (add) out->enrol = !strcmp(add, "enrol");
+    if (add) out->enrol = !strcmp(add, ADD_ENROL);
     const char *proto = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(p, "protocol"));
     if (proto) {
         const cJSON *pr = cJSON_GetObjectItemCaseSensitive(protocols, proto);

@@ -539,7 +539,9 @@ static void migrate_tx_overrides(void) {
     bool changed = false;
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
-        if (!(v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX)) continue;
+        /* fiches d'avant les profils seulement : avec un profil, « heriter » veut dire heriter DU PROFIL, et
+         * l'ancien global l'ecraserait a chaque demarrage (revue de la PR #156) */
+        if (!(v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX) || v->profile[0]) continue;
         if (v->tx_rpt == TXOVR_INHERIT) { v->tx_rpt = rp ? TXOVR_ON : TXOVR_OFF; changed = true; }
         if (v->tx_rmt == TXOVR_INHERIT) { v->tx_rmt = rm ? TXOVR_ON : TXOVR_OFF; changed = true; }
     }

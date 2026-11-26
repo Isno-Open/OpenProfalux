@@ -327,6 +327,11 @@ void app_main(void) {
     /* 4d. Modele cover + arbitre radio (RX permanent gere en interne) */
     memprobe("boot-radio");
     shutters_set_update_auto(s_upd_auto);   /* avant shutters_init : la 1re verification en tient compte */
+    /* TE et options d'emission enregistres, remis AVANT shutters_init : la migration vers les profils fige
+     * ce que chaque appareil emet aujourd'hui, et le lit dans la radio (revue de la PR #156). */
+    cc1101_set_tx_te(s_tx_te);
+    cc1101_set_tx_repeat_bit(s_tx_rpt);
+    cc1101_set_tx_rmt(s_tx_rmt);
     shutters_init();
     memprobe("boot-volets");
     pfx_enrol_init();   /* identite virtuelle 0x067 (apprentissage sans telecommande, experimental) */
@@ -334,9 +339,6 @@ void app_main(void) {
     shutters_set_mqtt_obey(s_mqtt_obey);   /* obeir aux ordres MQTT (defaut oui ; coupe = carte secondaire) */
     cc1101_set_rx_debug(s_debug);   /* switch DEBUG console restaure au boot */
     cc1101_set_rx_gain(s_rx_gain);  /* plafond de gain RX restaure au boot */
-    cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */
-    cc1101_set_tx_repeat_bit(s_tx_rpt);   /* bit de repetition (option) restaure au boot */
-    cc1101_set_tx_rmt(s_tx_rmt);          /* emission RMT (option) restauree au boot */
     /* Radios SECONDAIRES (issue #95) : la radio 0 garde les cles NVS historiques (ci-dessus) ;
      * chaque radio i>0 a ses propres cles indexees (rprofN, rfreqN, rxgN, rteN, rrptN, rrmtN).
      * On resout sa frequence dans SA bande (defaut = porteuse declaree) et on applique freq, gain,

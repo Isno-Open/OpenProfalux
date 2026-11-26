@@ -19,6 +19,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const WEB = join(here, '../../firmware/main/web');
 const BOARDS = join(here, '../../boards');
 const SPRITE = join(here, '../src/assets/icons.svg.txt');
+const CATALOG_H = join(here, '../../firmware/main/catalog.h');
 export const CATALOG_PATH = join(WEB, 'profiles.json');
 export const SCHEMA_PATH = join(WEB, 'profiles.schema.json');
 const OUT_PATH = join(here, '../src/api/catalog.generated.ts');
@@ -57,6 +58,44 @@ export function boardBands(dir = BOARDS): BandAllowed[] {
 /** Les dessins de la planche du projet (symboles i-<nom>), que les types et les roles nomment. */
 export function spriteIcons(path = SPRITE): string[] {
   return [...readFileSync(path, 'utf8').matchAll(/<symbol\b[^>]*\bid="i-([^"]+)"/g)].map(m => m[1] ?? '');
+}
+
+/** Les limites du lecteur du firmware (catalog.h) : un catalogue qui les depasse serait refuse EN ENTIER au
+ *  demarrage, et le boitier n'emettrait plus rien. On les lit dans l'en-tete, leur seule definition. */
+export interface FirmwareLimits { profiles: number; types: number; models: number; id: number; name: number }
+export function firmwareLimits(path = CATALOG_H): FirmwareLimits {
+  const text = readFileSync(path, 'utf8');
+  const value = (name: string): number => {
+    const m = new RegExp(`#define\\s+${name}\\s+(\\d+)`).exec(text);
+    if (!m?.[1]) throw new Error(`${path} : ${name} introuvable`);
+    return Number(m[1]);
+  };
+  return { profiles: value('CATALOG_PROFILES_MAX'), types: value('CATALOG_TYPES_MAX'), models: value('CATALOG_MODELS_MAX'),
+    id: value('CATALOG_ID_MAX'), name: value('CATALOG_NAME_MAX') };
+}
+
+/** Ce que le lecteur du firmware accepte (catalog.c) : tailles, et un protocole au plus par encodeur. */
+export function checkFirmware(doc: unknown, limits: FirmwareLimits): string[] {
+  const errors: string[] = [];
+  const root = obj(doc);
+  const profiles = list(root.profiles).map(obj);
+  const types = entries(root.types);
+  const models = profiles.flatMap(p => list(p.models).map(String));
+  if (profiles.length > limits.profiles) errors.push(`firmware : ${profiles.length} profils, le lecteur en prend ${limits.profiles}`);
+  if (types.length > limits.types) errors.push(`firmware : ${types.length} types, le lecteur en prend ${limits.types}`);
+  if (models.length > limits.models) errors.push(`firmware : ${models.length} modeles, le lecteur en prend ${limits.models}`);
+  const tooLong = (what: string, s: string, max: number): void => {
+    if (new TextEncoder().encode(s).length >= max) errors.push(`firmware : ${what} « ${s} » trop long (moins de ${max} octets)`);
+  };
+  for (const p of profiles) {
+    tooLong('identifiant de profil', String(p.id), limits.id);
+    if (typeof p.brand === 'string') tooLong('marque', p.brand, limits.name);
+  }
+  for (const [key] of types) tooLong('cle de type', key, limits.id);
+  for (const m of models) tooLong('modele', m, limits.name);
+  const encoders = entries(root.protocols).map(([, p]) => String(p.encoder));
+  for (const e of new Set(encoders)) if (encoders.filter(x => x === e).length > 1) errors.push(`firmware : deux protocoles pour l'encodeur ${e}`);
+  return errors;
 }
 
 /** La forme : le catalogue contre son schema. Rend les erreurs, vide si tout va bien. */
@@ -208,7 +247,7 @@ async function main(): Promise<void> {
   const doc: unknown = JSON.parse(readFileSync(catalogPath, 'utf8'));
   const schema: JSONSchema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
   const shape = checkShape(doc, schema);
-  const errors = shape.length ? shape : checkCatalog(doc, boardBands(), spriteIcons());
+  const errors = shape.length ? shape : [...checkCatalog(doc, boardBands(), spriteIcons()), ...checkFirmware(doc, firmwareLimits())];
   if (errors.length) {
     for (const e of errors) console.error(`${catalogPath} : ${e}`);
     process.exit(1);

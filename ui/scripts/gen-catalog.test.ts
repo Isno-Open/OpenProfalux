@@ -11,28 +11,32 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CATALOG_PATH, SCHEMA_PATH, boardBands, checkCatalog, checkShape, spriteIcons } from './gen-catalog.ts';
+import { CATALOG_PATH, SCHEMA_PATH, boardBands, checkCatalog, checkFirmware, checkShape, firmwareLimits, spriteIcons } from './gen-catalog.ts';
 
+/* Les profils du vrai catalogue que ce banc casse, par leur identifiant. */
+const PROFILE = { cameReplay: 'came-replay', eveno: 'eveno-enrol', neosol: 'neosol-enrol', profaluxEnrol: 'profalux-enrol', somfy: 'somfy-rts-enrol' } as const;
 type Json = Record<string, any>;   // un catalogue qu'on casse expres : sa forme n'est plus garantie
 const real = (): Json => JSON.parse(readFileSync(CATALOG_PATH, 'utf8'));
 const schema: object = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 const bands = boardBands();
 const icons = spriteIcons();
+const limits = firmwareLimits();
 const profile = (doc: Json, id: string): Json => doc.profiles.find((p: Json) => p.id === id);
 
 /* La regle refuse ce catalogue, et son message le dit. */
 function refuses(doc: Json, pattern: RegExp): void {
-  const errors = [...checkShape(doc, schema), ...checkCatalog(doc, bands, icons)];
+  const errors = [...checkShape(doc, schema), ...checkCatalog(doc, bands, icons), ...checkFirmware(doc, limits)];
   assert.ok(errors.some(e => pattern.test(e)), `attendu ${pattern}, obtenu :\n${errors.join('\n') || '(rien)'}`);
 }
 
 test('le vrai catalogue passe la forme et les regles', () => {
   assert.deepEqual(checkShape(real(), schema), []);
   assert.deepEqual(checkCatalog(real(), bands, icons), []);
+  assert.deepEqual(checkFirmware(real(), limits), []);
 });
 
 test('forme : une cle inconnue est refusee', () => {
-  const doc = real(); profile(doc, 'came-replay').colour = 'bleu';
+  const doc = real(); profile(doc, PROFILE.cameReplay).colour = 'bleu';
   refuses(doc, /forme : .*must NOT have additional properties/);
 });
 
@@ -73,76 +77,93 @@ test('type : deux types avec le meme numero legacy sont refuses', () => {
 });
 
 test('profil : un protocole inconnu est refuse', () => {
-  const doc = real(); profile(doc, 'came-replay').protocol = 'nice';
+  const doc = real(); profile(doc, PROFILE.cameReplay).protocol = 'nice';
   refuses(doc, /profil came-replay : protocole nice inconnu/);
 });
 
 test('profil : un type inconnu est refuse', () => {
-  const doc = real(); profile(doc, 'came-replay').types = ['garage'];
+  const doc = real(); profile(doc, PROFILE.cameReplay).types = ['garage'];
   refuses(doc, /profil came-replay : type garage inconnu/);
 });
 
 test("profil : une methode d'ajout sans procedure dans le protocole est refusee", () => {
-  const doc = real(); profile(doc, 'came-replay').add = 'enrol';
+  const doc = real(); profile(doc, PROFILE.cameReplay).add = 'enrol';
   refuses(doc, /profil came-replay : le protocole came n'a pas de procedure enrol/);
 });
 
 test('profil : un protocole a codes ne porte pas un bouton dont il ne connait pas la commande', () => {
-  const doc = real(); profile(doc, 'somfy-rts-enrol').types = ['portail'];
+  const doc = real(); profile(doc, PROFILE.somfy).types = ['portail'];
   refuses(doc, /profil somfy-rts-enrol : le protocole rts n'a pas de code pour la commande step du type portail/);
 });
 
 test('profil : une instruction exigee par la procedure doit exister dans le profil', () => {
-  const doc = real(); delete profile(doc, 'profalux-enrol').instructions;
+  const doc = real(); delete profile(doc, PROFILE.profaluxEnrol).instructions;
   refuses(doc, /profil profalux-enrol : la procedure enrol montre instructions\.gestures/);
 });
 
 test("profil : une porteuse hors de la bande qu'une carte autorise est refusee", () => {
-  const doc = real(); profile(doc, 'eveno-enrol').radio.freq_khz = 871000;
+  const doc = real(); profile(doc, PROFILE.eveno).radio.freq_khz = 871000;
   refuses(doc, /profil eveno-enrol : 871000 kHz hors de toute bande 868 autorisee/);
 });
 
 test('profil : un champ ni declare ni herite est refuse', () => {
-  const doc = real(); delete profile(doc, 'somfy-rts-enrol').radio.modulation;
+  const doc = real(); delete profile(doc, PROFILE.somfy).radio.modulation;
   refuses(doc, /profil somfy-rts-enrol : radio\.modulation manquant/);
 });
 
 test('heritage : une base absente est refusee', () => {
-  const doc = real(); profile(doc, 'eveno-enrol').inherits = 'nulle-part';
+  const doc = real(); profile(doc, PROFILE.eveno).inherits = 'nulle-part';
   refuses(doc, /profil eveno-enrol : base nulle-part introuvable/);
 });
 
 test('heritage : une boucle est refusee', () => {
-  const doc = real(); profile(doc, 'profalux-enrol').inherits = 'eveno-enrol';
+  const doc = real(); profile(doc, PROFILE.profaluxEnrol).inherits = PROFILE.eveno;
   refuses(doc, /heritage en boucle/);
 });
 
 test('heritage : une base qui suit ce qui en herite est refusee (le firmware lit dans l\'ordre)', () => {
   const doc = real();
-  const base = doc.profiles.findIndex((p: Json) => p.id === 'profalux-enrol');
+  const base = doc.profiles.findIndex((p: Json) => p.id === PROFILE.profaluxEnrol);
   const [moved] = doc.profiles.splice(base, 1);
   doc.profiles.push(moved);
   refuses(doc, /profil eveno-enrol : sa base profalux-enrol doit le preceder/);
 });
 
 test('heritage : changer la bande de sa base est refuse', () => {
-  const doc = real(); profile(doc, 'eveno-enrol').radio.band = '433';
+  const doc = real(); profile(doc, PROFILE.eveno).radio.band = '433';
   refuses(doc, /profil eveno-enrol : change la bande de sa base profalux-enrol/);
 });
 
 test('heritage : changer le protocole de sa base est refuse', () => {
-  const doc = real(); profile(doc, 'eveno-enrol').protocol = 'rts';
+  const doc = real(); profile(doc, PROFILE.eveno).protocol = 'rts';
   refuses(doc, /profil eveno-enrol : change le protocole de sa base profalux-enrol/);
 });
 
 test('profils : un identifiant en double est refuse', () => {
-  const doc = real(); profile(doc, 'eveno-enrol').id = 'neosol-enrol';
+  const doc = real(); profile(doc, PROFILE.eveno).id = PROFILE.neosol;
   refuses(doc, /profil neosol-enrol : identifiant en double/);
 });
 
 test('profils : un modele reconnu par deux profils est refuse', () => {
-  const doc = real(); profile(doc, 'neosol-enrol').models = ['FranciaFlex M4G'];
+  const doc = real(); profile(doc, PROFILE.neosol).models = ['FranciaFlex M4G'];
   refuses(doc, /profils profalux-enrol et neosol-enrol : meme modele FranciaFlex M4G/);
+});
+
+test('firmware : un catalogue plus grand que son lecteur est refuse a la construction', () => {
+  const doc = real();
+  const base = profile(doc, PROFILE.somfy);
+  for (let i = doc.profiles.length; i <= limits.profiles; i++) doc.profiles.push({ ...base, id: `copie-${i}` });
+  refuses(doc, new RegExp(`firmware : ${limits.profiles + 1} profils, le lecteur en prend ${limits.profiles}`));
+});
+
+test('firmware : un identifiant de profil trop long pour le lecteur est refuse', () => {
+  const doc = real(); profile(doc, PROFILE.somfy).id = 'p'.repeat(limits.id);
+  refuses(doc, /firmware : identifiant de profil .* trop long/);
+});
+
+test('firmware : deux protocoles pour un meme encodeur sont refuses', () => {
+  const doc = real(); doc.protocols.copie = { ...doc.protocols.rts };
+  refuses(doc, /firmware : deux protocoles pour l'encodeur somfy-rts/);
 });
 
 /* L'ordre des modeles est un contrat : une identite d'enrolement garde en NVS le NUMERO de son modele
@@ -178,7 +199,7 @@ test('appel : une faute de forme fait echouer le generateur, sans rien engendrer
 });
 
 test('appel : une faute de regle fait echouer le generateur, sans rien engendrer', () => {
-  const doc = real(); profile(doc, 'eveno-enrol').radio.freq_khz = 871000;
+  const doc = real(); profile(doc, PROFILE.eveno).radio.freq_khz = 871000;
   const r = run(doc);
   assert.equal(r.code, 1);
   assert.match(r.out, /hors de toute bande/);
