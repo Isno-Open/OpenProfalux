@@ -9,7 +9,7 @@ nouveau firmware, tant que l'encodeur existe.
 
 ## 0. Ce que fait OpenProfalux aujourd'hui
 
-Résumé de l'inventaire complet, [INVENTAIRE-270add2.md](INVENTAIRE-270add2.md), où chaque point renvoie au
+Résumé de l'inventaire complet, [INVENTORY-270add2.md](INVENTORY-270add2.md), où chaque point renvoie au
 `fichier:ligne` du code de `270add2`. Ces renvois valent pour ce commit, pas pour la suite.
 
 ### 0.1 Qui lit `profiles.json`
