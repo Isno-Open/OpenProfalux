@@ -205,3 +205,11 @@ test('appel : une faute de regle fait echouer le generateur, sans rien engendrer
   assert.match(r.out, /hors de toute bande/);
   assert.equal(r.generated, false);
 });
+
+test('appel : un catalogue que le firmware refuserait fait echouer le generateur, sans rien engendrer', () => {
+  const doc = real(); doc.protocols.copie = { ...doc.protocols.rts };
+  const r = run(doc);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /deux protocoles pour l'encodeur/);
+  assert.equal(r.generated, false);
+});
