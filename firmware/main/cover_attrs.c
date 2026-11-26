@@ -28,6 +28,39 @@ const char *dev_type_name(uint8_t type) {
     return type < sizeof(DEV_TYPE_NAMES) / sizeof(DEV_TYPE_NAMES[0]) ? DEV_TYPE_NAMES[type] : NULL;
 }
 
+static bool slug_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+}
+void cover_slug(char *dst, size_t cap, const char *name) {
+    size_t p = 0;
+    if (!dst || cap == 0) return;
+    for (size_t k = 0; name && name[k] && p + 1 < cap; k++) dst[p++] = slug_char(name[k]) ? name[k] : '_';
+    dst[p] = 0;
+    if (!p && cap > 6) { memcpy(dst, "volet", 6); }
+}
+bool cover_uid_ok(const char *uid) {
+    if (!uid || !uid[0]) return false;
+    size_t n = 0;
+    for (; uid[n]; n++) if (!slug_char(uid[n]) || n >= COVER_NAME_MAX) return false;
+    return true;
+}
+void cover_uid_pick(char *out, size_t cap, const char *name, bool (*taken)(const char *uid, void *ctx), void *ctx) {
+    char base[COVER_NAME_MAX + 1];
+    if (!out || cap < sizeof base) { if (out && cap) out[0] = 0; return; }
+    cover_slug(base, sizeof base, name);
+    memcpy(out, base, strlen(base) + 1);
+    /* deja porte par un autre appareil (l'ancien « Salon » renomme, puis un nouveau « Salon ») : suffixe,
+     * en raccourcissant la base pour rester dans la longueur d'un nom */
+    for (unsigned n = 2; taken && taken(out, ctx) && n < 1000; n++) {
+        char suf[8];
+        int k = snprintf(suf, sizeof suf, "_%u", n);
+        size_t keep = strlen(base);
+        if (keep + (size_t)k > COVER_NAME_MAX) keep = COVER_NAME_MAX - (size_t)k;
+        memcpy(out, base, keep);
+        memcpy(out + keep, suf, (size_t)k + 1);
+    }
+}
+
 /* Ajoute c a out (position *w, capacite cap) ; false si ca ne tient pas. */
 static bool put(char *out, size_t cap, size_t *w, const char *c, size_t n) {
     if (*w + n >= cap) return false;
@@ -59,6 +92,8 @@ int cover_attrs_json(const cover_attrs_t *a, char *out, size_t cap) {
     int n = snprintf(out, cap, "{\"type\":\"%s\",\"positional\":%s", tname, a->positional ? "true" : "false");
     if (n < 0 || (size_t)n >= cap) { out[0] = 0; return -1; }
     size_t w = (size_t)n;
+    /* identifiant stable : avant le nom, pour qu'un nom tres long ne puisse pas le faire sauter */
+    if (cover_uid_ok(a->uid) && !(put(out, cap, &w, ",\"uid\":", 7) && put_json_string(out, cap, &w, a->uid))) { out[0] = 0; return -1; }
     if (name && name[0] && !(put(out, cap, &w, ",\"name\":", 8) && put_json_string(out, cap, &w, name))) { out[0] = 0; return -1; }
     if (cover_travel_ok(up_ms) && cover_travel_ok(down_ms)) {
         char t[64];

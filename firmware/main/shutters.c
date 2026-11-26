@@ -290,15 +290,7 @@ static volet_t *get_or_create(const char *id) {
 
 /* nom volet -> slug HA-safe ([a-zA-Z0-9_-]) : espaces/accents interdits dans les topics
  * (decouverte HA ET command/state), sinon commandes/decouverte cassees. */
-static void slugify(char *dst, int cap, const char *src) {
-    int p = 0;
-    for (int k = 0; src[k] && p < cap - 1; k++) {
-        char c = src[k];
-        dst[p++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') ? c : '_';
-    }
-    dst[p] = 0;
-    if (!p && cap > 6) strlcpy(dst, "volet", cap);
-}
+static void slugify(char *dst, int cap, const char *src) { cover_slug(dst, (size_t)cap, src); }   /* une seule regle : cover_attrs.c */
 static volet_t *find_volet_by_slug(const char *slug) {
     char s[SH_ID_LEN];
     for (int i = 0; i < s_nvolets; i++) { slugify(s, sizeof(s), s_volets[i].id); if (!strcmp(s, slug)) return &s_volets[i]; }
@@ -888,7 +880,7 @@ static void publish_volet_state(volet_t *v) {
     /* attrs : type, positionnel, reglages (~120 o) + le nom echappe (SH_ID_LEN octets, au pire x6 en
      * \\u00XX) + pour une centrale ou une zone, ses membres (slugs entre guillemets). STATIQUES : trop gros
      * pour la pile de la tache appelante, et on est sous LOCK (un seul appelant a la fois). */
-    static char attrs[160 + 6 * SH_ID_LEN + SH_MAX_VOLETS * (SH_ID_LEN + 3)], member_slugs[SH_MEMBERS_LEN];
+    static char attrs[160 + 7 * SH_ID_LEN + SH_MAX_VOLETS * (SH_ID_LEN + 3)], member_slugs[SH_MEMBERS_LEN];
     char topic[96], pl[16], st[10], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);   /* topics slugifies (coherents avec la decouverte) */
     /* membres d'une centrale ou d'une zone, en SLUGS : l'identifiant de l'appareil dans le portail */
@@ -903,10 +895,12 @@ static void publish_volet_state(volet_t *v) {
             w += (size_t)k;
         }
     }
+    /* identifiant stable : un volet cree a l'instant, pas encore enregistre, le recoit ici */
+    if (!v->uid[0]) cfg_model_ensure_uids(&s_model);
     /* positionnel = position publiee (meme regle que ci-dessous et que la decouverte HA) */
     const cover_attrs_t ca = { .type = v->type, .positional = volet_positional(v), .name = v->id, .up_ms = v->travel_up_ms,
                                .down_ms = v->travel_down_ms, .rank = volet_rank(v), .orientation = v->orientation,
-                               .role = role, .members = member_slugs };
+                               .role = role, .members = member_slugs, .uid = v->uid };
     if (cover_attrs_json(&ca, attrs, sizeof(attrs)) > 0) {
         snprintf(topic, sizeof(topic), "openprofalux/cover/%s/attrs", slug);
         pub_defer(topic, attrs, 1, 1);

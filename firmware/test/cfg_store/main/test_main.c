@@ -473,6 +473,46 @@ int main(void) {
         cJSON_Delete(root); free(js); free(js2);
     }
 
+    /* ── T0b. Identifiant stable d'un appareil ── */
+    printf("\n[T0b] Identifiant stable : garde au renommage, absent des sauvegardes tant qu'il vaut le slug\n");
+    {
+        store_reset(&g_tmp);
+        mk_volet(&g_tmp, "Salon", 1, 0, 0);
+        mk_volet(&g_tmp, "Chambre Parents", 2, 0, 0);
+        int served = cfg_model_ensure_uids(&g_tmp.m);
+        CHECK(served == 2 && !strcmp(g_tmp.volets[0].uid, "Salon") && !strcmp(g_tmp.volets[1].uid, "Chambre_Parents"),
+              "un appareil d'avant ce champ doit prendre son slug (%d servis, '%s', '%s')", served, g_tmp.volets[0].uid, g_tmp.volets[1].uid);
+        CHECK(cfg_model_ensure_uids(&g_tmp.m) == 0, "un second passage ne doit rien changer");
+        char *js = cfg_model_export(&g_tmp.m);
+        CHECK(js && !strstr(js, "\"uid\""), "jamais renomme : la sauvegarde doit rester celle d'avant (pas de \"uid\")");
+        free(js);
+        /* renommage, comme shutters_rename_volet : seul le nom change */
+        snprintf(g_tmp.volets[0].id, SH_ID_LEN, "S\xC3\xA9jour");
+        js = cfg_model_export(&g_tmp.m);
+        int nuid = 0;
+        for (const char *q = js; js && (q = strstr(q, "\"uid\"")) != NULL; q += 5) nuid++;
+        CHECK(nuid == 1 && strstr(js, "\"uid\":\"Salon\""), "renomme : son identifiant d'origine doit etre ecrit, et lui seul (%d)", nuid);
+        cJSON *root = cJSON_Parse(js);
+        store_reset(&g_ram);
+        if (root) cfg_model_import(&g_ram.m, root);
+        CHECK(g_ram.nvolets == 2 && !strcmp(g_ram.volets[0].id, "S\xC3\xA9jour") && !strcmp(g_ram.volets[0].uid, "Salon")
+              && !strcmp(g_ram.volets[1].uid, "Chambre_Parents"), "relu : l'identifiant d'un appareil renomme est perdu ('%s')", g_ram.volets[0].uid);
+        cJSON_Delete(root); free(js);
+        /* un NOUVEL appareil reprend le nom libere : il ne doit pas voler l'identite de l'ancien */
+        mk_volet(&g_ram, "Salon", 3, 0, 0);
+        CHECK(cfg_model_ensure_uids(&g_ram.m) == 1 && !strcmp(g_ram.volets[2].uid, "Salon_2") && !strcmp(g_ram.volets[0].uid, "Salon"),
+              "nom repris par un nouvel appareil : identifiants '%s' et '%s'", g_ram.volets[0].uid, g_ram.volets[2].uid);
+        /* sauvegarde retouchee : deux fois le meme identifiant, ou un identifiant invalide */
+        snprintf(g_ram.volets[1].uid, SH_ID_LEN, "Salon");
+        snprintf(g_ram.volets[2].uid, SH_ID_LEN, "pas valable");
+        cfg_model_ensure_uids(&g_ram.m);
+        CHECK(!strcmp(g_ram.volets[0].uid, "Salon") && !strcmp(g_ram.volets[1].uid, "Chambre_Parents") && !strcmp(g_ram.volets[2].uid, "Salon_2"),
+              "doublon ou invalide : le premier garde le sien, les autres reprennent leur slug ('%s', '%s', '%s')",
+              g_ram.volets[0].uid, g_ram.volets[1].uid, g_ram.volets[2].uid);
+        printf("  renommage, nom repris, doublon, invalide : %s\n", s_fail ? "voir les echecs" : "OK");
+        store_reset(&g_tmp); store_reset(&g_ram);
+    }
+
     model_init(&g_ref);
     { char *l = cfg_model_export(&g_ref.m); printf("\nconfig de reference : 6 volets, 15 telecommandes, %u o en un seul document\n", (unsigned)strlen(l)); free(l); }
 
