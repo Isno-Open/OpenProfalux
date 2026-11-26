@@ -113,6 +113,7 @@ int main(int argc, char **argv) {
             "enrol : code", "R9 enrolement KeeLoq sans ses salves");
     refused("{\"protocols\":[]}", "objet protocols", "R10 protocols n'est pas un objet");
     refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":0}},\"b\":{\"legacy\":{\"code\":0}}}}", "meme numero legacy", "R12 deux types avec le meme numero legacy");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":300}}}}", "legacy.code hors", "R15 numero legacy hors 0..255");
     refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
             "\"profiles\":[{\"id\":\"b\",\"inherits\":\"a\"},{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000}}]}",
             "base absente", "R13 base declaree apres ce qui en herite");
