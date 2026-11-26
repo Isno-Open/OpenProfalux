@@ -16,7 +16,7 @@ export interface CaptureRequest {
   id: string;
   action: Command;
   replay: boolean;
-  type: number;
+  type: string;   // cle d'un type du catalogue
   brand?: string;
   radio: number;
   freq_khz: number;
@@ -91,7 +91,7 @@ export default {
   },
   saveTxParams: (body: Record<string, unknown>) => requireOk(post('/api/volet/txparams', body)),
   rename: (id: string, name: string) => requireOk(post('/api/volet/rename', { id, name })),
-  setType: (id: string, type: number) => requireOk(post('/api/volet/type', { id, type })),
+  setType: (id: string, type: string) => requireOk(post('/api/volet/type', { id, type })),
   deleteDevice: (id: string) => requireOk(post('/api/volet/delete', { id })),
   setOrientation: (id: string, value: number) => requireOk(post('/api/volet/orientation', { id, orientation: value })),
   setFollowers: (id: string, members: string[]) => requireOk(post('/api/volet/followers', { id, members })),

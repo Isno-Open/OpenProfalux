@@ -75,6 +75,13 @@ int cfg_model_ensure_uids(const cfg_model_t *m) {
 }
 
 /* ── Modele -> JSON ── */
+/* Le type qu'une fiche a quand elle n'en ecrit pas : celui de son profil, sinon celui des fiches d'avant
+ * les types par cle (mode legacy, numero 0). NULL si le catalogue ne dit rien. */
+static const char *default_type(const volet_t *v) {
+    const catalog_profile_t *p = catalog_profile(v->profile);
+    return p ? p->type : catalog_type_of_legacy(0);
+}
+
 static cJSON *volet_to_json(const volet_t *v) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
@@ -106,10 +113,12 @@ static cJSON *volet_to_json(const volet_t *v) {
         if (v->proto != VOLET_PROTO_PROFALUX)
             cJSON_AddNumberToObject(o, "proto", v->proto);
     }
-    /* Type d'appareil (dev_type_t) : attribut GENERAL, pas reserve aux virtuels. Un rejeu (CAME)
-     * portail doit aussi persister son type, sinon il retombe en volet au reboot. Omis quand = volet (0). */
-    if (v->type != TYPE_VOLET)
-        cJSON_AddNumberToObject(o, "type", v->type);
+    /* Le profil, quand on le connait. Le type : la cle du catalogue, jamais son numero (mode legacy :
+     * lu, jamais ecrit), et seulement s'il differe du type par defaut (default_type) : la NVS d'une
+     * carte n'a que 16 Ko, et une fiche ordinaire n'a pas a grossir pour redire son profil. */
+    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);
+    const char *def = default_type(v);
+    if (!def || strcmp(v->type, def)) cJSON_AddStringToObject(o, "type", v->type);
     if (v->central) cJSON_AddBoolToObject(o, "central", true);
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
@@ -226,10 +235,15 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         cJSON *pr       = cJSON_GetObjectItem(o, "proto");   /* absent -> Profalux (0) */
         v->proto        = pr ? (uint8_t)cJSON_GetNumberValue(pr) : (uint8_t)VOLET_PROTO_PROFALUX;
     }
-    /* Type d'appareil : GENERAL (lu pour tout appareil, pas seulement les virtuels), sinon un rejeu
-     * portail repasse volet au reboot. Absent -> volet (0). */
+    /* Type d'appareil : une cle du catalogue. Une fiche v0.2.16 porte un numero, ou rien pour un volet
+     * (mode legacy, traduit par le catalogue). Une cle inconnue est gardee telle quelle : elle vient
+     * peut-etre d'une version plus recente, et l'effacer perdrait l'information. */
+    strlcpy(v->profile, cJSON_GetStringValue(cJSON_GetObjectItem(o, "profile")) ?: "", sizeof v->profile);
     cJSON *ty = cJSON_GetObjectItem(o, "type");
-    v->type   = ty ? (uint8_t)cJSON_GetNumberValue(ty) : (uint8_t)TYPE_VOLET;
+    const char *key = cJSON_IsString(ty) ? cJSON_GetStringValue(ty)
+                    : cJSON_IsNumber(ty) ? catalog_type_of_legacy((int)cJSON_GetNumberValue(ty))
+                    : default_type(v);   /* absent : le type par defaut (celui du profil, sinon du numero 0) */
+    strlcpy(v->type, key ? key : "", sizeof v->type);
     v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
     /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le
      * firmware tient toujours : seul un fichier modifie a la main peut depasser
@@ -338,4 +352,40 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
     buf[got] = 0;
     if (n) *n = got;
     return buf;
+}
+
+/* ── Reglages d'emission : la fiche, sinon le profil ── */
+cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p) {
+    cfg_tx_t t = {
+        .freq_khz   = v->freq_khz ? v->freq_khz : (p ? p->freq_khz : 0),
+        .te_us      = v->te_us ? v->te_us : (p ? p->te_us : 0),
+        .rpt        = v->tx_rpt == TXOVR_ON ? 1 : v->tx_rpt == TXOVR_OFF ? 0 : (p ? p->repeat_bit : -1),
+        .rmt        = v->tx_rmt == TXOVR_ON ? 1 : v->tx_rmt == TXOVR_OFF ? 0 : (p ? p->rmt : -1),
+        .frame_bits = v->frame_bits ? v->frame_bits : (p ? p->frame_bits : 0),
+    };
+    return t;
+}
+
+void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p) {
+    if (!p) return;
+    if (p->freq_khz && v->freq_khz == p->freq_khz) v->freq_khz = 0;
+    if (p->te_us && v->te_us == p->te_us)          v->te_us = 0;
+    if (p->repeat_bit >= 0 && v->tx_rpt == (p->repeat_bit ? TXOVR_ON : TXOVR_OFF)) v->tx_rpt = TXOVR_INHERIT;
+    if (p->rmt >= 0 && v->tx_rmt == (p->rmt ? TXOVR_ON : TXOVR_OFF))               v->tx_rmt = TXOVR_INHERIT;
+    if (p->frame_bits && v->frame_bits == p->frame_bits) v->frame_bits = 0;
+}
+
+bool cfg_volet_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now) {
+    if (!p || !now) return false;
+    const volet_t before = *v;
+    /* 1. figer ce que l'appareil emet aujourd'hui, pour chaque reglage qu'il laissait au defaut */
+    if (!v->freq_khz)   v->freq_khz   = now->freq_khz;
+    if (!v->te_us)      v->te_us      = now->te_us;
+    if (v->tx_rpt == TXOVR_INHERIT && now->rpt >= 0) v->tx_rpt = now->rpt ? TXOVR_ON : TXOVR_OFF;
+    if (v->tx_rmt == TXOVR_INHERIT && now->rmt >= 0) v->tx_rmt = now->rmt ? TXOVR_ON : TXOVR_OFF;
+    if (!v->frame_bits) v->frame_bits = now->frame_bits;
+    /* 2. rendre au profil ce qui lui est egal */
+    cfg_volet_inherit_equal(v, p);
+    return v->freq_khz != before.freq_khz || v->te_us != before.te_us || v->tx_rpt != before.tx_rpt
+        || v->tx_rmt != before.tx_rmt || v->frame_bits != before.frame_bits;
 }

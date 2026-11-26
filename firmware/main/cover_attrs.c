@@ -1,17 +1,8 @@
 /* Description d'un appareil pour le portail cloud. Voir cover_attrs.h. */
 #include "cover_attrs.h"
-#include "dev_type.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-
-/* Noms des types : MIROIR des cles de profiles.json "types" (source de verite du vocabulaire),
- * comme les codes de dev_type_t le sont de ses "code". Le banc test/cover-attrs refuse toute
- * divergence entre les deux. */
-static const char *const DEV_TYPE_NAMES[] = {
-    [TYPE_VOLET]   = "volet",
-    [TYPE_PORTAIL] = "portail",
-};
 
 /* Noms des roles : MIROIR des cles de profiles.json "roles" (banc test/cover-attrs). */
 static const char *const COVER_ROLE_NAMES[COVER_ROLE_COUNT] = {
@@ -22,10 +13,6 @@ static const char *const COVER_ROLE_NAMES[COVER_ROLE_COUNT] = {
 
 const char *cover_role_name(cover_role_t role) {
     return (unsigned)role < COVER_ROLE_COUNT ? COVER_ROLE_NAMES[role] : NULL;
-}
-
-const char *dev_type_name(uint8_t type) {
-    return type < sizeof(DEV_TYPE_NAMES) / sizeof(DEV_TYPE_NAMES[0]) ? DEV_TYPE_NAMES[type] : NULL;
 }
 
 static bool slug_char(char c) {
@@ -84,9 +71,17 @@ static bool put_json_string(char *out, size_t cap, size_t *w, const char *s) {
 
 bool cover_travel_ok(uint32_t ms) { return ms >= COVER_TRAVEL_MIN_MS && ms <= COVER_TRAVEL_MAX_MS; }
 
+/* Cle de type publiable telle quelle dans le JSON : non vide, alphabet d'un slug (le catalogue impose
+ * [a-z][a-z0-9-]*, ceci refuse en plus toute fiche abimee). */
+static bool type_key_ok(const char *t) {
+    if (!t || !*t) return false;
+    for (; *t; t++) if (!slug_char(*t)) return false;
+    return true;
+}
+
 int cover_attrs_json(const cover_attrs_t *a, char *out, size_t cap) {
-    const char *tname = a ? dev_type_name(a->type) : NULL;
-    if (!tname || !out || cap == 0) return -1;
+    const char *tname = a ? a->type : NULL;
+    if (!type_key_ok(tname) || !out || cap == 0) return -1;
     const char *name = a->name;
     uint32_t up_ms = a->up_ms, down_ms = a->down_ms;
     int n = snprintf(out, cap, "{\"type\":\"%s\",\"positional\":%s", tname, a->positional ? "true" : "false");

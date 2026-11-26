@@ -107,14 +107,10 @@ export function typeView(key: string): TypeView {
   return { key, label: t.label, positional: t.positional, travel_s: t.travel_s, dpad, capture };
 }
 
-/* Mode legacy : la fiche designe son type par un numero (types[].legacy.code). Le firmware n'en connait pas d'autre
-   tant que la fiche ne porte pas son profil (#134, etape 3) : c'est aussi ce numero qu'on lui ecrit d'ici la. */
-export function typeKey(device: Pick<Device, 'type'> | null | undefined): string {
-  const t = types();
-  const code = typeof device?.type === 'number' ? device.type : 0;
-  return Object.keys(t).find(k => t[k]?.legacy?.code === code) ?? DEVICE_TYPE.shutter;
-}
-export const legacyCode = (key: string): number => types()[key]?.legacy?.code ?? 0;
+/* Le type d'un appareil : la cle que porte sa fiche (le firmware traduit l'ancien numero, mode legacy). Une cle que
+   ce catalogue ne connait pas s'affiche comme un volet. */
+export const typeKey = (device: Pick<Device, 'type'> | null | undefined): string =>
+  (device?.type && types()[device.type] ? device.type : DEVICE_TYPE.shutter);
 export const typeOf = (device: Pick<Device, 'type'> | null | undefined): TypeView => typeView(typeKey(device));
 
 export function deviceIcon(device: Device): IconName {
@@ -138,8 +134,11 @@ export function kindOf(device: Device): { label: string; hasTx: boolean } {
 
 /* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas du catalogue. */
 export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
-/* Profil d'un appareil : celui de sa marque et de son mecanisme. */
+/* Profil d'un appareil : celui que porte sa fiche ; pour un appareil inclassable, celui de sa marque et de son
+   mecanisme. */
 export function profileOf(device: Device): ProfileView | null {
+  const own = device.profile ? profileById(device.profile) : null;
+  if (own) return own;
   const brand = brandOf(device);
   const mech = mechanism(device);
   return profiles().find(p => p.brand === brand && p.mechanism === mech) ?? profiles().find(p => p.brand === brand) ?? null;

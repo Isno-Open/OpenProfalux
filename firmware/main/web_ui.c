@@ -380,14 +380,13 @@ static esp_err_t h_volet_rename(httpd_req_t *r) {
     return ESP_OK;
 }
 
-/* ── /api/volet/type : {"id":"...","type":N} -> corrige le dev_type d'un appareil existant.
+/* ── /api/volet/type : {"id":"...","type":"<cle>"} -> corrige le type (catalogue) d'un appareil existant.
  * Repare un type mal attribue (volet/portail) sans reenroler : identite, compteur, captures conserves. */
 static esp_err_t h_volet_type(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
-    cJSON *ty = cJSON_GetObjectItem(j, "type");
-    int rc = shutters_set_type(jstr(j, "id"), ty ? (uint8_t)cJSON_GetNumberValue(ty) : 0);
+    int rc = shutters_set_type(jstr(j, "id"), jstr(j, "type"));   /* une cle que le catalogue ne declare pas : refusee */
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -501,7 +500,7 @@ static esp_err_t h_volet_txparams(httpd_req_t *r) {
         cJSON_IsNumber(xp) ? (int)xp->valuedouble : -1,
         cJSON_IsNumber(xm) ? (int)xm->valuedouble : -1,
         cJSON_IsNumber(fb) ? (int)fb->valuedouble : 0,
-        jstr(j, "marque"));
+        jstr(j, "marque"), jstr(j, "profile"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -1360,6 +1359,7 @@ static void pfx_capture_task(void *arg) {
 static uint32_t s_enrol_freq = 0, s_enrol_te = 0;
 static uint8_t  s_enrol_rpt = TXOVR_INHERIT, s_enrol_rmt = TXOVR_INHERIT;
 static char     s_enrol_marque[SH_ID_LEN] = "";
+static char     s_enrol_profile[CATALOG_ID_MAX] = "";   /* le profil choisi dans la pyramide */
 /* cJSON bool/number -> tri-etat tx_override_t (absent = heriter). */
 static uint8_t txovr_of(cJSON *j, const char *key) {
     cJSON *x = cJSON_GetObjectItem(j, key);
@@ -1378,6 +1378,7 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
     s_enrol_rmt = txovr_of(j, "tx_rmt");
     strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
+    strlcpy(s_enrol_profile, jstr(j, "profile") ?: "", sizeof s_enrol_profile);
     tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
                        .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
                        .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
@@ -1619,11 +1620,12 @@ static esp_err_t h_rejeu_create(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id");
-    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "type"));   /* dev_type_t */
+    const char *type = jstr(j, "type");   /* cle d'un type du catalogue */
     const char *err = NULL;
     if (!id || !*id) err = "nom manquant";
     else if (strchr(id, ',')) err = "virgule dans le nom";
-    int rc = err ? -1 : shutters_create_rejeu(id, (uint8_t)type);
+    else if (!catalog_type(type)) err = "type inconnu du catalogue";
+    int rc = err ? -1 : shutters_create_rejeu(id, type);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
     if (err) cJSON_AddStringToObject(o, "err", err);
@@ -1674,7 +1676,8 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
          * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
          * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
         shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt, 0,
-                               s_enrol_marque[0] ? s_enrol_marque : NULL);   /* enrolement KeeLoq : pas de frame_bits */
+                               s_enrol_marque[0] ? s_enrol_marque : NULL,
+                               s_enrol_profile[0] ? s_enrol_profile : NULL);   /* enrolement KeeLoq : pas de frame_bits */
         pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
     }
     cJSON_Delete(j);

@@ -4,7 +4,9 @@
 // ouvert, 100 = ferme). Les captures, l'enrolement et le calage reussissent apres un court delai, comme si on
 // appuyait bien sur la telecommande.
 import profilesTable from '../../../firmware/main/web/profiles.json';   // la vraie table, source unique
-import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
+import { BAND, BRAND, COMMAND, DEVICE_TYPE, FLAG, PROTOCOL, type Command } from '../domain';
+/* Les profils des fausses fiches (identifiants du catalogue). */
+const MOCK_PROFILE = { copy: 'profalux-copy', enrol: 'profalux-enrol', replay: 'came-replay' } as const;
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
 import type { Catalog } from './catalog.generated';
@@ -21,12 +23,12 @@ const threeCommands = (s: string): Device['cmd'] => ({ up: { b: 2, s }, stop: { 
 
 const devices: Device[] = [
   { id: 'Général', central: true, members: 'Salon,Cuisine,Chambre,Bureau', order: 0, serials: ['0x0A1B2E0'], cmd: {} },
-  { id: 'Salon', type: 0, marque: 'Profalux', ...TX_INHERIT, position: 0, order: 1, orientation: 180, serials: ['0x0A1B2C3'], cmd: threeCommands('0x0A1B2C3'), travel_up_ms: 21000, travel_down_ms: 19500 },
-  { id: 'Cuisine', type: 0, marque: 'Profalux', ...TX_INHERIT, position: 65, order: 2, orientation: 90, serials: ['0x0A1B2D7'], cmd: threeCommands('0x0A1B2D7'), travel_up_ms: 18000, travel_down_ms: 17000 },
-  { id: 'Chambre', type: 0, marque: 'Profalux', ...TX_INHERIT, te_us: 400, tx_rpt: 2, position: 100, order: 3, orientation: -1, virt: true, proto: 'profalux', virt_serial: '0x0670012', serials: ['0x0B44A10'], cmd: {}, travel_up_ms: 20000, travel_down_ms: 19000 },
-  { id: 'Bureau', type: 0, marque: 'Profalux', ...TX_INHERIT, freq_khz: 868330, position: 40, order: 4, orientation: -1, serials: ['0x0B44A21'], cmd: { up: { b: 2, s: '0x0B44A21' }, down: { b: 8, s: '0x0B44A21' } }, travel_up_ms: 16000, travel_down_ms: 15000 },
-  { id: 'Étage', type: 0, zone: true, members: 'Chambre,Bureau', order: 5, serials: ['0x0B44A30'], cmd: {} },
-  { id: 'Portail entrée', type: 1, marque: 'CAME', ...TX_INHERIT, freq_khz: 433920, rejeu: true, rejeu_cmds: { up: true }, order: 6, serials: [], cmd: {} },
+  { id: 'Salon', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, marque: 'Profalux', ...TX_INHERIT, position: 0, order: 1, orientation: 180, serials: ['0x0A1B2C3'], cmd: threeCommands('0x0A1B2C3'), travel_up_ms: 21000, travel_down_ms: 19500 },
+  { id: 'Cuisine', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, marque: 'Profalux', ...TX_INHERIT, position: 65, order: 2, orientation: 90, serials: ['0x0A1B2D7'], cmd: threeCommands('0x0A1B2D7'), travel_up_ms: 18000, travel_down_ms: 17000 },
+  { id: 'Chambre', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.enrol, marque: 'Profalux', ...TX_INHERIT, te_us: 400, tx_rpt: 2, position: 100, order: 3, orientation: -1, virt: true, proto: 'profalux', virt_serial: '0x0670012', serials: ['0x0B44A10'], cmd: {}, travel_up_ms: 20000, travel_down_ms: 19000 },
+  { id: 'Bureau', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, marque: 'Profalux', ...TX_INHERIT, freq_khz: 868330, position: 40, order: 4, orientation: -1, serials: ['0x0B44A21'], cmd: { up: { b: 2, s: '0x0B44A21' }, down: { b: 8, s: '0x0B44A21' } }, travel_up_ms: 16000, travel_down_ms: 15000 },
+  { id: 'Étage', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, zone: true, members: 'Chambre,Bureau', order: 5, serials: ['0x0B44A30'], cmd: {} },
+  { id: 'Portail entrée', type: DEVICE_TYPE.gate, profile: MOCK_PROFILE.replay, marque: 'CAME', ...TX_INHERIT, freq_khz: 433920, rejeu: true, rejeu_cmds: { up: true }, order: 6, serials: [], cmd: {} },
 ];
 const remotes: Record<string, string> = {
   '0x0A1B2E0': 'Télécommande générale', '0x0A1B2C3': 'Salon', '0x0A1B2D7': 'Cuisine', '0x0B44A10': 'Chambre', '0x0B44A21': 'Bureau',
@@ -90,7 +92,7 @@ function replaceMember(previous: string, next: string): void {
 }
 
 function newDevice(fields: Partial<Device> & { id: string }): Device {
-  const d: Device = { type: 0, ...TX_INHERIT, position: 100, order: -1, orientation: -1, serials: [], cmd: {}, travel_up_ms: 0, travel_down_ms: 0, ...fields };
+  const d: Device = { type: DEVICE_TYPE.shutter, ...TX_INHERIT, position: 100, order: -1, orientation: -1, serials: [], cmd: {}, travel_up_ms: 0, travel_down_ms: 0, ...fields };
   devices.push(d);
   return d;
 }
@@ -185,7 +187,7 @@ export default {
     replaceMember(id, name);
     return ok();
   },
-  async setType(id: string, type: number) { mustFind(id).type = type; return ok(); },
+  async setType(id: string, type: string) { mustFind(id).type = type; return ok(); },
   async deleteDevice(id: string) {
     await wait(300);
     devices.splice(devices.indexOf(mustFind(id)), 1);

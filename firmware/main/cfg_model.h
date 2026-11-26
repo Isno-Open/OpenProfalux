@@ -29,7 +29,7 @@ typedef enum {
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
 } volet_proto_t;
 
-#include "dev_type.h"   /* dev_type_t : type d'appareil (en-tete sans dependance, teste sur PC) */
+#include "catalog.h"    /* types et profils du catalogue : la fiche les designe par leur nom */
 
 /* Tri-etat d'une option d'emission PAR APPAREIL (bit de repetition, RMT). 0 = heriter du defaut
  * (profil, puis firmware) ; on force explicitement ensuite. La valeur 0 est la sentinelle "heriter"
@@ -56,7 +56,12 @@ typedef struct {
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
     uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
-    uint8_t  type;           /* dev_type_t : ce qu'on pilote (0 = volet, defaut). Oriente l'UI, pas l'emission. */
+    /* Ce qu'on pilote : la CLE d'un type du catalogue (« volet », « portail »). Une fiche v0.2.16 portait
+     * un numero (mode legacy), traduit a la lecture. Vide : type inconnu de ce catalogue. */
+    char     type[CATALOG_ID_MAX];
+    /* Le profil de l'appareil (catalogue) : un reglage d'emission laisse a 0 prend sa valeur. Vide :
+     * appareil qu'on ne sait pas classer, qui garde le comportement d'avant les profils. */
+    char     profile[CATALOG_ID_MAX];
     /* ── Parametres d'emission RESOLUS PAR APPAREIL (etage 2 de la pyramide, issue #111). ──
      * Chaque marque peut coexister sur une meme radio (Profalux 868425, Eveno/NeoSol 868330) : un
      * reglage global en casse une en reglant l'autre (bugs CAME datarate et Profalux/Eveno rmt/rpt
@@ -134,6 +139,20 @@ const char *cfg_members_next(const char *p, char id[SH_ID_LEN]);
 
 /* Toute la config (telecommandes + noms + trames de reference + calibration) en
  * UN document : l'export, et l'ancienne cle NVS unique. A liberer par l'appelant. */
+/* Ce qu'emet un appareil : la valeur de sa fiche, sinon celle de son profil (p, NULL si aucun).
+ * Sentinelles de sortie : freq_khz / te_us / frame_bits a 0 et rpt / rmt a -1 = ni la fiche ni le profil
+ * n'en disent rien (l'emetteur garde alors son defaut, comme avant les profils). */
+typedef struct { uint32_t freq_khz; uint16_t te_us; int8_t rpt, rmt; uint8_t frame_bits; } cfg_tx_t;
+cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p);
+/* Migration d'une fiche qui vient de recevoir son profil : ecrit d'abord ce que l'appareil emet
+ * AUJOURD'HUI (now : les defauts qu'il heritait avant, pour chaque reglage laisse a 0), puis remet a 0
+ * ce qui egale le profil. Aucune emission ne change ; un appareil egal a son profil le suivra ensuite.
+ * Renvoie true si la fiche a change. */
+bool cfg_volet_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now);
+/* Un reglage egal a celui du profil revient a 0 (heriter) : l'appareil suivra une correction du profil.
+ * Applique a la migration et a chaque ecriture des reglages (shutters_set_tx_params). */
+void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p);
+
 char *cfg_model_export(const cfg_model_t *m);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */

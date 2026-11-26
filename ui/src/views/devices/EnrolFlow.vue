@@ -116,7 +116,7 @@ function captureBody(): Record<string, unknown> {
   if (v.te_us) body.te_us = v.te_us;
   if (v.tx_rpt) body.tx_repeat_bit = v.tx_rpt === TRISTATE.yes;
   if (v.tx_rmt) body.tx_rmt = v.tx_rmt === TRISTATE.yes;
-  if (profile.value?.brand) body.marque = profile.value.brand;
+  if (profile.value) { body.marque = profile.value.brand; body.profile = profile.value.id; }
   return body;
 }
 function restart(): void { gestures.value = false; testAllowedAt.value = 0; emission.value = null; }

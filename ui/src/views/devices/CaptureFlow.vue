@@ -8,7 +8,7 @@ import { computed, ref, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, withRadio, radioFor, refresh, toast, remoteName, renameFailureText } from '../../store';
 import {
-  profiles, profileById, typeKey, typeView, legacyCode, mechanism, methodRoute, deviceIcon, profileOf, isSomfy, hasComma, mhz, type ProfileView,
+  profiles, profileById, typeKey, typeView, mechanism, methodRoute, deviceIcon, profileOf, isSomfy, hasComma, mhz, type ProfileView,
 } from '../../profiles';
 import api from '../../api/index';
 import { isOtherRemote, type CaptureRequest } from '../../api/real';
@@ -119,7 +119,7 @@ async function capture(cmd: Command): Promise<void> {
   const target = id.value, isNew = choiceId.value === NEW_DEVICE;
   const targetSerial = current?.serials[0] ?? '';
   const request: Omit<CaptureRequest, 'radio'> = {
-    id: target, action: cmd, replay: replay.value, type: legacyCode(typeKeyOf.value), brand: p?.brand,
+    id: target, action: cmd, replay: replay.value, type: typeKeyOf.value, brand: p?.brand,
     freq_khz: frequency.value, rx: p?.rx, exists: !!current, remoteName: remoteSerial.value ? '' : remoteNameDraft.value.trim(),
     knownSerials: current?.serials ?? [], virtual: virtual.value,
   };
@@ -130,7 +130,7 @@ async function capture(cmd: Command): Promise<void> {
     if (fromPyramid) {
       const body: Record<string, unknown> = { id: target };
       for (const [k, v] of Object.entries(settings)) if (v) body[k] = v;
-      if (p?.brand) body.marque = p.brand;
+      if (p) { body.marque = p.brand; body.profile = p.id; }
       if (Object.keys(body).length > 1) await api.saveTxParams(body).catch(() => {});
     }
     toast('n' in r ? `✓ ${label} captée (${r.n} impulsions)`

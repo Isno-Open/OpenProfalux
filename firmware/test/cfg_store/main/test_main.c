@@ -100,6 +100,12 @@ int __wrap_remove(const char *a) { return s_dead ? -1 : __real_remove(a); }
 const char *__asan_default_options(void) { return "detect_leaks=0"; }
 
 /* ════ Outils NVS ═════════════════════════════════════════════════════════ */
+/* Le catalogue du firmware, lu depuis le dossier du banc (firmware/test/cfg_store). */
+#define CATALOG_PATH "../../main/web/profiles.json"
+/* Cles du catalogue que ce banc nomme. */
+#define GATE_KEY        "portail"
+#define PROFALUX_ENROL  "profalux-enrol"
+#define UNKNOWN_KEY     "garage"
 #define NVS_MAX 0x8000                      /* taille maximale geree par le banc */
 static const esp_partition_t *s_part;
 static int s_fail;
@@ -180,6 +186,8 @@ static volet_t *mk_volet(store_t *s, const char *id, unsigned seed, uint32_t up_
     volet_t *v = &s->volets[s->nvolets++];
     memset(v, 0, sizeof(*v));
     snprintf(v->id, sizeof(v->id), "%s", id);
+    /* une fiche a toujours un type : celui d'un volet (mode legacy 0), comme une fiche v0.2.16 relue */
+    snprintf(v->type, sizeof(v->type), "%s", catalog_type_of_legacy(0) ? catalog_type_of_legacy(0) : "");
     snprintf(v->serials[0], SH_SERIAL_LEN, "0x%07X", 0x0A10000u + seed * 0x111u);
     v->n_serials = 1;
     bits66(v->up, seed * 3 + 1); bits66(v->down, seed * 3 + 2); bits66(v->stop, seed * 3 + 3);
@@ -230,6 +238,7 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
         && a->central == b->central && !strcmp(a->members ? a->members : "", b->members ? b->members : "")
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
+        && !strcmp(a->type, b->type) && !strcmp(a->profile, b->profile)
         && (int)(a->position + 0.5f) == (int)(b->position + 0.5f);
 }
 static bool hdr_equal(const store_t *a, const store_t *b) {
@@ -408,9 +417,99 @@ int main(void) {
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "nvs");
     if (!s_part || s_part->size > NVS_MAX) { printf("partition 'nvs' absente ou trop grande\n"); return 2; }
     const bool field_size = s_part->size == 0x4000;
+    /* Le vrai catalogue : la fiche y lit ses types (mode legacy) et ses profils. */
+    char *catalog = cfg_read_file(CATALOG_PATH, 1 << 18, NULL);
+    char cat_err[CATALOG_ERR_MAX] = "";
+    if (!catalog || catalog_load(catalog, cat_err, sizeof cat_err) != 0) { printf("catalogue illisible : %s %s\n", CATALOG_PATH, cat_err); return 2; }
+    free(catalog);
     printf("== Banc cfg_model + cfg_store : NVS ESP-IDF reelle, partition emulee de %u Ko ==\n", (unsigned)(s_part->size / 1024));
     cfg_layout_t lay;
     char fk[8] = "";
+
+    /* ── T0p. Type et profil de la fiche (#134, etape 3), sans NVS ── */
+    printf("\n[T0p] Type par sa cle, profil, reglages herites, migration\n");
+    {
+        const char *shutter = catalog_type_of_legacy(0), *gate = catalog_type_of_legacy(1);
+        CHECK(shutter && gate && !strcmp(gate, GATE_KEY), "mode legacy : 0 et 1 sont des types du catalogue");
+        cJSON *root = cJSON_Parse("{\"remotes\":{},\"volets\":["
+            "{\"id\":\"A\",\"type\":1},{\"id\":\"B\"},{\"id\":\"C\",\"type\":\"portail\",\"profile\":\"came-replay\"},"
+            "{\"id\":\"D\",\"type\":\"garage\"},{\"id\":\"E\",\"type\":7}]}");
+        store_reset(&g_tmp);
+        cfg_model_import(&g_tmp.m, root);
+        cJSON_Delete(root);
+        const volet_t *a = &g_tmp.volets[0], *b = &g_tmp.volets[1], *c = &g_tmp.volets[2], *d = &g_tmp.volets[3], *e = &g_tmp.volets[4];
+        CHECK(!strcmp(a->type, gate), "ancien numero 1 : lu comme la cle du portail (%s)", a->type);
+        CHECK(!strcmp(b->type, shutter), "ancienne fiche sans type : celle du numero 0 (%s)", b->type);
+        CHECK(!strcmp(c->type, GATE_KEY) && !strcmp(c->profile, "came-replay"), "cle et profil lus tels quels");
+        CHECK(!strcmp(d->type, UNKNOWN_KEY), "cle inconnue du catalogue : gardee (version plus recente)");
+        CHECK(e->type[0] == 0, "numero qu'aucun type ne porte : type vide, rien d'invente");
+        char *js = cfg_model_export(&g_tmp.m);
+        cJSON *out = cJSON_Parse(js);
+        const cJSON *va = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 0);
+        CHECK(cJSON_IsString(cJSON_GetObjectItem(va, "type")) && !strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(va, "type")), gate),
+              "ecriture : la cle, jamais le numero (mode legacy : lu, jamais ecrit)");
+        const cJSON *vb = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 1);
+        CHECK(!cJSON_GetObjectItem(vb, "type"), "type par defaut : pas ecrit (la NVS n'a que 16 Ko)");
+        CHECK(js && !strstr(js, "\"type\":1") && !strstr(js, "\"type\":0"), "aucun numero de type dans l'export");
+        const cJSON *vc = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 2);
+        CHECK(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(vc, "profile")) ?: "", "came-replay"), "le profil est ecrit");
+        cJSON_Delete(out); free(js);
+
+        /* Ce qu'emet un appareil : la fiche, sinon le profil */
+        const catalog_profile_t *p = catalog_profile(PROFALUX_ENROL);
+        CHECK(p && p->freq_khz && p->te_us && p->repeat_bit >= 0 && p->rmt >= 0, "profil %s complet", PROFALUX_ENROL);
+        volet_t v; memset(&v, 0, sizeof v);
+        cfg_tx_t t = cfg_volet_tx(&v, p);
+        CHECK(p && t.freq_khz == p->freq_khz && t.te_us == p->te_us && t.rpt == p->repeat_bit && t.rmt == p->rmt,
+              "fiche a 0 : les valeurs du profil");
+        v.freq_khz = 868330; v.te_us = 390; v.tx_rpt = TXOVR_OFF; v.tx_rmt = TXOVR_OFF;
+        t = cfg_volet_tx(&v, p);
+        CHECK(t.freq_khz == 868330 && t.te_us == 390 && t.rpt == 0 && t.rmt == 0, "fiche reglee : la fiche prime");
+        memset(&v, 0, sizeof v);
+        t = cfg_volet_tx(&v, NULL);
+        CHECK(t.freq_khz == 0 && t.te_us == 0 && t.rpt == -1 && t.rmt == -1, "sans profil : rien d'impose, la radio garde son defaut");
+
+        /* Migration : aucune emission ne change. Pour chaque combinaison (fiche a 0 ou reglee, defaut
+         * d'aujourd'hui egal ou non au profil), ce que l'appareil emettait avant (la fiche, sinon le defaut
+         * d'aujourd'hui) est ce qu'il emet apres (la fiche, sinon le profil). */
+        if (p) {
+            const uint32_t freqs[] = { 0, p->freq_khz, 868350 };
+            const uint16_t tes[] = { 0, p->te_us, 380 };
+            const uint8_t ovr[] = { TXOVR_INHERIT, TXOVR_OFF, TXOVR_ON };
+            const int8_t nows[] = { 0, 1 };
+            int bad = 0, cases = 0;
+            for (int fi = 0; fi < 3; fi++) for (int nf = 1; nf < 3; nf++)
+            for (int ti = 0; ti < 3; ti++) for (int nt = 1; nt < 3; nt++)
+            for (int oi = 0; oi < 3; oi++) for (int no = 0; no < 2; no++) {
+                volet_t w; memset(&w, 0, sizeof w);
+                w.freq_khz = freqs[fi]; w.te_us = tes[ti]; w.tx_rpt = ovr[oi]; w.tx_rmt = ovr[(oi + 1) % 3];
+                const cfg_tx_t now = { .freq_khz = freqs[nf], .te_us = tes[nt], .rpt = nows[no], .rmt = nows[1 - no] };
+                cfg_tx_t before = cfg_volet_tx(&w, NULL);
+                if (!before.freq_khz) before.freq_khz = now.freq_khz;
+                if (!before.te_us) before.te_us = now.te_us;
+                if (before.rpt < 0) before.rpt = now.rpt;
+                if (before.rmt < 0) before.rmt = now.rmt;
+                cfg_volet_rebase_tx(&w, p, &now);
+                cfg_tx_t after = cfg_volet_tx(&w, p);
+                cases++;
+                if (before.freq_khz != after.freq_khz || before.te_us != after.te_us || before.rpt != after.rpt || before.rmt != after.rmt) bad++;
+            }
+            CHECK(bad == 0, "migration : %d emissions changees sur %d combinaisons", bad, cases);
+            volet_t w; memset(&w, 0, sizeof w);
+            const cfg_tx_t now = { .freq_khz = p->freq_khz, .te_us = p->te_us, .rpt = p->repeat_bit, .rmt = p->rmt };
+            CHECK(cfg_volet_rebase_tx(&w, p, &now) == false && w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT,
+                  "migration : un appareil egal a son profil le suit (tout a 0, fiche inchangee)");
+            w.freq_khz = 868350;
+            const cfg_tx_t elsewhere = { .freq_khz = 868350, .te_us = p->te_us, .rpt = p->repeat_bit, .rmt = p->rmt };
+            CHECK(cfg_volet_rebase_tx(&w, p, &elsewhere) == false && w.freq_khz == 868350, "migration : un reglage different du profil est garde");
+            memset(&w, 0, sizeof w);
+            CHECK(cfg_volet_rebase_tx(&w, p, &elsewhere) == true && w.freq_khz == 868350,
+                  "migration : un defaut d'aujourd'hui different du profil est fige dans la fiche");
+            w.freq_khz = p->freq_khz; w.te_us = p->te_us; w.tx_rpt = p->repeat_bit ? TXOVR_ON : TXOVR_OFF;
+            cfg_volet_inherit_equal(&w, p);
+            CHECK(w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT, "ecriture : une valeur egale au profil revient a 0");
+        }
+    }
 
     /* ── T0. Serialisation JSON, sans NVS ── */
     printf("\n[T0] Serialisation JSON : export, import, anciens exports\n");

@@ -60,8 +60,8 @@ typedef enum {
     SH_SOMFY_NAME_TAKEN,       /* un autre appareil porte deja ce nom */
 } sh_somfy_create_t;
 sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address);
-int  shutters_create_rejeu(const char *id, uint8_t type);                /* appareil a rejeu brut OOK (code fixe) */
-int  shutters_set_type(const char *id, uint8_t type);                    /* corrige le dev_type d'un appareil existant */
+int  shutters_create_rejeu(const char *id, const char *type);            /* appareil a rejeu brut OOK (code fixe) ; type = cle du catalogue */
+int  shutters_set_type(const char *id, const char *type);                /* corrige le type (cle du catalogue) d'un appareil existant */
 int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
@@ -82,7 +82,7 @@ int  shutters_set_orientation(const char *id, int orientation);   /* azimut faca
 /* Params d'emission PAR APPAREIL (etage 2, issue #111) : porteuse, TE, tri-etat bit de repetition/RMT
  * (tx_override_t). freq_khz/te_us a 0 = heriter. marque=NULL = provenance inchangee. */
 int  shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
-                            int rpt, int rmt, int frame_bits, const char *marque);
+                            int rpt, int rmt, int frame_bits, const char *marque, const char *profile);
 /* Renomme un volet (change son id + met a jour membres/suiveurs + entite HA). 0 ok ; -4 nom deja pris. */
 int  shutters_rename_volet(const char *old_id, const char *new_id);
 /* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE

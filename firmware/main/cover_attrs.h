@@ -6,9 +6,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Nom d'un dev_type_t tel que profiles.json le declare (cle de "types"), NULL si inconnu. */
-const char *dev_type_name(uint8_t type);
-
 /* Bornes d'un temps de course (montee ou descente), en millisecondes. MIROIR de profiles.json
  * types.volet.travel_s (min, max en secondes), d'ou le portail tire les bornes de son formulaire :
  * le banc test/cover-attrs refuse toute divergence. */
@@ -51,7 +48,7 @@ const char *cover_role_name(cover_role_t role);
  * publies seulement si les deux sont dans les bornes (etalonne) ; rank publie si >= 1 ; orientation
  * publiee si 0..359. */
 typedef struct {
-    uint8_t     type;
+    const char *type;          /* la cle du type (catalogue), telle que la fiche la porte */
     bool        positional;
     const char *name;
     uint32_t    up_ms, down_ms;

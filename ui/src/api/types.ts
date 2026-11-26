@@ -14,7 +14,8 @@ export interface LearnedCommand { b: number; s: string }
 /* Un appareil de /api/status (champ volets) : volet, portail, centrale ou zone. */
 export interface Device {
   id: string;
-  type?: number;
+  type?: string;          // la cle d'un type du catalogue (« volet », « portail »)
+  profile?: string;       // l'identifiant de son profil ; absent pour un appareil inclassable
   marque?: string;
   central?: boolean;
   zone?: boolean;

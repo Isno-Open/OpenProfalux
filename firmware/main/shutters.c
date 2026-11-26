@@ -289,6 +289,29 @@ static volet_t *get_or_create(const char *id) {
     return v;
 }
 
+/* ── Profil d'un appareil (catalogue) ── */
+static const catalog_profile_t *profile_of(const volet_t *v) { return catalog_profile(v->profile); }
+/* Ce que l'appareil dit de lui-meme : son encodeur, et s'il est enrole (sinon copie). */
+static catalog_encoder_t encoder_of(const volet_t *v) {
+    if (v->virt) return (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS ? CAT_ENC_SOMFY_RTS : CAT_ENC_KEELOQ;
+    return v->rejeu ? CAT_ENC_RAW_REPLAY : CAT_ENC_KEELOQ;
+}
+/* Donne son profil a un appareil : celui demande s'il existe et convient a son encodeur et a sa methode,
+ * sinon (s'il n'en a pas) celui de sa marque. Son type, s'il n'en a pas, est celui du profil. Une
+ * centrale n'a pas de profil : elle n'emet rien en propre. Sous LOCK. Renvoie le profil, ou NULL. */
+static const catalog_profile_t *assign_profile(volet_t *v, const char *wanted) {
+    if (v->central) return NULL;
+    const catalog_profile_t *p = catalog_profile(wanted);
+    if (p && (p->encoder != encoder_of(v) || p->enrol != v->virt)) {
+        ESP_LOGW(TAG, "'%s' : profil %s refuse (autre encodeur ou autre methode)", v->id, wanted);
+        p = NULL;
+    }
+    if (!p && !v->profile[0]) p = catalog_profile_infer(encoder_of(v), v->virt, v->marque);
+    if (p) strlcpy(v->profile, p->id, sizeof v->profile);
+    if (p && !v->type[0]) strlcpy(v->type, p->type, sizeof v->type);
+    return profile_of(v);
+}
+
 /* nom volet -> slug HA-safe ([a-zA-Z0-9_-]) : espaces/accents interdits dans les topics
  * (decouverte HA ET command/state), sinon commandes/decouverte cassees. */
 static void slugify(char *dst, int cap, const char *src) { cover_slug(dst, (size_t)cap, src); }   /* une seule regle : cover_attrs.c */
@@ -522,12 +545,38 @@ static void migrate_tx_overrides(void) {
     }
     if (changed) { ESP_LOGW(TAG, "migration #111 : bit de repetition/RMT (ancien global %d/%d) grave par appareil", rp, rm); save_cfg(); }
 }
+/* Migration vers les profils (#134, etape 3) : une fiche ecrite avant (v0.2.16) recoit le profil de sa
+ * marque et de son mecanisme, et son type si elle n'en avait pas. Puis ses reglages d'emission sont
+ * rebases (cfg_volet_rebase_tx) : ce qu'elle heritait de la radio est fige, ce qui egale le profil
+ * revient a 0. Aucune emission ne change. Une fiche qu'on ne sait pas classer reste telle quelle. */
+static void migrate_profiles(void) {
+    /* Ce qu'un appareil emet aujourd'hui pour un reglage laisse a 0 : la radio (KeeLoq), la norme
+     * (Somfy : SOMFY_RTS_FREQ_KHZ, trame de 56 bits). */
+    const cfg_tx_t keeloq = { .freq_khz = cc1101_get_freq_khz(), .te_us = (uint16_t)cc1101_get_tx_te(),
+                              .rpt = cc1101_get_tx_repeat_bit() ? 1 : 0, .rmt = cc1101_get_tx_rmt() ? 1 : 0 };
+    const cfg_tx_t somfy = { .freq_khz = SOMFY_RTS_FREQ_KHZ, .rpt = -1, .rmt = -1, .frame_bits = SOMFY_RTS_FRAME_BITS };
+    int n = 0;
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        if (v->central || v->profile[0]) continue;
+        const catalog_profile_t *p = assign_profile(v, NULL);
+        if (!p) { ESP_LOGW(TAG, "migration : '%s' sans profil (inclassable), garde son comportement", v->id); continue; }
+        /* le rejeu ne lit que sa porteuse, qu'il prend de sa capture : rien a figer */
+        if (p->encoder == CAT_ENC_KEELOQ)    cfg_volet_rebase_tx(v, p, &keeloq);
+        if (p->encoder == CAT_ENC_SOMFY_RTS) cfg_volet_rebase_tx(v, p, &somfy);
+        ESP_LOGW(TAG, "migration : '%s' -> profil %s, type %s", v->id, v->profile, v->type);
+        n++;
+    }
+    if (n) save_cfg();
+}
+
 static cfg_layout_t load_cfg(void) {
     cfg_layout_t lay = cfg_model_load(&s_model);
     for (int i = 0; i < s_nvolets; i++)   /* DIAGNOSTIC : verifie que la calibration est bien relue */
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
     migrate_tx_overrides();
+    migrate_profiles();   /* apres #111 : les options figees par appareil y sont deja */
     return lay;
 }
 
@@ -728,13 +777,10 @@ static inline bool is_pfx_virt(const volet_t *v) {
  * fichier"). Le firmware lit donc des valeurs concretes. Pour une fiche heritee (0 / TXOVR_INHERIT,
  * legacy pre-pyramide), les sentinelles (freq/te 0, rpt/rmt -1) disent a radio_tx_device de GARDER le
  * reglage radio courant : un repli invisible, pas une definition de defaut dupliquee. */
+/* La fiche, sinon son profil (cfg_volet_tx) ; ce que ni l'une ni l'autre ne dit garde le defaut de la radio. */
 static tx_params_t tx_params_of(const volet_t *v) {
-    tx_params_t p = {
-        .freq_khz = v->freq_khz,
-        .te_us    = v->te_us,
-        .rpt = v->tx_rpt == TXOVR_ON ? 1 : v->tx_rpt == TXOVR_OFF ? 0 : -1,
-        .rmt = v->tx_rmt == TXOVR_ON ? 1 : v->tx_rmt == TXOVR_OFF ? 0 : -1,
-    };
+    cfg_tx_t t = cfg_volet_tx(v, profile_of(v));
+    tx_params_t p = { .freq_khz = t.freq_khz, .te_us = t.te_us, .rpt = t.rpt, .rmt = t.rmt };
     return p;
 }
 
@@ -786,8 +832,9 @@ static bool somfy_emit_cmd(volet_t *v, catalog_cmd_t command) {
      * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
      * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
      * courte fait la course complete dans les deux cas. frame_bits 0 (defaut memset) = 56. */
-    if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, frames - 1, v->freq_khz);   /* repetitions apres la 1re */
-    else                     somfy_tx_emit(frame, frames - 1, v->freq_khz);
+    cfg_tx_t t = cfg_volet_tx(v, profile_of(v));   /* porteuse et format : la fiche, sinon le profil */
+    if (t.frame_bits == 80) somfy_tx_emit80(frame, cmd, frames - 1, t.freq_khz);   /* repetitions apres la 1re */
+    else                    somfy_tx_emit(frame, frames - 1, t.freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & SOMFY_RTS_ADDR_MAX), cmd, (unsigned)code);
     return true;
@@ -1345,6 +1392,7 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
+    assign_profile(v, NULL);   /* une telecommande copiee : le profil de sa marque, s'il n'en a pas */
     uint8_t btn = bits_button(bits);
     if      (!strcmp(action, "up"))   { strlcpy(v->up, bits, SH_BITS_LEN);   v->up_btn = btn; }
     else if (!strcmp(action, "down")) { strlcpy(v->down, bits, SH_BITS_LEN); v->down_btn = btn; }
@@ -1405,6 +1453,7 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     v->proto = VOLET_PROTO_PROFALUX;   /* seul generateur cable aujourd'hui */
     v->virt_serial = serial;
     v->virt_counter = counter;
+    assign_profile(v, NULL);   /* precise ensuite par shutters_set_tx_params, avec le profil choisi */
     /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
      * qui pilotent le moteur, pour le suivi de position). L'y melanger bloquait l'ajout d'une vraie
      * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
@@ -1451,6 +1500,7 @@ sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address
     v->proto = VOLET_PROTO_SOMFY_RTS;
     v->virt_serial = address;
     v->virt_counter = 1;
+    assign_profile(v, NULL);   /* porteuse et format de trame : ceux du profil Somfy, tant que la fiche laisse 0 */
     save_cfg();
     announce_one(v);
     UNLOCK();
@@ -1460,35 +1510,36 @@ sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address
 }
 
 /* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
- * par commande arrivent ensuite par shutters_rejeu_capture. `type` = dev_type_t (portail/volet). */
-int shutters_create_rejeu(const char *id, uint8_t type) {
-    if (!id || !*id) return -1;
+ * par commande arrivent ensuite par shutters_rejeu_capture. `type` : la cle d'un type du catalogue. */
+int shutters_create_rejeu(const char *id, const char *type) {
+    if (!id || !*id || !catalog_type(type)) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
     v->virt = false;
-    v->type = type;
+    strlcpy(v->type, type, sizeof v->type);
+    assign_profile(v, NULL);
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "appareil rejeu brut '%s' cree (type %u)", id, type);
+    ESP_LOGW(TAG, "appareil rejeu brut '%s' cree (type %s)", id, type);
     return 0;
 }
 
-/* Corrige le type (dev_type_t) d'un appareil DEJA cree, sans reenroler ni recapturer : l'id,
- * l'identite, le compteur et les captures restent. Sert a reparer un type mal attribue. */
-int shutters_set_type(const char *id, uint8_t type) {
-    if (!id || !*id || type > TYPE_PORTAIL) return -1;   /* borne sur dev_type_t declare */
+/* Corrige le type d'un appareil DEJA cree, sans reenroler ni recapturer : l'id, l'identite, le compteur
+ * et les captures restent. Sert a reparer un type mal attribue. `type` : la cle d'un type du catalogue. */
+int shutters_set_type(const char *id, const char *type) {
+    if (!id || !*id || !catalog_type(type)) return -1;   /* seulement un type que le catalogue declare */
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
-    v->type = type;
+    strlcpy(v->type, type, sizeof v->type);
     save_cfg();
     announce_one(v);   /* republie l'entite (un libelle HA peut dependre du type) */
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "appareil '%s' : type change en %u", id, type);
+    ESP_LOGW(TAG, "appareil '%s' : type change en %s", id, type);
     return 0;
 }
 
@@ -1597,6 +1648,9 @@ int shutters_create_central(const char *id, const char *members_csv) {
         return -1;
     }
     v->central = true; v->virt = false;
+    /* Le type d'une centrale : celui qu'avaient les fiches sans type (mode legacy, numero 0), comme avant
+     * les profils ; le cloud en tire les commandes de la centrale. */
+    if (!v->type[0]) strlcpy(v->type, catalog_type_of_legacy(0) ?: "", sizeof v->type);
     v->position = 50; v->dir = 0; v->target = -1;
     save_cfg();
     announce_one(v);
@@ -1712,18 +1766,21 @@ int shutters_set_orientation(const char *id, int orientation) {
 /* Ecrit les parametres d'emission PAR APPAREIL dans la fiche (etage 2, issue #111). Appele au save
  * d'un enrolement (valeurs resolues depuis le profil) et a l'edition du panneau avance. Sentinelles :
  * freq_khz/te_us a 0 = heriter du defaut ; tx_rpt/tx_rmt = tx_override_t (0 heriter, 1 off, 2 on).
- * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
+ * marque=NULL laisse la provenance inchangee, profile=NULL le profil. Une valeur < 0 ou > plafond est
+ * ignoree (garde l'actuelle). */
 int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
-                           int rpt, int rmt, int frame_bits, const char *marque) {
+                           int rpt, int rmt, int frame_bits, const char *marque, const char *profile) {
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
+    if (profile) assign_profile(v, profile);   /* le profil choisi a l'ajout ou a l'edition */
     v->freq_khz = freq_khz;                                  /* 0 = heriter */
     v->te_us    = (te_us && (te_us < 200 || te_us > 900)) ? v->te_us : te_us;   /* hors plage HCS300 : on garde */
     if (rpt >= TXOVR_INHERIT && rpt <= TXOVR_ON) v->tx_rpt = (uint8_t)rpt;
     if (rmt >= TXOVR_INHERIT && rmt <= TXOVR_ON) v->tx_rmt = (uint8_t)rmt;
     if (frame_bits == 56 || frame_bits == 80) v->frame_bits = (uint8_t)frame_bits;   /* Somfy ; autre = inchange */
     if (marque) strlcpy(v->marque, marque, SH_ID_LEN);
+    cfg_volet_inherit_equal(v, profile_of(v));   /* egal au profil : herite, pour suivre ses corrections */
     save_cfg();
     UNLOCK();
     return 0;
@@ -2085,7 +2142,9 @@ static cJSON *status_head_json(void) {
 static cJSON *status_device_json(const volet_t *v) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
-    cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
+    /* Type et profil par leur cle du catalogue : l'interface y lit libelles, boutons et reglages. */
+    if (v->type[0])    cJSON_AddStringToObject(o, "type", v->type);
+    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);
     if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
         cJSON_AddBoolToObject(o, "virt", true);
         bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
