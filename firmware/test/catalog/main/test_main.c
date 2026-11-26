@@ -14,6 +14,10 @@
 
 /* Le profil du catalogue qui reconnait le modele NeoSol. */
 #define NEOSOL_PROFILE "neosol-enrol"
+/* Un profil qui herite (Eveno), sa base, et la marque qui le designe. */
+#define EVENO_PROFILE          "eveno-enrol"
+#define PROFALUX_ENROL_PROFILE "profalux-enrol"
+#define EVENO_BRAND            "Eveno"
 
 static int s_fail;
 #define CHECK(cond, what) do { if (cond) printf("  ok   %s\n", what); else { printf("  ECHEC %s\n", what); s_fail = 1; } } while (0)
@@ -29,11 +33,14 @@ static char *read_file(const char *path) {
     return s;
 }
 
-/* Le catalogue est refuse, et plus rien n'est lu. */
-static void refused(const char *json, const char *what) {
+/* Le catalogue est refuse POUR LA RAISON ATTENDUE (sinon un refus pour une autre faute passerait pour
+ * la bonne), et plus rien n'est lu. */
+static void refused(const char *json, const char *reason, const char *what) {
     char err[CATALOG_ERR_MAX];
     int rc = catalog_load(json, err, sizeof err);
-    CHECK(rc == -1 && err[0] && !catalog_protocol(CAT_ENC_KEELOQ) && catalog_model_count() == 0, what);
+    CHECK(rc == -1 && strstr(err, reason) && !catalog_protocol(CAT_ENC_KEELOQ) && catalog_model_count() == 0
+          && !catalog_type_of_legacy(0) && !catalog_profile_infer(CAT_ENC_KEELOQ, true, ""), what);
+    if (rc != -1 || !strstr(err, reason)) printf("       raison : %s\n", err);
 }
 
 int main(int argc, char **argv) {
@@ -74,25 +81,50 @@ int main(int argc, char **argv) {
     CHECK(catalog_model(catalog_model_count()) == NULL && catalog_model(-1) == NULL, "C13 modele hors borne : NULL");
     CHECK(catalog_cmd_of("stop") == CAT_CMD_STOP && catalog_cmd_of("step") == -1 && catalog_cmd_of(NULL) == -1, "C14 commande par son nom");
 
+    printf("Types et profils :\n");
+    const char *shutter = catalog_type_of_legacy(0), *gate = catalog_type_of_legacy(1);
+    CHECK(shutter && gate && catalog_type(shutter)->positional && !catalog_type(gate)->positional,
+          "C16 mode legacy : 0 et 1 designent un type positionnel et un type sans position");
+    CHECK(catalog_type_of_legacy(7) == NULL && catalog_type("inconnu") == NULL, "C17 numero ou cle inconnus : NULL");
+    const catalog_profile_t *eveno = catalog_profile(EVENO_PROFILE), *base = catalog_profile(PROFALUX_ENROL_PROFILE);
+    CHECK(eveno && base && eveno->freq_khz != base->freq_khz && eveno->te_us == base->te_us
+          && eveno->repeat_bit == base->repeat_bit && eveno->rmt == base->rmt && eveno->encoder == CAT_ENC_KEELOQ
+          && eveno->enrol && !strcmp(eveno->type, base->type),
+          "C18 heritage : Eveno change sa porteuse et garde le reste de sa base");
+    CHECK(catalog_profile_infer(CAT_ENC_KEELOQ, true, EVENO_BRAND) == eveno, "C19 fiche ancienne : la marque designe le profil");
+    CHECK(catalog_profile_infer(CAT_ENC_KEELOQ, true, "") == base && catalog_profile_infer(CAT_ENC_KEELOQ, true, "Marque inconnue") == base,
+          "C20 fiche ancienne sans marque connue : le premier profil de l'encodeur et de la methode");
+    CHECK(catalog_profile_infer(CAT_ENC_KEELOQ, false, "") && !catalog_profile_infer(CAT_ENC_KEELOQ, false, "")->enrol,
+          "C21 copie et enrolement ne se confondent pas");
+    CHECK(catalog_profile_infer(CAT_ENC_SOMFY_RTS, false, "") == NULL, "C22 aucun profil de cet encodeur et de cette methode : NULL");
+
     printf("Un catalogue faux est refuse en entier :\n");
-    refused("{", "R1 JSON illisible");
-    refused(NULL, "R2 pas de texte");
-    refused("{\"protocols\":{\"x\":{\"encoder\":\"nice\",\"press\":{\"frames\":1}}}}", "R3 encodeur inconnu de ce firmware");
+    refused("{", "JSON illisible", "R1 JSON illisible");
+    refused(NULL, "JSON illisible", "R2 pas de texte");
+    refused("{\"protocols\":{\"x\":{\"encoder\":\"nice\",\"press\":{\"frames\":1}}}}", "encodeur inconnu", "R3 encodeur inconnu de ce firmware");
     refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}},\"b\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}}}",
-            "R4 deux protocoles pour le meme encodeur");
-    refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"commands\":{\"up\":{\"code\":16}},\"press\":{\"frames\":1}}}}", "R5 code hors 0..15");
-    refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"commands\":{\"up\":{\"code\":2}},\"press\":{}}}}", "R6 press.frames absent");
-    refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1.5}}}}", "R7 press.frames pas entier");
+            "deux protocoles", "R4 deux protocoles pour le meme encodeur");
+    refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"commands\":{\"up\":{\"code\":16}},\"press\":{\"frames\":1}}}}", "code de commande", "R5 code hors 0..15");
+    refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"commands\":{\"up\":{\"code\":2}},\"press\":{}}}}", "press.frames", "R6 press.frames absent");
+    refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1.5}}}}", "press.frames", "R7 press.frames pas entier");
     refused("{\"protocols\":{\"a\":{\"encoder\":\"somfy-rts\",\"press\":{\"frames\":2},\"enrol\":{\"command\":\"prog\"}}}}",
-            "R8 enrol.command sans code dans commands");
+            "enrol.command", "R8 enrol.command sans code dans commands");
     refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1},\"enrol\":{\"code\":5}}}}",
-            "R9 enrolement KeeLoq sans ses salves");
-    refused("{\"protocols\":[]}", "R10 protocols n'est pas un objet");
+            "enrol : code", "R9 enrolement KeeLoq sans ses salves");
+    refused("{\"protocols\":[]}", "objet protocols", "R10 protocols n'est pas un objet");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":0}},\"b\":{\"legacy\":{\"code\":0}}}}", "meme numero legacy", "R12 deux types avec le meme numero legacy");
+    refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
+            "\"profiles\":[{\"id\":\"b\",\"inherits\":\"a\"},{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000}}]}",
+            "base absente", "R13 base declaree apres ce qui en herite");
+    refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
+            "\"profiles\":[{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"]}]}",
+            "sans protocole, type ou porteuse", "R14 profil sans porteuse");
     /* un modele de trop : CATALOG_MODELS_MAX + 1 noms */
-    char many[4096]; int n = snprintf(many, sizeof many, "{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"profiles\":[{\"id\":\"p\",\"models\":[");
+    char many[4096]; int n = snprintf(many, sizeof many, "{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
+                               "\"profiles\":[{\"id\":\"p\",\"protocol\":\"a\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000},\"models\":[");
     for (int i = 0; i <= CATALOG_MODELS_MAX; i++) n += snprintf(many + n, sizeof many - (size_t)n, "%s\"m%d\"", i ? "," : "", i);
     snprintf(many + n, sizeof many - (size_t)n, "]}]}");
-    refused(many, "R11 trop de modeles");
+    refused(many, "trop de modeles", "R11 trop de modeles");
 
     printf("Un bon catalogue relu apres un faux :\n");
     CHECK(catalog_load(real, err, sizeof err) == 0 && catalog_code(CAT_ENC_KEELOQ, CAT_CMD_UP) == 0x2, "C15 relu entier");

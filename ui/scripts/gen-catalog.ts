@@ -131,7 +131,9 @@ export function checkCatalog(doc: unknown, bands: readonly BandAllowed[], icons:
     for (const field of ['types', 'protocol', 'add', 'test'] as const) if (p[field] === undefined) fail(`profil ${id} : ${field} manquant (ni declare ni herite)`);
     for (const field of ['band', 'freq_khz', 'modulation'] as const) if (radio[field] === undefined) fail(`profil ${id} : radio.${field} manquant (ni declare ni herite)`);
 
-    // une base ne change ni l'encodeur (le protocole) ni la bande
+    // une base ne change ni l'encodeur (le protocole) ni la bande ; elle precede ce qui en herite (le firmware
+    // lit les profils dans l'ordre, catalog.c)
+    if (typeof own.inherits === 'string' && !raw.slice(0, i).some(q => q.id === own.inherits)) fail(`profil ${id} : sa base ${own.inherits} doit le preceder`);
     if (typeof own.inherits === 'string') {
       const base = byId.get(own.inherits);
       if (base && own.protocol !== undefined && own.protocol !== base.protocol) fail(`profil ${id} : change le protocole de sa base ${own.inherits}`);

@@ -117,6 +117,14 @@ test('heritage : une boucle est refusee', () => {
   refuses(doc, /heritage en boucle/);
 });
 
+test('heritage : une base qui suit ce qui en herite est refusee (le firmware lit dans l\'ordre)', () => {
+  const doc = real();
+  const base = doc.profiles.findIndex((p: Json) => p.id === 'profalux-enrol');
+  const [moved] = doc.profiles.splice(base, 1);
+  doc.profiles.push(moved);
+  refuses(doc, /profil eveno-enrol : sa base profalux-enrol doit le preceder/);
+});
+
 test('heritage : changer la bande de sa base est refuse', () => {
   const doc = real(); profile(doc, 'eveno-enrol').radio.band = '433';
   refuses(doc, /profil eveno-enrol : change la bande de sa base profalux-enrol/);
