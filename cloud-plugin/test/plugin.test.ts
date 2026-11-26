@@ -142,16 +142,22 @@ test("types engendres depuis profiles.json : volet positionnel, portail sans pos
 });
 
 test("libelles des commandes : ceux que profiles.json declare (types[].commands), en francais et en anglais", () => {
-  const p = profiles() as { types: Record<string, { commands: Record<string, { label: string; en: string }> }> };
-  const kinds = kindsOf(p) as { id: string; controls: { id: string; label?: { fr: string; en: string } }[] }[];
-  for (const id of ["volet", "portail"]) {
-    const kind = kinds.find((k) => k.id === id)!;
-    for (const [cmd, text] of Object.entries(p.types[id]!.commands)) {
-      assert.deepEqual(kind.controls.find((c) => c.id === cmd)?.label, { fr: text.label, en: text.en }, `${id} ${cmd}`);
+  // chaque type du catalogue, chaque commande qu'il expose : aucun nom ecrit ici, tout vient du catalogue
+  const catalog: { types: Record<string, { commands: Record<string, { label: string; en: string }> }> } =
+    JSON.parse(readFileSync(join(here, "../../../firmware/main/web/profiles.json"), "utf8"));
+  const at = (x: unknown, key: string): unknown => (typeof x === "object" && x !== null ? Reflect.get(x, key) : undefined);
+  const kinds = kindsOf(catalog);
+  const types = Object.entries(catalog.types);
+  assert.ok(types.length > 0);
+  for (const [id, type] of types) {
+    const kind = kinds.find((k) => at(k, "id") === id);
+    const controls = at(kind, "controls");
+    assert.ok(Array.isArray(controls), `type ${id} : controles attendus`);
+    for (const [command, text] of Object.entries(type.commands)) {
+      const control: unknown = controls.find((c: unknown) => at(c, "id") === command);
+      assert.deepEqual(at(control, "label"), { fr: text.label, en: text.en }, `${id} ${command}`);
     }
   }
-  const portail = kinds.find((k) => k.id === "portail")!;
-  assert.deepEqual(portail.controls.find((c) => c.id === "up")?.label, { fr: "Ouvrir", en: "Open" });
 });
 
 test("commandes qui donnent acces : celles que profiles.json declare, pas une de plus ; une commande inconnue est refusee", () => {

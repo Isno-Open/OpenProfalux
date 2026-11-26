@@ -23,7 +23,7 @@ export interface ProfileView {
   id: string;
   name: string;
   description?: string;
-  brand: string;
+  brand: string;              // la marque ; un profil sans marque se range sous son nom (jamais une chaine vide)
   type: string;               // le premier type du profil (cle de types)
   protocol: string;           // cle de protocols
   encoder: Encoder;
@@ -59,7 +59,7 @@ function view(p: Profile): ProfileView | null {
   const flow = p.add === ADD.enrol ? ENROL_FLOW[protocol.encoder] : COPY_FLOW[mechanism];
   if (!flow) return null;
   return {
-    id: p.id, name: p.name, description: p.description, brand: p.brand ?? '', type: p.types[0], protocol: p.protocol ?? '',
+    id: p.id, name: p.name, description: p.description, brand: p.brand ?? p.name, type: p.types[0], protocol: p.protocol ?? '',
     encoder: protocol.encoder, add: p.add, mechanism, flow, band: radio.band, freq_khz: radio.freq_khz, rx: radio.rx,
     tx: p.tx ?? {}, models: p.models ?? [], instructions: p.instructions ?? {},
   };

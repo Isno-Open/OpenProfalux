@@ -13,7 +13,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Ajv2020 } from 'ajv/dist/2020.js';
-import { compile } from 'json-schema-to-typescript';
+import { compile, type JSONSchema } from 'json-schema-to-typescript';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WEB = join(here, '../../firmware/main/web');
@@ -25,7 +25,8 @@ const OUT_PATH = join(here, '../src/api/catalog.generated.ts');
 
 /* La seule resolution des heritages du projet : celle que l'interface et la detection utilisent. */
 const require = createRequire(import.meta.url);
-const { resolveProfiles } = require(join(WEB, 'pyramid-detect.js')) as { resolveProfiles: (doc: unknown) => Record<string, unknown>[] };
+const detect: { resolveProfiles: (doc: unknown) => unknown[] } = require(join(WEB, 'pyramid-detect.js'));
+const { resolveProfiles } = detect;
 
 type Json = Record<string, unknown>;
 const isObj = (x: unknown): x is Json => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -175,31 +176,35 @@ export function checkCatalog(doc: unknown, bands: readonly BandAllowed[], icons:
 }
 
 /* Le schema sans ses notes : une cle '_' est un commentaire pour qui lit le fichier, jamais une donnee que le
-   code lit. La garder ferait de chaque objet un dictionnaire ouvert, et le compilateur ne verifierait plus rien. */
+   code lit. La garder ferait de chaque objet un dictionnaire ouvert, et le compilateur ne verifierait plus rien.
+   On retire la regle des notes d'une copie, en place : la copie garde le type du schema. */
 const NOTE_KEYS = '^_';
-function withoutNotes(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(withoutNotes);
-  if (!isObj(node)) return node;
-  const out: Json = {};
-  for (const [k, v] of Object.entries(node)) {
-    if (k === 'patternProperties' && isObj(v)) {
-      const kept = Object.fromEntries(Object.entries(v).filter(([p]) => p !== NOTE_KEYS));
-      if (Object.keys(kept).length) out[k] = withoutNotes(kept);
-    } else out[k] = withoutNotes(v);
+function dropNotes(node: unknown): void {
+  if (Array.isArray(node)) { node.forEach(dropNotes); return; }
+  if (!isObj(node)) return;
+  const pattern = node.patternProperties;
+  if (isObj(pattern)) {
+    delete pattern[NOTE_KEYS];
+    if (Object.keys(pattern).length === 0) delete node.patternProperties;
   }
-  return out;
+  Object.values(node).forEach(dropNotes);
+}
+function withoutNotes(schema: JSONSchema): JSONSchema {
+  const copy = structuredClone(schema);
+  dropNotes(copy);
+  return copy;
 }
 
 /** Les types TypeScript du catalogue, engendres depuis son schema. */
-export async function typesOf(schema: object): Promise<string> {
+export async function typesOf(schema: JSONSchema): Promise<string> {
   const banner = '// ENGENDRE par scripts/gen-catalog.ts depuis firmware/main/web/profiles.schema.json : ne pas editer.\n';
-  return compile(withoutNotes(schema) as Parameters<typeof compile>[0], 'Catalog', { bannerComment: banner, unreachableDefinitions: true, additionalProperties: false, style: { singleQuote: true } });
+  return compile(withoutNotes(schema), 'Catalog', { bannerComment: banner, unreachableDefinitions: true, additionalProperties: false, style: { singleQuote: true } });
 }
 
 async function main(): Promise<void> {
   const [catalogPath = CATALOG_PATH, outPath = OUT_PATH] = process.argv.slice(2);
   const doc: unknown = JSON.parse(readFileSync(catalogPath, 'utf8'));
-  const schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as object;
+  const schema: JSONSchema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
   const shape = checkShape(doc, schema);
   const errors = shape.length ? shape : checkCatalog(doc, boardBands(), spriteIcons());
   if (errors.length) {

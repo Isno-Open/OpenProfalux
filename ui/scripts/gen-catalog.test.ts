@@ -6,7 +6,7 @@
 //   node --test scripts/*.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import { CATALOG_PATH, SCHEMA_PATH, boardBands, checkCatalog, checkShape, sprite
 
 type Json = Record<string, any>;   // un catalogue qu'on casse expres : sa forme n'est plus garantie
 const real = (): Json => JSON.parse(readFileSync(CATALOG_PATH, 'utf8'));
-const schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as object;
+const schema: object = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 const bands = boardBands();
 const icons = spriteIcons();
 const profile = (doc: Json, id: string): Json => doc.profiles.find((p: Json) => p.id === id);
@@ -154,13 +154,8 @@ function run(doc: Json): { code: number; out: string; generated: boolean } {
   const dir = mkdtempSync(join(tmpdir(), 'catalog-'));
   const input = join(dir, 'profiles.json'), output = join(dir, 'catalog.generated.ts');
   writeFileSync(input, JSON.stringify(doc));
-  try {
-    execFileSync(process.execPath, [script, input, output], { stdio: 'pipe' });
-    return { code: 0, out: '', generated: existsSync(output) };
-  } catch (e) {
-    const err = e as { status: number; stderr: Buffer };
-    return { code: err.status, out: String(err.stderr), generated: existsSync(output) };
-  }
+  const r = spawnSync(process.execPath, [script, input, output], { encoding: 'utf8' });
+  return { code: r.status ?? -1, out: r.stderr, generated: existsSync(output) };
 }
 
 test('appel : le generateur engendre les types du vrai catalogue', () => {
