@@ -7,7 +7,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
-import { kindsOf, iconOf } from "../scripts/gen-kinds.js";
+import { kindsOf as kindsFrom, iconOf } from "../scripts/gen-kinds.js";
+import { asIcon } from "@isno-open/plugin-host";
 import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
 import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById, buildFileRequest, awaitBoxFile } from "../opencloudapp/server/src/device-families.js";
 
@@ -27,6 +28,9 @@ const REAL: readonly [string, string][] = [
 ];
 const here = dirname(fileURLToPath(import.meta.url));
 const profiles = (): unknown => JSON.parse(readFileSync(join(here, "../../../firmware/main/web/profiles.json"), "utf8"));
+/** La planche d'icones du boitier, et les types engendres avec elle. */
+const readSprite = (): string => readFileSync(join(here, "../../../ui/src/assets/icons.svg.txt"), "utf8");
+const kindsOf = (src: unknown): unknown[] => kindsFrom(src, readSprite());
 
 test("la famille passe la verification du portail, et le plugin la declare", () => {
   clearDeviceFamilies();
@@ -120,12 +124,19 @@ test("messages abimes : rien plutot qu'un fait faux", () => {
   assert.equal(command({ box: BOX, device: "x" }, "voler", null), null);
 });
 
-test("types engendres depuis profiles.json : volet positionnel, portail sans position, icones sans balisage", () => {
+test("types engendres depuis profiles.json : volet positionnel, portail sans position, icones de la planche du boitier", () => {
   const kinds = kindsOf(profiles()) as { id: string; icon: Record<string, string>; controls: { id: string }[] }[];
   const volet = kinds.find((k) => k.id === "volet")!, portail = kinds.find((k) => k.id === "portail")!;
   assert.ok(volet.controls.some((c) => c.id === "position"));
   assert.ok(!portail.controls.some((c) => c.id === "position"));
-  assert.equal(typeof portail.icon.path, "string", "l'icone SVG du firmware devient un trace");
+  // le MEME dessin que sur le boitier : le symbole de la planche, remis en image, que le portail accepte
+  const drawing = (k: { icon: Record<string, string> }): string => Buffer.from(k.icon.src!.replace(/^data:image\/svg\+xml;base64,/, ""), "base64").toString("utf8");
+  const symbol = (name: string): string => new RegExp(`<symbol id="i-${name}"[^>]*>([\\s\\S]*?)</symbol>`).exec(readSprite())![1]!.replace(/\s*\n\s*/g, "");
+  const kind = (id: string): { icon: Record<string, string> } => kinds.find((k) => k.id === id)!;
+  for (const [id, name] of [["volet", "shutter"], ["portail", "gate"], ["volet-central", "central"], ["volet-zone", "zone"]] as const)
+    assert.ok(drawing(kind(id)).includes(symbol(name)), `${id} porte le dessin « ${name} » de la planche`);
+  for (const k of family.kinds) assert.ok(asIcon(k.icon), `${k.id} : icone acceptee par le portail`);
+  assert.ok(drawing(family.kinds.find((k) => k.id === "remote") as never).includes(symbol("remote")), "une telecommande porte le dessin de la planche");
   assert.deepEqual(family.kinds.map((k) => k.id), [...kinds.map((k) => k.id), "remote", "remote-ignored"], "le plugin porte les types du firmware, puis ses telecommandes");
 });
 
@@ -144,12 +155,15 @@ test("commandes qui donnent acces : celles que profiles.json declare, pas une de
   assert.throws(() => kindsOf(invalid), /secure/);
 });
 
-test("types engendres : un type sans libelles anglais, ou une icone SVG a plusieurs traces, sont refuses", () => {
+test("types engendres : un type sans libelles anglais, ou une icone absente de la planche, sont refuses", () => {
   const p = profiles() as { types: Record<string, Record<string, unknown>> };
   const sansEn = structuredClone(p);
   delete sansEn.types.volet!.en;
   assert.throws(() => kindsOf(sansEn), /anglais/);
-  assert.throws(() => iconOf("x", "<svg><path d='M0 0'/><path d='M1 1'/></svg>"), /un seul/);
+  const unknownIcon = structuredClone(p);
+  unknownIcon.types.volet!.icon = "licorne";
+  assert.throws(() => kindsOf(unknownIcon), /absente de la planche/);
+  assert.throws(() => iconOf("x", "<svg><path d='M0 0'/></svg>", readSprite()), /nom d'un dessin/);
 });
 
 test("le moteur de plugins est a la meme version que celle d'OpenCloudApp (une seule version)", () => {
