@@ -1,5 +1,5 @@
 // Engendre src/kinds.generated.ts depuis firmware/main/web/profiles.json : les types d'appareils de
-// la famille OpenProfalux sont ceux que le FIRMWARE declare, une seule declaration (docs/FAMILLES.md
+// la famille OpenProfalux sont ceux que le FIRMWARE declare, une seule declaration, et leurs icones sont celles de la planche du boitier (docs/FAMILLES.md
 // d'OpenCloudApp). Lance a la construction et par les tests ; le fichier engendre n'est pas commis.
 //   node scripts/gen-kinds.ts [profiles.json] [sortie]
 import { readFileSync, writeFileSync } from "node:fs";
@@ -13,6 +13,10 @@ import { SETTING_KIND } from "../opencloudapp/server/src/plugin-contract.ts";
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = process.argv[2] ?? join(here, "../../firmware/main/web/profiles.json");
 const OUT = process.argv[3] ?? join(here, "../src/kinds.generated.ts");
+/** La planche d'icones du projet : celle que l'interface du boitier affiche. */
+const SPRITE = join(here, "../../ui/src/assets/icons.svg.txt");
+/** Icone des telecommandes (elles ne sont pas un type de profiles.json : c'est le plugin qui les declare). */
+const REMOTE_ICON = "remote";
 
 type Text = { fr: string; en: string };
 type Ctl = { kind: string; id: string; label: Text; icon?: unknown; settable?: boolean; secure?: true };
@@ -22,15 +26,18 @@ type Dpad = { up: string; stop: string; down: string };
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isDpad = (v: unknown): v is Dpad => isObj(v) && typeof v.up === "string" && typeof v.stop === "string" && typeof v.down === "string";
 
-/** Icone du firmware -> icone du portail : un caractere tel quel, ou le trace d'un SVG a UN seul path
- *  (le portail ne prend jamais de balisage). Autre chose : erreur, plutot qu'une icone fausse. */
-export function iconOf(type: string, icon: unknown): { glyph: string } | { path: string } {
-  if (typeof icon !== "string" || !icon) throw new Error(`type ${type} : icone absente`);
-  if (!icon.startsWith("<")) return { glyph: icon };
-  const paths = [...icon.matchAll(/<path\b[^>]*\bd=['"]([^'"]+)['"]/g)];
-  if (paths.length !== 1) throw new Error(`type ${type} : icone SVG a ${paths.length} traces, un seul attendu`);
-  return { path: paths[0]![1]! };
+/** Icone declaree par le firmware -> icone du portail. profiles.json nomme un dessin de la planche du projet
+ *  (symbole i-<nom>) ; le portail le recoit en image (data: URL), jamais en balisage : c'est donc LE MEME
+ *  dessin que sur le boitier. Un nom absent de la planche : erreur, plutot qu'une icone fausse. */
+export function iconOf(owner: string, icon: unknown, sprite: string): { src: string } {
+  if (typeof icon !== "string" || !/^[a-z][a-z-]*$/.test(icon)) throw new Error(`${owner} : icone attendue, le nom d'un dessin de la planche`);
+  const symbol = new RegExp(`<symbol id="i-${icon}" viewBox="([^"]+)">([\\s\\S]*?)</symbol>`).exec(sprite);
+  if (!symbol) throw new Error(`${owner} : icone « ${icon} » absente de la planche`);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${symbol[1]!}">${symbol[2]!.replace(/\s*\n\s*/g, "")}</svg>`;
+  return { src: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}` };
 }
+/** L'icone des telecommandes, prise sur la meme planche. */
+export const remoteIconOf = (sprite: string): { src: string } => iconOf("telecommande", REMOTE_ICON, sprite);
 
 /** Plus long nom accepte par le firmware (profiles.json name_max). */
 export function nameMaxOf(profiles: unknown): number {
@@ -40,7 +47,7 @@ export function nameMaxOf(profiles: unknown): number {
 }
 
 /** Les types d'appareils du firmware, dans le vocabulaire du portail. */
-export function kindsOf(profiles: unknown): unknown[] {
+export function kindsOf(profiles: unknown, sprite: string): unknown[] {
   if (!isObj(profiles) || !isObj(profiles.types)) throw new Error("profiles.json : objet types attendu");
   const devicesMax = profiles.devices_max;
   if (typeof devicesMax !== "number" || devicesMax < 1) throw new Error("profiles.json : devices_max (nombre maximal d'appareils) requis");
@@ -75,15 +82,15 @@ export function kindsOf(profiles: unknown): unknown[] {
         hint: text("Chronométré sur le volet, en secondes.", "Timed on the shutter, in seconds.") });
       settings.push(field(SETTING_ID.travelUp, "Temps de montée (s)", "Up travel time (s)"), field(SETTING_ID.travelDown, "Temps de descente (s)", "Down travel time (s)"));
     }
-    return { id, label: text(t.label, en.label), icon: iconOf(id, t.icon), controls, settings, positional: t.positional === true };
+    return { id, label: text(t.label, en.label), icon: iconOf(`type ${id}`, t.icon, sprite), controls, settings, positional: t.positional === true };
   });
   // ordre des types = ordre des cartes sans rang : les roles « list_first » (centrales) d'abord
-  const roles = roleKindsOf(profiles, simple);
+  const roles = roleKindsOf(profiles, simple, sprite);
   const out = (r: (typeof roles)[number]): unknown => { const { listFirst: _, ...k } = r; return k; };
   return [...roles.filter((r) => r.listFirst).map(out), ...simple.map(({ positional: _, ...k }) => k), ...roles.filter((r) => !r.listFirst).map(out)];
 }
 
-type Role = { id: string; label: Text; membersLabel: Text; members: readonly string[]; positionalOnly: boolean; listFirst: boolean };
+type Role = { id: string; icon: unknown; label: Text; membersLabel: Text; members: readonly string[]; positionalOnly: boolean; listFirst: boolean };
 /** Roles du firmware (profiles.json "roles") : centrale, zone. */
 function rolesOf(profiles: Record<string, unknown>): Role[] {
   const roles = profiles.roles;
@@ -96,13 +103,13 @@ function rolesOf(profiles: Record<string, unknown>): Role[] {
       if (typeof m !== "string" || (m !== ROLE_SIMPLE && !(m in roles))) throw new Error(`role ${id} : membre « ${String(m)} » ni simple ni un role`);
       return m;
     });
-    return { id, label: { fr: r.label, en: r.en.label }, membersLabel: { fr: r.members_label, en: r.en.members_label }, members, positionalOnly: r.positional_only === true, listFirst: r.list_first === true };
+    return { id, icon: r.icon, label: { fr: r.label, en: r.en.label }, membersLabel: { fr: r.members_label, en: r.en.members_label }, members, positionalOnly: r.positional_only === true, listFirst: r.list_first === true };
   });
 }
 
 /** Une centrale ou une zone de chaque type permis : les commandes du type, sans position (elle ne serait
  *  celle d'aucun volet), le rang, et ses membres choisis parmi les appareils du boitier des roles permis. */
-function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[]): ({ listFirst?: boolean } & Record<string, unknown>)[] {
+function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[], sprite: string): ({ listFirst?: boolean } & Record<string, unknown>)[] {
   const roles = rolesOf(profiles);
   const typesOf = (r: Role): readonly Simple[] => simple.filter((k) => !r.positionalOnly || k.positional);
   const kindsFor = (r: Role, member: string): string[] => {
@@ -111,7 +118,7 @@ function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[
     return typesOf(r).filter((k) => typesOf(mr).includes(k)).map((k) => roleKindId(k.id, mr.id));
   };
   return roles.flatMap((r) => typesOf(r).map((k) => ({
-    id: roleKindId(k.id, r.id), label: r.label, icon: k.icon, listFirst: r.listFirst,
+    id: roleKindId(k.id, r.id), label: r.label, icon: iconOf(`role ${r.id}`, r.icon, sprite), listFirst: r.listFirst,
     controls: k.controls.filter((c) => c.kind === CONTROL.action),
     settings: [k.settings[0], { kind: DEVICE_SETTING.devices, key: SETTING_ID.members, label: r.membersLabel, kinds: r.members.flatMap((m) => kindsFor(r, m)) }],
   })));
@@ -119,12 +126,15 @@ function roleKindsOf(profiles: Record<string, unknown>, simple: readonly Simple[
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const profiles: unknown = JSON.parse(readFileSync(SRC, "utf8"));
-  const kinds = kindsOf(profiles);
-  writeFileSync(OUT, `// ENGENDRE par scripts/gen-kinds.ts depuis firmware/main/web/profiles.json : ne pas editer.
+  const sprite = readFileSync(SPRITE, "utf8");
+  const kinds = kindsOf(profiles, sprite);
+  writeFileSync(OUT, `// ENGENDRE par scripts/gen-kinds.ts depuis firmware/main/web/profiles.json et la planche d'icones : ne pas editer.
 import type { KindDecl } from "../opencloudapp/server/src/family-contract.js";
 export const KINDS = ${JSON.stringify(kinds, null, 2)} satisfies readonly KindDecl[];
 /** Plus long nom d'un appareil ou d'une telecommande (profiles.json name_max, COVER_NAME_MAX). */
 export const NAME_MAX = ${nameMaxOf(profiles)};
+/** Icone des telecommandes : le dessin de la planche du projet, comme sur le boitier. */
+export const REMOTE_ICON = ${JSON.stringify(remoteIconOf(sprite))};
 `);
   console.log(`${kinds.length} type(s) -> ${OUT}`);
 }

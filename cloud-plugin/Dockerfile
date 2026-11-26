@@ -1,5 +1,5 @@
 # Image du plugin OpenProfalux pour le catalogue d'OpenCloudApp, construite depuis la RACINE du depot
-# (les types d'appareils viennent de firmware/main/web/profiles.json) :
+# (les types d'appareils viennent de firmware/main/web/profiles.json, leurs icones de ui/src/assets/icons.svg.txt) :
 #   git submodule update --init cloud-plugin/opencloudapp
 #   docker build -f cloud-plugin/Dockerfile -t <registre>/openprofalux-cloud-plugin:<version> .
 # Contrat de l'image (docs/PLUGINS.md d'OpenCloudApp) : /plugin/index.js, les modules qu'il importe et
@@ -8,6 +8,8 @@ FROM node:26.13.1-trixie-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY firmware/main/web/profiles.json ./firmware/main/web/profiles.json
+# les icones des types sont celles de la planche du boitier
+COPY ui/src/assets/icons.svg.txt ./ui/src/assets/icons.svg.txt
 COPY cloud-plugin/package.json cloud-plugin/package-lock.json ./cloud-plugin/
 RUN cd cloud-plugin && npm ci --no-audit --no-fund
 COPY cloud-plugin ./cloud-plugin

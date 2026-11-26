@@ -83,7 +83,7 @@ export interface Profile {
   rx?: { datarate_baud?: number; bandwidth_khz?: number };
   tx?: ProfileTx;
 }
-export interface RoleEntry { label?: string; members_label?: string; members?: string[]; positional_only?: boolean; list_first?: boolean }
+export interface RoleEntry { label?: string; icon?: string; members_label?: string; members?: string[]; positional_only?: boolean; list_first?: boolean }
 export interface Profiles {
   types: Record<string, TypeEntry>;   // cles : DEVICE_TYPE, et celles qu'une version future ajoutera
   profils: Profile[];

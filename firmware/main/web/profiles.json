@@ -3,10 +3,10 @@
   "devices_max": 24,
   "name_max": 23,
   "roles": {
-    "_note": "Role d'un appareil : centrale (commande diffusee a ses membres) ou zone (telecommande de piece : ses suiveurs reproduisent ses mouvements). Sans role, un appareil est simple. Cles MIROIR de cover_role_t (cover_attrs.c, verifie par le banc cover-attrs). members : roles des appareils qu'il peut avoir pour membres ; positional_only : role reserve aux types positionnels (et ses membres aussi) ; list_first : en tete de liste tant qu'aucun ordre n'est choisi, comme l'interface locale (sortVolets). Creer ou supprimer une centrale, une zone, se fait sur le boitier ; le portail en change les membres.",
-    "central": { "label": "Centrale", "members_label": "Appareils de la centrale", "members": ["simple", "zone"], "list_first": true,
+    "_note": "Role d'un appareil : centrale (commande diffusee a ses membres) ou zone (telecommande de piece : ses suiveurs reproduisent ses mouvements). Sans role, un appareil est simple. icon (ici comme dans types) : le NOM d'un dessin de la planche du projet (ui/src/assets/icons.svg.txt, symbole i-<nom>), le meme pour l'interface du boitier et pour le portail cloud. Cles MIROIR de cover_role_t (cover_attrs.c, verifie par le banc cover-attrs). members : roles des appareils qu'il peut avoir pour membres ; positional_only : role reserve aux types positionnels (et ses membres aussi) ; list_first : en tete de liste tant qu'aucun ordre n'est choisi, comme l'interface locale (sortVolets). Creer ou supprimer une centrale, une zone, se fait sur le boitier ; le portail en change les membres.",
+    "central": { "label": "Centrale", "icon": "central", "members_label": "Appareils de la centrale", "members": ["simple", "zone"], "list_first": true,
                  "en": { "label": "Central", "members_label": "Devices of the central" } },
-    "zone":    { "label": "Zone", "members_label": "Volets qui suivent la zone", "members": ["simple"], "positional_only": true,
+    "zone":    { "label": "Zone", "icon": "zone", "members_label": "Volets qui suivent la zone", "members": ["simple"], "positional_only": true,
                  "en": { "label": "Zone", "members_label": "Shutters following the zone" } }
   },
   "params": {
@@ -29,11 +29,11 @@
     "_note": "Structure PAR TRAIT (alignee sur pyramid-detect.js : params[k].statut, params[k].detecte). La detection ne filtre que statut=='certain'. certain = spec marque (modulation, band, code, mecanisme). valide = empirique grave en defaut profil (CAME 3800/135 n=1). releve = mesure sur trame reelle, vit dans la fiche appareil (ex. freq calee ; freq_khz est 'valide' en defaut ET surcharge 'releve' par appareil). implementation = choix firmware (RMT). intention = DECLARE mais PAS CABLE (le code ne lit rien : rx, encoder, short/long ; cible E4, et E6 pour batir vraiment l'encodeur). detecte = observable d'une capture. A reconcilier avec le params non committe de Max, sa version fait foi."
   },
   "types": {
-    "volet":   { "label": "Volet",   "code": 0, "icon": "🪟", "positional": true, "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
+    "volet":   { "label": "Volet",   "code": 0, "icon": "shutter", "positional": true, "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
                  "en": { "label": "Shutter", "dpad": { "up": "Up", "stop": "Stop", "down": "Down" } },
                  "travel_s": { "min": 1, "max": 180 },
                  "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
-    "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
+    "portail": { "label": "Portail", "code": 1, "icon": "gate", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
                  "en": { "label": "Gate", "dpad": { "up": "Open", "stop": "Stop", "down": "Close" } },
                  "secure": [ "up", "stop", "down" ],
                  "_secure": "Commandes qui DONNENT ACCES aux lieux : le portail cloud exige un code avant de les envoyer pour un tiers (Google Home). Les trois, parce qu'un portail a bouton unique rejoue la meme trame pour Ouvrir, Stop et Fermer (shutters.c, rejeu_emit) : « fermer » un portail ferme l'ouvre.",

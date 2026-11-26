@@ -12,9 +12,12 @@ import { state } from './store';
 export const profiles = (): Profile[] => state.profiles?.profils ?? [];
 export const types = (): Record<string, TypeEntry> => state.profiles?.types ?? {};
 
-/* Icone du sprite pour un type declare ; un type inconnu prend celle du volet. */
-const TYPE_ICON: Record<string, IconName> = { [DEVICE_TYPE.shutter]: ICON.shutter, [DEVICE_TYPE.gate]: ICON.gate };
-export const typeIcon = (key: string): IconName => TYPE_ICON[key] ?? ICON.shutter;
+/* Icone d'un type ou d'un role : le dessin de la planche que profiles.json NOMME (le portail cloud lit la meme
+   declaration : meme dessin des deux cotes). Un nom absent ou hors de la planche prend le dessin de repli. */
+const ICON_NAMES: readonly string[] = Object.values(ICON);
+const isIconName = (name: string | undefined): name is IconName => name !== undefined && ICON_NAMES.includes(name);
+const declaredIcon = (name: string | undefined, fallback: IconName): IconName => (isIconName(name) ? name : fallback);
+export const typeIcon = (key: string): IconName => declaredIcon(types()[key]?.icon, ICON.shutter);
 
 export function typeKey(device: Pick<Device, 'type'> | null | undefined): string {
   const t = types();
@@ -23,8 +26,8 @@ export function typeKey(device: Pick<Device, 'type'> | null | undefined): string
 }
 
 export function deviceIcon(device: Device): IconName {
-  if (device.central) return ICON.central;
-  if (device.zone) return ICON.zone;
+  if (device.central) return declaredIcon(state.profiles?.roles?.central?.icon, ICON.central);
+  if (device.zone) return declaredIcon(state.profiles?.roles?.zone?.icon, ICON.zone);
   return typeIcon(typeKey(device));
 }
 

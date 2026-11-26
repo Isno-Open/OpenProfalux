@@ -5,6 +5,7 @@
 // et ce qu'il accepte : remote/<slug>/set DELETE|IGNORE, remote/<slug>/config {"name"}, ignored/<slug>/set
 // ACCEPT. Le slug est le serial sans « 0x ». Supprimer ou ignorer une telecommande qu'un volet utilise
 // est refuse par le boitier : le portail ne propose pas ces boutons dans ce cas.
+import { REMOTE_ICON } from "./kinds.generated.js";
 import { CONTROL, FACT, KIND_PLACE, type Fact, type FamilyCommand, type KindDecl } from "../opencloudapp/server/src/family-contract.js";
 import { SETTING_KIND, TEXT_FORMAT } from "../opencloudapp/server/src/plugin-contract.js";
 import { NAME_MAX } from "./kinds.generated.js";
@@ -18,7 +19,7 @@ export const REMOTE_NAME = "remote_name";
 const IGNORED_PREFIX = "ignored-";
 
 const GROUP = { fr: "Télécommandes", en: "Remotes" };
-const ICON = { path: "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM12 6v.01M10 10h4M10 14h4" };
+const ICON = REMOTE_ICON;
 
 export const REMOTE_KINDS = [
   { id: REMOTE_KIND.known, label: { fr: "Télécommande", en: "Remote" }, icon: ICON, place: KIND_PLACE.box, group: GROUP,
