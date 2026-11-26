@@ -12,6 +12,9 @@
 #include "catalog.h"
 #include "somfy_rts.h"
 
+/* Le profil du catalogue qui reconnait le modele NeoSol. */
+#define NEOSOL_PROFILE "neosol-enrol"
+
 static int s_fail;
 #define CHECK(cond, what) do { if (cond) printf("  ok   %s\n", what); else { printf("  ECHEC %s\n", what); s_fail = 1; } } while (0)
 
@@ -62,11 +65,12 @@ int main(int argc, char **argv) {
     CHECK(r && r->press_frames == 8 && r->press_gap_us == 12000, "C9 rejeu : 8 trames, 12 ms entre deux (ex REJEU_REPEATS, REJEU_GAP_US)");
     CHECK(catalog_code(CAT_ENC_RAW_REPLAY, CAT_CMD_UP) == CATALOG_NO_CODE, "C10 rejeu : aucun code, la trame est la capture");
 
+    /* Les modeles d'avant le catalogue, dans leur ordre, et le profil qui reconnait le troisieme. */
     static const char *const MODELS[] = { "Profalux MAI-EMPX / MUR / NOE", "FranciaFlex M4G", "Profalux NeoSol", "Profalux MAI-RDPX / RDTELPX" };
     bool same = catalog_model_count() >= 4;
     for (int i = 0; same && i < 4; i++) same = !strcmp(catalog_model(i)->name, MODELS[i]);
     CHECK(same, "C11 modeles dans l'ordre d'avant (le numero d'un modele est garde en NVS)");
-    CHECK(catalog_model(2) && !strcmp(catalog_model(2)->profile, "neosol-enrol"), "C12 un modele designe son profil");
+    CHECK(catalog_model(2) && !strcmp(catalog_model(2)->profile, NEOSOL_PROFILE), "C12 un modele designe son profil");
     CHECK(catalog_model(catalog_model_count()) == NULL && catalog_model(-1) == NULL, "C13 modele hors borne : NULL");
     CHECK(catalog_cmd_of("stop") == CAT_CMD_STOP && catalog_cmd_of("step") == -1 && catalog_cmd_of(NULL) == -1, "C14 commande par son nom");
 

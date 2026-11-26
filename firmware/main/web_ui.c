@@ -1434,20 +1434,35 @@ static esp_err_t h_pfx_renew(httpd_req_t *r) {
 }
 static esp_err_t h_pfx_get(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
-    char out[720]; int p = 0;
-    p += snprintf(out + p, sizeof(out) - p,
-                  "{\"active\":%d,\"learn_ok\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
-                  active ? 1 : 0, eg_learn_allowed(&s_egate) ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
+    /* Construit avec cJSON : la liste des modeles vient du catalogue, sa longueur n'est pas bornee ici,
+     * et un nom y est echappe. */
+    char serial[12], remote[12];
+    snprintf(serial, sizeof serial, "0x%07X", (unsigned)id.serial);
+    snprintf(remote, sizeof remote, "0x%07X", (unsigned)id.remote);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "active", active ? 1 : 0);
+    cJSON_AddNumberToObject(o, "learn_ok", eg_learn_allowed(&s_egate) ? 1 : 0);
+    cJSON_AddNumberToObject(o, "model", id.model);
+    cJSON_AddStringToObject(o, "serial", serial);
+    cJSON_AddNumberToObject(o, "idx", id.idx);
+    cJSON_AddNumberToObject(o, "counter", id.counter);
+    cJSON_AddStringToObject(o, "remote", remote);
     /* Les modeles du catalogue, et le profil qui reconnait chacun (l'interface y lit les gestes). */
-    int nm = catalog_model_count();
-    for (int i = 0; i < nm && p < (int)sizeof(out); i++) {
+    cJSON *models = cJSON_AddArrayToObject(o, "models");
+    for (int i = 0; i < catalog_model_count(); i++) {
         const catalog_model_t *m = catalog_model(i);
-        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"profile\":\"%s\"}",
-                      i ? "," : "", m->name, m->profile);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", m->name);
+        cJSON_AddStringToObject(e, "profile", m->profile);
+        cJSON_AddItemToArray(models, e);
     }
-    snprintf(out + p, sizeof(out) - p, "]}");
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
     httpd_resp_set_type(r, "application/json");
-    return httpd_resp_sendstr(r, out);
+    if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "memoire");
+    esp_err_t res = httpd_resp_sendstr(r, js);
+    free(js);
+    return res;
 }
 static esp_err_t h_pfx_learn(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
