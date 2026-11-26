@@ -7,7 +7,8 @@ import profilesTable from '../../../firmware/main/web/profiles.json';   // la vr
 import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
-import type { Device, LearnedCommand, OkReply, PfxState, Profiles, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
+import type { Catalog } from './catalog.generated';
+import type { Device, LearnedCommand, OkReply, PfxState, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
 
 const WRONG_PASSWORD = 'faux';   // le seul mot de passe refuse en mode mock (essai de l'ecran de connexion)
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -104,7 +105,9 @@ const copy = <T>(o: T): T => JSON.parse(JSON.stringify(o));
 const ok = (): OkReply => ({ ok: 1 });
 const okWith = <T extends object>(extra: T): OkReply & T => ({ ok: 1, ...extra });
 /* La table est verifiee contre le contrat : un champ de profiles.json qui s'en ecarte casse la verification. */
-const PROFILES: Profiles = profilesTable;
+/* La meme frontiere que la vraie route (real.ts, json<Catalog>) : le texte du catalogue, que le generateur a valide
+   contre son schema (scripts/gen-catalog.ts). Importe tel quel, le JSON n'aurait que des chaines, pas ses enumerations. */
+const PROFILES: Catalog = JSON.parse(JSON.stringify(profilesTable));
 
 export default {
   async session() { return { ...session }; },
@@ -115,7 +118,7 @@ export default {
     return true;
   },
   async logout(): Promise<unknown> { session.authed = false; return null; },
-  async profiles(): Promise<Profiles> { return copy(PROFILES); },
+  async profiles(): Promise<Catalog> { return copy(PROFILES); },
   async status(): Promise<Status> {
     advance();
     return copy({

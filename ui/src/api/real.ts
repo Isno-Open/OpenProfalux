@@ -2,8 +2,9 @@
 // corps que l'interface d'avant (app.js) : le firmware n'a rien a changer.
 import { FAILURE, HTTP_UNAUTHORIZED, SCAN_STATE, type Command } from '../domain';
 import { json, post, requireOk, poll } from './http';
+import type { Catalog } from './catalog.generated';
 import type {
-  CaptureLast, DeviceFromRemoteReply, LearnPoll, OkReply, PfxCaptureReply, PfxRenewReply, PfxState, Profiles, RadioSummary,
+  CaptureLast, DeviceFromRemoteReply, LearnPoll, OkReply, PfxCaptureReply, PfxRenewReply, PfxState, RadioSummary,
   ReplayCaptureReply, Session, ShutterOrder, ShutterReply, Status, Sweep,
 } from './types';
 
@@ -45,7 +46,7 @@ export default {
     .then(r => r.ok, () => false),
   logout: (): Promise<unknown> => fetch('/api/logout', { method: 'POST' }),
   status: (signal?: AbortSignal) => json<Status>('/api/status', { signal }),
-  profiles: (signal?: AbortSignal) => json<Profiles>('/profiles.json', { signal }),
+  profiles: (signal?: AbortSignal) => json<Catalog>('/profiles.json', { signal }),
   sendShutter: (order: ShutterOrder) => post<ShutterReply>('/api/shutter', order),
   saveDisplayOrder: (ids: string[]) => requireOk(post('/api/volet/order', { ids })),
 

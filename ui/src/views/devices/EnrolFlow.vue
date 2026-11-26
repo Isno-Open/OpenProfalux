@@ -3,8 +3,8 @@
 // apprend. Cinq etapes : capturer la telecommande d'origine (le boitier attribue une identite, nouvelle si le
 // moteur est inconnu, la meme s'il est deja connu), emettre la trame d'apprentissage (~5 s), faire les gestes,
 // tester apres le delai de confirmation du moteur (~10 s), enregistrer comme volet. L'identite vit dans le boitier
-// (/api/pfx) : une identite en cours se reprend apres un F5. La marque choisie dans la pyramide est dans l'adresse
-// (#remotes/enrol/<index>).
+// (/api/pfx) : une identite en cours se reprend apres un F5. Le profil choisi dans la pyramide est dans l'adresse
+// (#remotes/enrol/<profil>). Les gestes viennent du profil du modele choisi (catalogue, profiles[].instructions).
 import { ref } from 'vue';
 import type { Tone } from '../../domain';
 
@@ -26,11 +26,11 @@ const done = ref<Message | null>(null);
 import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, refresh, toast } from '../../store';
-import { profiles, types, hasComma, mhz } from '../../profiles';
+import { profileById, profileOfModel, typeView, hasComma, mhz, type ProfileView } from '../../profiles';
 import api from '../../api/index';
-import type { PfxCaptureReply, PfxState, Profile } from '../../api/types';
+import type { PfxCaptureReply, PfxState } from '../../api/types';
 import {
-  BUTTON, COMMAND, DEVICE_TYPE, FAILURE, FLOW, NO_SERIAL, SECTION, TAB, TONE, TRISTATE, type Command,
+  BUTTON, DEVICE_TYPE, FAILURE, FLOW, NO_SERIAL, SECTION, TAB, TONE, TRISTATE, type Command,
 } from '../../domain';
 import { ICON } from '../../icons';
 import OpCard from '../../components/base/OpCard.vue';
@@ -43,30 +43,17 @@ import OpProgress from '../../components/base/OpProgress.vue';
 import TxParamsPanel from '../../components/domain/TxParamsPanel.vue';
 import ShutterControl from '../../components/domain/ShutterControl.vue';
 
-/* Gestes PHYSIQUES a faire APRES l'emission, par routine du moteur (pfx_enrol.c, champ routine des modeles). */
-const GESTURES: Record<string, string[]> = {
-  R6: ['Monte le volet jusqu\'en butée haute.', 'Descends de ~4 lames.', 'Remonte jusqu\'en butée haute.',
-    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même : beaucoup de moteurs confirment sans bouger.'],
-  R7: ['Monte → descends ~4 lames → remonte (procédure proche, à confirmer).',
-    'Va-et-vient = enrôlé. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.'],
-  R8: ['Montée → laisse le volet s\'arrêter seul en butée haute.', 'Descente → laisse ~4 lames apparentes.', 'Montée → laisse s\'arrêter seul.',
-    'Le volet fait un va-et-vient = enrôlé ✅. S\'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub.'],
-};
-const DEFAULT_ROUTINE = 'R6';
-/* Geste a faire AVANT l'emission (certains modeles partent d'une position de reference). */
-const BEFORE: Record<string, string> = { R8: 'NeoSol : AVANT d\'émettre, descends le volet et laisse ~4 lames apparentes.' };
 const MOTOR_DELAY_S = 10;     // secondes de confirmation du moteur avant de tester
 const CAPTURE_WINDOW_S = 15;
 const EMISSION_S = 5;
 /* Codes de /api/pfx/capture/poll (rc) et de /api/pfx/renew. */
 const PFX_RC = { ok: 0, full: -1, nothing: -3 } as const;
-const DEFAULT_DPAD: Partial<Record<Command, string>> = { [COMMAND.up]: 'Montée', [COMMAND.stop]: 'Stop', [COMMAND.down]: 'Descente' };
 
 const COUNTDOWN_TICK_MS = 250;
 /* L'adresse est lue une fois : l'ecran est reconstruit a chaque adresse (DevicesView). */
-const profileIndex = parseInt(route.rest[0] ?? '', 10);
-const profile = computed<Profile | null>(() => {
-  const p = profiles()[profileIndex];
+const profileId = decodeURIComponent(route.rest[0] ?? '');
+const profile = computed<ProfileView | null>(() => {
+  const p = profileById(profileId);
   return p && p.flow === FLOW.enrolPfx ? p : null;
 });
 const pfx = ref<PfxState | null>(null);   // /api/pfx
@@ -80,9 +67,13 @@ const countdown = computed(() => (testAllowedAt.value ? Math.max(0, Math.ceil((t
 
 const models = computed(() => pfx.value?.models ?? []);
 const modelOptions = computed(() => models.value.map((m, i) => ({ value: i, label: `${m.name} · ${m.routine}` })));
-const routine = computed(() => models.value[Number(model.value)]?.routine ?? DEFAULT_ROUTINE);
+/* Les gestes : ceux du profil qui reconnait le modele choisi, sinon ceux du profil de l'adresse. */
+const instructions = computed(() => {
+  const chosen = models.value[Number(model.value)];
+  return (chosen ? profileOfModel(chosen.name) : null)?.instructions ?? profile.value?.instructions ?? {};
+});
 const active = computed(() => !!pfx.value?.active);
-const dpad = computed(() => types()[DEVICE_TYPE.shutter]?.dpad ?? DEFAULT_DPAD);
+const dpad = computed(() => typeView(DEVICE_TYPE.shutter).dpad);
 const step = computed(() => (done.value?.tone === TONE.ok ? 5 : !active.value ? 0 : !gestures.value ? 1 : countdown.value !== 0 ? 2 : 3));
 const identityLine = computed(() => {
   const d = pfx.value;
@@ -111,7 +102,7 @@ watch([pfx, profile], () => {
   if (pfx.value.active) { modelSet.value = true; return; }
   const p = profile.value;
   if (!p || !models.value.length) return;
-  const i = models.value.findIndex(m => m.name.includes(p.marque));
+  const i = models.value.findIndex(m => p.models.includes(m.name));
   if (i >= 0) model.value = i;
   modelSet.value = true;
 }, { immediate: true });
@@ -125,7 +116,7 @@ function captureBody(): Record<string, unknown> {
   if (v.te_us) body.te_us = v.te_us;
   if (v.tx_rpt) body.tx_repeat_bit = v.tx_rpt === TRISTATE.yes;
   if (v.tx_rmt) body.tx_rmt = v.tx_rmt === TRISTATE.yes;
-  if (profile.value?.marque) body.marque = profile.value.marque;
+  if (profile.value?.brand) body.marque = profile.value.brand;
   return body;
 }
 function restart(): void { gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
@@ -218,7 +209,7 @@ async function forget(): Promise<void> {
   restart(); captureMsg.value = null; done.value = null;
   await read();
 }
-const subtitle = computed(() => (profile.value ? `${profile.value.nom}${profile.value.freq_khz ? ` · ${mhz(profile.value.freq_khz)}` : ''}` : ''));
+const subtitle = computed(() => (profile.value ? `${profile.value.name}${profile.value.freq_khz ? ` · ${mhz(profile.value.freq_khz)}` : ''}` : ''));
 </script>
 
 <template>
@@ -256,7 +247,7 @@ const subtitle = computed(() => (profile.value ? `${profile.value.nom}${profile.
         <!-- 2. Emettre la trame d'apprentissage -->
         <section class="step" :class="{ done: gestures }">
           <h3 class="section-title">1. Enrôler l'identité sur le moteur</h3>
-          <OpStatline v-if="BEFORE[routine]" :tone="TONE.warning"><b>{{ BEFORE[routine] }}</b></OpStatline>
+          <OpStatline v-if="instructions.before" :tone="TONE.warning"><b>{{ instructions.before }}</b></OpStatline>
           <p class="hint">Clique ci-dessous : l'émission dure ~5 s. <b>Ne touche à rien</b> pendant. Les gestes à faire sur ta télécommande s'afficheront
             <b>à la fin</b> de l'émission.</p>
           <div class="row"><OpButton :variant="gestures ? BUTTON.normal : BUTTON.primary" :icon="ICON.remote" :disabled="state.radioBusy || !pfx?.learn_ok"
@@ -265,7 +256,7 @@ const subtitle = computed(() => (profile.value ? `${profile.value.nom}${profile.
           <OpStatline v-if="emission" :tone="emission.tone">{{ emission.text }}</OpStatline>
           <template v-if="gestures">
             <p class="hint"><b>✅ Émission finie. Fais MAINTENANT sur ta télécommande d'origine :</b></p>
-            <ol class="gestures"><li v-for="g in GESTURES[routine] ?? []" :key="g">{{ g }}</li></ol>
+            <ol class="gestures"><li v-for="g in instructions.gestures ?? []" :key="g">{{ g }}</li></ol>
             <p class="hint">Quand les gestes sont faits, clique ci-dessous. Beaucoup de moteurs font un petit va-et-vient pour confirmer : bon signe.
               Certains ne bougent pas du tout : c'est normal aussi.</p>
             <div v-if="countdown < 0" class="row"><OpButton :variant="BUTTON.primary" @click="gesturesDone">✅ J'ai fait les gestes</OpButton></div>

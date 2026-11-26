@@ -1,18 +1,17 @@
 <script setup lang="ts">
-// Une methode d'ajout (un profil de profiles.json), en carte cliquable : la pyramide et la detection montrent la
+// Une methode d'ajout (un profil du catalogue), en carte cliquable : la pyramide et la detection montrent la
 // meme carte et menent au meme parcours. La phrase vient du champ description du profil.
-import { METHOD_SENTENCE, bandLabel } from '../../profiles';
-import type { Profile } from '../../api/types';
+import { METHOD_SENTENCE, bandLabel, type ProfileView } from '../../profiles';
 import { TONE } from '../../domain';
 import OpBadge from '../base/OpBadge.vue';
-defineProps<{ profile: Profile; proposed?: boolean }>();
-defineEmits<{ choose: [profile: Profile] }>();
+defineProps<{ profile: ProfileView; proposed?: boolean }>();
+defineEmits<{ choose: [profile: ProfileView] }>();
 </script>
 
 <template>
   <button type="button" class="choice" :class="{ proposed }" @click="$emit('choose', profile)">
-    <span class="top"><b>{{ profile.nom }}</b><OpBadge v-if="profile.band">{{ bandLabel(profile.band) }}</OpBadge><OpBadge v-if="proposed" :tone="TONE.accent">proposé</OpBadge></span>
-    <span class="sentence">{{ profile.description || METHOD_SENTENCE[profile.flow] || '' }}</span>
+    <span class="top"><b>{{ profile.name }}</b><OpBadge v-if="profile.band">{{ bandLabel(profile.band) }}</OpBadge><OpBadge v-if="proposed" :tone="TONE.accent">proposé</OpBadge></span>
+    <span class="sentence">{{ profile.description || METHOD_SENTENCE[profile.flow] }}</span>
     <span class="chevron" aria-hidden="true">›</span>
   </button>
 </template>

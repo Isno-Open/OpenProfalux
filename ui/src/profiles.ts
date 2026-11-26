@@ -1,16 +1,79 @@
-// Lecture de profiles.json, la source unique des types, marques et methodes. Les ecrans ne codent en dur aucun
-// type ni aucune marque : ils demandent ici. Meme logique que l'interface d'avant (profileFields,
-// profileForDevice, deviceKind), rassemblee en un seul module.
-import type { Device, Profile, TypeEntry } from './api/types';
+// Lecture du catalogue (profiles.json), la source unique des protocoles, types et profils. Les ecrans ne codent en
+// dur aucun type ni aucune marque : ils demandent ici. Les profils sont resolus (heritage) par la meme fonction que la
+// detection et le generateur (pyramid-detect.js), puis mis a plat dans une vue que les ecrans lisent.
+import type { Device } from './api/types';
+import type { AddMethod, Band, Catalog, Command as ButtonCommand, DeviceType, Encoder, Profile, Protocol, Radio } from './api/catalog.generated';
 import {
-  BAND, BRAND, DEVICE_TYPE, FIELD_KIND, FLOW, MECHANISM, PROTOCOL, SECTION, TAB, TX_FIELD,
-  type FieldKind, type Mechanism, type TxFieldName,
+  BAND, BRAND, COMMAND, DEVICE_TYPE, ENCODER, FIELD_KIND, FLOW, MECHANISM, MOVE_COMMANDS, PROTOCOL, SECTION, TAB, TX_FIELD, isCommand,
+  type Command, type FieldKind, type Flow, type Mechanism, type MoveCommand, type TxFieldName,
 } from './domain';
+import { resolveProfiles } from './lib/detection';
 import { ICON, type IconName } from './icons';
 import { state } from './store';
 
-export const profiles = (): Profile[] => state.profiles?.profils ?? [];
-export const types = (): Record<string, TypeEntry> => state.profiles?.types ?? {};
+/* Methodes d'ajout du catalogue (profils « add »). */
+export const ADD = { copy: 'copy', enrol: 'enrol' } as const satisfies Record<string, AddMethod>;
+/* Codage d'un protocole (« code ») : un code fixe se rejoue tel quel. */
+const CODE_FIXED = 'fixed';
+/* Commande d'un bouton pas a pas (types[].buttons[].command). */
+export const STEP = 'step' satisfies ButtonCommand;
+
+/** Un profil resolu, a plat : ce que les ecrans lisent. */
+export interface ProfileView {
+  id: string;
+  name: string;
+  description?: string;
+  brand: string;
+  type: string;               // le premier type du profil (cle de types)
+  protocol: string;           // cle de protocols
+  encoder: Encoder;
+  add: AddMethod;
+  mechanism: Mechanism;
+  flow: Flow;
+  band: Band;
+  freq_khz: number;
+  rx?: Radio['rx'];
+  tx: NonNullable<Profile['tx']>;
+  models: string[];
+  instructions: NonNullable<Profile['instructions']>;
+}
+
+export const catalog = (): Catalog | null => state.profiles;
+export const types = (): Record<string, DeviceType> => state.profiles?.types ?? {};
+const protocols = (): Record<string, Protocol> => state.profiles?.protocols ?? {};
+
+/* Mecanisme d'un profil, d'apres sa methode et le codage de son protocole : un enrolement, un rejeu (code fixe
+   copie), ou un clone (code tournant copie : le boitier apprend l'identite). */
+const mechanismOf = (add: AddMethod, protocol: Protocol | undefined): Mechanism =>
+  add === ADD.enrol ? MECHANISM.enrolment : protocol?.code === CODE_FIXED ? MECHANISM.replay : MECHANISM.clone;
+/* Parcours d'aujourd'hui d'un enrolement, par encodeur. Un seul ecran deroulera la procedure du protocole (#134,
+   etape 8) ; d'ici la, chaque encodeur garde le sien. */
+const ENROL_FLOW: Partial<Record<Encoder, Flow>> = { [ENCODER.keeloq]: FLOW.enrolPfx, [ENCODER.somfyRts]: FLOW.createSomfy };
+const COPY_FLOW: Record<Mechanism, Flow> = { [MECHANISM.replay]: FLOW.replay, [MECHANISM.clone]: FLOW.learn, [MECHANISM.enrolment]: FLOW.learn };
+
+function view(p: Profile): ProfileView | null {
+  const protocol = protocols()[p.protocol ?? ''];
+  const radio = p.radio ?? {};
+  if (!protocol || !p.add || !p.types?.[0] || !radio.band || !radio.freq_khz) return null;   // le generateur l'a refuse
+  const mechanism = mechanismOf(p.add, protocol);
+  const flow = p.add === ADD.enrol ? ENROL_FLOW[protocol.encoder] : COPY_FLOW[mechanism];
+  if (!flow) return null;
+  return {
+    id: p.id, name: p.name, description: p.description, brand: p.brand ?? '', type: p.types[0], protocol: p.protocol ?? '',
+    encoder: protocol.encoder, add: p.add, mechanism, flow, band: radio.band, freq_khz: radio.freq_khz, rx: radio.rx,
+    tx: p.tx ?? {}, models: p.models ?? [], instructions: p.instructions ?? {},
+  };
+}
+
+/* Les profils resolus, recalcules seulement quand le catalogue change. */
+let cache: { source: Catalog; list: ProfileView[] } | null = null;
+export function profiles(): ProfileView[] {
+  const doc = state.profiles;
+  if (!doc) return [];
+  if (cache?.source !== doc) cache = { source: doc, list: resolveProfiles(doc).flatMap(p => view(p) ?? []) };
+  return cache.list;
+}
+export const profileById = (id: string): ProfileView | null => profiles().find(p => p.id === id) ?? null;
 
 /* Icone d'un type ou d'un role : le dessin de la planche que profiles.json NOMME (le portail cloud lit la meme
    declaration : meme dessin des deux cotes). Un nom absent ou hors de la planche prend le dessin de repli. */
@@ -19,11 +82,40 @@ const isIconName = (name: string | undefined): name is IconName => name !== unde
 const declaredIcon = (name: string | undefined, fallback: IconName): IconName => (isIconName(name) ? name : fallback);
 export const typeIcon = (key: string): IconName => declaredIcon(types()[key]?.icon, ICON.shutter);
 
+/* Ou le firmware range la trame d'un bouton capture. Le pas a pas n'existe pas encore pour lui (#134, etape 5) :
+   il range la trame unique du portail sous « up » et la rejoue pour les trois commandes. */
+const captureSlot = (command: ButtonCommand): Command => (command !== STEP && isCommand(command) ? command : COMMAND.up);
+
+/** Un type d'appareil, tel que les ecrans le lisent. */
+export interface TypeView {
+  key: string;
+  label: string;
+  positional: boolean;
+  travel_s?: DeviceType['travel_s'];
+  dpad: Record<MoveCommand, string>;          // libelles des commandes (pave, Home Assistant, cloud)
+  capture: { cmd: Command; label: string }[]; // un creneau de capture par bouton
+}
+const DEFAULT_DPAD: Record<MoveCommand, string> = { [COMMAND.up]: 'Montée', [COMMAND.stop]: 'Stop', [COMMAND.down]: 'Descente' };
+export function typeView(key: string): TypeView {
+  const t = types()[key];
+  if (!t) return { key, label: 'Volet', positional: true, dpad: DEFAULT_DPAD, capture: MOVE_COMMANDS.map(cmd => ({ cmd, label: DEFAULT_DPAD[cmd] })) };
+  const dpad = { [COMMAND.up]: t.commands.up.label, [COMMAND.stop]: t.commands.stop.label, [COMMAND.down]: t.commands.down.label };
+  const capture = t.buttons.map(b => ({
+    cmd: captureSlot(b.command),
+    label: b.label ?? (b.command === COMMAND.up || b.command === COMMAND.stop || b.command === COMMAND.down ? dpad[b.command] : b.command),
+  }));
+  return { key, label: t.label, positional: t.positional, travel_s: t.travel_s, dpad, capture };
+}
+
+/* Mode legacy : la fiche designe son type par un numero (types[].legacy.code). Le firmware n'en connait pas d'autre
+   tant que la fiche ne porte pas son profil (#134, etape 3) : c'est aussi ce numero qu'on lui ecrit d'ici la. */
 export function typeKey(device: Pick<Device, 'type'> | null | undefined): string {
   const t = types();
   const code = typeof device?.type === 'number' ? device.type : 0;
-  return Object.keys(t).find(k => t[k]?.code === code) ?? DEVICE_TYPE.shutter;
+  return Object.keys(t).find(k => t[k]?.legacy?.code === code) ?? DEVICE_TYPE.shutter;
 }
+export const legacyCode = (key: string): number => types()[key]?.legacy?.code ?? 0;
+export const typeOf = (device: Pick<Device, 'type'> | null | undefined): TypeView => typeView(typeKey(device));
 
 export function deviceIcon(device: Device): IconName {
   if (device.central) return declaredIcon(state.profiles?.roles?.central?.icon, ICON.central);
@@ -44,14 +136,16 @@ export function kindOf(device: Device): { label: string; hasTx: boolean } {
   return { label: 'télécommande clonée', hasTx: true };
 }
 
-/* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas de profiles.json. */
+/* Marque d'un appareil : celle gravee dans sa fiche, sinon deduite du protocole. Ne depend pas du catalogue. */
 export const brandOf = (device: Device): string => device.marque || (isSomfy(device) ? BRAND.somfy : device.rejeu ? BRAND.came : BRAND.profalux);
 /* Profil d'un appareil : celui de sa marque et de son mecanisme. */
-export function profileOf(device: Device): Profile | null {
+export function profileOf(device: Device): ProfileView | null {
   const brand = brandOf(device);
   const mech = mechanism(device);
-  return profiles().find(p => p.marque === brand && p.mecanisme === mech) ?? profiles().find(p => p.marque === brand) ?? null;
+  return profiles().find(p => p.brand === brand && p.mechanism === mech) ?? profiles().find(p => p.brand === brand) ?? null;
 }
+/* Le profil dont l'etape « identify » reconnait ce modele de telecommande (profiles[].models). */
+export const profileOfModel = (model: string): ProfileView | null => profiles().find(p => p.models.includes(model)) ?? null;
 
 /* Un champ d'emission reglable d'un profil. */
 export interface TxField {
@@ -64,11 +158,12 @@ export interface TxField {
   options?: { value: number; label: string }[];
 }
 
-/* Les champs reglables d'un profil, derives des cles de son bloc tx (jamais une liste en dur). */
-export function txFields(profile: Profile | null | undefined): TxField[] {
+/* Les champs reglables d'un profil, derives des cles de son bloc tx (jamais une liste en dur). La porteuse de Somfy
+   RTS est celle de la norme : on la montre, on ne la regle pas. */
+export function txFields(profile: ProfileView | null | undefined): TxField[] {
   if (!profile) return [];
-  const tx = profile.tx ?? {}, fields: TxField[] = [];
-  if (profile.freq_khz) fields.push({ name: TX_FIELD.frequency, label: 'Fréquence porteuse (kHz)', kind: FIELD_KIND.number, defaultValue: profile.freq_khz, fixed: profile.marque === BRAND.somfy });
+  const tx = profile.tx, fields: TxField[] = [];
+  fields.push({ name: TX_FIELD.frequency, label: 'Fréquence porteuse (kHz)', kind: FIELD_KIND.number, defaultValue: profile.freq_khz, fixed: profile.encoder === ENCODER.somfyRts });
   if (tx.te_us !== undefined) fields.push({ name: TX_FIELD.te, label: "TE d'émission (µs)", kind: FIELD_KIND.number, defaultValue: tx.te_us });
   if (tx.repeat_bit !== undefined) fields.push({ name: TX_FIELD.repeat, label: 'Bit de répétition', help: 'Émettre comme la télécommande d\'origine.', kind: FIELD_KIND.toggle, defaultValue: tx.repeat_bit });
   if (tx.rmt !== undefined) fields.push({ name: TX_FIELD.rmt, label: 'Émission matérielle (RMT)', kind: FIELD_KIND.toggle, defaultValue: tx.rmt });
@@ -90,19 +185,13 @@ export function defaultSummary(field: TxField): string {
   }
 }
 
-/* Ou mene une methode de la pyramide : les adresses d'aujourd'hui, avec l'index du profil pour qu'un F5 garde
-   la marque choisie (l'enrolement la perdait). */
-export function methodRoute(profile: Profile): string {
-  const i = profiles().indexOf(profile);
-  if (profile.flow === FLOW.learn || profile.flow === FLOW.replay) return `${TAB.remotes}/${SECTION.learn}/${i}`;
-  if (profile.flow === FLOW.enrolPfx) return `${TAB.remotes}/${SECTION.enrol}/${i}`;
-  if (profile.flow === FLOW.createSomfy) return `${TAB.remotes}/${SECTION.somfy}/${i}`;
-  return `${TAB.remotes}/${SECTION.add}`;
-}
+/* Ou mene une methode de la pyramide, avec l'identifiant du profil pour qu'un F5 garde la marque choisie. */
+const FLOW_SECTION: Record<Flow, string> = { [FLOW.learn]: SECTION.learn, [FLOW.replay]: SECTION.learn, [FLOW.enrolPfx]: SECTION.enrol, [FLOW.createSomfy]: SECTION.somfy };
+export const methodRoute = (profile: ProfileView): string => `${TAB.remotes}/${FLOW_SECTION[profile.flow]}/${encodeURIComponent(profile.id)}`;
 
-/* Phrase de repli par methode, pour un profil sans champ description (les « note » de profiles.json sont des
-   notes de developpeur, jamais montrees). */
-export const METHOD_SENTENCE: Record<string, string> = {
+/* Phrase de repli par methode, pour un profil sans champ description (les « note » du catalogue sont des notes de
+   developpeur, jamais montrees). */
+export const METHOD_SENTENCE: Record<Flow, string> = {
   [FLOW.learn]: 'Tu as la télécommande d\'origine : le boîtier copie ses commandes, une capture par bouton.',
   [FLOW.replay]: 'Le boîtier enregistre le signal de ta télécommande et le rejoue à l\'identique.',
   [FLOW.enrolPfx]: 'Le boîtier devient une nouvelle télécommande, que le moteur apprend. La télécommande d\'origine sert au geste de validation.',
@@ -110,8 +199,8 @@ export const METHOD_SENTENCE: Record<string, string> = {
 };
 
 /* Espace insecable entre le nombre et l'unite : « MHz » ne passe jamais seul a la ligne. */
-const BAND_LABEL: Record<string, string> = { [BAND.mhz868]: '868\u00a0MHz', [BAND.mhz433]: '433\u00a0MHz' };
-export const bandLabel = (band: string): string => BAND_LABEL[band] ?? `${band}\u00a0MHz`;
+const BAND_LABEL: Record<string, string> = { [BAND.mhz868]: '868 MHz', [BAND.mhz433]: '433 MHz' };
+export const bandLabel = (band: string): string => BAND_LABEL[band] ?? `${band} MHz`;
 /* Couleur d'une bande (tuiles de marque) : une variable par bande, declaree dans styles/tokens.css. */
 const BAND_COLOR: Record<string, string> = { [BAND.mhz868]: 'var(--band-868)', [BAND.mhz433]: 'var(--band-433)' };
 export const bandColor = (band: string): string => BAND_COLOR[band] ?? 'var(--muted)';

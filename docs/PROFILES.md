@@ -223,7 +223,7 @@ Son type et ses boutons se lisent dans son profil. Modifier un profil change tou
 
 ## 7. Les contrôles
 
-Faits par le générateur (`tools/gen_profiles.py`) pour le catalogue du projet, et par le boîtier pour un profil
+Faits par le générateur (`ui/scripts/gen-catalog.ts`, contre `firmware/main/web/profiles.schema.json`) pour le catalogue du projet, et par le boîtier pour un profil
 utilisateur, contre le **même schéma** :
 
 - l'encodeur du protocole existe dans ce firmware ;

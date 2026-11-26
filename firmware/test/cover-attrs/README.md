@@ -12,5 +12,5 @@ eprouve aussi le slug d'un nom (`cover_slug`) et le choix de cet identifiant (`c
     ./cover_attrs_host_test ../../main/web/profiles.json
 
 Couvre : JSON d'un volet et d'un portail, refus d'un type inconnu et d'un tampon trop petit, et la
-COHERENCE des noms et codes de types avec `profiles.json` (source du vocabulaire) : renommer un type
+COHERENCE des noms de types et de leur numero (`legacy.code`) avec `profiles.json` (source du vocabulaire) : renommer un type
 d'un cote sans l'autre fait echouer le banc.

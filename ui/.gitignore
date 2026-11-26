@@ -1,3 +1,5 @@
 node_modules/
 dist/
 dist-mock/
+# engendre par scripts/gen-catalog.ts depuis firmware/main/web/profiles.schema.json
+src/api/catalog.generated.ts

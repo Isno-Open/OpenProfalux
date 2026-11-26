@@ -2,6 +2,8 @@
 // s'y refere par leur nom. Les valeurs qui partent sur le fil (firmware, profiles.json, adresses) gardent la
 // forme que le firmware attend : seul le nom, cote interface, est en anglais.
 
+import type { Encoder } from './api/catalog.generated';
+
 type ValueOf<T> = T[keyof T];
 
 /* Commandes d'un appareil (corps de /api/shutter, /api/pfx/cmd, captures). */
@@ -11,31 +13,32 @@ export type Command = ValueOf<typeof COMMAND>;
 export const MOVE_COMMANDS = [COMMAND.up, COMMAND.stop, COMMAND.down] as const;
 export type MoveCommand = (typeof MOVE_COMMANDS)[number];
 const COMMAND_VALUES: readonly string[] = Object.values(COMMAND);
-/* Une commande lue dans profiles.json (types[].capture) : verifiee avant d'etre envoyee. */
+/* Une commande lue ailleurs que dans le code (choix d'une liste) : verifiee avant d'etre envoyee. */
 export const isCommand = (value: string): value is Command => COMMAND_VALUES.includes(value);
 /* Serial vide d'une telecommande (aucune trame, aucune identite) dans les reponses du firmware. */
 export const NO_SERIAL = '0x0000000';
 /* Choix « nouvel appareil » d'une liste de puces (valeur interne, jamais un nom d'appareil valide). */
 export const NEW_DEVICE = '__new';
 
-/* Types d'appareil : cles de profiles.json « types », et leur code dans la fiche (champ type). */
+/* Types d'appareil : cles du catalogue « types ». Leur numero dans la fiche (mode legacy) est dans le catalogue. */
 export const DEVICE_TYPE = { shutter: 'volet', gate: 'portail' } as const;
 export type DeviceType = ValueOf<typeof DEVICE_TYPE>;
-export const DEVICE_TYPE_CODE = { shutter: 0, gate: 1 } as const;
+/* Encodeurs du firmware (catalogue, protocols[].encoder) : du code, que l'interface nomme pour choisir un parcours. */
+export const ENCODER = { keeloq: 'keeloq', somfyRts: 'somfy-rts', rawReplay: 'raw-replay' } as const satisfies Record<string, Encoder>;
 
 /* Protocole d'un appareil virtuel (champ proto). */
 export const PROTOCOL = { somfy: 'somfy', profalux: 'profalux' } as const;
 export type Protocol = ValueOf<typeof PROTOCOL>;
 
-/* Mecanisme d'un profil (profiles.json « mecanisme ») et d'un appareil. */
+/* Mecanisme d'un profil (deduit de sa methode et de son protocole) et d'un appareil. */
 export const MECHANISM = { enrolment: 'enrolement', replay: 'rejeu', clone: 'cloner' } as const;
 export type Mechanism = ValueOf<typeof MECHANISM>;
 
-/* Parcours d'ajout d'un profil (profiles.json « flow »). */
+/* Parcours d'ajout d'un profil (deduit de sa methode et de son encodeur, profiles.ts). */
 export const FLOW = { learn: 'learn', replay: 'rejeu', enrolPfx: 'enrol-pfx', createSomfy: 'create-somfy' } as const;
 export type Flow = ValueOf<typeof FLOW>;
 
-/* Marques nommees par le code (profiles.json « marque »). */
+/* Marques nommees par le code (catalogue « brand », et champ marque des fiches). */
 export const BRAND = { profalux: 'Profalux', somfy: 'Somfy RTS', came: 'CAME' } as const;
 
 /* Role d'un appareil (profiles.json « roles », membres permis d'une centrale ou d'une zone). */

@@ -20,10 +20,10 @@ function startOver(): void {
 <script setup lang="ts">
 import { computed } from 'vue';
 import { navigate } from '../../router';
-import { state, sendCommand, refresh, typeOf } from '../../store';
-import { hasComma } from '../../profiles';
+import { state, sendCommand, refresh } from '../../store';
+import { hasComma, typeView } from '../../profiles';
 import api from '../../api/index';
-import { BUTTON, COMMAND, DEVICE_TYPE, DEVICE_TYPE_CODE, SECTION, TAB, TONE, type Command } from '../../domain';
+import { BUTTON, COMMAND, DEVICE_TYPE, SECTION, TAB, TONE, type Command } from '../../domain';
 import { ICON } from '../../icons';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
@@ -38,7 +38,7 @@ const ADDRESS_MAX = 0xFFFFFF;
 /* Le volet en cours a ete supprime entre-temps (Appareils) : plus rien a appairer. */
 if (created.value && state.status && !state.status.volets.some(d => d.id === created.value)) startOver();
 const step = computed(() => (!created.value ? 0 : !paired.value ? 1 : 2));
-const dpad = computed(() => typeOf({ type: DEVICE_TYPE_CODE.shutter }).dpad ?? {});
+const dpad = computed(() => typeView(DEVICE_TYPE.shutter).dpad);
 const sending = computed<Command | ''>(() => (state.sending && state.sending.id === created.value ? state.sending.cmd : ''));
 
 function generate(): void {

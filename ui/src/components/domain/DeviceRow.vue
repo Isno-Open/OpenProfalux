@@ -13,7 +13,7 @@ const kind = computed(() => kindOf(props.device));
 const profile = computed(() => (kind.value.hasTx ? profileOf(props.device) : null));
 const detail = computed(() => (props.device.central || props.device.zone
   ? (props.device.members || '').split(',').filter(Boolean).join(', ') || 'aucun volet'
-  : (profile.value ? profile.value.nom : props.device.marque || '')));
+  : (profile.value ? profile.value.name : props.device.marque || '')));
 </script>
 
 <template>

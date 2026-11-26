@@ -3,8 +3,9 @@
 import { reactive } from 'vue';
 import api from './api/index';
 import { whenUnauthorized } from './api/http';
-import type { Device, OtaStatus, Profiles, RadioSummary, ShutterOrder, Status, TypeEntry } from './api/types';
-import { COMMAND, DEVICE_TYPE, FAILURE, HTTP_UNAUTHORIZED, type Command } from './domain';
+import type { OtaStatus, RadioSummary, ShutterOrder, Status } from './api/types';
+import type { Catalog } from './api/catalog.generated';
+import { FAILURE, HTTP_UNAUTHORIZED, type Command } from './domain';
 import { updateAvailable } from './versions';
 
 const STATUS_PERIOD_MS = 3000;          // comme app.js
@@ -18,7 +19,7 @@ interface AppState {
   ready: boolean;                       // la session est connue (sinon on n'affiche rien)
   status: Status | null;                // /api/status
   statusOkAt: number | null;            // heure du dernier statut recu
-  profiles: Profiles | null;            // profiles.json (route protegee : lu apres la connexion)
+  profiles: Catalog | null;             // profiles.json, le catalogue (route protegee : lu apres la connexion)
   isProtected: boolean;                 // /api/session : interface protegee par mot de passe
   loggedIn: boolean;
   offline: boolean;                     // le boitier ne repond plus
@@ -181,11 +182,3 @@ export const renameFailureText = (e: unknown): string => (typeof e === 'string' 
 /* Nom a afficher pour un serial : nom de la telecommande, sinon le serial. */
 export const remoteName = (serial: string): string => state.status?.remotes[serial] || serial;
 
-/* Le type declare d'un appareil, lu dans profiles.json (source unique) : volet, portail... */
-const DEFAULT_TYPE: TypeEntry = { label: 'Volet', code: 0, dpad: { [COMMAND.up]: 'Montée', [COMMAND.stop]: 'Stop', [COMMAND.down]: 'Descente' } };
-export function typeOf(device: Pick<Device, 'type'> | null | undefined): TypeEntry & { key: string } {
-  const types = state.profiles?.types ?? {};
-  const code = device?.type ?? 0;
-  const key = Object.keys(types).find(k => types[k]?.code === code) ?? DEVICE_TYPE.shutter;
-  return { key, ...(types[key] ?? DEFAULT_TYPE) };
-}

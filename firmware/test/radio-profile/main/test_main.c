@@ -31,7 +31,7 @@ int main(void) {
     check_u("868350   -> 0x2165E8", radio_cc1101_freq_word(868350), 0x2165E8);
     check_u("863000   -> 0x21313B", radio_cc1101_freq_word(863000), 0x21313B);
     check_u("870000   -> 0x217627", radio_cc1101_freq_word(870000), 0x217627);
-    /* Porteuse CAME declaree dans profiles.json (tx.freq_khz = 433920), bande 433. */
+    /* Porteuse CAME declaree dans profiles.json (radio.freq_khz = 433920), bande 433. */
     check_u("came 433920 -> 0x10B071", radio_cc1101_freq_word(433920), 0x10B071);
 
     /* Noms <-> profils, aller-retour et inconnus. */

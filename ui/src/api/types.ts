@@ -60,38 +60,6 @@ export interface Status {
 export interface ShutterOrder { id: string; cmd: Command; value?: number }
 export interface ShutterReply extends OkReply { busy?: boolean }
 
-/* profiles.json : types d'appareil, profils (marque, methode), roles et bornes. */
-export interface TypeEntry {
-  label: string;
-  code: number;
-  icon?: string;
-  positional?: boolean;
-  dpad?: Partial<Record<Command, string>>;
-  travel_s?: { min: number; max: number };
-  capture?: { cmd: string; label: string }[];
-}
-export interface ProfileTx { te_us?: number; repeat_bit?: boolean; rmt?: boolean; frame_bits?: number }
-export interface Profile {
-  nom: string;
-  marque: string;
-  type: string;          // une cle de types (DEVICE_TYPE)
-  mecanisme: string;     // MECHANISM
-  flow: string;          // FLOW
-  band: string;
-  freq_khz?: number;
-  description?: string;
-  rx?: { datarate_baud?: number; bandwidth_khz?: number };
-  tx?: ProfileTx;
-}
-export interface RoleEntry { label?: string; icon?: string; members_label?: string; members?: string[]; positional_only?: boolean; list_first?: boolean }
-export interface Profiles {
-  types: Record<string, TypeEntry>;   // cles : DEVICE_TYPE, et celles qu'une version future ajoutera
-  profils: Profile[];
-  roles?: { central?: RoleEntry; zone?: RoleEntry };
-  name_max?: number;
-  devices_max?: number;
-}
-
 /* /api/radios. */
 export interface RadioSummary { idx: number; band: string; chip?: string; freq_khz?: number; ok?: boolean }
 export interface RadioDetail {

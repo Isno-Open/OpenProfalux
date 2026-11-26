@@ -13,17 +13,21 @@ static void check(bool ok, const char *name) {
     if (!ok) g_fail++;
 }
 
-/* Le type <name> est-il declare dans profiles.json avec ce code ? (lecture simple du texte :
- * "<name>": { ... "code": <code>, dans l'objet "types"). */
+/* Le type <name> est-il declare dans profiles.json avec ce numero (mode legacy) ? Lecture simple du texte :
+ * "<name>": { ... "legacy": { "code": <code> } dans l'objet "types". Chaque type a une icone : le "legacy" doit
+ * venir avant l'icone du type suivant, sinon c'est celui d'un autre type. */
 static bool declared_in_profiles(const char *json, const char *name, int code) {
     const char *types = strstr(json, "\"types\"");
     if (!types) return false;
     char key[48]; snprintf(key, sizeof key, "\"%s\":", name);
     const char *k = strstr(types, key);
     if (!k) return false;
-    const char *c = strstr(k, "\"code\":");
-    const char *close = strchr(k, '}');
-    if (!c || (close && c > close)) return false;
+    const char *icon = strstr(k, "\"icon\"");
+    const char *next = icon ? strstr(icon + 1, "\"icon\"") : NULL;
+    const char *legacy = strstr(k, "\"legacy\"");
+    if (!legacy || (next && legacy > next)) return false;
+    const char *c = strstr(legacy, "\"code\":");
+    if (!c) return false;
     return atoi(c + 7) == code;
 }
 

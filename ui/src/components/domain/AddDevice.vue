@@ -6,8 +6,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { route, navigate } from '../../router';
 import { radios } from '../../store';
-import { profiles, types, typeIcon, methodRoute, bandLabel, bandColor } from '../../profiles';
-import type { Profile } from '../../api/types';
+import { profiles, types, typeIcon, methodRoute, bandLabel, bandColor, type ProfileView } from '../../profiles';
 import { SECTION, TAB } from '../../domain';
 import OpCard from '../base/OpCard.vue';
 import OpIcon from '../base/OpIcon.vue';
@@ -37,18 +36,18 @@ const typeHint = (t: { count: number; bands: string[] }): string => (t.count ? (
   : t.bands.length ? `disponible en ${t.bands.map(bandLabel).join(' ou ')}` : 'bientôt');
 const brands = computed(() => {
   const list = available.value.filter(p => p.type === type.value);
-  return [...new Set(list.map(p => p.marque))].map(name => ({ name, band: list.find(p => p.marque === name)?.band }));
+  return [...new Set(list.map(p => p.brand))].map(name => ({ name, band: list.find(p => p.brand === name)?.band }));
 });
-const methods = computed(() => available.value.filter(p => p.type === type.value && p.marque === brand.value));
+const methods = computed(() => available.value.filter(p => p.type === type.value && p.brand === brand.value));
 const typeLabel = (key: string | null): string => (key ? types()[key]?.label ?? key : '');
 
 const enc = encodeURIComponent;
 function chooseBrand(name: string): void {
-  const matching = available.value.filter(p => p.type === type.value && p.marque === name);
+  const matching = available.value.filter(p => p.type === type.value && p.brand === name);
   const only = matching.length === 1 ? matching[0] : undefined;
   navigate(only ? methodRoute(only) : `${ADD_ROUTE}/${enc(type.value ?? '')}/${enc(name)}`);
 }
-const chooseMethod = (p: Profile): void => navigate(methodRoute(p));
+const chooseMethod = (p: ProfileView): void => navigate(methodRoute(p));
 </script>
 
 <template>
@@ -89,7 +88,7 @@ const chooseMethod = (p: Profile): void => navigate(methodRoute(p));
         <template v-else>
           <p class="question">Comment l'ajouter ?</p>
           <div class="list">
-            <ProfileChoice v-for="p in methods" :key="p.nom" :profile="p" @choose="chooseMethod" />
+            <ProfileChoice v-for="p in methods" :key="p.id" :profile="p" @choose="chooseMethod" />
           </div>
         </template>
       </template>

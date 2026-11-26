@@ -14,7 +14,8 @@ const stopwatch = ref<{ direction: Direction; start: number; id: string } | null
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, watch } from 'vue';
-import { state, refresh, toast, typeOf } from '../../store';
+import { state, refresh, toast } from '../../store';
+import { typeOf } from '../../profiles';
 import { navigate } from '../../router';
 import api from '../../api/index';
 import { BUTTON, SECTION, TAB, TONE } from '../../domain';

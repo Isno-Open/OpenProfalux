@@ -18,8 +18,8 @@ const devices = computed(() => state.status?.volets ?? []);
 const centrals = computed(() => devices.value.filter(d => d.central));
 /* Qui peut etre membre d'une centrale : profiles.json (roles.central.members : appareils simples et zones). */
 const roleOf = (d: Device): Role => (d.central ? ROLE.central : d.zone ? ROLE.zone : ROLE.simple);
-const rule = computed(() => state.profiles?.roles?.central ?? {});
-const allowedRoles = computed<string[]>(() => rule.value.members ?? [ROLE.simple, ROLE.zone]);
+const rule = computed(() => state.profiles?.roles.central);
+const allowedRoles = computed<string[]>(() => rule.value?.members ?? [ROLE.simple, ROLE.zone]);
 const candidates = computed(() => devices.value.filter(d => allowedRoles.value.includes(roleOf(d))).map(d => ({ value: d.id, label: d.id })));
 const editing = ref('');          // centrale en cours de modification ('' = nouvelle)
 const name = ref('');
@@ -74,7 +74,7 @@ async function confirmDelete(id: string): Promise<void> {
         <OpField label="Nom" control="central-name">
           <input id="central-name" v-model="name" class="op-input" placeholder="ex : Tous les volets" :maxlength="state.profiles?.name_max || 23" :disabled="!!editing">
         </OpField>
-        <OpField :label="rule.members_label || 'Volets pilotés'">
+        <OpField :label="rule?.members_label || 'Volets pilotés'">
           <ChipPicker v-model="members" multiple :options="candidates" label="Volets pilotés" empty="Aucun volet à grouper pour l'instant." />
         </OpField>
         <div class="row">
