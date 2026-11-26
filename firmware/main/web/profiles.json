@@ -35,6 +35,8 @@
                  "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
     "portail": { "label": "Portail", "code": 1, "icon": "<svg viewBox='0 0 24 24' width='1.05em' height='1.05em' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' style='vertical-align:-2px'><path d='M4 8h12v12H4M4 11h12M4 14h12M4 17h12M1 20h22M18 14h4M20 12l2 2-2 2'/></svg>", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
                  "en": { "label": "Gate", "dpad": { "up": "Open", "stop": "Stop", "down": "Close" } },
+                 "secure": [ "up", "stop", "down" ],
+                 "_secure": "Commandes qui DONNENT ACCES aux lieux : le portail cloud exige un code avant de les envoyer pour un tiers (Google Home). Les trois, parce qu'un portail a bouton unique rejoue la meme trame pour Ouvrir, Stop et Fermer (shutters.c, rejeu_emit) : « fermer » un portail ferme l'ouvre.",
                  "capture": [ { "cmd": "up", "label": "Bouton du portail" } ] }
   },
   "profils": [

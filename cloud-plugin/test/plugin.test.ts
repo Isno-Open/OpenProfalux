@@ -112,6 +112,21 @@ test("types engendres depuis profiles.json : volet positionnel, portail sans pos
   assert.deepEqual(family.kinds.map((k) => k.id), [...kinds.map((k) => k.id), "remote", "remote-ignored"], "le plugin porte les types du firmware, puis ses telecommandes");
 });
 
+test("commandes qui donnent acces : celles que profiles.json declare, pas une de plus ; une commande inconnue est refusee", () => {
+  const p = profiles() as { types: Record<string, Record<string, unknown>> };
+  const secureOf = (src: unknown, id: string): string[] =>
+    (kindsOf(src) as { id: string; controls: { id: string; secure?: true }[] }[]).find((k) => k.id === id)!.controls.filter((c) => c.secure === true).map((c) => c.id);
+  // un portail a bouton unique rejoue la meme trame pour les trois : les trois donnent acces
+  assert.deepEqual(secureOf(p, "portail"), ["up", "stop", "down"]);
+  assert.deepEqual(secureOf(p, "volet"), [], "un volet ne declare rien : aucun code");
+  const partial = structuredClone(p);
+  partial.types.portail!.secure = ["up"];
+  assert.deepEqual(secureOf(partial, "portail"), ["up"], "la declaration decide, commande par commande");
+  const invalid = structuredClone(p);
+  invalid.types.portail!.secure = ["ouvrir"];
+  assert.throws(() => kindsOf(invalid), /secure/);
+});
+
 test("types engendres : un type sans libelles anglais, ou une icone SVG a plusieurs traces, sont refuses", () => {
   const p = profiles() as { types: Record<string, Record<string, unknown>> };
   const sansEn = structuredClone(p);
