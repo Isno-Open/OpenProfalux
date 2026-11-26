@@ -368,7 +368,9 @@ cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p) {
 
 void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p) {
     if (!p) return;
-    if (p->freq_khz && v->freq_khz == p->freq_khz) v->freq_khz = 0;
+    /* Un rejeu brut : sa porteuse a 0 est celle de SA CAPTURE, pas celle du profil. Une valeur egale au
+     * profil reste donc ecrite, sinon il emettrait sur la capture (revue de la PR #156). */
+    if (!v->rejeu && p->freq_khz && v->freq_khz == p->freq_khz) v->freq_khz = 0;
     if (p->te_us && v->te_us == p->te_us)          v->te_us = 0;
     if (p->repeat_bit >= 0 && v->tx_rpt == (p->repeat_bit ? TXOVR_ON : TXOVR_OFF)) v->tx_rpt = TXOVR_INHERIT;
     if (p->rmt >= 0 && v->tx_rmt == (p->rmt ? TXOVR_ON : TXOVR_OFF))               v->tx_rmt = TXOVR_INHERIT;

@@ -509,6 +509,13 @@ int main(void) {
             w.freq_khz = p->freq_khz; w.te_us = p->te_us; w.tx_rpt = p->repeat_bit ? TXOVR_ON : TXOVR_OFF;
             cfg_volet_inherit_equal(&w, p);
             CHECK(w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT, "ecriture : une valeur egale au profil revient a 0");
+            const catalog_profile_t *came = catalog_profile(CAME_REPLAY);
+            volet_t r; memset(&r, 0, sizeof r);
+            char capture[] = "{\"f\":433900}";
+            r.rejeu = capture;
+            r.freq_khz = came ? came->freq_khz : 0;
+            cfg_volet_inherit_equal(&r, came);
+            CHECK(came && r.freq_khz == came->freq_khz, "rejeu : la porteuse egale au profil reste ecrite (0 = celle de la capture)");
         }
     }
 

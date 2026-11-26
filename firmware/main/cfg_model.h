@@ -150,6 +150,7 @@ cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p);
  * Renvoie true si la fiche a change. */
 bool cfg_volet_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now);
 /* Un reglage egal a celui du profil revient a 0 (heriter) : l'appareil suivra une correction du profil.
+ * Sauf la porteuse d'un rejeu brut, dont le 0 veut dire « celle de la capture ».
  * Applique a la migration et a chaque ecriture des reglages (shutters_set_tx_params). */
 void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p);
 
