@@ -15,7 +15,7 @@ const SRC = process.argv[2] ?? join(here, "../../firmware/main/web/profiles.json
 const OUT = process.argv[3] ?? join(here, "../src/kinds.generated.ts");
 
 type Text = { fr: string; en: string };
-type Ctl = { kind: string; id: string; label: Text; icon?: unknown; settable?: boolean };
+type Ctl = { kind: string; id: string; label: Text; icon?: unknown; settable?: boolean; secure?: true };
 /** Un type simple tel que le generateur le construit (positional : pour choisir ceux d'un role). */
 type Simple = { id: string; label: Text; icon: unknown; controls: Ctl[]; settings: unknown[]; positional: boolean };
 type Dpad = { up: string; stop: string; down: string };
@@ -51,8 +51,13 @@ export function kindsOf(profiles: unknown): unknown[] {
     const dpad = t.dpad, enDpad = en.dpad;
     const text = (fr: string, e: string): Text => ({ fr, en: e });
     const glyphs: Dpad = { up: "▲", stop: "■", down: "▼" };
+    // commandes qui donnent acces aux lieux (profiles.json "secure") : le portail exige un code avant
+    // de les envoyer pour un tiers. Declare par le firmware, qui seul sait ce que la commande emet.
+    const secure = t.secure ?? [];
+    if (!Array.isArray(secure) || secure.some((k) => !ACTION_IDS.some((a) => a === k)))
+      throw new Error(`type ${id} : secure liste des commandes du pave (${ACTION_IDS.join(", ")})`);
     const controls: Ctl[] = ACTION_IDS.map((k) => ({
-      kind: CONTROL.action, id: k, label: text(dpad[k], enDpad[k]), icon: { glyph: glyphs[k] },
+      kind: CONTROL.action, id: k, label: text(dpad[k], enDpad[k]), icon: { glyph: glyphs[k] }, ...(secure.includes(k) ? { secure: true as const } : {}),
     }));
     // un type positionnel a une position, reglable (decide le 2026-11-14) ; chaque appareil peut la masquer
     if (t.positional === true) controls.push({ kind: CONTROL.position, id: CONTROL_ID.position, label: text("Position", "Position"), settable: true });
