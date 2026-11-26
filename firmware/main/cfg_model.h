@@ -43,6 +43,9 @@ typedef enum {
 
 typedef struct {
     char id[SH_ID_LEN];
+    /* Identifiant STABLE (cover_attrs.h, cover_uid_ok) : garde quand `id` change (renommage). Toujours
+     * rempli une fois le modele charge (cfg_model_ensure_uids). */
+    char uid[SH_ID_LEN];
     char serials[SH_MAX_SERIALS][SH_SERIAL_LEN];
     int  n_serials;
     char up[SH_BITS_LEN], down[SH_BITS_LEN], stop[SH_BITS_LEN];
@@ -135,6 +138,10 @@ char *cfg_model_export(const cfg_model_t *m);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */
 void  cfg_model_import(const cfg_model_t *m, cJSON *root);
+/* Donne un identifiant stable a chaque volet qui n'en a pas (ou dont le sien est invalide, ou deja porte
+ * par un volet place avant lui), sans toucher aux autres. Renvoie le nombre de volets servis. Appele
+ * apres tout chargement, et avant toute ecriture : un volet tout juste cree le recoit la. */
+int   cfg_model_ensure_uids(const cfg_model_t *m);
 /* Est-ce une sauvegarde de config (format de cfg_model_export) ? Un objet avec un
  * tableau "volets", et "remotes" absent ou objet. L'export des trames, {} ou []
  * ne le sont pas : les restaurer remettait toute la config a zero. */

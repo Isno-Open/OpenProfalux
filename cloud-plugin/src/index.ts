@@ -117,7 +117,9 @@ export function read({ path, payload, retained }: FamilyMessage): Fact[] {
       ...(role && Array.isArray(members) && members.every((x) => typeof x === "string") ? { [SETTING_ID.members]: members as string[] } : {}),
     };
     const type = typeof a.type === "string" ? a.type : "";
-    return [{ fact: FACT.device, device, kind: role ? roleKindId(type, role) : type, name: nameOf(a.name, device),
+    // uid : l'identifiant que le boitier garde quand il renomme l'appareil (cover_attrs.c) ; le portail
+    // le verifie, et s'en sert pour reconnaitre l'appareil apres un renommage. Absent : firmware d'avant.
+    return [{ fact: FACT.device, device, kind: role ? roleKindId(type, role) : type, ...(str(a.uid) ? { uid: a.uid } : {}), name: nameOf(a.name, device),
       hidden: a.positional === true ? [] : [CONTROL_ID.position], settings, ...(num(rank) ? { rank } : {}) }];
   }
   m = /^remote\/([^/]+)\/battery$/.exec(path);

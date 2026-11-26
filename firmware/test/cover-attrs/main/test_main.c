@@ -27,6 +27,12 @@ static bool declared_in_profiles(const char *json, const char *name, int code) {
     return atoi(c + 7) == code;
 }
 
+/* L'identifiant est-il dans la liste (terminee par NULL) ? */
+static bool taken_in(const char *uid, void *ctx) {
+    for (const char *const *p = ctx; *p; p++) if (!strcmp(*p, uid)) return true;
+    return false;
+}
+
 int main(int argc, char **argv) {
     printf("Banc cover_attrs\n");
     char out[96];
@@ -73,6 +79,32 @@ int main(int argc, char **argv) {
           && strstr(big, "\"members\":[\"a\",\"b\"]}"), "T25 membres : vides ignores");
     check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .orientation = -1, .role = COVER_ROLE_CENTRAL, .members = "Salon,Chambre" }, big, 60) == -1 && big[0] == 0, "T26 membres qui ne tiennent pas : refuse, chaine vide");
     check(cover_role_name(COVER_ROLE_SIMPLE) == NULL && cover_role_name(COVER_ROLE_COUNT) == NULL, "T27 role simple ou inconnu : pas de nom");
+
+    /* slug d'un nom, et identifiant stable d'un appareil (garde au renommage) */
+    char sl[COVER_NAME_MAX + 1], uid[COVER_NAME_MAX + 1];
+    cover_slug(sl, sizeof sl, "Chambre Parents");
+    check(!strcmp(sl, "Chambre_Parents"), "T30 slug : hors alphabet devient _");
+    cover_slug(sl, sizeof sl, "");
+    check(!strcmp(sl, "volet"), "T31 slug d'un nom vide : volet");
+    cover_slug(sl, 4, "Salon");
+    check(!strcmp(sl, "Sal"), "T32 slug : borne par la capacite");
+    check(cover_uid_ok("Chambre_Parents") && cover_uid_ok("a-1") && !cover_uid_ok("") && !cover_uid_ok(NULL) && !cover_uid_ok("a b")
+          && !cover_uid_ok("s\xc3\xa9jour") && cover_uid_ok("12345678901234567890123") && !cover_uid_ok("123456789012345678901234"),
+          "T33 identifiant stable : alphabet d'un slug, 1 a COVER_NAME_MAX octets");
+    cover_uid_pick(uid, sizeof uid, "Chambre Parents", NULL, NULL);
+    check(!strcmp(uid, "Chambre_Parents"), "T34 identifiant libre : le slug du nom");
+    cover_uid_pick(uid, sizeof uid, "Salon", taken_in, (void *)(const char *const[]){ "Salon", NULL });
+    check(!strcmp(uid, "Salon_2"), "T35 identifiant deja porte : suffixe _2");
+    cover_uid_pick(uid, sizeof uid, "Salon", taken_in, (void *)(const char *const[]){ "Salon", "Salon_2", "Salon_3", NULL });
+    check(!strcmp(uid, "Salon_4"), "T36 suffixes deja portes : le suivant");
+    cover_uid_pick(uid, sizeof uid, "12345678901234567890123", taken_in, (void *)(const char *const[]){ "12345678901234567890123", NULL });
+    check(!strcmp(uid, "123456789012345678901_2") && cover_uid_ok(uid), "T37 nom a la longueur maximale : base raccourcie, identifiant valable");
+    cover_uid_pick(uid, 4, "Salon", NULL, NULL);
+    check(uid[0] == 0, "T38 tampon trop petit : rien, plutot qu'un identifiant tronque");
+    /* publie avec la description, avant le nom ; jamais un identifiant invalide */
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .positional = true, .name = "S\xc3\xa9jour", .orientation = -1, .uid = "Salon" }, big, sizeof big) > 0
+          && !strcmp(big, "{\"type\":\"volet\",\"positional\":true,\"uid\":\"Salon\",\"name\":\"S\xc3\xa9jour\"}"), "T39 identifiant stable publie, independant du nom");
+    check(cover_attrs_json(&(cover_attrs_t){ .type = TYPE_VOLET, .name = "V", .orientation = -1, .uid = "pas valable" }, big, sizeof big) > 0 && !strstr(big, "uid"), "T40 identifiant invalide : non publie");
 
     /* json_string : texte choisi par l'utilisateur (SSID) en chaine JSON */
     char js[64];

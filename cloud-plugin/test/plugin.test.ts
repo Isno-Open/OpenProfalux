@@ -79,6 +79,23 @@ test("commandes : celles que le firmware attend, sous le prefixe du boitier", ()
   assert.deepEqual(Object.keys(ACTION_PAYLOAD).sort(), ["down", "stop", "up"]);
 });
 
+test("renommage sur le boitier : le meme appareil, sous son nouveau nom, et les commandes suivent", () => {
+  clearDeviceFamilies();
+  registerDeviceFamily(family);
+  const devices = (): unknown[] => [...boxState("openprofalux", BOX)!.devices].map(([slug, d]) => [slug, d.uid, d.name]);
+  // ce que publie le firmware : l'identifiant stable, pris au slug du moment a la creation
+  applyMessage(`${ROOT}/${BOX}/cover/Volet_Test/attrs`, '{"type":"volet","positional":true,"uid":"Volet_Test","name":"Volet Test"}', true, 1);
+  assert.deepEqual(devices(), [["Volet_Test", "Volet_Test", "Volet Test"]]);
+  // renomme : le firmware retire l'ancienne description (vide) puis publie la nouvelle, MEME identifiant
+  applyMessage(`${ROOT}/${BOX}/cover/Volet_Test/attrs`, "", true, 2);
+  applyMessage(`${ROOT}/${BOX}/cover/Test_Google/attrs`, '{"type":"volet","positional":true,"uid":"Volet_Test","name":"Test Google"}', true, 2);
+  assert.deepEqual(devices(), [["Test_Google", "Volet_Test", "Test Google"]], "un seul appareil, la meme identite, le nouveau nom");
+  assert.deepEqual(buildCommand(familyById("openprofalux")!, { box: BOX, device: "Test_Google" }, "up", null),
+    { topic: `${ROOT}/${BOX}/cover/Test_Google/set`, payload: "OPEN", retain: false }, "la commande vise le nouveau nom, celui que le boitier ecoute");
+  // un firmware d'avant n'annonce pas d'identifiant : rien n'est invente
+  assert.deepEqual(read({ box: BOX, path: "cover/Ancien/attrs", payload: '{"type":"volet","positional":true}', retained: true })[0], { fact: FACT.device, device: "Ancien", kind: "volet", name: "Ancien", hidden: [], settings: {} });
+});
+
 test("un portail (non positionnel) n'a ni position affichee ni commande de position", () => {
   clearDeviceFamilies();
   registerDeviceFamily(family);

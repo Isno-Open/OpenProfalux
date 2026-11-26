@@ -7,6 +7,7 @@
 #include <bsd/string.h>   /* strlcpy sur PC (banc de test) ; newlib la fournit sur l'ESP32 */
 #endif
 #include "esp_log.h"
+#include "cover_attrs.h"   /* slug et identifiant stable d'un appareil (unite pure) */
 
 static const char *TAG = "cfg_model";
 
@@ -47,10 +48,41 @@ const char *cfg_members_next(const char *p, char id[SH_ID_LEN]) {
     return p + n;
 }
 
+/* ── Identifiant stable ── */
+typedef struct { const cfg_model_t *m; int upto, skip; } uid_scope_t;
+/* uid deja porte par un des `upto` premiers volets, hors le volet `skip` (celui qu'on sert) ? */
+static bool uid_taken(const char *uid, void *ctx) {
+    const uid_scope_t *s = ctx;
+    for (int i = 0; i < s->upto; i++) if (i != s->skip && !strcmp(s->m->volets[i].uid, uid)) return true;
+    return false;
+}
+int cfg_model_ensure_uids(const cfg_model_t *m) {
+    int n = *m->nvolets, served = 0;
+    /* d'abord les identifiants deja choisis : un doublon ou une valeur invalide (sauvegarde retouchee
+     * a la main, appareil recopie) perd le sien, le premier garde le sien */
+    for (int i = 0; i < n; i++) {
+        uid_scope_t before = { m, i, -1 };
+        if (m->volets[i].uid[0] && (!cover_uid_ok(m->volets[i].uid) || uid_taken(m->volets[i].uid, &before))) m->volets[i].uid[0] = 0;
+    }
+    /* puis ceux qui n'en ont pas : leur slug, s'il est libre parmi TOUS les autres */
+    for (int i = 0; i < n; i++) {
+        if (m->volets[i].uid[0]) continue;
+        uid_scope_t others = { m, n, i };
+        cover_uid_pick(m->volets[i].uid, sizeof(m->volets[i].uid), m->volets[i].id, uid_taken, &others);
+        served++;
+    }
+    return served;
+}
+
 /* ── Modele -> JSON ── */
 static cJSON *volet_to_json(const volet_t *v) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
+    /* Identifiant stable : omis tant qu'il vaut le slug du nom (jamais renomme), pour garder les
+     * sauvegardes existantes a l'identique ; au chargement, un volet sans ce champ le retrouve tel quel. */
+    char slug[SH_ID_LEN];
+    cover_slug(slug, sizeof(slug), v->id);
+    if (v->uid[0] && strcmp(v->uid, slug)) cJSON_AddStringToObject(o, "uid", v->uid);
     cJSON *sr = cJSON_AddArrayToObject(o, "serials");
     for (int j = 0; j < v->n_serials; j++) cJSON_AddItemToArray(sr, cJSON_CreateString(v->serials[j]));
     cJSON *cmd = cJSON_AddObjectToObject(o, "cmd");
@@ -119,6 +151,7 @@ static char *print_and_free(cJSON *j) {   /* NULL si plus de memoire : cfg_store
  * reecrite en bloc. Un volet inchange ne coute rien, la NVS ignore une valeur
  * identique. */
 esp_err_t cfg_model_save(const cfg_model_t *m, char *failed_key) {
+    cfg_model_ensure_uids(m);   /* un volet tout juste cree recoit le sien avant d'etre ecrit */
     cfg_store_tx_t tx;
     if (cfg_store_begin(&tx) == ESP_OK) {
         char *d = print_and_free(hdr_to_json(m));
@@ -163,6 +196,8 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     volet_t *v = &m->volets[(*m->nvolets)++];
     memset(v, 0, sizeof(*v)); v->target = -1; v->pub_pos = -1; v->pub_dir = -9;
     strlcpy(v->id, id, SH_ID_LEN);
+    /* identifiant stable : absent = jamais renomme, cfg_model_ensure_uids lui rendra son slug */
+    strlcpy(v->uid, cJSON_GetStringValue(cJSON_GetObjectItem(o, "uid")) ?: "", SH_ID_LEN);
     cJSON *sr = cJSON_GetObjectItem(o, "serials");
     for (cJSON *s = sr ? sr->child : NULL; s && v->n_serials < SH_MAX_SERIALS; s = s->next)
         strlcpy(v->serials[v->n_serials++], cJSON_GetStringValue(s) ?: "", SH_SERIAL_LEN);
@@ -218,6 +253,7 @@ void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);
     cJSON *vols = cJSON_GetObjectItem(root, "volets");
     for (cJSON *o = vols ? vols->child : NULL; o; o = o->next) parse_volet_json(m, o);
+    cfg_model_ensure_uids(m);
 }
 bool cfg_model_is_backup(const cJSON *root) {
     if (!cJSON_IsObject(root)) return false;
@@ -249,7 +285,9 @@ static bool legacy_has_volets(const char *doc) {
     return yes;
 }
 cfg_layout_t cfg_model_load(const cfg_model_t *m) {
-    return cfg_store_load(on_cfg_doc, (void *)m, legacy_has_volets);
+    cfg_layout_t lay = cfg_store_load(on_cfg_doc, (void *)m, legacy_has_volets);
+    cfg_model_ensure_uids(m);   /* un document par volet : seulement une fois tous lus */
+    return lay;
 }
 
 /* ── Dataset de trames ── */

@@ -26,6 +26,20 @@ bool cover_travel_ok(uint32_t ms);
 /* Orientation d'une facade : azimut en degres, 0 (nord) a 359 ; -1 = non definie. */
 #define COVER_ORIENTATION_MAX 359
 
+/* Slug d'un nom d'appareil : ses caracteres hors [a-zA-Z0-9_-] deviennent '_' (un nom vide donne
+ * "volet"). C'est l'identifiant de l'appareil dans les topics MQTT, donc il CHANGE quand on renomme. */
+void cover_slug(char *dst, size_t cap, const char *name);
+
+/* IDENTIFIANT STABLE d'un appareil (uid) : choisi une fois, a sa creation, et GARDE quand on le renomme.
+ * Le portail cloud s'en sert pour reconnaitre l'appareil apres un renommage (Google Home y perdait sa
+ * piece et ses routines, le code propre d'un portail etait perdu). Meme alphabet qu'un slug, au plus
+ * COVER_NAME_MAX octets. Un appareil cree avant ce champ prend son slug du moment : son identite
+ * connue du portail ne change pas a la mise a jour. */
+bool cover_uid_ok(const char *uid);
+/* Choisit l'uid d'un appareil nomme `name` : son slug, ou son slug suivi de _2, _3... tant que
+ * taken(candidat, ctx) dit qu'un autre appareil le porte deja. out a au moins COVER_NAME_MAX + 1 octets. */
+void cover_uid_pick(char *out, size_t cap, const char *name, bool (*taken)(const char *uid, void *ctx), void *ctx);
+
 /* Role d'un appareil : simple, CENTRALE (commande diffusee a ses membres) ou ZONE (telecommande de
  * piece, ses suiveurs reproduisent ses mouvements). Noms MIROIR des cles de profiles.json "roles" : le
  * banc test/cover-attrs refuse toute divergence. */
@@ -45,9 +59,10 @@ typedef struct {
     int         orientation;   /* 0..359, -1 = non definie */
     cover_role_t role;
     const char  *members;      /* centrale ou zone : SLUGS de ses membres separes par des virgules (NULL = aucun) */
+    const char  *uid;          /* identifiant stable (cover_uid_ok), NULL ou invalide = non publie */
 } cover_attrs_t;
 
-/* Ecrit {"type":"<nom>","positional":true|false,"name":"...","travel_up_s":N,"travel_down_s":N,
+/* Ecrit {"type":"<nom>","positional":true|false,"uid":"...","name":"...","travel_up_s":N,"travel_down_s":N,
  * "rank":N,"orientation":N,"role":"central|zone","members":["slug",...]} dans out (role et members
  * seulement pour une centrale ou une zone, members toujours present alors, meme vide) (champs facultatifs selon cover_attrs_t). Le nom est celui que
  * l'utilisateur a donne (accents compris, en UTF-8), echappe pour JSON. Rend la longueur, ou -1 si le
