@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import plugin, { family, read, command, configure, ACTION_PAYLOAD } from "../src/index.js";
 import { kindsOf as kindsFrom, iconOf } from "../scripts/gen-kinds.js";
 import { asIcon } from "@isno-open/plugin-host";
+import { REMOTE_KIND } from "../src/remotes.js";
 import { FACT, DEVICE_SETTING } from "../opencloudapp/server/src/family-contract.js";
 import { registerDeviceFamily, clearDeviceFamilies, applyMessage, boxState, buildCommand, buildConfigure, familyById, buildFileRequest, awaitBoxFile } from "../opencloudapp/server/src/device-families.js";
 
@@ -136,7 +137,7 @@ test("types engendres depuis profiles.json : volet positionnel, portail sans pos
   for (const [id, name] of [["volet", "shutter"], ["portail", "gate"], ["volet-central", "central"], ["volet-zone", "zone"]] as const)
     assert.ok(drawing(kind(id)).includes(symbol(name)), `${id} porte le dessin « ${name} » de la planche`);
   for (const k of family.kinds) assert.ok(asIcon(k.icon), `${k.id} : icone acceptee par le portail`);
-  assert.ok(drawing(family.kinds.find((k) => k.id === "remote") as never).includes(symbol("remote")), "une telecommande porte le dessin de la planche");
+  assert.ok(drawing(family.kinds.find((k) => k.id === REMOTE_KIND.known) as never).includes(symbol("remote")), "une telecommande porte le dessin de la planche");
   assert.deepEqual(family.kinds.map((k) => k.id), [...kinds.map((k) => k.id), "remote", "remote-ignored"], "le plugin porte les types du firmware, puis ses telecommandes");
 });
 
