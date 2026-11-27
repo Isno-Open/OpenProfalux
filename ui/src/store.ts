@@ -145,6 +145,7 @@ export async function sendCommand(order: ShutterOrder): Promise<void> {
   try {
     const r = await api.sendShutter(order);
     if (r && r.busy) toast('Émission déjà en cours sur une autre carte, réessaie');
+    else if (r && r.refused) toast('Rien émis : cet appareil n\'a pas de bouton pour cette commande, ou sa trame n\'a pas été captée');
   } catch { toast('Radio occupée, réessaie dans un instant'); }
   finally { state.radioBusy = false; state.sending = null; refresh(); }
 }

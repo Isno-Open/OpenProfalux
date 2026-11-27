@@ -1376,6 +1376,25 @@ int main(void) {
         s_capture_dir = NULL; clear_captures();
     }
 
+    /* ── T17. Une commande s'emet par le bouton de son type ; sans bouton, elle est refusee ── */
+    printf("\n[T17] Emission par bouton : le creneau de chaque commande, ou le refus\n");
+    {
+        volet_t v; memset(&v, 0, sizeof v);
+        const char *shutter = catalog_type_of_legacy(0), *gate = catalog_type_of_legacy(1);
+        snprintf(v.type, sizeof v.type, "%s", shutter ? shutter : "");
+        bool vol = cfg_device_slot(&v, CAT_CMD_UP) == CAT_CMD_UP && cfg_device_slot(&v, CAT_CMD_STOP) == CAT_CMD_STOP
+                && cfg_device_slot(&v, CAT_CMD_DOWN) == CAT_CMD_DOWN && cfg_device_slot(&v, CAT_CMD_PROG) == CATALOG_NO_SLOT;
+        snprintf(v.type, sizeof v.type, "%s", gate ? gate : "");
+        bool gat = cfg_device_slot(&v, CAT_CMD_UP) == CAT_CMD_UP && cfg_device_slot(&v, CAT_CMD_STOP) == CAT_CMD_UP
+                && cfg_device_slot(&v, CAT_CMD_DOWN) == CAT_CMD_UP;
+        snprintf(v.type, sizeof v.type, "type-d-une-autre-version");
+        bool unk = cfg_device_slot(&v, CAT_CMD_UP) == CATALOG_NO_SLOT && cfg_device_slot(&v, CAT_CMD_COUNT) == CATALOG_NO_SLOT;
+        CHECK(shutter && gate && vol, "volet : chaque commande par son bouton, prog refusee");
+        CHECK(gat, "portail : ouvrir, stop et fermer par son bouton pas a pas");
+        CHECK(unk, "type inconnu de ce catalogue : tout est refuse");
+        printf("  volet %s, portail %s, type inconnu refuse %s\n", vol ? "OK" : "KO", gat ? "OK" : "KO", unk ? "OK" : "KO");
+    }
+
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");
     return s_fail ? 1 : 0;
 }

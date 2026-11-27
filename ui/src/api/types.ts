@@ -61,7 +61,8 @@ export interface Status {
 
 /* Corps de /api/shutter. */
 export interface ShutterOrder { id: string; cmd: Command; value?: number }
-export interface ShutterReply extends OkReply { busy?: boolean }
+/* Pilotage. refused : rien emis, aucun bouton du type ne porte la commande ou sa trame manque. */
+export interface ShutterReply extends OkReply { busy?: boolean; refused?: boolean }
 
 /* /api/radios. */
 export interface RadioSummary { idx: number; band: string; chip?: string; freq_khz?: number; ok?: boolean }

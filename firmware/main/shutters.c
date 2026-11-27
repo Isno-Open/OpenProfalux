@@ -621,14 +621,10 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
     /* Frequence d'emission : la fiche (editable dans Modifier, par appareil) prime sur la frequence
      * captee. Permet de faire cohabiter CAME, Profalux et Eveno sur des frequences differentes. */
     uint32_t freq = v->freq_khz ? v->freq_khz : (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
+    /* `cmd` est le creneau du bouton qui porte la commande (cfg_device_slot) : un portail a bouton unique
+     * rejoue sa trame unique pour Ouvrir, Stop et Fermer parce que son type le declare (cycle du bouton
+     * pas a pas), plus par un repli sur la premiere trame venue. Creneau sans capture : rien emis. */
     const char *csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, cmd));
-    /* Portail a bouton UNIQUE (CAME & co) : la telecommande n'a qu'un bouton, le moteur enchaine
-     * la sequence lui-meme (ouvre -> stop -> ferme). On ne capture donc qu'une commande ; Ouvrir /
-     * Stop / Fermer du pave rejouent la meme trame. Repli : si la commande demandee n'a pas ete
-     * captee, on rejoue la premiere commande presente. */
-    if (!csv || !*csv)
-        for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
-            csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
     bool ok = false;
     const catalog_protocol_t *proto = catalog_protocol(CAT_ENC_RAW_REPLAY);
     if (!proto || !proto->press_frames || !proto->press_gap_us)
@@ -840,28 +836,38 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
  * qu'une fois la rafale partie : ecrite avant, une commande qui echoue (code roulant non enregistre)
  * changeait la cible d'un mouvement EN COURS, que la boucle de tick croyait alors atteinte, et le
  * suivi s'arretait pendant que le moteur continuait (revue de la PR #131). */
-static void start_move(volet_t *v, int dir, int target) {
+/* Emet la commande `cmd` par le bouton de son type qui la porte (cfg_device_slot). false si aucun bouton
+ * ne la porte, ou si sa trame manque (clone sans cette trame, rejeu sans cette capture) : la commande est
+ * refusee, jamais acquittee sans emission (docs/PROFILES.md, section 7). */
+static bool emit_cmd(volet_t *v, catalog_cmd_t cmd) {
+    const int slot = cfg_device_slot(v, cmd);
+    if (slot == CATALOG_NO_SLOT) {
+        ESP_LOGW(TAG, "'%s' : aucun bouton du type '%s' ne porte la commande %s, refusee", v->id, v->type, catalog_cmd_name(cmd));
+        return false;
+    }
+    if (v->virt)  return emit_virt(v, (catalog_cmd_t)slot);
+    if (v->rejeu) return rejeu_emit(v, catalog_cmd_name((catalog_cmd_t)slot));   /* rejeu brut par commande */
+    /* vraie telecommande capturee, par appareil ; sans la trame de ce bouton, rien */
+    const char *bits = slot == CAT_CMD_UP ? v->up : slot == CAT_CMD_STOP ? v->stop : slot == CAT_CMD_DOWN ? v->down : NULL;
+    return emit_press(v, bits);
+}
+static bool start_move(volet_t *v, int dir, int target) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
-    bool sent;
-    if (v->virt) sent = emit_virt(v, dir > 0 ? CAT_CMD_UP : CAT_CMD_DOWN);
-    else if (v->rejeu) sent = rejeu_emit(v, dir > 0 ? "up" : "down");   /* rejeu brut par commande */
-    else       { emit_press(v, dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise, par appareil */
+    const bool sent = emit_cmd(v, dir > 0 ? CAT_CMD_UP : CAT_CMD_DOWN);
     if (!sent) {
         /* Rien n'est parti (protocole non cable) : ne pas enclencher le suivi, sinon la boucle de
          * tick ferait avancer et publier une position que le moteur n'a jamais recue. */
         radio_pause_rx(false);
-        return;
+        return false;
     }
     v->target = target;
     v->dir = dir; v->own_move = true;
     v->last_tick_us = esp_timer_get_time();
     zone_follow(v, dir);
+    return true;
 }
-static void do_stop(volet_t *v) {
-    bool sent = true;
-    if (v->virt) sent = emit_virt(v, CAT_CMD_STOP);
-    else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
-    else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
+static bool do_stop(volet_t *v) {
+    const bool sent = emit_cmd(v, CAT_CMD_STOP);   /* rafale STOP = fige le moteur a la position voulue */
     if (!sent && v->dir) {
         /* STOP non emis (code roulant non enregistre, voir emit_virt_profalux) : le moteur continue
          * jusqu'a sa butee. On l'y suit, comme un mouvement lance par la vraie telecommande, au lieu
@@ -875,6 +881,7 @@ static void do_stop(volet_t *v) {
         zone_follow(v, 0);
     }
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
+    return sent;
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
  * Le moteur part vers la butee (target) ; l'arret intermediaire vient du STOP (freeze). */
@@ -1148,9 +1155,10 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
             volet_t *m = find_volet(mid);
             if (!m || m == v || m->central) continue;
+            /* un membre qui refuse la commande (aucun bouton ne la porte) ne bloque pas les autres */
             if      (!strcmp(cmd, "up"))   start_move(m, +1, 0);
             else if (!strcmp(cmd, "down")) start_move(m, -1, 100);
-            else if (!strcmp(cmd, "stop")) { do_stop(m); }
+            else if (!strcmp(cmd, "stop")) do_stop(m);
             publish_volet_state(m);
         }
         if (!strcmp(cmd, "up")) v->position = 0; else if (!strcmp(cmd, "down")) v->position = 100;
@@ -1175,21 +1183,23 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
-    /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
-    if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
-    else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
-    else if (!strcmp(cmd, "stop")) { do_stop(v); }
+    /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). Une commande que l'appareil n'a pas
+     * emise (aucun bouton ne la porte, trame absente) est REFUSEE : l'appelant le dit, rien n'est acquitte. */
+    bool sent = true;
+    if (!strcmp(cmd, "up"))        sent = start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
+    else if (!strcmp(cmd, "down")) sent = start_move(v, -1, 100);   /* fermer : descendre vers 100 */
+    else if (!strcmp(cmd, "stop")) sent = do_stop(v);
     else if (!strcmp(cmd, "pos"))  {   /* value = % de fermeture voulu */
         if (value < 0) value = 0;
         if (value > 100) value = 100;
-        if (value > v->position + 1)      start_move(v, -1, value);   /* plus ferme -> descendre */
-        else if (value < v->position - 1) start_move(v, +1, value);   /* plus ouvert -> monter */
+        if (value > v->position + 1)      sent = start_move(v, -1, value);   /* plus ferme -> descendre */
+        else if (value < v->position - 1) sent = start_move(v, +1, value);   /* plus ouvert -> monter */
         else { v->target = value; v->dir = 0; }
     }
     publish_volet_state(v);
     UNLOCK();
     pub_flush();
-    return 0;
+    return sent ? 0 : SH_CMD_REFUSED;
 }
 
 /* ── Synchro inter-cartes : compteur roulant PARTAGE + verrou d'emission, par MQTT.

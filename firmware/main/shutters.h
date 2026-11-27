@@ -35,6 +35,7 @@ void shutters_mem_sizes(int *ring, int *hops_cap);
 /* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
 #define SH_CMD_BUSY (-2)   /* une emission du meme serial est deja en cours (ici ou sur l'autre carte) */
+#define SH_CMD_REFUSED (-3)   /* rien emis : aucun bouton du type ne porte la commande, ou sa trame manque */
 /* Comme shutters_cmd, mais synchronise le compteur roulant entre cartes (MQTT) et pose un verrou
  * d'emission : refuse (SH_CMD_BUSY) si une emission du meme serial est deja en cours. A appeler pour
  * tout ordre venant de HA ou de l'UI ; shutters_cmd reste l'emission brute (zones, centrales). */

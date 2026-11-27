@@ -529,6 +529,11 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
 /* ── Encodeur et profil d'un appareil ── */
 char *cfg_replay_empty(void) { return strdup("{}"); }
 
+int cfg_device_slot(const volet_t *v, catalog_cmd_t cmd) {
+    const catalog_type_t *t = catalog_type(v->type);
+    return (t && (unsigned)cmd < CAT_CMD_COUNT) ? t->slot[cmd] : CATALOG_NO_SLOT;
+}
+
 bool cfg_device_is_blank(const volet_t *v) {
     return !v->virt && !v->central && !v->rejeu && !v->up[0] && !v->down[0] && !v->stop[0];
 }

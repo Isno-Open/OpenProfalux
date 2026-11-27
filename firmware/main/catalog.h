@@ -30,6 +30,7 @@ typedef enum { CAT_ENC_KEELOQ, CAT_ENC_SOMFY_RTS, CAT_ENC_RAW_REPLAY, CAT_ENC_CO
 #define CATALOG_TYPES_MAX    8
 #define CATALOG_PROFILES_MAX 24
 #define CATALOG_NO_LEGACY    (-1)
+#define CATALOG_NO_SLOT      (-1)
 
 typedef struct {
     bool     present;
@@ -55,6 +56,10 @@ typedef struct {
     char key[CATALOG_ID_MAX];       /* la cle, ecrite dans la fiche (« volet », « portail ») */
     int  legacy;                    /* mode legacy : numero des fiches v0.2.16, CATALOG_NO_LEGACY sinon */
     bool positional;
+    /* Pour chaque commande, le creneau qui porte sa trame : celui de son bouton (« command »), ou, pour un
+     * bouton pas a pas, celui de ce bouton si la commande est dans son cycle. CATALOG_NO_SLOT : aucun
+     * bouton du type ne la porte, et l'appareil la refuse (docs/PROFILES.md, section 7). */
+    int8_t slot[CAT_CMD_COUNT];
 } catalog_type_t;
 
 /* Un profil RESOLU (heritage applique) : ce qu'une fiche herite quand elle laisse un reglage a 0. */
@@ -78,6 +83,8 @@ const catalog_protocol_t *catalog_protocol(catalog_encoder_t enc);
 int catalog_code(catalog_encoder_t enc, catalog_cmd_t cmd);
 /* Commande d'un nom (« up », « stop »...), -1 si inconnu. */
 int catalog_cmd_of(const char *name);
+/* Nom d'une commande (« up »...), NULL hors borne. Cle de la trame captee dans un rejeu. */
+const char *catalog_cmd_name(catalog_cmd_t cmd);
 /* Modeles reconnus, dans l'ordre du catalogue. L'ordre est un CONTRAT : l'identite d'enrolement
  * garde en NVS le numero de son modele. On ajoute a la fin, on ne reordonne pas. */
 int                    catalog_model_count(void);

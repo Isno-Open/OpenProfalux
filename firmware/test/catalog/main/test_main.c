@@ -86,6 +86,14 @@ int main(int argc, char **argv) {
     CHECK(shutter && gate && catalog_type(shutter)->positional && !catalog_type(gate)->positional,
           "C16 mode legacy : 0 et 1 designent un type positionnel et un type sans position");
     CHECK(catalog_type_of_legacy(7) == NULL && catalog_type("inconnu") == NULL, "C17 numero ou cle inconnus : NULL");
+    const catalog_type_t *st = catalog_type(shutter), *gt = catalog_type(gate);
+    CHECK(st && st->slot[CAT_CMD_UP] == CAT_CMD_UP && st->slot[CAT_CMD_STOP] == CAT_CMD_STOP
+          && st->slot[CAT_CMD_DOWN] == CAT_CMD_DOWN && st->slot[CAT_CMD_PROG] == CATALOG_NO_SLOT,
+          "C24 volet : chaque commande a son bouton ; prog n'est porte par aucun bouton");
+    CHECK(gt && gt->slot[CAT_CMD_UP] == CAT_CMD_UP && gt->slot[CAT_CMD_STOP] == CAT_CMD_UP
+          && gt->slot[CAT_CMD_DOWN] == CAT_CMD_UP && gt->slot[CAT_CMD_PROG] == CATALOG_NO_SLOT,
+          "C25 portail : son bouton pas a pas porte les commandes de son cycle, sur une seule trame");
+    CHECK(!strcmp(catalog_cmd_name(CAT_CMD_STOP), "stop") && catalog_cmd_name(CAT_CMD_COUNT) == NULL, "C26 nom d'une commande");
     const catalog_profile_t *eveno = catalog_profile(EVENO_PROFILE), *base = catalog_profile(PROFALUX_ENROL_PROFILE);
     CHECK(eveno && base && eveno->freq_khz != base->freq_khz && eveno->te_us == base->te_us
           && eveno->repeat_bit == base->repeat_bit && eveno->rmt == base->rmt && eveno->encoder == CAT_ENC_KEELOQ
@@ -116,6 +124,8 @@ int main(int argc, char **argv) {
     refused("{\"protocols\":[]}", "objet protocols", "R10 protocols n'est pas un objet");
     refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":0}},\"b\":{\"legacy\":{\"code\":0}}}}", "meme numero legacy", "R12 deux types avec le meme numero legacy");
     refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":300}}}}", "legacy.code hors", "R15 numero legacy hors 0..255");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"ouvre\"}]}}}", "bouton de commande inconnue", "R16 bouton d'une commande inconnue");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"ouvre\"]}]}}}", "cycle : commande inconnue", "R17 cycle d'une commande inconnue");
     refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
             "\"profiles\":[{\"id\":\"b\",\"inherits\":\"a\"},{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000}}]}",
             "base absente", "R13 base declaree apres ce qui en herite");

@@ -13,6 +13,12 @@ static const char *const COMMAND_NAME[CAT_CMD_COUNT] = {
     [CAT_CMD_UP] = "up", [CAT_CMD_STOP] = "stop", [CAT_CMD_DOWN] = "down", [CAT_CMD_PROG] = "prog",
 };
 
+/* Commande d'un bouton pas a pas (types[].buttons[].command) : il parcourt son cycle. */
+#define BUTTON_STEP "step"
+/* Creneau ou se range la trame d'un bouton pas a pas. Le pas a pas n'est pas encore emis (#134, etape 5) :
+ * la trame unique du portail se capture sous « up » (ui/src/profiles.ts, captureSlot) et porte les
+ * commandes de son cycle. */
+#define STEP_SLOT CAT_CMD_UP
 /* Methode d'ajout d'un profil (« add ») qui fait apprendre le boitier au moteur ; l'autre est la copie. */
 #define ADD_ENROL "enrol"
 
@@ -28,6 +34,7 @@ int catalog_cmd_of(const char *name) {
     for (int c = 0; name && c < CAT_CMD_COUNT; c++) if (!strcmp(name, COMMAND_NAME[c])) return c;
     return -1;
 }
+const char *catalog_cmd_name(catalog_cmd_t cmd) { return (unsigned)cmd < CAT_CMD_COUNT ? COMMAND_NAME[cmd] : NULL; }
 static int encoder_of(const char *name) {
     for (int e = 0; name && e < CAT_ENC_COUNT; e++) if (!strcmp(name, ENCODER_NAME[e])) return e;
     return -1;
@@ -122,6 +129,21 @@ static int read_type(const cJSON *t, char *err, size_t errlen) {
     if (legacy && out->legacy < 0) return fail(err, errlen, "legacy.code hors 0..255", t->string);
     for (int i = 0; i + 1 < s_n_types; i++)
         if (out->legacy != CATALOG_NO_LEGACY && s_types[i].legacy == out->legacy) return fail(err, errlen, "meme numero legacy", t->string);
+    /* Les boutons : quelle commande chacun porte, et ou se range sa trame */
+    for (int c = 0; c < CAT_CMD_COUNT; c++) out->slot[c] = CATALOG_NO_SLOT;
+    const cJSON *b;
+    cJSON_ArrayForEach(b, cJSON_GetObjectItemCaseSensitive(t, "buttons")) {
+        const char *command = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(b, "command"));
+        const int c = catalog_cmd_of(command);
+        if (c >= 0) { out->slot[c] = (int8_t)c; continue; }
+        if (!command || strcmp(command, BUTTON_STEP)) return fail(err, errlen, "bouton de commande inconnue", t->string);
+        const cJSON *step;
+        cJSON_ArrayForEach(step, cJSON_GetObjectItemCaseSensitive(b, "cycle")) {
+            const int sc = catalog_cmd_of(cJSON_GetStringValue(step));
+            if (sc < 0) return fail(err, errlen, "cycle : commande inconnue", t->string);
+            if (out->slot[sc] == CATALOG_NO_SLOT) out->slot[sc] = STEP_SLOT;
+        }
+    }
     return 0;
 }
 

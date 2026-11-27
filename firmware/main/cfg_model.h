@@ -164,6 +164,10 @@ bool cfg_device_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t
  * Applique a la migration et a chaque ecriture des reglages (shutters_set_tx_params). */
 void cfg_device_inherit_equal(volet_t *v, const catalog_profile_t *p);
 
+/* Le creneau dont l'appareil emet la commande `cmd` : celui du bouton de son type qui la porte
+ * (catalog_type_t.slot). CATALOG_NO_SLOT si aucun bouton ne la porte, ou si ce catalogue ne connait pas
+ * son type : la commande est alors REFUSEE, jamais acquittee sans emission (docs/PROFILES.md, section 7). */
+int cfg_device_slot(const volet_t *v, catalog_cmd_t cmd);
 /* Document de rejeu d'un appareil cree sans capture encore ("{}", sur le tas ; NULL sans memoire). */
 char *cfg_replay_empty(void);
 /* Fiche qui n'a rien a emettre : ni identite generee, ni rejeu, ni trame copiee (une centrale n'en est

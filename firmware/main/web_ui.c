@@ -350,8 +350,9 @@ static esp_err_t h_shutter(httpd_req_t *r) {
     cJSON *val = cJSON_GetObjectItem(j, "value");
     int rc = (id && cmd) ? shutters_cmd_synced(id, cmd, val ? (int)val->valuedouble : 0) : -1;
     cJSON_Delete(j);
-    char resp[56];
-    snprintf(resp, sizeof(resp), "{\"ok\":%d,\"busy\":%d,\"tx_marc\":%d}", rc == 0 ? 1 : 0, rc == SH_CMD_BUSY ? 1 : 0, g_tx_marc);
+    char resp[72];
+    snprintf(resp, sizeof(resp), "{\"ok\":%d,\"busy\":%d,\"refused\":%d,\"tx_marc\":%d}",
+             rc == 0 ? 1 : 0, rc == SH_CMD_BUSY ? 1 : 0, rc == SH_CMD_REFUSED ? 1 : 0, g_tx_marc);
     httpd_resp_sendstr(r, resp);
     return ESP_OK;
 }
