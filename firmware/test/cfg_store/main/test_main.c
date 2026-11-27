@@ -1429,7 +1429,7 @@ int main(void) {
         bool during = step_presses(c, n, opening, CAT_CMD_DOWN) == 2 && step_presses(c, n, opening, CAT_CMD_STOP) == 1
                    && step_presses(c, n, opening, CAT_CMD_UP) == 0;   /* en ouverture : stop puis ferme */
         uint8_t m = 1; step_travel_end(c, &m);
-        bool end = m == 2 && step_presses(c, m, open, CAT_CMD_DOWN) == 1;   /* en butee, la carte saute le stop */
+        bool end = m == 2 && step_presses(c, m, open, CAT_CMD_DOWN) == 1 && step_presses(c, m, open, CAT_CMD_UP) == 0;   /* en butee, la carte saute le stop */
         uint8_t k = 2; step_travel_end(c, &k);
         bool no_skip = k == 2;   /* rien a sauter si le prochain appui n'est pas un stop */
         bool mid = step_presses(c, 2, midway, CAT_CMD_UP) == 3;   /* arrete en chemin, prochain = ferme : ferme, stop, ouvre */
