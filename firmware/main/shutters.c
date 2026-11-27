@@ -1460,7 +1460,7 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
 /* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
  * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
-sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address) {
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address, const char *profile) {
     if (!id || !*id || !address || address > SOMFY_RTS_ADDR_MAX) return SH_SOMFY_INVALID;
     if (strlen(id) >= SH_ID_LEN) return SH_SOMFY_NAME_TOO_LONG;
     /* Une adresse Somfy ne doit JAMAIS ressembler a une identite Profalux 0x067 valide. Sinon un
@@ -1487,7 +1487,9 @@ sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address
     v->proto = VOLET_PROTO_SOMFY_RTS;
     v->virt_serial = address;
     v->virt_counter = 1;
-    assign_profile(v, NULL);   /* porteuse et format de trame : ceux du profil Somfy, tant que la fiche laisse 0 */
+    /* le profil choisi a l'ajout, sinon celui de la marque : porteuse et format de trame (56 ou 80 bits),
+     * tant que la fiche laisse 0. Attribue ici, avant le premier PROG (revue de la PR #156). */
+    assign_profile(v, profile);
     save_cfg();
     announce_one(v);
     UNLOCK();

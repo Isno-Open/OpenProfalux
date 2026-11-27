@@ -93,7 +93,9 @@ int main(int argc, char **argv) {
     CHECK(gt && gt->slot[CAT_CMD_UP] == CAT_CMD_UP && gt->slot[CAT_CMD_STOP] == CAT_CMD_UP
           && gt->slot[CAT_CMD_DOWN] == CAT_CMD_UP && gt->slot[CAT_CMD_PROG] == CATALOG_NO_SLOT,
           "C25 portail : son bouton pas a pas porte les commandes de son cycle, sur une seule trame");
-    CHECK(!strcmp(catalog_cmd_name(CAT_CMD_STOP), "stop") && catalog_cmd_name(CAT_CMD_COUNT) == NULL, "C26 nom d'une commande");
+    bool names = catalog_cmd_name(CAT_CMD_COUNT) == NULL;
+    for (int c = 0; c < CAT_CMD_COUNT; c++) names = names && catalog_cmd_of(catalog_cmd_name((catalog_cmd_t)c)) == c;
+    CHECK(names, "C26 nom d'une commande : celui que catalog_cmd_of relit");
     const catalog_profile_t *eveno = catalog_profile(EVENO_PROFILE), *base = catalog_profile(PROFALUX_ENROL_PROFILE);
     CHECK(eveno && base && eveno->freq_khz != base->freq_khz && eveno->te_us == base->te_us
           && eveno->repeat_bit == base->repeat_bit && eveno->rmt == base->rmt && eveno->encoder == CAT_ENC_KEELOQ

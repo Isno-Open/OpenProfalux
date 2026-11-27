@@ -1598,7 +1598,7 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
         err = "adresse invalide : un nombre de 1 a 0xFFFFFF (24 bits)";
     else if (pfx_key_for_serial(address, NULL, NULL))
         err = "adresse reservee (ressemble a une identite Profalux 0x067), choisis-en une autre";
-    sh_somfy_create_t rc = err ? SH_SOMFY_INVALID : shutters_create_virtual_somfy(id, address);
+    sh_somfy_create_t rc = err ? SH_SOMFY_INVALID : shutters_create_virtual_somfy(id, address, jstr(j, "profile"));
     if (!err) switch (rc) {
         case SH_SOMFY_CREATED:       break;
         case SH_SOMFY_NAME_TOO_LONG: err = "nom trop long (accents comptes double)"; break;

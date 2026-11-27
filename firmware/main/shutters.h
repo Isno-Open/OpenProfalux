@@ -60,7 +60,7 @@ typedef enum {
     SH_SOMFY_NAME_TOO_LONG,    /* ne tiendrait pas dans SH_ID_LEN : il serait tronque */
     SH_SOMFY_NAME_TAKEN,       /* un autre appareil porte deja ce nom */
 } sh_somfy_create_t;
-sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address);
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address, const char *profile);   /* profile : NULL = celui de la marque */
 int  shutters_create_rejeu(const char *id, const char *type);            /* appareil a rejeu brut OOK (code fixe) ; type = cle du catalogue */
 int  shutters_set_type(const char *id, const char *type);                /* corrige le type (cle du catalogue) d'un appareil existant */
 int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz, bool *backup_full); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */

@@ -19,11 +19,11 @@ function startOver(): void {
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { navigate } from '../../router';
+import { navigate, route } from '../../router';
 import { state, sendCommand, refresh } from '../../store';
-import { hasComma, typeView } from '../../profiles';
+import { hasComma, profileById, typeView } from '../../profiles';
 import api from '../../api/index';
-import { BUTTON, COMMAND, DEVICE_TYPE, SECTION, TAB, TONE, type Command } from '../../domain';
+import { BUTTON, COMMAND, DEVICE_TYPE, FLOW, SECTION, TAB, TONE, type Command } from '../../domain';
 import { ICON } from '../../icons';
 import OpCard from '../../components/base/OpCard.vue';
 import OpField from '../../components/base/OpField.vue';
@@ -35,6 +35,10 @@ import ShutterControl from '../../components/domain/ShutterControl.vue';
 const NAME_EXISTS = 'exists';   // refus du firmware : un appareil porte deja ce nom
 const ADDRESS_PATTERN = /^0x[0-9a-f]{6}$/i;
 const ADDRESS_MAX = 0xFFFFFF;
+/* Le profil choisi dans « Ajouter un appareil » (methodRoute) : le boitier l'attribue a la creation, avant tout
+   appairage. Sans lui, il prendrait le premier profil Somfy du catalogue, peut-etre d'un autre format de trame. */
+const profileId = decodeURIComponent(route.rest[0] ?? '');
+const chosenProfile = profileById(profileId)?.flow === FLOW.createSomfy ? profileId : '';
 /* Le volet en cours a ete supprime entre-temps (Appareils) : plus rien a appairer. */
 if (created.value && state.status && !state.status.volets.some(d => d.id === created.value)) startOver();
 const step = computed(() => (!created.value ? 0 : !paired.value ? 1 : 2));
@@ -49,7 +53,7 @@ async function create(): Promise<void> {
   if (!n || hasComma(n)) { message.value = { tone: TONE.danger, text: 'Donne un nom au volet, sans virgule.' }; return; }
   if (!ADDRESS_PATTERN.test(address.value.trim())) { message.value = { tone: TONE.danger, text: 'L\'adresse fait 6 chiffres hexadécimaux, par exemple 0x1A2B3C. Clique Générer.' }; return; }
   try {
-    await api.somfyCreate({ id: n, address: address.value.trim() });
+    await api.somfyCreate({ id: n, address: address.value.trim(), ...(chosenProfile ? { profile: chosenProfile } : {}) });
     created.value = n;
     message.value = { tone: TONE.ok, text: `Volet « ${n} » créé. Appaire maintenant le moteur.` };
     refresh();

@@ -1320,7 +1320,22 @@ int main(void) {
         bool lost = !g_seen.volets[g_seen.nvolets - 1].rejeu;
         esp_err_t es = cfg_model_save(&g_seen.m, NULL);
         bool file_kept = count_captures() == files0 && access(path, F_OK) == 0;
+        /* la sauvegarde et la copie d'avant restauration refusent de sortir sans cette capture */
+        char *ex_unread = cfg_model_export(&g_seen.m);
+        bool export_refused = !ex_unread && cfg_model_export_len(&g_seen.m) == SIZE_MAX
+                           && !cfg_model_save_copy(&g_seen.m, CAPTURE_DIR "/copie.json");
+        free(ex_unread);
         tf = fopen(path, "wb"); if (tf && saved) fwrite(saved, 1, sl, tf); if (tf) fclose(tf);
+        /* fichier lisible de nouveau : l'export le relit, meme si le demarrage l'avait manque */
+        char *ex_back = cfg_model_export(&g_seen.m);
+        int caps = 0; for (const char *q = ex_back; q && (q = strstr(q, "\"rejeu\":")); q++) caps++;
+        int want_caps = 0; for (int k = 0; k < g_seen.nvolets; k++) want_caps += g_seen.volets[k].rejeu || g_seen.volets[k].replay_file[0];
+        bool export_reads = ex_back && caps == want_caps && strlen(ex_back) == cfg_model_export_len(&g_seen.m);
+        free(ex_back);
+        CHECK(export_refused && export_reads, "export d'une capture non relue : refuse si illisible %d, relue sinon %d (%d/%d)",
+              export_refused, export_reads, caps, want_caps);
+        printf("  export d'une capture non relue : refuse si illisible %d, relue sinon %d -> %s\n", export_refused, export_reads,
+               export_refused && export_reads ? "OK" : "KO");
         free(saved);
         reboot();
         bool back = flash_is(&was, NULL);

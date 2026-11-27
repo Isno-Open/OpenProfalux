@@ -20,6 +20,8 @@ static const char *TAG = "cfg_model";
  * enregistrement reussi : une coupure ne laisse jamais un document sans sa capture. */
 /* Cle du document NVS qui nomme le fichier de la capture (donnee du format, pas un identifiant). */
 #define DOC_KEY_REPLAY_FILE "rejeu_file"
+/* Cle du tableau des appareils dans l'export (sauvegarde) : donnee du format. */
+#define DOC_KEY_DEVICES "volets"
 #define REPLAY_FILE_PREFIX "rj"
 #define REPLAY_FILE_EXT    ".json"
 #define REPLAY_FILE_TMP    ".tmp"              /* suffixe du temporaire de cfg_write_file */
@@ -258,10 +260,29 @@ static cJSON *hdr_to_json(const cfg_model_t *m) {
     for (int i = 0; i < *m->nremotes; i++) cJSON_AddStringToObject(rem, m->remotes[i].serial, m->remotes[i].name);
     return root;
 }
+/* L'objet d'export d'un appareil. Une capture que le demarrage n'a pas pu relire (RAM, fichier abime) est
+ * relue pour lui : une sauvegarde qui l'omettrait se restaurerait sans elle, et son fichier serait ensuite
+ * efface. NULL si elle reste illisible, ou plus de memoire : l'export echoue plutot que de sortir incomplet
+ * (revue de la PR #156). */
+static cJSON *device_export_json(const cfg_model_t *m, const volet_t *v) {
+    if (v->rejeu || !v->replay_file[0]) return volet_to_json(v, NULL);
+    char path[REPLAY_PATH_MAX];
+    char *buf = (m->capture_dir && replay_path(path, m->capture_dir, v->replay_file))
+              ? cfg_read_file(path, REPLAY_FILE_MAX, NULL) : NULL;
+    if (!buf) { ESP_LOGE(TAG, "'%s' : capture %s illisible, export refuse", v->id, v->replay_file); return NULL; }
+    volet_t with = *v;
+    with.rejeu = buf;
+    cJSON *o = volet_to_json(&with, NULL);   /* copie le texte : buf se libere ici */
+    free(buf);
+    return o;
+}
 char *cfg_model_export(const cfg_model_t *m) {
     cJSON *root = hdr_to_json(m);
-    cJSON *vols = cJSON_AddArrayToObject(root, "volets");
-    for (int i = 0; i < *m->nvolets; i++) cJSON_AddItemToArray(vols, volet_to_json(&m->volets[i], NULL));
+    cJSON *vols = cJSON_AddArrayToObject(root, DOC_KEY_DEVICES);
+    for (int i = 0; i < *m->nvolets; i++) {
+        cJSON *o = device_export_json(m, &m->volets[i]);
+        if (!o || !cJSON_AddItemToArray(vols, o)) { cJSON_Delete(o); cJSON_Delete(root); return NULL; }
+    }
     char *js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
@@ -271,18 +292,18 @@ static char *print_and_free(cJSON *j) {   /* NULL si plus de memoire : cfg_store
     cJSON_Delete(j);
     return s;
 }
-#define EXPORT_VOLETS_OPEN  "\"volets\":["
-#define EXPORT_VOLETS_CLOSE "]}"
+#define EXPORT_DEVICES_OPEN  "\"" DOC_KEY_DEVICES "\":["
+#define EXPORT_DEVICES_CLOSE "]}"
 /* Meme texte que cfg_model_export : l'en-tete sans son '}', une virgule s'il a des champs, le tableau des
  * appareils separes par des virgules, puis "]}". SIZE_MAX si plus de memoire. */
 size_t cfg_model_export_len(const cfg_model_t *m) {
     char *h = print_and_free(hdr_to_json(m));
     if (!h) return SIZE_MAX;
     const size_t hl = strlen(h);
-    size_t len = hl - 1 + (hl > 2 ? 1 : 0) + strlen(EXPORT_VOLETS_OPEN) + strlen(EXPORT_VOLETS_CLOSE);
+    size_t len = hl - 1 + (hl > 2 ? 1 : 0) + strlen(EXPORT_DEVICES_OPEN) + strlen(EXPORT_DEVICES_CLOSE);
     free(h);
     for (int i = 0; i < *m->nvolets; i++) {
-        char *d = print_and_free(volet_to_json(&m->volets[i], NULL));
+        char *d = print_and_free(device_export_json(m, &m->volets[i]));
         if (!d) return SIZE_MAX;
         len += strlen(d) + (i ? 1 : 0);
         free(d);
@@ -432,14 +453,14 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);
-    cJSON *vols = cJSON_GetObjectItem(root, "volets");
+    cJSON *vols = cJSON_GetObjectItem(root, DOC_KEY_DEVICES);
     for (cJSON *o = vols ? vols->child : NULL; o; o = o->next) parse_volet_json(m, o);
     cfg_model_ensure_uids(m);
 }
 bool cfg_model_is_backup(const cJSON *root) {
     if (!cJSON_IsObject(root)) return false;
     const cJSON *rem = cJSON_GetObjectItemCaseSensitive(root, "remotes");
-    return cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(root, "volets")) && (!rem || cJSON_IsObject(rem));
+    return cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(root, DOC_KEY_DEVICES)) && (!rem || cJSON_IsObject(rem));
 }
 bool cfg_model_save_copy(const cfg_model_t *m, const char *path) {
     char *js = cfg_model_export(m);
@@ -461,7 +482,7 @@ static void on_cfg_doc(void *ctx, int index, const char *doc) {
 /* L'ancienne config (cle NVS unique) contient-elle au moins un volet ? */
 static bool legacy_has_volets(const char *doc) {
     cJSON *j = cJSON_Parse(doc);
-    bool yes = cJSON_GetArraySize(cJSON_GetObjectItem(j, "volets")) > 0;
+    bool yes = cJSON_GetArraySize(cJSON_GetObjectItem(j, DOC_KEY_DEVICES)) > 0;
     cJSON_Delete(j);
     return yes;
 }
