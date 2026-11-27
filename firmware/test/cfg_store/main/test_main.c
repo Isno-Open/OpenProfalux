@@ -19,6 +19,8 @@
  * puis rouverte : elle relit tout depuis la flash). */
 #include <stdbool.h>
 #include <stdio.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include "esp_log.h"
@@ -71,11 +73,13 @@ static void arm(long k) { s_budget = k; s_armed = true; s_dead = false; }
  * octets arrive sur le disque, puis plus rien ne se fait, ni renommage, ni
  * suppression, ni ecriture NVS, jusqu'au redemarrage. */
 static bool s_file_cut;
+static long s_fwrites;   /* ecritures de fichier : un enregistrement ne reecrit pas une capture inchangee */
 size_t __real_fwrite(const void *, size_t, size_t, FILE *);
 int    __real_rename(const char *, const char *);
 int    __real_remove(const char *);
 size_t __wrap_fwrite(const void *p, size_t sz, size_t n, FILE *f) {
     if (s_dead) return 0;
+    s_fwrites++;
     if (s_file_cut) {
         size_t part = __real_fwrite(p, sz, n / 2, f);
         fflush(f);
@@ -165,8 +169,10 @@ typedef struct {
     volet_t  volets[SH_MAX_VOLETS];   int nvolets;
     cfg_model_t m;
 } store_t;
+/* Dossier des captures de rejeu des exemplaires (T15) ; NULL : en NVS, comme avant. */
+static const char *s_capture_dir;
 static void store_bind(store_t *s) {
-    s->m = (cfg_model_t){ &s->log_frames, s->remotes, &s->nremotes, s->volets, &s->nvolets };
+    s->m = (cfg_model_t){ &s->log_frames, s->remotes, &s->nremotes, s->volets, &s->nvolets, s_capture_dir };
 }
 static void store_reset(store_t *s) { memset(s, 0, sizeof(*s)); store_bind(s); }
 /* Copie profonde : la liste des membres d'une centrale vit sur le tas, et deux
@@ -176,6 +182,7 @@ static void store_copy(store_t *dst, const store_t *src) {
     for (int i = 0; i < dst->nvolets; i++) {
         dst->volets[i].members = NULL;
         cfg_volet_set_members(&dst->volets[i], src->volets[i].members);
+        dst->volets[i].rejeu = src->volets[i].rejeu ? strdup(src->volets[i].rejeu) : NULL;
     }
 }
 static store_t g_ref, g_ram;
@@ -241,6 +248,7 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
         && !strcmp(a->type, b->type) && !strcmp(a->profile, b->profile)
+        && !strcmp(a->rejeu ? a->rejeu : "", b->rejeu ? b->rejeu : "")
         && (int)(a->position + 0.5f) == (int)(b->position + 0.5f);
 }
 static bool hdr_equal(const store_t *a, const store_t *b) {
@@ -356,6 +364,30 @@ static void fill_frames(int size) {
     ESP_ERROR_CHECK(nvs_open("shutters", NVS_READWRITE, &h));
     nvs_set_blob(h, "framesv2", fb, (size_t)size);   /* peut echouer : NVS pleine, c'est le sujet */
     nvs_commit(h); nvs_close(h);
+}
+
+/* ════ Captures de rejeu en fichier (T15) ═════════════════════════════════ */
+#define CAPTURE_DIR "/tmp/cfg_store_test_captures"
+#define CAPTURE_BAD "/nonexistent-cfg-store-test/captures"   /* ecriture impossible */
+static void clear_captures(void) {
+    DIR *d = opendir(CAPTURE_DIR); struct dirent *e; char p[512];
+    while (d && (e = readdir(d))) if (e->d_name[0] != '.') { snprintf(p, sizeof p, "%s/%s", CAPTURE_DIR, e->d_name); remove(p); }
+    if (d) closedir(d);
+}
+static int count_captures(void) {
+    DIR *d = opendir(CAPTURE_DIR); struct dirent *e; int n = 0;
+    while (d && (e = readdir(d))) if (e->d_name[0] != '.') n++;
+    if (d) closedir(d);
+    return n;
+}
+/* Un appareil a rejeu, comme ceux qu'ajoute l'ecran de capture. */
+static void add_replay(store_t *s, const char *capture) {
+    char id[SH_ID_LEN];
+    snprintf(id, sizeof(id), "Portail ajoute %02d", s->nvolets);
+    volet_t *v = mk_volet(s, id, 40u + (unsigned)s->nvolets, 0, 0);
+    v->n_serials = 0; v->up[0] = v->down[0] = v->stop[0] = 0; v->up_btn = v->down_btn = v->stop_btn = 0;
+    snprintf(v->type, sizeof v->type, "%s", GATE_KEY);
+    v->rejeu = strdup(capture);
 }
 
 /* ════ Demarrage du firmware ══════════════════════════════════════════════
@@ -1174,6 +1206,96 @@ int main(void) {
         printf("  coupure entre effacement et renommage : temporaire complet repris -> %s\n", repris ? "OK" : "KO");
         remove(COPY); remove(COPY ".tmp");
         free(exp); free(exp2);
+    }
+
+
+    /* ── T15. Captures de rejeu en fichier, hors de la NVS ── */
+    printf("\n[T15] Captures de rejeu en fichier (SPIFFS sur le boitier), hors de la NVS\n");
+    {
+        /* Une capture comme celles d'une Super : 3 trames de 49 impulsions (~2,3 Ko en clair). */
+        char cap[4096]; int p = snprintf(cap, sizeof cap, "{\"f\":433920,\"up\":\"");
+        for (int i = 0; i < 300 && p < (int)sizeof cap - 16; i++) p += snprintf(cap + p, sizeof cap - p, "%s%d", i ? "," : "", i % 2 ? -500 - i : 170 + i);
+        snprintf(cap + p, sizeof cap - p, "\"}");
+        mkdir(CAPTURE_DIR, 0755);
+
+        /* a. Ce que tient la NVS d'un boitier de terrain, captures en NVS puis en fichier */
+        int fit[2] = { 0, 0 };
+        for (int f = 0; f < 2; f++) {
+            s_capture_dir = f ? CAPTURE_DIR : NULL; clear_captures();
+            use_snapshot(g_migrated); store_copy(&g_ref, &g_sat_ref);
+            while (g_ref.nvolets < SH_MAX_VOLETS) {
+                add_replay(&g_ref, cap);
+                if (save_ref(fk) != ESP_OK) { cfg_model_remove(&g_ref.m, g_ref.nvolets - 1); break; }
+                fit[f]++;
+            }
+        }
+        printf("  appareils a capture ajoutes : %d en NVS, %d en fichier\n", fit[0], fit[1]);
+        CHECK(fit[1] >= 3 * (fit[0] + 1), "captures en fichier : %d appareils, en NVS : %d (gain attendu)", fit[1], fit[0]);
+
+        /* b. Relecture : la meme config, la capture lue dans son fichier, le document sans elle. La NVS
+         *    vient d'etre remplie jusqu'au refus : on lui rend de la place pour les essais qui suivent. */
+        for (int k = 0; k < 3; k++) cfg_model_remove(&g_ref.m, g_ref.nvolets - 1);
+        CHECK(save_ref(fk) == ESP_OK, "enregistrement avec de la marge : refuse (cle '%s')", fk);
+        reboot();
+        bool same = flash_is(&g_ref, NULL);
+        CHECK(same, "relecture des captures en fichier");
+        nvs_handle_t h; char doc[1024]; size_t dl = sizeof doc; bool slim = false;
+        char key[8]; snprintf(key, sizeof key, "v%u", (unsigned)(g_ref.nvolets - 1) % 100u);
+        if (nvs_open("shutters", NVS_READONLY, &h) == ESP_OK) {
+            slim = nvs_get_str(h, key, doc, &dl) == ESP_OK && strstr(doc, "\"rejeu_file\"") && !strstr(doc, "\"rejeu\"");
+            nvs_close(h);
+        }
+        CHECK(slim, "document NVS : le nom du fichier, pas la capture");
+        char *exp = cfg_model_export(&g_ref.m);
+        CHECK(exp && strstr(exp, "\"rejeu\"") && !strstr(exp, "\"rejeu_file\""), "export : la capture en clair, comme avant");
+        free(exp);
+        printf("  relecture %s, document NVS %s\n", same ? "identique" : "DIFFERENTE", slim ? "sans la capture" : "AVEC la capture");
+
+        /* c. Un mouvement ne reecrit aucune capture ; une capture changee, la sienne seulement */
+        long w0 = s_fwrites; int refused = 0;
+        for (int m = 0; m < 100; m++) { move_one(&g_ref, m); refused += save_ref(fk) != ESP_OK; }
+        long moves = s_fwrites - w0;
+        CHECK(refused == 0, "%d mouvements refuses sur 100", refused);
+        volet_t *last = &g_ref.volets[g_ref.nvolets - 1];
+        free(last->rejeu); last->rejeu = strdup("{\"f\":433920,\"up\":\"170,-500\"}");
+        w0 = s_fwrites; save_ref(fk); long changed = s_fwrites - w0;
+        reboot();
+        bool same2 = flash_is(&g_ref, NULL);
+        CHECK(moves == 0 && changed == 1 && same2, "ecritures : %ld pour 100 mouvements, %ld pour une capture changee, relecture %d", moves, changed, same2);
+        printf("  100 mouvements : %ld ecriture de fichier ; une capture changee : %ld -> %s\n", moves, changed, moves == 0 && changed == 1 ? "OK" : "KO");
+
+        /* d. Appareil supprime : son fichier part, apres l'enregistrement */
+        int before = count_captures();
+        cfg_model_remove(&g_ref.m, g_ref.nvolets - 1);
+        save_ref(fk);
+        int after = count_captures();
+        CHECK(after == before - 1 && after == fit[1] - 4, "suppression : %d fichiers avant, %d apres", before, after);
+        printf("  appareil supprime : %d -> %d fichiers -> %s\n", before, after, after == before - 1 ? "OK" : "KO");
+
+        /* e. Coupure pendant l'ecriture d'une capture : l'etat d'avant se relit, capture comprise */
+        store_t was; store_copy(&was, &g_ref);
+        last = &g_ref.volets[g_ref.nvolets - 1];
+        free(last->rejeu); last->rejeu = strdup("{\"f\":433920,\"up\":\"180,-510,180,-510\"}");   /* une autre capture */
+        last->position = (float)(((int)last->position + 50) % 101);
+        s_file_cut = true;
+        save_ref(fk);
+        CHECK(!s_file_cut, "la capture changee n'a pas ete ecrite : la coupure n'a pas eu lieu");
+        s_file_cut = false;
+        reboot();
+        bool kept = flash_is(&was, NULL);
+        CHECK(kept, "coupure pendant l'ecriture d'une capture : etat d'avant %s", kept ? "relu" : "PERDU");
+        printf("  coupure pendant l'ecriture d'une capture : etat d'avant relu -> %s\n", kept ? "OK" : "KO");
+
+        /* f. Fichier impossible a ecrire : la capture reste dans la NVS, et se relit */
+        s_capture_dir = CAPTURE_BAD;
+        wipe(); system_state(); model_init(&g_ref);
+        add_replay(&g_ref, "{\"f\":433920,\"up\":\"170,-500\"}");
+        esp_err_t e13 = save_ref(fk);
+        reboot();
+        bool inl = e13 == ESP_OK && flash_is(&g_ref, NULL);
+        CHECK(inl, "dossier impossible : capture gardee en NVS (%s)", esp_err_to_name(e13));
+        printf("  dossier impossible : capture gardee dans la NVS -> %s\n", inl ? "OK" : "KO");
+        s_capture_dir = NULL; clear_captures();
     }
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");

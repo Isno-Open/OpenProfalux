@@ -86,7 +86,9 @@ static bool     s_mqtt_ready = false;   /* true apres shutters_mqtt_announce() *
 static bool     s_log_frames = false;   /* publie toutes les trames captees en MQTT */
 static bool     s_mqtt_obey  = true;    /* la carte obeit-elle aux ordres cover MQTT (emission) ? defaut oui */
 /* La config persistante, telle que cfg_model.c la lit et l'ecrit. */
-static const cfg_model_t s_model = { &s_log_frames, s_remotes, &s_nremotes, s_volets, &s_nvolets };
+/* Point de montage de la partition SPIFFS "storage" : dataset de trames, ring RF, copie de config, captures. */
+#define SPIFFS_BASE "/spiffs"
+static const cfg_model_t s_model = { &s_log_frames, s_remotes, &s_nremotes, s_volets, &s_nvolets, SPIFFS_BASE };   /* captures de rejeu : SPIFFS */
 static bool     s_frames_dirty = false; /* dataset modifie -> a resauvegarder (SPIFFS) */
 static bool     s_ring_dirty = false;    /* ring RF modifie -> a resauvegarder (SPIFFS) */
 static bool     s_pos_dirty = false;     /* position d'un volet a changer/figer -> sauver la cfg (retenir la position au reboot) */
@@ -340,7 +342,7 @@ static esp_err_t save_cfg(void) {
  * En SPIFFS, a cote du ring RF. Il vivait en NVS ("framesv2", jusqu'a 4 Ko) : le plus
  * gros occupant d'une NVS de 16 Ko qui saturait. Donnee NON critique (jeu de trames
  * pour la recherche) : une coupure en pleine ecriture n'en perd au pire que la fin. */
-#define FRAMES_FILE "/spiffs/frames.bin"
+#define FRAMES_FILE SPIFFS_BASE "/frames.bin"
 static void save_frames(void) {
     static uint32_t buf[FRAMES_MAX * 4];   /* records {serial, hop, t, bouton} */
     int n = 0;
@@ -404,7 +406,7 @@ static void build_frame_bits(char *out, uint32_t serial, uint8_t button, uint32_
 /* Persistance BORNEE du ring RF en NVS : on ne stocke que les METADONNEES {serial,bouton,hop,t,rssi}
  * (16 o/trame) et on RECONSTRUIT les bits au boot -> les trames restent REJOUABLES apres reboot/flash. */
 typedef struct { uint32_t serial, hop, t; uint8_t button; int8_t rssi; uint16_t _pad; } ringrec_t;
-#define RING_FILE "/spiffs/rfring.bin"
+#define RING_FILE SPIFFS_BASE "/rfring.bin"
 /* Conversion par blocs de RING_CHUNK, meme format de fichier qu'avant (int head, puis
  * s_rf_n enregistrements) : un tampon du ring entier immobilisait 16 Ko de RAM pour
  * une sauvegarde par minute au plus. Partage sans risque : load_ring tourne au
@@ -412,7 +414,7 @@ typedef struct { uint32_t serial, hop, t; uint8_t button; int8_t rssi; uint16_t 
 #define RING_CHUNK 64
 static ringrec_t s_ringchunk[RING_CHUNK];
 static void spiffs_mount(void) {   /* la NVS (16 Ko) ne tient pas le ring 300 -> SPIFFS (partition storage, 960 Ko) */
-    esp_vfs_spiffs_conf_t c = { .base_path = "/spiffs", .partition_label = "storage", .max_files = 4, .format_if_mount_failed = true };
+    esp_vfs_spiffs_conf_t c = { .base_path = SPIFFS_BASE, .partition_label = "storage", .max_files = 4, .format_if_mount_failed = true };
     esp_err_t e = esp_vfs_spiffs_register(&c);
     ESP_LOGI(TAG, "spiffs mount: %s", esp_err_to_name(e));
 }
@@ -2321,7 +2323,7 @@ char *shutters_export_json(void) {
     return js;
 }
 /* Copie de la config d'avant la derniere restauration (Systeme > Sauvegarde, "Revenir"). */
-#define PREV_CFG_FILE "/spiffs/config-avant.json"
+#define PREV_CFG_FILE SPIFFS_BASE "/config-avant.json"
 #define PREV_CFG_MAX  (24 * 1024)   /* = RESTORE_MAX_BODY (web_ui.c) */
 
 int shutters_import_json(const char *js, const char **err) {

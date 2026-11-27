@@ -6,10 +6,115 @@
 #if __has_include(<bsd/string.h>)
 #include <bsd/string.h>   /* strlcpy sur PC (banc de test) ; newlib la fournit sur l'ESP32 */
 #endif
+#include <dirent.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "cover_attrs.h"   /* slug et identifiant stable d'un appareil (unite pure) */
 
 static const char *TAG = "cfg_model";
+
+/* ── Captures de rejeu en fichier ──
+ * Le document NVS d'un appareil ne porte plus que le nom du fichier ("rejeu_file"). L'export (sauvegarde,
+ * restauration) garde la capture en clair : son format ne change pas. Le fichier est ecrit AVANT le
+ * document qui le nomme, et un fichier qu'aucun document ne nomme n'est efface qu'apres un
+ * enregistrement reussi : une coupure ne laisse jamais un document sans sa capture. */
+#define REJEU_FILE_PREFIX "rj"
+#define REJEU_FILE_EXT    ".json"
+#define REJEU_FILE_TMP    ".tmp"              /* suffixe du temporaire de cfg_write_file */
+#define REJEU_FILE_HEX    8
+#define REJEU_FILE_MAX    (64 * 1024)         /* au-dela, un fichier n'est pas une capture de ce firmware */
+#define REJEU_PATH_MAX    96
+
+/* FNV-1a 32 bits. Jamais 0 : 0 veut dire « aucun contenu connu sur disque ». */
+static uint32_t fnv1a(const char *s) {
+    uint32_t h = 2166136261u;
+    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    return h ? h : 1u;
+}
+/* Un nom que ce firmware a pu ecrire : seul nom lu, et seul nom efface (un document retouche a la main
+ * ne fait pas lire ni effacer autre chose). */
+static bool rejeu_name_ok(const char *n) {
+    const size_t lp = strlen(REJEU_FILE_PREFIX);
+    if (strlen(n) != lp + REJEU_FILE_HEX + strlen(REJEU_FILE_EXT) || strncmp(n, REJEU_FILE_PREFIX, lp)) return false;
+    for (size_t i = 0; i < REJEU_FILE_HEX; i++) {
+        const char c = n[lp + i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return !strcmp(n + lp + REJEU_FILE_HEX, REJEU_FILE_EXT);
+}
+static bool rejeu_path(char *out, const char *dir, const char *name) {
+    return snprintf(out, REJEU_PATH_MAX, "%s/%s", dir, name) < REJEU_PATH_MAX;
+}
+/* Nom deja pris par un autre appareil dont la capture est en fichier ? */
+static bool rejeu_name_taken(const cfg_model_t *m, int self, const char *name) {
+    for (int k = 0; k < *m->nvolets; k++)
+        if (k != self && m->volets[k].rejeu && !strcmp(m->volets[k].rejeu_file, name)) return true;
+    return false;
+}
+/* Range la capture de l'appareil i dans son fichier. true : elle y est, et v->rejeu_file la nomme ;
+ * false : elle reste dans le document NVS (pas de dossier, ou fichier impossible a ecrire). */
+static bool rejeu_store_file(const cfg_model_t *m, int i) {
+    volet_t *v = &m->volets[i];
+    if (!m->capture_dir || !v->rejeu) return false;
+    if (!v->rejeu_file[0] || rejeu_name_taken(m, i, v->rejeu_file)) {
+        /* un nom tire de l'identifiant stable ; un autre appareil le porte deja : le suivant */
+        uint32_t h = fnv1a(v->uid[0] ? v->uid : v->id);
+        for (int t = 0; t < SH_MAX_VOLETS; t++, h++) {
+            snprintf(v->rejeu_file, sizeof v->rejeu_file, REJEU_FILE_PREFIX "%08" PRIx32 REJEU_FILE_EXT, h);
+            if (!rejeu_name_taken(m, i, v->rejeu_file)) break;
+        }
+        v->rejeu_hash = 0;   /* nouveau nom : rien encore sur disque */
+    }
+    const uint32_t h = fnv1a(v->rejeu);
+    if (v->rejeu_hash == h) return true;
+    char path[REJEU_PATH_MAX];
+    if (!rejeu_path(path, m->capture_dir, v->rejeu_file) || !cfg_write_file(path, v->rejeu, strlen(v->rejeu))) {
+        ESP_LOGW(TAG, "'%s' : capture non ecrite en fichier, elle reste dans la NVS", v->id);
+        v->rejeu_hash = 0;
+        return false;
+    }
+    v->rejeu_hash = h;
+    return true;
+}
+/* Apres un enregistrement reussi : efface les fichiers de capture qu'aucun appareil ne nomme plus
+ * (appareil supprime, capture retiree). Un temporaire suit le sort de son fichier. */
+static void rejeu_sweep(const cfg_model_t *m) {
+    if (!m->capture_dir) return;
+    DIR *d = opendir(m->capture_dir);
+    if (!d) return;
+    /* On efface apres closedir : retirer une entree pendant le parcours n'est pas garanti sur SPIFFS. */
+    char gone[2 * SH_MAX_VOLETS][CFG_REJEU_NAME_LEN + sizeof(REJEU_FILE_TMP)];
+    int ngone = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && ngone < (int)(sizeof gone / sizeof gone[0])) {
+        char name[sizeof gone[0]];
+        if (strlen(e->d_name) >= sizeof name) continue;
+        strcpy(name, e->d_name);
+        size_t n = strlen(name), lt = strlen(REJEU_FILE_TMP);
+        if (n > lt && !strcmp(name + n - lt, REJEU_FILE_TMP)) name[n - lt] = 0;
+        if (!rejeu_name_ok(name)) continue;
+        bool used = false;
+        for (int k = 0; k < *m->nvolets && !used; k++) used = m->volets[k].rejeu && !strcmp(m->volets[k].rejeu_file, name);
+        if (!used) strcpy(gone[ngone++], e->d_name);
+    }
+    closedir(d);
+    for (int i = 0; i < ngone; i++) {
+        char path[REJEU_PATH_MAX];
+        if (rejeu_path(path, m->capture_dir, gone[i]) && remove(path) == 0)
+            ESP_LOGI(TAG, "capture %s : plus aucun appareil ne la nomme, effacee", gone[i]);
+    }
+}
+/* Relit la capture que nomme un document NVS. */
+static void rejeu_load_file(const cfg_model_t *m, volet_t *v, const char *name) {
+    char path[REJEU_PATH_MAX];
+    size_t n = 0;
+    char *buf = (m->capture_dir && rejeu_name_ok(name) && rejeu_path(path, m->capture_dir, name))
+              ? cfg_read_file(path, REJEU_FILE_MAX, &n) : NULL;
+    if (!buf) { ESP_LOGE(TAG, "'%s' : capture %s introuvable", v->id, name); return; }
+    v->rejeu = buf;
+    strlcpy(v->rejeu_file, name, sizeof v->rejeu_file);
+    v->rejeu_hash = fnv1a(buf);
+}
 
 /* ── Membres d'une centrale ── */
 int cfg_volet_set_members(volet_t *v, const char *csv) {
@@ -82,7 +187,8 @@ static const char *default_type(const volet_t *v) {
     return p ? p->type : catalog_type_of_legacy(0);
 }
 
-static cJSON *volet_to_json(const volet_t *v) {
+/* rejeu_file : la capture est dans ce fichier, le document ne porte que son nom (NVS) ; NULL : en clair. */
+static cJSON *volet_to_json(const volet_t *v, const char *rejeu_file) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
     /* Identifiant stable : omis tant qu'il vaut le slug du nom (jamais renomme), pour garder les
@@ -123,7 +229,8 @@ static cJSON *volet_to_json(const volet_t *v) {
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
-    if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
+    if (v->rejeu && rejeu_file) cJSON_AddStringToObject(o, "rejeu_file", rejeu_file);   /* capture en fichier */
+    else if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
     /* Parametres d'emission par appareil (etage 2, issue #111). Omis quand ils valent le defaut
      * (0 = heriter), pour garder les sauvegardes existantes a l'identique et rester compatible dans
      * les deux sens : une version anterieure ignore ces cles, celle-ci les retrouve a 0 si absentes. */
@@ -146,7 +253,7 @@ static cJSON *hdr_to_json(const cfg_model_t *m) {
 char *cfg_model_export(const cfg_model_t *m) {
     cJSON *root = hdr_to_json(m);
     cJSON *vols = cJSON_AddArrayToObject(root, "volets");
-    for (int i = 0; i < *m->nvolets; i++) cJSON_AddItemToArray(vols, volet_to_json(&m->volets[i]));
+    for (int i = 0; i < *m->nvolets; i++) cJSON_AddItemToArray(vols, volet_to_json(&m->volets[i], NULL));
     char *js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
@@ -166,11 +273,13 @@ esp_err_t cfg_model_save(const cfg_model_t *m, char *failed_key) {
         char *d = print_and_free(hdr_to_json(m));
         cfg_store_put_hdr(&tx, d); free(d);
         for (int i = 0; i < *m->nvolets; i++) {
-            d = print_and_free(volet_to_json(&m->volets[i]));
+            const bool in_file = rejeu_store_file(m, i);   /* le fichier AVANT le document qui le nomme */
+            d = print_and_free(volet_to_json(&m->volets[i], in_file ? m->volets[i].rejeu_file : NULL));
             cfg_store_put_volet(&tx, d); free(d);
         }
     }
     esp_err_t e = cfg_store_end(&tx);
+    if (e == ESP_OK) rejeu_sweep(m);
     if (failed_key) memcpy(failed_key, tx.failed_key, sizeof(tx.failed_key));
     return e;
 }
@@ -253,7 +362,9 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
                  v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
     const char *rj = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu"));
+    const char *rf = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu_file"));
     v->rejeu = (rj && *rj) ? strdup(rj) : NULL;   /* rejeu brut par commande ; libere par cfg_volet_release */
+    if (!v->rejeu && rf && *rf) rejeu_load_file(m, v, rf);   /* document NVS : la capture est en fichier */
     /* Parametres d'emission par appareil (etage 2, issue #111). memset() a deja mis 0 = heriter : on
      * ne surcharge que si la cle est presente. Compatible avec une config anterieure (cles absentes). */
     cJSON *fk = cJSON_GetObjectItem(o, "freq_khz"); if (fk) v->freq_khz = (uint32_t)cJSON_GetNumberValue(fk);

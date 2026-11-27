@@ -19,6 +19,8 @@
 #include "remote_battery.h"
 
 #define SH_MAX_REMOTES 16
+/* Nom du fichier d'une capture de rejeu : "rj" + 8 chiffres hexadecimaux + ".json", zero final compris. */
+#define CFG_REJEU_NAME_LEN 16
 
 /* Protocole d'emission d'un volet VIRTUEL (qui GENERE sa trame). Profalux/KeeLoq est le
  * seul cable aujourd'hui, et vaut 0 : les volets deja persistes, sans ce champ, le
@@ -91,6 +93,10 @@ typedef struct {
                               * l'UI place alors le volet a la fin, dans son ordre de creation. */
     float position;          /* 0..100 */
     /* ── Etat d'execution, NON persiste ── */
+    /* Capture rangee en fichier (cfg_model_t.capture_dir) : son nom, et l'empreinte du contenu qui y est.
+     * Un enregistrement ne reecrit le fichier que si la capture a change (chaque mouvement enregistre). */
+    char     rejeu_file[CFG_REJEU_NAME_LEN];
+    uint32_t rejeu_hash;
     int   dir;               /* -1 down, 0 stop, +1 up */
     int   target;            /* -1 = aucun, sinon 0..100 */
     bool  own_move;          /* true = notre commande (on stream) ; false = externe (on suit sans emettre) */
@@ -116,6 +122,10 @@ typedef struct {
     bool     *log_frames;                 /* ecoute permanente */
     remote_t *remotes;  int *nremotes;    /* SH_MAX_REMOTES places */
     volet_t  *volets;   int *nvolets;     /* SH_MAX_VOLETS places */
+    /* Dossier des captures de rejeu (SPIFFS sur le boitier). NULL : elles restent dans le document NVS
+     * de leur appareil. Une capture fait jusqu'a plusieurs Ko : en NVS (16 Ko, partages avec le Wi-Fi et
+     * la calibration radio), deux d'entre elles ont suffi a remplir une Super. */
+    const char *capture_dir;
 } cfg_model_t;
 
 /* ── Membres d'une centrale (ou suiveurs d'une zone) ──
