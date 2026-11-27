@@ -84,7 +84,9 @@ export interface RadiosReply { active?: number; radios: RadioDetail[] }
 
 /* Detection (/api/capture/last) et captures brutes. */
 export interface CaptureLast { n: number; band?: string; freq_khz?: number; rssi?: number; nframes?: number }
-export interface ReplayCaptureReply { n: number }
+/* Capture de rejeu : n impulsions, ou refus. backup_full : la sauvegarde aurait depasse ce que le boitier sait
+   restaurer, rien n'a ete enregistre. */
+export interface ReplayCaptureReply { n: number; backup_full?: boolean }
 /* Capture d'une commande KeeLoq (/api/learn/poll). */
 export interface LearnPoll { bits?: string; serial: string; button: string; rssi: number }
 /* Balayage « Caler sur ma telecommande » (/api/rx/sweep). */

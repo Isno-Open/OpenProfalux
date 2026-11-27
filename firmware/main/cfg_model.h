@@ -188,6 +188,23 @@ const catalog_profile_t *cfg_device_assign_copy_profile(volet_t *v, const cfg_tx
 int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, const cfg_tx_t *somfy);
 
 char *cfg_model_export(const cfg_model_t *m);
+
+/* Taille d'une sauvegarde que le boitier sait restaurer : le corps de /api/restore et la copie d'avant
+ * restauration sont lus ENTIERS en RAM (32 Ko libres sur un ATOM). On ne releve pas ce plafond ; on refuse
+ * ce qui ferait deborder la sauvegarde : tout ce qui est sauvegarde se restaure (revue de la PR #156). */
+#define CFG_BACKUP_MAX (24 * 1024)
+/* Longueur exacte de cfg_model_export(m), calculee appareil par appareil, sans tenir l'export en RAM. */
+size_t cfg_model_export_len(const cfg_model_t *m);
+typedef enum {
+    CFG_CAPTURE_OK          = 0,
+    CFG_CAPTURE_ERR         = -1,   /* trame trop courte, plus de memoire */
+    CFG_CAPTURE_BACKUP_FULL = -2,   /* la sauvegarde depasserait CFG_BACKUP_MAX : rien n'est change */
+} cfg_capture_rc_t;
+/* Range une trame captee (n impulsions : niveau lvl[i], duree us[i]) comme commande `cmd` du rejeu de v,
+ * a la porteuse freq (kHz). `reserved` : ce que la sauvegarde porte hors de ce modele (table d'enrolement).
+ * Si la sauvegarde depasserait alors CFG_BACKUP_MAX, la capture d'avant reste et rien n'est change. */
+cfg_capture_rc_t cfg_device_store_capture(const cfg_model_t *m, volet_t *v, const char *cmd, uint32_t freq,
+                                          const uint8_t *lvl, const uint16_t *us, int n, size_t reserved);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */
 void  cfg_model_import(const cfg_model_t *m, cJSON *root);

@@ -910,9 +910,9 @@ static esp_err_t h_backup(httpd_req_t *r) {
     free(js);
     return e;
 }
-/* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets,
- * dont des centrales a longue liste de membres. */
-#define RESTORE_MAX_BODY (24 * 1024)
+/* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets, dont des centrales a
+ * longue liste de membres, et des captures de rejeu. Le boitier refuse ce qui la ferait depasser. */
+#define RESTORE_MAX_BODY CFG_BACKUP_MAX
 /* Mauvais fichier ou copie absente : 400 ; copie ou NVS en echec cote boitier : 500 (#33).
  * La raison part dans le corps, l'UI l'affiche en clair. */
 static esp_err_t restore_reply(httpd_req_t *r, int rc, const char *err) {
@@ -1651,9 +1651,11 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     cJSON *bwj = cJSON_GetObjectItem(j, "bandwidth_khz");
     if (cJSON_IsNumber(drj) && cJSON_IsNumber(bwj))
         cc1101_set_capture_rx((uint32_t)drj->valuedouble, (uint32_t)bwj->valuedouble);
-    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio, freq_khz) : -1;
+    bool backup_full = false;
+    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio, freq_khz, &backup_full) : -1;
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "n", n);
+    if (backup_full) cJSON_AddBoolToObject(o, "backup_full", true);   /* refusee : la sauvegarde deborderait */
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o); cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");

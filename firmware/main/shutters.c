@@ -657,25 +657,15 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
     return ok;
 }
 
-/* Range le cadre capte (lvl/us, n impulsions) comme commande `cmd` de v, a la frequence freq. */
-static int rejeu_store(volet_t *v, const char *cmd, uint32_t freq,
-                       const uint8_t *lvl, const uint16_t *us, int n) {
-    if (n < 2) return -1;
-    char *csv = malloc((size_t)n * 9 + 1);
-    if (!csv) return -1;
-    int p = 0;
-    for (int i = 0; i < n; i++)
-        p += snprintf(csv + p, (size_t)n * 9 + 1 - p, "%s%d", i ? "," : "",
-                      lvl[i] ? (int)us[i] : -(int)us[i]);
-    cJSON *j = v->rejeu ? cJSON_Parse(v->rejeu) : NULL;
-    if (!j) j = cJSON_CreateObject();
-    cJSON_DeleteItemFromObject(j, "f");   cJSON_AddNumberToObject(j, "f", freq);
-    cJSON_DeleteItemFromObject(j, cmd);   cJSON_AddStringToObject(j, cmd, csv);
-    char *out = cJSON_PrintUnformatted(j);
-    cJSON_Delete(j); free(csv);
-    if (!out) return -1;
-    free(v->rejeu); v->rejeu = out;   /* out = heap cJSON, libere par cfg_volet_release */
-    return 0;
+/* Ce que la sauvegarde porte hors du modele : la table d'enrolement (cle "pfx_enrol", shutters_export_json). */
+#define BACKUP_KEY_PFX_ENROL "pfx_enrol"
+static size_t backup_reserved(void) {
+    cJSON *t = pfx_enrol_export();
+    char *e = t ? cJSON_PrintUnformatted(t) : NULL;
+    cJSON_Delete(t);
+    size_t n = e ? strlen(e) + strlen(",\"" BACKUP_KEY_PFX_ENROL "\":") : 0;
+    free(e);
+    return n;
 }
 /* Rejoue TELLE QUELLE une trame captee (identifiee par serial+hop dans l'anneau RF).
  * Sert au bouton "rejouer" du debug RF : on renvoie la trame brute, sans passer par un volet. */
@@ -1536,7 +1526,8 @@ int shutters_set_type(const char *id, const char *type) {
 /* Capture le cadre OOK brut d'UNE commande (cmd = "up"/"stop"/"down") sur la radio `radio` et
  * le range dans l'appareil. La capture (~15 s, mutex radio) se fait HORS du LOCK shutters ; le
  * rangement + sauvegarde sous LOCK. Rend le nombre d'impulsions (>0), <=0 si rien / erreur. */
-int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz) {
+int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz, bool *backup_full) {
+    *backup_full = false;
     if (!id || !*id || !cmd || !*cmd) return -1;
     static uint8_t  lvl[REJEU_MAX_PULSES];
     static uint16_t us[REJEU_MAX_PULSES];
@@ -1548,9 +1539,11 @@ int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t 
     uint32_t freq = freq_khz ? freq_khz : (cur ? cur : carrier);   /* freq du profil de marque si fournie, sinon porteuse de la radio */
     LOCK();
     volet_t *v = find_volet(id);
-    int rc = v ? rejeu_store(v, cmd, freq, lvl, us, n) : -1;
-    if (rc == 0) save_cfg();
+    const size_t reserved = backup_reserved();
+    cfg_capture_rc_t rc = v ? cfg_device_store_capture(&s_model, v, cmd, freq, lvl, us, n, reserved) : CFG_CAPTURE_ERR;
+    if (rc == CFG_CAPTURE_OK) save_cfg();
     UNLOCK();
+    *backup_full = rc == CFG_CAPTURE_BACKUP_FULL;
     if (rc != 0) return -1;
     ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : %d impulsions a %u kHz, RSSI %d dBm", id, cmd, n, (unsigned)freq, rssi);
     return n;
@@ -2322,14 +2315,14 @@ char *shutters_export_json(void) {
     cJSON *root = js ? cJSON_Parse(js) : NULL;
     if (!root) return js;
     free(js);
-    cJSON_AddItemToObject(root, "pfx_enrol", pfx_enrol_export());
+    cJSON_AddItemToObject(root, BACKUP_KEY_PFX_ENROL, pfx_enrol_export());
     js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
 }
 /* Copie de la config d'avant la derniere restauration (Systeme > Sauvegarde, "Revenir"). */
 #define PREV_CFG_FILE SPIFFS_BASE "/config-avant.json"
-#define PREV_CFG_MAX  (24 * 1024)   /* = RESTORE_MAX_BODY (web_ui.c) */
+#define PREV_CFG_MAX  CFG_BACKUP_MAX   /* meme plafond que la restauration : la copie s'y relit */
 
 int shutters_import_json(const char *js, const char **err) {
     *err = "format";

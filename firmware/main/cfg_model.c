@@ -271,6 +271,52 @@ static char *print_and_free(cJSON *j) {   /* NULL si plus de memoire : cfg_store
     cJSON_Delete(j);
     return s;
 }
+#define EXPORT_VOLETS_OPEN  "\"volets\":["
+#define EXPORT_VOLETS_CLOSE "]}"
+/* Meme texte que cfg_model_export : l'en-tete sans son '}', une virgule s'il a des champs, le tableau des
+ * appareils separes par des virgules, puis "]}". SIZE_MAX si plus de memoire. */
+size_t cfg_model_export_len(const cfg_model_t *m) {
+    char *h = print_and_free(hdr_to_json(m));
+    if (!h) return SIZE_MAX;
+    const size_t hl = strlen(h);
+    size_t len = hl - 1 + (hl > 2 ? 1 : 0) + strlen(EXPORT_VOLETS_OPEN) + strlen(EXPORT_VOLETS_CLOSE);
+    free(h);
+    for (int i = 0; i < *m->nvolets; i++) {
+        char *d = print_and_free(volet_to_json(&m->volets[i], NULL));
+        if (!d) return SIZE_MAX;
+        len += strlen(d) + (i ? 1 : 0);
+        free(d);
+    }
+    return len;
+}
+cfg_capture_rc_t cfg_device_store_capture(const cfg_model_t *m, volet_t *v, const char *cmd, uint32_t freq,
+                                          const uint8_t *lvl, const uint16_t *us, int n, size_t reserved) {
+    if (n < 2) return CFG_CAPTURE_ERR;
+    const size_t cap = (size_t)n * 9 + 1;   /* « -65535, » au plus par impulsion */
+    char *csv = malloc(cap);
+    if (!csv) return CFG_CAPTURE_ERR;
+    size_t p = 0;
+    for (int i = 0; i < n; i++)
+        p += (size_t)snprintf(csv + p, cap - p, "%s%d", i ? "," : "", lvl[i] ? (int)us[i] : -(int)us[i]);
+    cJSON *j = v->rejeu ? cJSON_Parse(v->rejeu) : NULL;
+    if (!j) j = cJSON_CreateObject();
+    cJSON_DeleteItemFromObject(j, "f");   cJSON_AddNumberToObject(j, "f", freq);
+    cJSON_DeleteItemFromObject(j, cmd);   cJSON_AddStringToObject(j, cmd, csv);
+    char *out = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j); free(csv);
+    if (!out) return CFG_CAPTURE_ERR;
+    char *was = v->rejeu;
+    v->rejeu = out;
+    const size_t len = cfg_model_export_len(m);
+    if (len == SIZE_MAX || len + reserved > CFG_BACKUP_MAX) {
+        v->rejeu = was; free(out);
+        ESP_LOGW(TAG, "'%s' : capture refusee, la sauvegarde ferait %u octets (au plus %u)",
+                 v->id, (unsigned)(len + reserved), (unsigned)CFG_BACKUP_MAX);
+        return len == SIZE_MAX ? CFG_CAPTURE_ERR : CFG_CAPTURE_BACKUP_FULL;
+    }
+    free(was);
+    return CFG_CAPTURE_OK;
+}
 /* Un document a la fois : la config n'est jamais tenue entiere en RAM, ni
  * reecrite en bloc. Un volet inchange ne coute rien, la NVS ignore une valeur
  * identique. */

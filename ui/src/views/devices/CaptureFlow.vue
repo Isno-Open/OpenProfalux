@@ -139,6 +139,7 @@ async function capture(cmd: Command): Promise<void> {
     await refresh();
   } catch (e) {
     if (isOtherRemote(e)) toast(`Pas la bonne télécommande : trame de ${e.otherRemote}, le volet utilise ${targetSerial}`);
+    else if (e === FAILURE.backupFull) toast(`Sauvegarde pleine : « ${label} » n'est pas enregistrée. Supprime un appareil à capture pour faire de la place.`);
     else if (e === FAILURE.refused) toast(`Refusé par le boîtier : « ${label} » n'est pas enregistrée (liste des appareils pleine ?)`);
     else if (e !== FAILURE.busy) failed.value = label;
   } finally { busy.value = ''; }

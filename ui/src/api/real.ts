@@ -67,6 +67,7 @@ export default {
         body.bandwidth_khz = rx.bandwidth_khz;
       }
       const d = await post<ReplayCaptureReply>('/api/rejeu/capture', body).catch(() => null);
+      if (d?.backup_full) return Promise.reject(FAILURE.backupFull);
       return d && d.n > 0 ? d : Promise.reject(FAILURE.nothing);
     }
     await post(`/api/learn/start?radio=${radio}${freq_khz ? `&freq_khz=${freq_khz}` : ''}`, { action });

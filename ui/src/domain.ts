@@ -78,6 +78,7 @@ export const FAILURE = {
   github: 'github',            // verification GitHub finie sans resultat
   start: 'start',              // l'operation n'a pas demarre
   refused: 'refused',          // refus metier sans raison
+  backupFull: 'backupFull',    // la sauvegarde deborderait : capture refusee
 } as const;
 export type Failure = ValueOf<typeof FAILURE>;
 export const HTTP_UNAUTHORIZED = 401;

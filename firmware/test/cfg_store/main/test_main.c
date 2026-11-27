@@ -1340,6 +1340,42 @@ int main(void) {
         s_capture_dir = NULL; clear_captures();
     }
 
+    /* ── T16. Tout ce qui est sauvegarde se restaure : une capture qui ferait depasser CFG_BACKUP_MAX est refusee ── */
+    printf("\n[T16] Plafond de la sauvegarde (CFG_BACKUP_MAX = %u octets) : la capture qui le depasserait est refusee\n", (unsigned)CFG_BACKUP_MAX);
+    {
+        s_capture_dir = CAPTURE_DIR; clear_captures();
+        wipe(); system_state(); model_init(&g_ref);
+        /* a. La longueur calculee est celle de l'export, modele vide compris */
+        store_t empty; store_reset(&empty);
+        char *e0 = cfg_model_export(&empty.m), *e1 = cfg_model_export(&g_ref.m);
+        bool len_ok = e0 && e1 && cfg_model_export_len(&empty.m) == strlen(e0) && cfg_model_export_len(&g_ref.m) == strlen(e1);
+        free(e0); free(e1);
+        /* b. Des portails captes jusqu'au refus. Une trame de 300 impulsions par portail. */
+        enum { PULSES = 300 };
+        static uint8_t lvl[PULSES]; static uint16_t us[PULSES];
+        for (int i = 0; i < PULSES; i++) { lvl[i] = (uint8_t)(i % 2 == 0); us[i] = (uint16_t)(300 + i * 7); }
+        const size_t reserved = 500;   /* la table d'enrolement d'un boitier */
+        int accepted = 0; cfg_capture_rc_t rc = CFG_CAPTURE_OK; bool over = false, len_track = true;
+        while (g_ref.nvolets < SH_MAX_VOLETS) {
+            add_replay(&g_ref, "{}");
+            volet_t *v = &g_ref.volets[g_ref.nvolets - 1];
+            rc = cfg_device_store_capture(&g_ref.m, v, "up", 433920, lvl, us, PULSES, reserved);
+            char *ex = cfg_model_export(&g_ref.m);
+            if (ex) { over |= strlen(ex) + reserved > CFG_BACKUP_MAX; len_track &= strlen(ex) == cfg_model_export_len(&g_ref.m); }
+            free(ex);
+            if (rc != CFG_CAPTURE_OK) break;
+            accepted++;
+        }
+        const volet_t *refused = &g_ref.volets[g_ref.nvolets - 1];
+        bool unchanged = refused->rejeu && !strcmp(refused->rejeu, "{}");
+        CHECK(len_ok && len_track, "longueur calculee differente de l'export");
+        CHECK(rc == CFG_CAPTURE_BACKUP_FULL && accepted > 0 && !over && unchanged,
+              "plafond : %d captures acceptees, refus %d, depassement %d, capture refusee laissee intacte %d", accepted, rc, over, unchanged);
+        printf("  %d portails captes, le suivant refuse (%s), aucune sauvegarde au-dela du plafond -> %s\n",
+               accepted, rc == CFG_CAPTURE_BACKUP_FULL ? "sauvegarde pleine" : "AUTRE", !over && unchanged ? "OK" : "KO");
+        s_capture_dir = NULL; clear_captures();
+    }
+
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");
     return s_fail ? 1 : 0;
 }

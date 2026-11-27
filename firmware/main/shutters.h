@@ -62,7 +62,7 @@ typedef enum {
 sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address);
 int  shutters_create_rejeu(const char *id, const char *type);            /* appareil a rejeu brut OOK (code fixe) ; type = cle du catalogue */
 int  shutters_set_type(const char *id, const char *type);                /* corrige le type (cle du catalogue) d'un appareil existant */
-int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
+int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz, bool *backup_full); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);
