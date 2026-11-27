@@ -20,6 +20,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <dirent.h>
+#include <malloc.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1298,6 +1300,33 @@ int main(void) {
         bool kept = flash_is(&was, NULL);
         CHECK(kept, "coupure pendant l'ecriture d'une capture : etat d'avant %s", kept ? "relu" : "PERDU");
         printf("  coupure pendant l'ecriture d'une capture : etat d'avant relu -> %s\n", kept ? "OK" : "KO");
+
+        /* g. Une capture relue ne garde que sa taille en RAM, pas le plafond de lecture : douze tampons de
+         *    64 Ko epuisaient un ESP32 (revue de la PR #156) */
+        load_seen();
+        const volet_t *sv = &g_seen.volets[g_seen.nvolets - 1];
+        size_t want = sv->rejeu ? strlen(sv->rejeu) + 1 : 0, held = sv->rejeu ? malloc_usable_size(sv->rejeu) : 0;
+        CHECK(want && held < want + 64, "capture relue : %zu octets tenus pour %zu utiles", held, want);
+        printf("  capture relue : %zu octets en RAM pour %zu -> %s\n", held, want, want && held < want + 64 ? "OK" : "KO");
+
+        /* h. Une capture qu'on n'a pas pu relire garde son fichier et son nom : le prochain enregistrement
+         *    ne l'efface pas, et elle revient au demarrage suivant */
+        char path[512], *saved = NULL;
+        snprintf(path, sizeof path, "%s/%s", CAPTURE_DIR, sv->rejeu_file);   /* l'etat relu, celui d'avant la coupure (e) */
+        size_t sl = 0; saved = cfg_read_file(path, 1 << 20, &sl);
+        FILE *tf = fopen(path, "wb"); if (tf) fclose(tf);   /* fichier vide : illisible */
+        int files0 = count_captures();
+        load_seen();
+        bool lost = !g_seen.volets[g_seen.nvolets - 1].rejeu;
+        esp_err_t es = cfg_model_save(&g_seen.m, NULL);
+        bool file_kept = count_captures() == files0 && access(path, F_OK) == 0;
+        tf = fopen(path, "wb"); if (tf && saved) fwrite(saved, 1, sl, tf); if (tf) fclose(tf);
+        free(saved);
+        reboot();
+        bool back = flash_is(&was, NULL);
+        CHECK(saved && lost && es == ESP_OK && file_kept && back,
+              "capture non relue : perdue a la lecture %d, fichier garde %d, revenue %d", lost, file_kept, back);
+        printf("  capture non relue : fichier garde %d, revenue au demarrage suivant %d -> %s\n", file_kept, back, file_kept && back ? "OK" : "KO");
 
         /* f. Fichier impossible a ecrire : la capture reste dans la NVS, et se relit */
         s_capture_dir = CAPTURE_BAD;

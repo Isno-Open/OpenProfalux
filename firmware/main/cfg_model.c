@@ -48,7 +48,7 @@ static bool rejeu_path(char *out, const char *dir, const char *name) {
 /* Nom deja pris par un autre appareil dont la capture est en fichier ? */
 static bool rejeu_name_taken(const cfg_model_t *m, int self, const char *name) {
     for (int k = 0; k < *m->nvolets; k++)
-        if (k != self && m->volets[k].rejeu && !strcmp(m->volets[k].rejeu_file, name)) return true;
+        if (k != self && !strcmp(m->volets[k].rejeu_file, name)) return true;   /* relue ou non */
     return false;
 }
 /* Range la capture de l'appareil i dans son fichier. true : elle y est, et v->rejeu_file la nomme ;
@@ -70,6 +70,7 @@ static bool rejeu_store_file(const cfg_model_t *m, int i) {
     char path[REJEU_PATH_MAX];
     if (!rejeu_path(path, m->capture_dir, v->rejeu_file) || !cfg_write_file(path, v->rejeu, strlen(v->rejeu))) {
         ESP_LOGW(TAG, "'%s' : capture non ecrite en fichier, elle reste dans la NVS", v->id);
+        v->rejeu_file[0] = 0;   /* le document la porte en clair : il ne nomme plus de fichier */
         v->rejeu_hash = 0;
         return false;
     }
@@ -94,7 +95,8 @@ static void rejeu_sweep(const cfg_model_t *m) {
         if (n > lt && !strcmp(name + n - lt, REJEU_FILE_TMP)) name[n - lt] = 0;
         if (!rejeu_name_ok(name)) continue;
         bool used = false;
-        for (int k = 0; k < *m->nvolets && !used; k++) used = m->volets[k].rejeu && !strcmp(m->volets[k].rejeu_file, name);
+        /* une fiche dont la capture n'a pas ete relue nomme encore son fichier : il reste */
+        for (int k = 0; k < *m->nvolets && !used; k++) used = !strcmp(m->volets[k].rejeu_file, name);
         if (!used) strcpy(gone[ngone++], e->d_name);
     }
     closedir(d);
@@ -110,9 +112,12 @@ static void rejeu_load_file(const cfg_model_t *m, volet_t *v, const char *name) 
     size_t n = 0;
     char *buf = (m->capture_dir && rejeu_name_ok(name) && rejeu_path(path, m->capture_dir, name))
               ? cfg_read_file(path, REJEU_FILE_MAX, &n) : NULL;
+    /* Meme non relue (RAM, fichier abime), la fiche garde le nom : le document qui l'enregistre de
+     * nouveau le nomme encore, et le menage n'efface pas le fichier. La capture revient au demarrage
+     * suivant si c'etait la RAM. */
+    if (rejeu_name_ok(name)) strlcpy(v->rejeu_file, name, sizeof v->rejeu_file);
     if (!buf) { ESP_LOGE(TAG, "'%s' : capture %s introuvable", v->id, name); return; }
     v->rejeu = buf;
-    strlcpy(v->rejeu_file, name, sizeof v->rejeu_file);
     v->rejeu_hash = fnv1a(buf);
 }
 
@@ -231,6 +236,7 @@ static cJSON *volet_to_json(const volet_t *v, const char *rejeu_file) {
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
     if (v->rejeu && rejeu_file) cJSON_AddStringToObject(o, "rejeu_file", rejeu_file);   /* capture en fichier */
     else if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
+    else if (rejeu_file) cJSON_AddStringToObject(o, "rejeu_file", rejeu_file);   /* capture non relue : son nom reste */
     /* Parametres d'emission par appareil (etage 2, issue #111). Omis quand ils valent le defaut
      * (0 = heriter), pour garder les sauvegardes existantes a l'identique et rester compatible dans
      * les deux sens : une version anterieure ignore ces cles, celle-ci les retrouve a 0 si absentes. */
@@ -273,8 +279,10 @@ esp_err_t cfg_model_save(const cfg_model_t *m, char *failed_key) {
         char *d = print_and_free(hdr_to_json(m));
         cfg_store_put_hdr(&tx, d); free(d);
         for (int i = 0; i < *m->nvolets; i++) {
+            const volet_t *v = &m->volets[i];
             const bool in_file = rejeu_store_file(m, i);   /* le fichier AVANT le document qui le nomme */
-            d = print_and_free(volet_to_json(&m->volets[i], in_file ? m->volets[i].rejeu_file : NULL));
+            const bool unread = m->capture_dir && !v->rejeu && v->rejeu_file[0];   /* capture non relue */
+            d = print_and_free(volet_to_json(v, in_file || unread ? v->rejeu_file : NULL));
             cfg_store_put_volet(&tx, d); free(d);
         }
     }
@@ -456,10 +464,15 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
     FILE *f = fopen(path, "rb");
     if (!f && snprintf(tmp, sizeof(tmp), "%s.tmp", path) < (int)sizeof(tmp)) f = fopen(tmp, "rb");
     if (!f) return NULL;
-    char *buf = malloc(cap + 1);
-    size_t got = buf ? fread(buf, 1, cap + 1, f) : 0;
+    /* Le tampon a la taille du fichier, cap n'est qu'un plafond : une capture relue en garde le tampon
+     * tant que l'appareil existe, et des tampons de cap octets chacun epuisaient la RAM d'un ESP32
+     * (revue de la PR #156). */
+    long size = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    if (size <= 0 || (size_t)size > cap || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = malloc((size_t)size + 1);
+    size_t got = buf ? fread(buf, 1, (size_t)size + 1, f) : 0;
     fclose(f);
-    if (!buf || got == 0 || got > cap) { free(buf); return NULL; }
+    if (!buf || got != (size_t)size) { free(buf); return NULL; }
     buf[got] = 0;
     if (n) *n = got;
     return buf;
