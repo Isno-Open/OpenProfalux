@@ -20,7 +20,7 @@
 
 #define SH_MAX_REMOTES 16
 /* Nom du fichier d'une capture de rejeu : "rj" + 8 chiffres hexadecimaux + ".json", zero final compris. */
-#define CFG_REJEU_NAME_LEN 16
+#define CFG_REPLAY_NAME_LEN 16
 
 /* Protocole d'emission d'un volet VIRTUEL (qui GENERE sa trame). Profalux/KeeLoq est le
  * seul cable aujourd'hui, et vaut 0 : les volets deja persistes, sans ce champ, le
@@ -95,8 +95,8 @@ typedef struct {
     /* ── Etat d'execution, NON persiste ── */
     /* Capture rangee en fichier (cfg_model_t.capture_dir) : son nom, et l'empreinte du contenu qui y est.
      * Un enregistrement ne reecrit le fichier que si la capture a change (chaque mouvement enregistre). */
-    char     rejeu_file[CFG_REJEU_NAME_LEN];
-    uint32_t rejeu_hash;
+    char     replay_file[CFG_REPLAY_NAME_LEN];
+    uint32_t replay_hash;
     int   dir;               /* -1 down, 0 stop, +1 up */
     int   target;            /* -1 = aucun, sinon 0..100 */
     bool  own_move;          /* true = notre commande (on stream) ; false = externe (on suit sans emettre) */
@@ -165,7 +165,7 @@ bool cfg_device_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t
 void cfg_device_inherit_equal(volet_t *v, const catalog_profile_t *p);
 
 /* Document de rejeu d'un appareil cree sans capture encore ("{}", sur le tas ; NULL sans memoire). */
-char *cfg_rejeu_empty(void);
+char *cfg_replay_empty(void);
 /* Fiche qui n'a rien a emettre : ni identite generee, ni rejeu, ni trame copiee (une centrale n'en est
  * pas une). Typiquement la coquille d'un appareil dont la capture n'a jamais ete enregistree. */
 bool cfg_device_is_blank(const volet_t *v);

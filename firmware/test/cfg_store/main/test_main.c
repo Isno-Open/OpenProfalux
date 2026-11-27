@@ -563,7 +563,7 @@ int main(void) {
             volet_t *blank = &g_tmp.volets[g_tmp.nvolets++], *fresh = &g_tmp.volets[g_tmp.nvolets++], *copy = &g_tmp.volets[g_tmp.nvolets++];
             strlcpy(blank->id, "Coquille", SH_ID_LEN); strlcpy(blank->type, GATE_KEY, sizeof blank->type);
             strlcpy(fresh->id, "Rejeu neuf", SH_ID_LEN); strlcpy(fresh->type, GATE_KEY, sizeof fresh->type);
-            fresh->rejeu = cfg_rejeu_empty();
+            fresh->rejeu = cfg_replay_empty();
             strlcpy(copy->id, "Copie", SH_ID_LEN); strlcpy(copy->up, "1010", SH_BITS_LEN);
             CHECK(cfg_device_is_blank(blank) && cfg_device_encoder(blank) == CAT_ENC_NONE, "fiche vide : aucun encodeur");
             CHECK(fresh->rejeu && cfg_device_encoder(fresh) == CAT_ENC_RAW_REPLAY, "rejeu sans capture : encodeur de rejeu");
@@ -1312,7 +1312,7 @@ int main(void) {
         /* h. Une capture qu'on n'a pas pu relire garde son fichier et son nom : le prochain enregistrement
          *    ne l'efface pas, et elle revient au demarrage suivant */
         char path[512], *saved = NULL;
-        snprintf(path, sizeof path, "%s/%s", CAPTURE_DIR, sv->rejeu_file);   /* l'etat relu, celui d'avant la coupure (e) */
+        snprintf(path, sizeof path, "%s/%s", CAPTURE_DIR, sv->replay_file);   /* l'etat relu, celui d'avant la coupure (e) */
         size_t sl = 0; saved = cfg_read_file(path, 1 << 20, &sl);
         FILE *tf = fopen(path, "wb"); if (tf) fclose(tf);   /* fichier vide : illisible */
         int files0 = count_captures();

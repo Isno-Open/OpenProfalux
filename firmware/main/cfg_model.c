@@ -18,12 +18,14 @@ static const char *TAG = "cfg_model";
  * restauration) garde la capture en clair : son format ne change pas. Le fichier est ecrit AVANT le
  * document qui le nomme, et un fichier qu'aucun document ne nomme n'est efface qu'apres un
  * enregistrement reussi : une coupure ne laisse jamais un document sans sa capture. */
-#define REJEU_FILE_PREFIX "rj"
-#define REJEU_FILE_EXT    ".json"
-#define REJEU_FILE_TMP    ".tmp"              /* suffixe du temporaire de cfg_write_file */
-#define REJEU_FILE_HEX    8
-#define REJEU_FILE_MAX    (64 * 1024)         /* au-dela, un fichier n'est pas une capture de ce firmware */
-#define REJEU_PATH_MAX    96
+/* Cle du document NVS qui nomme le fichier de la capture (donnee du format, pas un identifiant). */
+#define DOC_KEY_REPLAY_FILE "rejeu_file"
+#define REPLAY_FILE_PREFIX "rj"
+#define REPLAY_FILE_EXT    ".json"
+#define REPLAY_FILE_TMP    ".tmp"              /* suffixe du temporaire de cfg_write_file */
+#define REPLAY_FILE_HEX    8
+#define REPLAY_FILE_MAX    (64 * 1024)         /* au-dela, un fichier n'est pas une capture de ce firmware */
+#define REPLAY_PATH_MAX    96
 
 /* FNV-1a 32 bits. Jamais 0 : 0 veut dire « aucun contenu connu sur disque ». */
 static uint32_t fnv1a(const char *s) {
@@ -33,92 +35,92 @@ static uint32_t fnv1a(const char *s) {
 }
 /* Un nom que ce firmware a pu ecrire : seul nom lu, et seul nom efface (un document retouche a la main
  * ne fait pas lire ni effacer autre chose). */
-static bool rejeu_name_ok(const char *n) {
-    const size_t lp = strlen(REJEU_FILE_PREFIX);
-    if (strlen(n) != lp + REJEU_FILE_HEX + strlen(REJEU_FILE_EXT) || strncmp(n, REJEU_FILE_PREFIX, lp)) return false;
-    for (size_t i = 0; i < REJEU_FILE_HEX; i++) {
+static bool replay_name_ok(const char *n) {
+    const size_t lp = strlen(REPLAY_FILE_PREFIX);
+    if (strlen(n) != lp + REPLAY_FILE_HEX + strlen(REPLAY_FILE_EXT) || strncmp(n, REPLAY_FILE_PREFIX, lp)) return false;
+    for (size_t i = 0; i < REPLAY_FILE_HEX; i++) {
         const char c = n[lp + i];
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
     }
-    return !strcmp(n + lp + REJEU_FILE_HEX, REJEU_FILE_EXT);
+    return !strcmp(n + lp + REPLAY_FILE_HEX, REPLAY_FILE_EXT);
 }
-static bool rejeu_path(char *out, const char *dir, const char *name) {
-    return snprintf(out, REJEU_PATH_MAX, "%s/%s", dir, name) < REJEU_PATH_MAX;
+static bool replay_path(char *out, const char *dir, const char *name) {
+    return snprintf(out, REPLAY_PATH_MAX, "%s/%s", dir, name) < REPLAY_PATH_MAX;
 }
 /* Nom deja pris par un autre appareil dont la capture est en fichier ? */
-static bool rejeu_name_taken(const cfg_model_t *m, int self, const char *name) {
+static bool replay_name_taken(const cfg_model_t *m, int self, const char *name) {
     for (int k = 0; k < *m->nvolets; k++)
-        if (k != self && !strcmp(m->volets[k].rejeu_file, name)) return true;   /* relue ou non */
+        if (k != self && !strcmp(m->volets[k].replay_file, name)) return true;   /* relue ou non */
     return false;
 }
-/* Range la capture de l'appareil i dans son fichier. true : elle y est, et v->rejeu_file la nomme ;
+/* Range la capture de l'appareil i dans son fichier. true : elle y est, et v->replay_file la nomme ;
  * false : elle reste dans le document NVS (pas de dossier, ou fichier impossible a ecrire). */
-static bool rejeu_store_file(const cfg_model_t *m, int i) {
+static bool replay_store_file(const cfg_model_t *m, int i) {
     volet_t *v = &m->volets[i];
     if (!m->capture_dir || !v->rejeu) return false;
-    if (!v->rejeu_file[0] || rejeu_name_taken(m, i, v->rejeu_file)) {
+    if (!v->replay_file[0] || replay_name_taken(m, i, v->replay_file)) {
         /* un nom tire de l'identifiant stable ; un autre appareil le porte deja : le suivant */
         uint32_t h = fnv1a(v->uid[0] ? v->uid : v->id);
         for (int t = 0; t < SH_MAX_VOLETS; t++, h++) {
-            snprintf(v->rejeu_file, sizeof v->rejeu_file, REJEU_FILE_PREFIX "%08" PRIx32 REJEU_FILE_EXT, h);
-            if (!rejeu_name_taken(m, i, v->rejeu_file)) break;
+            snprintf(v->replay_file, sizeof v->replay_file, REPLAY_FILE_PREFIX "%08" PRIx32 REPLAY_FILE_EXT, h);
+            if (!replay_name_taken(m, i, v->replay_file)) break;
         }
-        v->rejeu_hash = 0;   /* nouveau nom : rien encore sur disque */
+        v->replay_hash = 0;   /* nouveau nom : rien encore sur disque */
     }
     const uint32_t h = fnv1a(v->rejeu);
-    if (v->rejeu_hash == h) return true;
-    char path[REJEU_PATH_MAX];
-    if (!rejeu_path(path, m->capture_dir, v->rejeu_file) || !cfg_write_file(path, v->rejeu, strlen(v->rejeu))) {
+    if (v->replay_hash == h) return true;
+    char path[REPLAY_PATH_MAX];
+    if (!replay_path(path, m->capture_dir, v->replay_file) || !cfg_write_file(path, v->rejeu, strlen(v->rejeu))) {
         ESP_LOGW(TAG, "'%s' : capture non ecrite en fichier, elle reste dans la NVS", v->id);
-        v->rejeu_file[0] = 0;   /* le document la porte en clair : il ne nomme plus de fichier */
-        v->rejeu_hash = 0;
+        v->replay_file[0] = 0;   /* le document la porte en clair : il ne nomme plus de fichier */
+        v->replay_hash = 0;
         return false;
     }
-    v->rejeu_hash = h;
+    v->replay_hash = h;
     return true;
 }
 /* Apres un enregistrement reussi : efface les fichiers de capture qu'aucun appareil ne nomme plus
  * (appareil supprime, capture retiree). Un temporaire suit le sort de son fichier. */
-static void rejeu_sweep(const cfg_model_t *m) {
+static void replay_sweep(const cfg_model_t *m) {
     if (!m->capture_dir) return;
     DIR *d = opendir(m->capture_dir);
     if (!d) return;
     /* On efface apres closedir : retirer une entree pendant le parcours n'est pas garanti sur SPIFFS. */
-    char gone[2 * SH_MAX_VOLETS][CFG_REJEU_NAME_LEN + sizeof(REJEU_FILE_TMP)];
+    char gone[2 * SH_MAX_VOLETS][CFG_REPLAY_NAME_LEN + sizeof(REPLAY_FILE_TMP)];
     int ngone = 0;
     struct dirent *e;
     while ((e = readdir(d)) && ngone < (int)(sizeof gone / sizeof gone[0])) {
         char name[sizeof gone[0]];
         if (strlen(e->d_name) >= sizeof name) continue;
         strcpy(name, e->d_name);
-        size_t n = strlen(name), lt = strlen(REJEU_FILE_TMP);
-        if (n > lt && !strcmp(name + n - lt, REJEU_FILE_TMP)) name[n - lt] = 0;
-        if (!rejeu_name_ok(name)) continue;
+        size_t n = strlen(name), lt = strlen(REPLAY_FILE_TMP);
+        if (n > lt && !strcmp(name + n - lt, REPLAY_FILE_TMP)) name[n - lt] = 0;
+        if (!replay_name_ok(name)) continue;
         bool used = false;
         /* une fiche dont la capture n'a pas ete relue nomme encore son fichier : il reste */
-        for (int k = 0; k < *m->nvolets && !used; k++) used = !strcmp(m->volets[k].rejeu_file, name);
+        for (int k = 0; k < *m->nvolets && !used; k++) used = !strcmp(m->volets[k].replay_file, name);
         if (!used) strcpy(gone[ngone++], e->d_name);
     }
     closedir(d);
     for (int i = 0; i < ngone; i++) {
-        char path[REJEU_PATH_MAX];
-        if (rejeu_path(path, m->capture_dir, gone[i]) && remove(path) == 0)
+        char path[REPLAY_PATH_MAX];
+        if (replay_path(path, m->capture_dir, gone[i]) && remove(path) == 0)
             ESP_LOGI(TAG, "capture %s : plus aucun appareil ne la nomme, effacee", gone[i]);
     }
 }
 /* Relit la capture que nomme un document NVS. */
-static void rejeu_load_file(const cfg_model_t *m, volet_t *v, const char *name) {
-    char path[REJEU_PATH_MAX];
+static void replay_load_file(const cfg_model_t *m, volet_t *v, const char *name) {
+    char path[REPLAY_PATH_MAX];
     size_t n = 0;
-    char *buf = (m->capture_dir && rejeu_name_ok(name) && rejeu_path(path, m->capture_dir, name))
-              ? cfg_read_file(path, REJEU_FILE_MAX, &n) : NULL;
+    char *buf = (m->capture_dir && replay_name_ok(name) && replay_path(path, m->capture_dir, name))
+              ? cfg_read_file(path, REPLAY_FILE_MAX, &n) : NULL;
     /* Meme non relue (RAM, fichier abime), la fiche garde le nom : le document qui l'enregistre de
      * nouveau le nomme encore, et le menage n'efface pas le fichier. La capture revient au demarrage
      * suivant si c'etait la RAM. */
-    if (rejeu_name_ok(name)) strlcpy(v->rejeu_file, name, sizeof v->rejeu_file);
+    if (replay_name_ok(name)) strlcpy(v->replay_file, name, sizeof v->replay_file);
     if (!buf) { ESP_LOGE(TAG, "'%s' : capture %s introuvable", v->id, name); return; }
     v->rejeu = buf;
-    v->rejeu_hash = fnv1a(buf);
+    v->replay_hash = fnv1a(buf);
 }
 
 /* ── Membres d'une centrale ── */
@@ -192,8 +194,8 @@ static const char *default_type(const volet_t *v) {
     return p ? p->type : catalog_type_of_legacy(0);
 }
 
-/* rejeu_file : la capture est dans ce fichier, le document ne porte que son nom (NVS) ; NULL : en clair. */
-static cJSON *volet_to_json(const volet_t *v, const char *rejeu_file) {
+/* replay_file : la capture est dans ce fichier, le document ne porte que son nom (NVS) ; NULL : en clair. */
+static cJSON *volet_to_json(const volet_t *v, const char *replay_file) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
     /* Identifiant stable : omis tant qu'il vaut le slug du nom (jamais renomme), pour garder les
@@ -234,9 +236,9 @@ static cJSON *volet_to_json(const volet_t *v, const char *rejeu_file) {
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
-    if (v->rejeu && rejeu_file) cJSON_AddStringToObject(o, "rejeu_file", rejeu_file);   /* capture en fichier */
+    if (v->rejeu && replay_file) cJSON_AddStringToObject(o, DOC_KEY_REPLAY_FILE, replay_file);   /* capture en fichier */
     else if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
-    else if (rejeu_file) cJSON_AddStringToObject(o, "rejeu_file", rejeu_file);   /* capture non relue : son nom reste */
+    else if (replay_file) cJSON_AddStringToObject(o, DOC_KEY_REPLAY_FILE, replay_file);   /* capture non relue : son nom reste */
     /* Parametres d'emission par appareil (etage 2, issue #111). Omis quand ils valent le defaut
      * (0 = heriter), pour garder les sauvegardes existantes a l'identique et rester compatible dans
      * les deux sens : une version anterieure ignore ces cles, celle-ci les retrouve a 0 si absentes. */
@@ -280,14 +282,14 @@ esp_err_t cfg_model_save(const cfg_model_t *m, char *failed_key) {
         cfg_store_put_hdr(&tx, d); free(d);
         for (int i = 0; i < *m->nvolets; i++) {
             const volet_t *v = &m->volets[i];
-            const bool in_file = rejeu_store_file(m, i);   /* le fichier AVANT le document qui le nomme */
-            const bool unread = m->capture_dir && !v->rejeu && v->rejeu_file[0];   /* capture non relue */
-            d = print_and_free(volet_to_json(v, in_file || unread ? v->rejeu_file : NULL));
+            const bool in_file = replay_store_file(m, i);   /* le fichier AVANT le document qui le nomme */
+            const bool unread = m->capture_dir && !v->rejeu && v->replay_file[0];   /* capture non relue */
+            d = print_and_free(volet_to_json(v, in_file || unread ? v->replay_file : NULL));
             cfg_store_put_volet(&tx, d); free(d);
         }
     }
     esp_err_t e = cfg_store_end(&tx);
-    if (e == ESP_OK) rejeu_sweep(m);
+    if (e == ESP_OK) replay_sweep(m);
     if (failed_key) memcpy(failed_key, tx.failed_key, sizeof(tx.failed_key));
     return e;
 }
@@ -370,9 +372,9 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
                  v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
     const char *rj = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu"));
-    const char *rf = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu_file"));
+    const char *rf = cJSON_GetStringValue(cJSON_GetObjectItem(o, DOC_KEY_REPLAY_FILE));
     v->rejeu = (rj && *rj) ? strdup(rj) : NULL;   /* rejeu brut par commande ; libere par cfg_volet_release */
-    if (!v->rejeu && rf && *rf) rejeu_load_file(m, v, rf);   /* document NVS : la capture est en fichier */
+    if (!v->rejeu && rf && *rf) replay_load_file(m, v, rf);   /* document NVS : la capture est en fichier */
     /* Parametres d'emission par appareil (etage 2, issue #111). memset() a deja mis 0 = heriter : on
      * ne surcharge que si la cle est presente. Compatible avec une config anterieure (cles absentes). */
     cJSON *fk = cJSON_GetObjectItem(o, "freq_khz"); if (fk) v->freq_khz = (uint32_t)cJSON_GetNumberValue(fk);
@@ -479,7 +481,7 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
 }
 
 /* ── Encodeur et profil d'un appareil ── */
-char *cfg_rejeu_empty(void) { return strdup("{}"); }
+char *cfg_replay_empty(void) { return strdup("{}"); }
 
 bool cfg_device_is_blank(const volet_t *v) {
     return !v->virt && !v->central && !v->rejeu && !v->up[0] && !v->down[0] && !v->stop[0];

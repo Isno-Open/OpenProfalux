@@ -1506,7 +1506,7 @@ int shutters_create_rejeu(const char *id, const char *type) {
     v->virt = false;
     /* Un rejeu sans capture encore : un document vide le dit. Sans lui, la fiche passait pour une copie
      * KeeLoq et recevait le profil d'une telecommande Profalux (constate sur une Super). */
-    if (!v->rejeu && !(v->rejeu = cfg_rejeu_empty())) { UNLOCK(); return -1; }
+    if (!v->rejeu && !(v->rejeu = cfg_replay_empty())) { UNLOCK(); return -1; }
     strlcpy(v->type, type, sizeof v->type);
     assign_profile(v, NULL);
     save_cfg();
