@@ -293,9 +293,9 @@ static volet_t *get_or_create(const char *id) {
 
 /* ── Profil d'un appareil (catalogue) ── */
 static const catalog_profile_t *profile_of(const volet_t *v) { return catalog_profile(v->profile); }
-/* Encodeur et profil d'un appareil : cfg_model.c (cfg_volet_encoder, cfg_volet_assign_profile), ou le
+/* Encodeur et profil d'un appareil : cfg_model.c (cfg_device_encoder, cfg_device_assign_profile), ou le
  * banc cfg_store les eprouve. Sous LOCK. */
-static const catalog_profile_t *assign_profile(volet_t *v, const char *wanted) { return cfg_volet_assign_profile(v, wanted); }
+static const catalog_profile_t *assign_profile(volet_t *v, const char *wanted) { return cfg_device_assign_profile(v, wanted); }
 
 /* nom volet -> slug HA-safe ([a-zA-Z0-9_-]) : espaces/accents interdits dans les topics
  * (decouverte HA ET command/state), sinon commandes/decouverte cassees. */
@@ -539,13 +539,17 @@ static void migrate_tx_overrides(void) {
 }
 /* Migration vers les profils (#134, etape 3) : une fiche ecrite avant (v0.2.16) recoit le profil de sa
  * marque et de son mecanisme, et son type si elle n'en avait pas. Puis ses reglages d'emission sont
- * rebases (cfg_volet_rebase_tx) : ce qu'elle heritait de la radio est fige, ce qui egale le profil
+ * rebases (cfg_device_rebase_tx) : ce qu'elle heritait de la radio est fige, ce qui egale le profil
  * revient a 0. Aucune emission ne change. Une fiche qu'on ne sait pas classer reste telle quelle. */
+/* Ce qu'emet aujourd'hui un appareil KeeLoq pour un reglage laisse a 0 : celui de la radio. */
+static cfg_tx_t keeloq_radio_tx(void) {
+    return (cfg_tx_t){ .freq_khz = cc1101_get_freq_khz(), .te_us = (uint16_t)cc1101_get_tx_te(),
+                       .rpt = cc1101_get_tx_repeat_bit() ? 1 : 0, .rmt = cc1101_get_tx_rmt() ? 1 : 0 };
+}
 static void migrate_profiles(void) {
     /* Ce qu'un appareil emet aujourd'hui pour un reglage laisse a 0 : la radio (KeeLoq), la norme
      * (Somfy : SOMFY_RTS_FREQ_KHZ, trame de 56 bits). */
-    const cfg_tx_t keeloq = { .freq_khz = cc1101_get_freq_khz(), .te_us = (uint16_t)cc1101_get_tx_te(),
-                              .rpt = cc1101_get_tx_repeat_bit() ? 1 : 0, .rmt = cc1101_get_tx_rmt() ? 1 : 0 };
+    const cfg_tx_t keeloq = keeloq_radio_tx();
     const cfg_tx_t somfy = { .freq_khz = SOMFY_RTS_FREQ_KHZ, .rpt = -1, .rmt = -1, .frame_bits = SOMFY_RTS_FRAME_BITS };
     if (cfg_model_migrate_profiles(&s_model, &keeloq, &somfy)) save_cfg();
 }
@@ -757,9 +761,9 @@ static inline bool is_pfx_virt(const volet_t *v) {
  * fichier"). Le firmware lit donc des valeurs concretes. Pour une fiche heritee (0 / TXOVR_INHERIT,
  * legacy pre-pyramide), les sentinelles (freq/te 0, rpt/rmt -1) disent a radio_tx_device de GARDER le
  * reglage radio courant : un repli invisible, pas une definition de defaut dupliquee. */
-/* La fiche, sinon son profil (cfg_volet_tx) ; ce que ni l'une ni l'autre ne dit garde le defaut de la radio. */
+/* La fiche, sinon son profil (cfg_device_tx) ; ce que ni l'une ni l'autre ne dit garde le defaut de la radio. */
 static tx_params_t tx_params_of(const volet_t *v) {
-    cfg_tx_t t = cfg_volet_tx(v, profile_of(v));
+    cfg_tx_t t = cfg_device_tx(v, profile_of(v));
     tx_params_t p = { .freq_khz = t.freq_khz, .te_us = t.te_us, .rpt = t.rpt, .rmt = t.rmt };
     return p;
 }
@@ -812,7 +816,7 @@ static bool somfy_emit_cmd(volet_t *v, catalog_cmd_t command) {
      * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
      * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
      * courte fait la course complete dans les deux cas. frame_bits 0 (defaut memset) = 56. */
-    cfg_tx_t t = cfg_volet_tx(v, profile_of(v));   /* porteuse et format : la fiche, sinon le profil */
+    cfg_tx_t t = cfg_device_tx(v, profile_of(v));   /* porteuse et format : la fiche, sinon le profil */
     if (t.frame_bits == 80) somfy_tx_emit80(frame, cmd, frames - 1, t.freq_khz);   /* repetitions apres la 1re */
     else                    somfy_tx_emit(frame, frames - 1, t.freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
@@ -1378,8 +1382,9 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     else if (!strcmp(action, "stop")) { strlcpy(v->stop, bits, SH_BITS_LEN); v->stop_btn = btn; }
     else { UNLOCK(); return -1; }
     /* une telecommande copiee : le profil de sa marque, s'il n'en a pas. APRES la trame : une fiche
-     * vide n'a pas d'encodeur, donc pas de profil (cfg_volet_encoder). */
-    assign_profile(v, NULL);
+     * vide n'a pas d'encodeur, donc pas de profil (cfg_device_encoder). */
+    const cfg_tx_t radio = keeloq_radio_tx();
+    cfg_device_assign_copy_profile(v, &radio);
     /* memorise le serial de cette telecommande pour ce volet (sync position) */
     uint32_t ser = 0; if ((int)strlen(bits) >= 60) for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)ser);
@@ -1765,7 +1770,7 @@ int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
     if (rmt >= TXOVR_INHERIT && rmt <= TXOVR_ON) v->tx_rmt = (uint8_t)rmt;
     if (frame_bits == 56 || frame_bits == 80) v->frame_bits = (uint8_t)frame_bits;   /* Somfy ; autre = inchange */
     if (marque) strlcpy(v->marque, marque, SH_ID_LEN);
-    cfg_volet_inherit_equal(v, profile_of(v));   /* egal au profil : herite, pour suivre ses corrections */
+    cfg_device_inherit_equal(v, profile_of(v));   /* egal au profil : herite, pour suivre ses corrections */
     save_cfg();
     UNLOCK();
     return 0;

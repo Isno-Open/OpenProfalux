@@ -493,14 +493,14 @@ int main(void) {
         const catalog_profile_t *p = catalog_profile(PROFALUX_ENROL);
         CHECK(p && p->freq_khz && p->te_us && p->repeat_bit >= 0 && p->rmt >= 0, "profil %s complet", PROFALUX_ENROL);
         volet_t v; memset(&v, 0, sizeof v);
-        cfg_tx_t t = cfg_volet_tx(&v, p);
+        cfg_tx_t t = cfg_device_tx(&v, p);
         CHECK(p && t.freq_khz == p->freq_khz && t.te_us == p->te_us && t.rpt == p->repeat_bit && t.rmt == p->rmt,
               "fiche a 0 : les valeurs du profil");
         v.freq_khz = 868330; v.te_us = 390; v.tx_rpt = TXOVR_OFF; v.tx_rmt = TXOVR_OFF;
-        t = cfg_volet_tx(&v, p);
+        t = cfg_device_tx(&v, p);
         CHECK(t.freq_khz == 868330 && t.te_us == 390 && t.rpt == 0 && t.rmt == 0, "fiche reglee : la fiche prime");
         memset(&v, 0, sizeof v);
-        t = cfg_volet_tx(&v, NULL);
+        t = cfg_device_tx(&v, NULL);
         CHECK(t.freq_khz == 0 && t.te_us == 0 && t.rpt == -1 && t.rmt == -1, "sans profil : rien d'impose, la radio garde son defaut");
 
         /* Migration : aucune emission ne change. Pour chaque combinaison (fiche a 0 ou reglee, defaut
@@ -518,36 +518,36 @@ int main(void) {
                 volet_t w; memset(&w, 0, sizeof w);
                 w.freq_khz = freqs[fi]; w.te_us = tes[ti]; w.tx_rpt = ovr[oi]; w.tx_rmt = ovr[(oi + 1) % 3];
                 const cfg_tx_t now = { .freq_khz = freqs[nf], .te_us = tes[nt], .rpt = nows[no], .rmt = nows[1 - no] };
-                cfg_tx_t before = cfg_volet_tx(&w, NULL);
+                cfg_tx_t before = cfg_device_tx(&w, NULL);
                 if (!before.freq_khz) before.freq_khz = now.freq_khz;
                 if (!before.te_us) before.te_us = now.te_us;
                 if (before.rpt < 0) before.rpt = now.rpt;
                 if (before.rmt < 0) before.rmt = now.rmt;
-                cfg_volet_rebase_tx(&w, p, &now);
-                cfg_tx_t after = cfg_volet_tx(&w, p);
+                cfg_device_rebase_tx(&w, p, &now);
+                cfg_tx_t after = cfg_device_tx(&w, p);
                 cases++;
                 if (before.freq_khz != after.freq_khz || before.te_us != after.te_us || before.rpt != after.rpt || before.rmt != after.rmt) bad++;
             }
             CHECK(bad == 0, "migration : %d emissions changees sur %d combinaisons", bad, cases);
             volet_t w; memset(&w, 0, sizeof w);
             const cfg_tx_t now = { .freq_khz = p->freq_khz, .te_us = p->te_us, .rpt = p->repeat_bit, .rmt = p->rmt };
-            CHECK(cfg_volet_rebase_tx(&w, p, &now) == false && w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT,
+            CHECK(cfg_device_rebase_tx(&w, p, &now) == false && w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT,
                   "migration : un appareil egal a son profil le suit (tout a 0, fiche inchangee)");
             w.freq_khz = 868350;
             const cfg_tx_t elsewhere = { .freq_khz = 868350, .te_us = p->te_us, .rpt = p->repeat_bit, .rmt = p->rmt };
-            CHECK(cfg_volet_rebase_tx(&w, p, &elsewhere) == false && w.freq_khz == 868350, "migration : un reglage different du profil est garde");
+            CHECK(cfg_device_rebase_tx(&w, p, &elsewhere) == false && w.freq_khz == 868350, "migration : un reglage different du profil est garde");
             memset(&w, 0, sizeof w);
-            CHECK(cfg_volet_rebase_tx(&w, p, &elsewhere) == true && w.freq_khz == 868350,
+            CHECK(cfg_device_rebase_tx(&w, p, &elsewhere) == true && w.freq_khz == 868350,
                   "migration : un defaut d'aujourd'hui different du profil est fige dans la fiche");
             w.freq_khz = p->freq_khz; w.te_us = p->te_us; w.tx_rpt = p->repeat_bit ? TXOVR_ON : TXOVR_OFF;
-            cfg_volet_inherit_equal(&w, p);
+            cfg_device_inherit_equal(&w, p);
             CHECK(w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT, "ecriture : une valeur egale au profil revient a 0");
             const catalog_profile_t *came = catalog_profile(CAME_REPLAY);
             volet_t r; memset(&r, 0, sizeof r);
             char capture[] = "{\"f\":433900}";
             r.rejeu = capture;
             r.freq_khz = came ? came->freq_khz : 0;
-            cfg_volet_inherit_equal(&r, came);
+            cfg_device_inherit_equal(&r, came);
             CHECK(came && r.freq_khz == came->freq_khz, "rejeu : la porteuse egale au profil reste ecrite (0 = celle de la capture)");
         }
 
@@ -563,17 +563,30 @@ int main(void) {
             strlcpy(fresh->id, "Rejeu neuf", SH_ID_LEN); strlcpy(fresh->type, GATE_KEY, sizeof fresh->type);
             fresh->rejeu = cfg_rejeu_empty();
             strlcpy(copy->id, "Copie", SH_ID_LEN); strlcpy(copy->up, "1010", SH_BITS_LEN);
-            CHECK(cfg_volet_is_blank(blank) && cfg_volet_encoder(blank) == CAT_ENC_NONE, "fiche vide : aucun encodeur");
-            CHECK(fresh->rejeu && cfg_volet_encoder(fresh) == CAT_ENC_RAW_REPLAY, "rejeu sans capture : encodeur de rejeu");
-            CHECK(cfg_volet_encoder(copy) == CAT_ENC_KEELOQ, "trame copiee : KeeLoq");
+            CHECK(cfg_device_is_blank(blank) && cfg_device_encoder(blank) == CAT_ENC_NONE, "fiche vide : aucun encodeur");
+            CHECK(fresh->rejeu && cfg_device_encoder(fresh) == CAT_ENC_RAW_REPLAY, "rejeu sans capture : encodeur de rejeu");
+            CHECK(cfg_device_encoder(copy) == CAT_ENC_KEELOQ, "trame copiee : KeeLoq");
             int n = cfg_model_migrate_profiles(&g_tmp.m, &keeloq, &somfy);
             CHECK(blank->profile[0] == 0 && blank->freq_khz == 0 && blank->te_us == 0,
                   "migration : une fiche vide reste sans profil ni reglage (profil '%s', %u kHz)", blank->profile, (unsigned)blank->freq_khz);
             CHECK(!strcmp(fresh->profile, CAME_REPLAY), "migration : un rejeu sans capture prend le profil de rejeu (%s)", fresh->profile);
             CHECK(!strcmp(copy->profile, PROFALUX_COPY), "migration : une copie prend le profil de copie (%s)", copy->profile);
             CHECK(n == 2, "migration : %d fiches classees sur 3 (la vide ne l'est pas)", n);
+            /* Copie captee sur une radio reglee ailleurs que le profil : elle garde la porteuse de la radio */
+            {
+                const catalog_profile_t *pc = catalog_profile(PROFALUX_COPY);
+                const cfg_tx_t radio = { .freq_khz = 868330, .te_us = pc ? pc->te_us : 0, .rpt = pc ? pc->repeat_bit : -1, .rmt = pc ? pc->rmt : -1 };
+                volet_t c2; memset(&c2, 0, sizeof c2); strlcpy(c2.id, "Copie 868330", SH_ID_LEN); strlcpy(c2.up, "1010", SH_BITS_LEN);
+                const catalog_profile_t *got = cfg_device_assign_copy_profile(&c2, &radio);
+                cfg_tx_t t = cfg_device_tx(&c2, got);
+                CHECK(got && !strcmp(c2.profile, PROFALUX_COPY) && t.freq_khz == 868330 && c2.te_us == 0,
+                      "copie : profil %s, emet a %u kHz (radio 868330), TE de la fiche %u (egal au profil : 0)", c2.profile, (unsigned)t.freq_khz, (unsigned)c2.te_us);
+                c2.freq_khz = 868999;
+                cfg_device_assign_copy_profile(&c2, &radio);
+                CHECK(c2.freq_khz == 868999, "copie qui avait deja son profil : ses reglages ne bougent pas");
+            }
             strlcpy(blank->up, "1010", SH_BITS_LEN);
-            CHECK(cfg_volet_assign_profile(blank, NULL) && !strcmp(blank->profile, PROFALUX_COPY),
+            CHECK(cfg_device_assign_profile(blank, NULL) && !strcmp(blank->profile, PROFALUX_COPY),
                   "apprentissage : la fiche recoit son profil des qu'elle a une trame (%s)", blank->profile);
             cfg_volet_release(fresh);
         }

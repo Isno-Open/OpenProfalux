@@ -468,14 +468,14 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
 /* ── Encodeur et profil d'un appareil ── */
 char *cfg_rejeu_empty(void) { return strdup("{}"); }
 
-bool cfg_volet_is_blank(const volet_t *v) {
+bool cfg_device_is_blank(const volet_t *v) {
     return !v->virt && !v->central && !v->rejeu && !v->up[0] && !v->down[0] && !v->stop[0];
 }
 
-catalog_encoder_t cfg_volet_encoder(const volet_t *v) {
+catalog_encoder_t cfg_device_encoder(const volet_t *v) {
     if (!v->virt) {
         if (v->rejeu) return CAT_ENC_RAW_REPLAY;
-        return cfg_volet_is_blank(v) ? CAT_ENC_NONE : CAT_ENC_KEELOQ;
+        return cfg_device_is_blank(v) ? CAT_ENC_NONE : CAT_ENC_KEELOQ;
     }
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:  return CAT_ENC_KEELOQ;
@@ -484,9 +484,9 @@ catalog_encoder_t cfg_volet_encoder(const volet_t *v) {
     }
 }
 
-const catalog_profile_t *cfg_volet_assign_profile(volet_t *v, const char *wanted) {
+const catalog_profile_t *cfg_device_assign_profile(volet_t *v, const char *wanted) {
     if (v->central) return NULL;
-    const catalog_encoder_t enc = cfg_volet_encoder(v);
+    const catalog_encoder_t enc = cfg_device_encoder(v);
     const catalog_profile_t *p = catalog_profile(wanted);
     if (p && (p->encoder != enc || p->enrol != v->virt)) {
         ESP_LOGW(TAG, "'%s' : profil %s refuse (autre encodeur ou autre methode)", v->id, wanted);
@@ -498,16 +498,23 @@ const catalog_profile_t *cfg_volet_assign_profile(volet_t *v, const char *wanted
     return catalog_profile(v->profile);
 }
 
+const catalog_profile_t *cfg_device_assign_copy_profile(volet_t *v, const cfg_tx_t *radio) {
+    const bool had_profile = v->profile[0];
+    const catalog_profile_t *p = cfg_device_assign_profile(v, NULL);
+    if (!had_profile && p && p->encoder == CAT_ENC_KEELOQ) cfg_device_rebase_tx(v, p, radio);
+    return p;
+}
+
 int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, const cfg_tx_t *somfy) {
     int n = 0;
     for (int i = 0; i < *m->nvolets; i++) {
         volet_t *v = &m->volets[i];
         if (v->central || v->profile[0]) continue;
-        const catalog_profile_t *p = cfg_volet_assign_profile(v, NULL);
+        const catalog_profile_t *p = cfg_device_assign_profile(v, NULL);
         if (!p) { ESP_LOGW(TAG, "migration : '%s' sans profil (vide ou inclassable), garde son comportement", v->id); continue; }
         /* le rejeu ne lit que sa porteuse, qu'il prend de sa capture : rien a figer */
-        if (p->encoder == CAT_ENC_KEELOQ)    cfg_volet_rebase_tx(v, p, keeloq);
-        if (p->encoder == CAT_ENC_SOMFY_RTS) cfg_volet_rebase_tx(v, p, somfy);
+        if (p->encoder == CAT_ENC_KEELOQ)    cfg_device_rebase_tx(v, p, keeloq);
+        if (p->encoder == CAT_ENC_SOMFY_RTS) cfg_device_rebase_tx(v, p, somfy);
         ESP_LOGW(TAG, "migration : '%s' -> profil %s, type %s", v->id, v->profile, v->type);
         n++;
     }
@@ -515,7 +522,7 @@ int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, con
 }
 
 /* ── Reglages d'emission : la fiche, sinon le profil ── */
-cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p) {
+cfg_tx_t cfg_device_tx(const volet_t *v, const catalog_profile_t *p) {
     cfg_tx_t t = {
         .freq_khz   = v->freq_khz ? v->freq_khz : (p ? p->freq_khz : 0),
         .te_us      = v->te_us ? v->te_us : (p ? p->te_us : 0),
@@ -526,7 +533,7 @@ cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p) {
     return t;
 }
 
-void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p) {
+void cfg_device_inherit_equal(volet_t *v, const catalog_profile_t *p) {
     if (!p) return;
     /* Un rejeu brut : sa porteuse a 0 est celle de SA CAPTURE, pas celle du profil. Une valeur egale au
      * profil reste donc ecrite, sinon il emettrait sur la capture (revue de la PR #156). */
@@ -537,7 +544,7 @@ void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p) {
     if (p->frame_bits && v->frame_bits == p->frame_bits) v->frame_bits = 0;
 }
 
-bool cfg_volet_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now) {
+bool cfg_device_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now) {
     if (!p || !now) return false;
     const volet_t before = *v;
     /* 1. figer ce que l'appareil emet aujourd'hui, pour chaque reglage qu'il laissait au defaut */
@@ -547,7 +554,7 @@ bool cfg_volet_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t 
     if (v->tx_rmt == TXOVR_INHERIT && now->rmt >= 0) v->tx_rmt = now->rmt ? TXOVR_ON : TXOVR_OFF;
     if (!v->frame_bits) v->frame_bits = now->frame_bits;
     /* 2. rendre au profil ce qui lui est egal */
-    cfg_volet_inherit_equal(v, p);
+    cfg_device_inherit_equal(v, p);
     return v->freq_khz != before.freq_khz || v->te_us != before.te_us || v->tx_rpt != before.tx_rpt
         || v->tx_rmt != before.tx_rmt || v->frame_bits != before.frame_bits;
 }
