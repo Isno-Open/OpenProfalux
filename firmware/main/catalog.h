@@ -31,6 +31,8 @@ typedef enum { CAT_ENC_KEELOQ, CAT_ENC_SOMFY_RTS, CAT_ENC_RAW_REPLAY, CAT_ENC_CO
 #define CATALOG_PROFILES_MAX 24
 #define CATALOG_NO_LEGACY    (-1)
 #define CATALOG_NO_SLOT      (-1)
+#define CATALOG_CYCLE_MAX    4      /* plus long cycle pas a pas declarable (ouvre, stop, ferme, stop) */
+#define CATALOG_PRESS_GAP_MAX_MS 60000   /* plus long delai entre deux appuis d'un bouton pas a pas */
 
 typedef struct {
     bool     present;
@@ -51,6 +53,14 @@ typedef struct {
     char profile[CATALOG_ID_MAX];   /* le profil qui le reconnait */
 } catalog_model_t;
 
+/* Le cycle d'un bouton pas a pas (types[].buttons[].cycle) : ce que fait chaque appui, dans l'ordre, et le delai
+ * entre deux appuis enchaines. len 0 : le type n'a pas de bouton pas a pas. up = ouvre, down = ferme. */
+typedef struct {
+    uint8_t  len;
+    int8_t   act[CATALOG_CYCLE_MAX];   /* catalog_cmd_t */
+    uint16_t press_gap_ms;
+} catalog_cycle_t;
+
 /* Un type d'appareil (catalogue « types »). */
 typedef struct {
     char key[CATALOG_ID_MAX];       /* la cle, ecrite dans la fiche (« volet », « portail ») */
@@ -60,6 +70,7 @@ typedef struct {
      * bouton pas a pas, celui de ce bouton si la commande est dans son cycle. CATALOG_NO_SLOT : aucun
      * bouton du type ne la porte, et l'appareil la refuse (docs/PROFILES.md, section 7). */
     int8_t slot[CAT_CMD_COUNT];
+    catalog_cycle_t step;           /* son bouton pas a pas, s'il en a un */
 } catalog_type_t;
 
 /* Un profil RESOLU (heritage applique) : ce qu'une fiche herite quand elle laisse un reglage a 0. */

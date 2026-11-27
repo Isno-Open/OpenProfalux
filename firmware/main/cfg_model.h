@@ -92,6 +92,10 @@ typedef struct {
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
                               * l'UI place alors le volet a la fin, dans son ordre de creation. */
     float position;          /* 0..100 */
+    /* Bouton pas a pas (portail) : position du prochain appui dans le cycle de son type, mesuree chez lui
+     * (docs/PROFILES.md, section 6). step_known false : jamais suivie, elle se deduit de la position au repos. */
+    uint8_t step_next;
+    bool    step_known;
     /* ── Etat d'execution, NON persiste ── */
     /* Capture rangee en fichier (cfg_model_t.capture_dir) : son nom, et l'empreinte du contenu qui y est.
      * Un enregistrement ne reecrit le fichier que si la capture a change (chaque mouvement enregistre). */

@@ -137,12 +137,18 @@ static int read_type(const cJSON *t, char *err, size_t errlen) {
         const int c = catalog_cmd_of(command);
         if (c >= 0) { out->slot[c] = (int8_t)c; continue; }
         if (!command || strcmp(command, BUTTON_STEP)) return fail(err, errlen, "bouton de commande inconnue", t->string);
+        if (out->step.len) return fail(err, errlen, "deux boutons pas a pas", t->string);
         const cJSON *step;
         cJSON_ArrayForEach(step, cJSON_GetObjectItemCaseSensitive(b, "cycle")) {
             const int sc = catalog_cmd_of(cJSON_GetStringValue(step));
-            if (sc < 0) return fail(err, errlen, "cycle : commande inconnue", t->string);
+            if (sc < 0 || sc == CAT_CMD_PROG) return fail(err, errlen, "cycle : commande inconnue", t->string);
+            if (out->step.len >= CATALOG_CYCLE_MAX) return fail(err, errlen, "cycle trop long", t->string);
+            out->step.act[out->step.len++] = (int8_t)sc;
             if (out->slot[sc] == CATALOG_NO_SLOT) out->slot[sc] = STEP_SLOT;
         }
+        const long gap = int_in(b, "press_gap_ms", 1, CATALOG_PRESS_GAP_MAX_MS);
+        if (!out->step.len || gap < 0) return fail(err, errlen, "bouton pas a pas sans cycle ou sans press_gap_ms", t->string);
+        out->step.press_gap_ms = (uint16_t)gap;
     }
     return 0;
 }

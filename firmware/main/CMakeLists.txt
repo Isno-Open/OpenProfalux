@@ -72,6 +72,7 @@ idf_component_register(
         "mqtt_tls_policy.c"
         "shutters.c"
         "catalog.c"
+        "step_cycle.c"
         "remote_battery.c"
         "cfg_store.c"
         "cfg_model.c"

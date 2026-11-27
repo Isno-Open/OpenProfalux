@@ -30,6 +30,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "cfg_model.h"
+#include "step_cycle.h"
 #include "cfg_store.h"
 
 /* ════ Coupure de courant ════════════════════════════════════════════════ */
@@ -251,7 +252,8 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
         && a->orientation == b->orientation && a->order == b->order
         && !strcmp(a->type, b->type) && !strcmp(a->profile, b->profile)
         && !strcmp(a->rejeu ? a->rejeu : "", b->rejeu ? b->rejeu : "")
-        && (int)(a->position + 0.5f) == (int)(b->position + 0.5f);
+        && (int)(a->position + 0.5f) == (int)(b->position + 0.5f)
+        && a->step_known == b->step_known && (!a->step_known || a->step_next == b->step_next);
 }
 static bool hdr_equal(const store_t *a, const store_t *b) {
     if (a->log_frames != b->log_frames || a->nremotes != b->nremotes) return false;
@@ -1408,6 +1410,45 @@ int main(void) {
         CHECK(gat, "portail : ouvrir, stop et fermer par son bouton pas a pas");
         CHECK(unk, "type inconnu de ce catalogue : tout est refuse");
         printf("  volet %s, portail %s, type inconnu refuse %s\n", vol ? "OK" : "KO", gat ? "OK" : "KO", unk ? "OK" : "KO");
+    }
+
+    /* ── T18. Bouton pas a pas : le cycle du portail (catalogue), et sa position retenue par la fiche ── */
+    printf("\n[T18] Pas a pas : nombre d'appuis par etat, fin de course, position du cycle retenue\n");
+    {
+        const catalog_type_t *gt = catalog_type(catalog_type_of_legacy(1));
+        const catalog_cycle_t *c = gt ? &gt->step : NULL;
+        const step_state_t closed = { 0, false, true }, open = { 0, true, false }, opening = { +1, false, false },
+                           midway = { 0, false, false };
+        bool came = c && c->len == 4 && c->act[0] == CAT_CMD_UP && c->act[1] == CAT_CMD_STOP && c->act[2] == CAT_CMD_DOWN
+                 && c->act[3] == CAT_CMD_STOP && c->press_gap_ms > 0;
+        uint8_t n = step_next_at_rest(c, true);
+        bool rest = n == 0 && step_next_at_rest(c, false) == 2;
+        bool counts = step_presses(c, n, closed, CAT_CMD_UP) == 1 && step_presses(c, n, closed, CAT_CMD_DOWN) == 0
+                   && step_presses(c, n, closed, CAT_CMD_STOP) == 0;
+        bool press = step_press(c, &n) == CAT_CMD_UP && n == 1;   /* ferme : un appui ouvre */
+        bool during = step_presses(c, n, opening, CAT_CMD_DOWN) == 2 && step_presses(c, n, opening, CAT_CMD_STOP) == 1
+                   && step_presses(c, n, opening, CAT_CMD_UP) == 0;   /* en ouverture : stop puis ferme */
+        uint8_t m = 1; step_travel_end(c, &m);
+        bool end = m == 2 && step_presses(c, m, open, CAT_CMD_DOWN) == 1;   /* en butee, la carte saute le stop */
+        uint8_t k = 2; step_travel_end(c, &k);
+        bool no_skip = k == 2;   /* rien a sauter si le prochain appui n'est pas un stop */
+        bool mid = step_presses(c, 2, midway, CAT_CMD_UP) == 3;   /* arrete en chemin, prochain = ferme : ferme, stop, ouvre */
+        const catalog_cycle_t two = { 2, { CAT_CMD_UP, CAT_CMD_DOWN }, 1000 };
+        bool refuse = step_presses(&two, 1, opening, CAT_CMD_STOP) == -1 && step_presses(NULL, 0, closed, CAT_CMD_UP) == -1;
+        CHECK(came, "cycle du portail lu dans le catalogue : ouvre, stop, ferme, stop, avec un delai");
+        CHECK(rest && counts && press, "au repos ferme : un appui ouvre, fermer et stop n'appuient pas");
+        CHECK(during, "en ouverture : fermer = 2 appuis (stop puis ferme), stop = 1");
+        CHECK(end && no_skip, "fin de course : la carte saute le stop qui suivait");
+        CHECK(mid, "arrete en chemin : ouvrir passe par ferme et stop");
+        CHECK(refuse, "un ordre que le cycle ne permet pas est refuse (-1)");
+        /* la position du cycle survit a l'enregistrement */
+        s_capture_dir = NULL; wipe(); system_state(); model_init(&g_ref);
+        add_replay(&g_ref, "{\"f\":433920,\"up\":\"170,-500\"}");
+        volet_t *g = &g_ref.volets[g_ref.nvolets - 1]; g->step_next = 3; g->step_known = true;
+        bool kept = save_ref(fk) == ESP_OK && (reboot(), flash_is(&g_ref, NULL));
+        CHECK(kept, "position du cycle retenue a l'enregistrement");
+        printf("  cycle %s, repos %s, en ouverture %s, fin de course %s, refus %s, retenue %s\n", came ? "OK" : "KO",
+               rest && counts && press ? "OK" : "KO", during ? "OK" : "KO", end && no_skip ? "OK" : "KO", refuse ? "OK" : "KO", kept ? "OK" : "KO");
     }
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");

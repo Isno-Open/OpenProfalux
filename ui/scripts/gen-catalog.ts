@@ -62,7 +62,7 @@ export function spriteIcons(path = SPRITE): string[] {
 
 /** Les limites du lecteur du firmware (catalog.h) : un catalogue qui les depasse serait refuse EN ENTIER au
  *  demarrage, et le boitier n'emettrait plus rien. On les lit dans l'en-tete, leur seule definition. */
-export interface FirmwareLimits { profiles: number; types: number; models: number; id: number; name: number }
+export interface FirmwareLimits { profiles: number; types: number; models: number; id: number; name: number; cycle: number; pressGapMs: number }
 export function firmwareLimits(path = CATALOG_H): FirmwareLimits {
   const text = readFileSync(path, 'utf8');
   const value = (name: string): number => {
@@ -71,7 +71,7 @@ export function firmwareLimits(path = CATALOG_H): FirmwareLimits {
     return Number(m[1]);
   };
   return { profiles: value('CATALOG_PROFILES_MAX'), types: value('CATALOG_TYPES_MAX'), models: value('CATALOG_MODELS_MAX'),
-    id: value('CATALOG_ID_MAX'), name: value('CATALOG_NAME_MAX') };
+    id: value('CATALOG_ID_MAX'), name: value('CATALOG_NAME_MAX'), cycle: value('CATALOG_CYCLE_MAX'), pressGapMs: value('CATALOG_PRESS_GAP_MAX_MS') };
 }
 
 /** Ce que le lecteur du firmware accepte (catalog.c) : tailles, et un protocole au plus par encodeur. */
@@ -92,6 +92,15 @@ export function checkFirmware(doc: unknown, limits: FirmwareLimits): string[] {
     if (typeof p.brand === 'string') tooLong('marque', p.brand, limits.name);
   }
   for (const [key] of types) tooLong('cle de type', key, limits.id);
+  // un bouton pas a pas au plus par type, dont le cycle et le delai tiennent dans le lecteur (catalog.c, read_type)
+  for (const [key, t] of types) {
+    const steps = list(t.buttons).map(obj).filter(b => Array.isArray(b.cycle));
+    if (steps.length > 1) errors.push(`firmware : type ${key}, ${steps.length} boutons pas a pas, le lecteur en prend 1`);
+    for (const b of steps) {
+      if (list(b.cycle).length > limits.cycle) errors.push(`firmware : type ${key}, cycle de ${list(b.cycle).length} appuis, le lecteur en prend ${limits.cycle}`);
+      if (typeof b.press_gap_ms === 'number' && b.press_gap_ms > limits.pressGapMs) errors.push(`firmware : type ${key}, press_gap_ms ${b.press_gap_ms}, le lecteur en prend ${limits.pressGapMs} au plus`);
+    }
+  }
   for (const m of models) tooLong('modele', m, limits.name);
   const encoders = entries(root.protocols).map(([, p]) => String(p.encoder));
   for (const e of new Set(encoders)) if (encoders.filter(x => x === e).length > 1) errors.push(`firmware : deux protocoles pour l'encodeur ${e}`);

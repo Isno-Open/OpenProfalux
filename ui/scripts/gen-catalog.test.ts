@@ -213,3 +213,20 @@ test('appel : un catalogue que le firmware refuserait fait echouer le generateur
   assert.match(r.out, /deux protocoles pour l'encodeur/);
   assert.equal(r.generated, false);
 });
+
+test('firmware : un cycle plus long que le lecteur est refuse a la construction', () => {
+  const doc = real(); const b = doc.types.portail.buttons[0];
+  b.cycle = Array.from({ length: limits.cycle + 1 }, (_, i) => (i % 2 ? 'stop' : 'up'));
+  refuses(doc, new RegExp(`firmware : type portail, cycle de ${limits.cycle + 1} appuis, le lecteur en prend ${limits.cycle}`));
+});
+
+test('firmware : un delai entre appuis plus long que le lecteur est refuse', () => {
+  const doc = real(); doc.types.portail.buttons[0].press_gap_ms = limits.pressGapMs + 1;
+  refuses(doc, /firmware : type portail, press_gap_ms .* au plus/);
+});
+
+test('firmware : deux boutons pas a pas sur un type sont refuses', () => {
+  const doc = real(); const b = doc.types.portail.buttons[0];
+  doc.types.portail.buttons.push({ ...b, id: 'second', position: { row: 1, col: 0 } });
+  refuses(doc, /firmware : type portail, 2 boutons pas a pas, le lecteur en prend 1/);
+});

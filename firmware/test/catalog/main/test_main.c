@@ -96,6 +96,8 @@ int main(int argc, char **argv) {
     bool names = catalog_cmd_name(CAT_CMD_COUNT) == NULL;
     for (int c = 0; c < CAT_CMD_COUNT; c++) names = names && catalog_cmd_of(catalog_cmd_name((catalog_cmd_t)c)) == c;
     CHECK(names, "C26 nom d'une commande : celui que catalog_cmd_of relit");
+    CHECK(gt && gt->step.len == 4 && gt->step.act[0] == CAT_CMD_UP && gt->step.act[2] == CAT_CMD_DOWN && gt->step.press_gap_ms > 0
+          && st && st->step.len == 0, "C27 le portail a un cycle pas a pas et son delai ; le volet n'en a pas");
     const catalog_profile_t *eveno = catalog_profile(EVENO_PROFILE), *base = catalog_profile(PROFALUX_ENROL_PROFILE);
     CHECK(eveno && base && eveno->freq_khz != base->freq_khz && eveno->te_us == base->te_us
           && eveno->repeat_bit == base->repeat_bit && eveno->rmt == base->rmt && eveno->encoder == CAT_ENC_KEELOQ
@@ -128,6 +130,9 @@ int main(int argc, char **argv) {
     refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":300}}}}", "legacy.code hors", "R15 numero legacy hors 0..255");
     refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"ouvre\"}]}}}", "bouton de commande inconnue", "R16 bouton d'une commande inconnue");
     refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"ouvre\"]}]}}}", "cycle : commande inconnue", "R17 cycle d'une commande inconnue");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"stop\",\"down\",\"stop\",\"up\"],\"press_gap_ms\":1000}]}}}", "cycle trop long", "R18 cycle plus long que le lecteur");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"]}]}}}", "sans cycle ou sans press_gap_ms", "R19 bouton pas a pas sans delai");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"],\"press_gap_ms\":1000},{\"id\":\"y\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"],\"press_gap_ms\":1000}]}}}", "deux boutons pas a pas", "R20 deux boutons pas a pas");
     refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
             "\"profiles\":[{\"id\":\"b\",\"inherits\":\"a\"},{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000}}]}",
             "base absente", "R13 base declaree apres ce qui en herite");

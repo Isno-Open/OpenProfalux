@@ -20,6 +20,8 @@ static const char *TAG = "cfg_model";
  * enregistrement reussi : une coupure ne laisse jamais un document sans sa capture. */
 /* Cle du document NVS qui nomme le fichier de la capture (donnee du format, pas un identifiant). */
 #define DOC_KEY_REPLAY_FILE "rejeu_file"
+/* Cle de la position du cycle pas a pas d'un appareil (donnee du format). */
+#define DOC_KEY_STEP "step"
 /* Cle du tableau des appareils dans l'export (sauvegarde) : donnee du format. */
 #define DOC_KEY_DEVICES "volets"
 #define REPLAY_FILE_PREFIX "rj"
@@ -219,6 +221,7 @@ static cJSON *volet_to_json(const volet_t *v, const char *replay_file) {
     cJSON_AddNumberToObject(o, "orientation", v->orientation);
     cJSON_AddNumberToObject(o, "order", v->order);   /* rang d'affichage UI (-1 = non range) */
     cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
+    if (v->step_known) cJSON_AddNumberToObject(o, DOC_KEY_STEP, v->step_next);   /* cycle pas a pas suivi */
     if (v->virt) {   /* volet virtuel : identite 0x067 + compteur roulant persiste */
         cJSON_AddBoolToObject(o, "virt", true);
         cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
@@ -413,6 +416,10 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     cJSON *ord = cJSON_GetObjectItem(o, "order");
     v->order          = ord ? (int)cJSON_GetNumberValue(ord) : -1;
     v->position       = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "position"));
+    cJSON *stp = cJSON_GetObjectItem(o, DOC_KEY_STEP);   /* absent : jamais suivi */
+    if (cJSON_IsNumber(stp) && stp->valuedouble >= 0 && stp->valuedouble < CATALOG_CYCLE_MAX) {
+        v->step_next = (uint8_t)stp->valuedouble; v->step_known = true;
+    }
     cJSON *vt = cJSON_GetObjectItem(o, "virt");
     if (cJSON_IsTrue(vt)) {
         v->virt         = true;
