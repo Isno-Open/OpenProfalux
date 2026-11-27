@@ -34,6 +34,15 @@ typedef enum { CAT_ENC_KEELOQ, CAT_ENC_SOMFY_RTS, CAT_ENC_RAW_REPLAY, CAT_ENC_CO
 #define CATALOG_CYCLE_MAX    4      /* plus long cycle pas a pas declarable (ouvre, stop, ferme, stop) */
 #define CATALOG_PRESS_GAP_MAX_MS 60000   /* plus long delai entre deux appuis d'un bouton pas a pas */
 
+/* L'entite Home Assistant d'un type (types[].entity). La FAMILLE (component) est du code : le firmware sait
+ * annoncer celles-ci, et seulement celles-ci. La CLASSE (device_class) est une donnee : un type nouveau d'une
+ * famille connue (porte de garage, store) se declare sans firmware. Les deux listes sont celles de Home
+ * Assistant ; le schema de profiles.json les enumere a l'identique, le generateur refuse toute divergence. */
+typedef enum { CAT_COMPONENT_COVER, CAT_COMPONENT_COUNT } catalog_component_t;
+#define CATALOG_COMPONENTS "cover"
+#define CATALOG_COVER_CLASSES "awning", "blind", "curtain", "damper", "door", "garage", "gate", "shade", "shutter", "window"
+#define CATALOG_CLASS_MAX 16            /* plus longue classe, zero final compris */
+
 typedef struct {
     bool     present;
     int8_t   code[CAT_CMD_COUNT];   /* code de chaque commande ; CATALOG_NO_CODE si le protocole ne l'a pas */
@@ -71,6 +80,8 @@ typedef struct {
      * bouton du type ne la porte, et l'appareil la refuse (docs/PROFILES.md, section 7). */
     int8_t slot[CAT_CMD_COUNT];
     catalog_cycle_t step;           /* son bouton pas a pas, s'il en a un */
+    catalog_component_t component;  /* son entite Home Assistant : la famille... */
+    char device_class[CATALOG_CLASS_MAX];   /* ...et la classe */
 } catalog_type_t;
 
 /* Un profil RESOLU (heritage applique) : ce qu'une fiche herite quand elle laisse un reglage a 0. */
@@ -94,6 +105,8 @@ const catalog_protocol_t *catalog_protocol(catalog_encoder_t enc);
 int catalog_code(catalog_encoder_t enc, catalog_cmd_t cmd);
 /* Commande d'un nom (« up », « stop »...), -1 si inconnu. */
 int catalog_cmd_of(const char *name);
+/* Nom d'une famille d'entites Home Assistant (« cover »), NULL hors borne : le composant de ses topics. */
+const char *catalog_component_name(catalog_component_t c);
 /* Nom d'une commande (« up »...), NULL hors borne. Cle de la trame captee dans un rejeu. */
 const char *catalog_cmd_name(catalog_cmd_t cmd);
 /* Modeles reconnus, dans l'ordre du catalogue. L'ordre est un CONTRAT : l'identite d'enrolement

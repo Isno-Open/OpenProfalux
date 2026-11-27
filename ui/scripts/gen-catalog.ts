@@ -62,7 +62,11 @@ export function spriteIcons(path = SPRITE): string[] {
 
 /** Les limites du lecteur du firmware (catalog.h) : un catalogue qui les depasse serait refuse EN ENTIER au
  *  demarrage, et le boitier n'emettrait plus rien. On les lit dans l'en-tete, leur seule definition. */
-export interface FirmwareLimits { profiles: number; types: number; models: number; id: number; name: number; cycle: number; pressGapMs: number }
+export interface FirmwareLimits {
+  profiles: number; types: number; models: number; id: number; name: number; cycle: number; pressGapMs: number;
+  /** les familles d'entites Home Assistant que le firmware sait annoncer, et les classes d'un cover */
+  components: string[]; coverClasses: string[];
+}
 export function firmwareLimits(path = CATALOG_H): FirmwareLimits {
   const text = readFileSync(path, 'utf8');
   const value = (name: string): number => {
@@ -70,7 +74,13 @@ export function firmwareLimits(path = CATALOG_H): FirmwareLimits {
     if (!m?.[1]) throw new Error(`${path} : ${name} introuvable`);
     return Number(m[1]);
   };
-  return { profiles: value('CATALOG_PROFILES_MAX'), types: value('CATALOG_TYPES_MAX'), models: value('CATALOG_MODELS_MAX'),
+  const names = (name: string): string[] => {
+    const m = new RegExp(`#define\\s+${name}\\s+(.+)`).exec(text);
+    const found = m?.[1] ? [...m[1].matchAll(/"([^"]+)"/g)].map(x => x[1] ?? '') : [];
+    if (!found.length) throw new Error(`${path} : ${name} introuvable`);
+    return found;
+  };
+  return { components: names('CATALOG_COMPONENTS'), coverClasses: names('CATALOG_COVER_CLASSES'), profiles: value('CATALOG_PROFILES_MAX'), types: value('CATALOG_TYPES_MAX'), models: value('CATALOG_MODELS_MAX'),
     id: value('CATALOG_ID_MAX'), name: value('CATALOG_NAME_MAX'), cycle: value('CATALOG_CYCLE_MAX'), pressGapMs: value('CATALOG_PRESS_GAP_MAX_MS') };
 }
 
@@ -104,6 +114,21 @@ export function checkFirmware(doc: unknown, limits: FirmwareLimits): string[] {
   for (const m of models) tooLong('modele', m, limits.name);
   const encoders = entries(root.protocols).map(([, p]) => String(p.encoder));
   for (const e of new Set(encoders)) if (encoders.filter(x => x === e).length > 1) errors.push(`firmware : deux protocoles pour l'encodeur ${e}`);
+  return errors;
+}
+
+/** Le schema enumere les entites que le firmware sait annoncer (catalog.h), ni plus ni moins : une classe que le
+ *  schema accepterait et pas le lecteur ferait refuser tout le catalogue au demarrage ; l'inverse cacherait aux
+ *  auteurs de types une classe que le boitier connait. */
+export function checkSchemaFirmware(schema: unknown, limits: FirmwareLimits): string[] {
+  const entity = obj(obj(obj(obj(obj(schema).$defs).DeviceType).properties).entity);
+  const enumOf = (key: string): string[] => list(obj(obj(entity.properties)[key]).enum).map(String);
+  const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && [...a].sort().every((x, i) => x === [...b].sort()[i]);
+  const errors: string[] = [];
+  if (!same(enumOf('component'), limits.components))
+    errors.push(`schema : entity.component enumere ${enumOf('component').join(', ')}, le firmware annonce ${limits.components.join(', ')}`);
+  if (!same(enumOf('device_class'), limits.coverClasses))
+    errors.push(`schema : entity.device_class enumere ${enumOf('device_class').join(', ')}, le firmware connait ${limits.coverClasses.join(', ')}`);
   return errors;
 }
 
@@ -252,11 +277,13 @@ export async function typesOf(schema: JSONSchema): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const [catalogPath = CATALOG_PATH, outPath = OUT_PATH] = process.argv.slice(2);
+  const [catalogPath = CATALOG_PATH, outPath = OUT_PATH, schemaPath = SCHEMA_PATH] = process.argv.slice(2);
   const doc: unknown = JSON.parse(readFileSync(catalogPath, 'utf8'));
-  const schema: JSONSchema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
-  const shape = checkShape(doc, schema);
-  const errors = shape.length ? shape : [...checkCatalog(doc, boardBands(), spriteIcons()), ...checkFirmware(doc, firmwareLimits())];
+  const schema: JSONSchema = JSON.parse(readFileSync(schemaPath, 'utf8'));
+  const limits = firmwareLimits();
+  const mirror = checkSchemaFirmware(schema, limits);
+  const shape = mirror.length ? mirror : checkShape(doc, schema);
+  const errors = shape.length ? shape : [...checkCatalog(doc, boardBands(), spriteIcons()), ...checkFirmware(doc, limits)];
   if (errors.length) {
     for (const e of errors) console.error(`${catalogPath} : ${e}`);
     process.exit(1);

@@ -13,6 +13,11 @@ static const char *const COMMAND_NAME[CAT_CMD_COUNT] = {
     [CAT_CMD_UP] = "up", [CAT_CMD_STOP] = "stop", [CAT_CMD_DOWN] = "down", [CAT_CMD_PROG] = "prog",
 };
 
+static const char *const COMPONENT_NAME[] = { CATALOG_COMPONENTS };
+static const char *const COVER_CLASS[] = { CATALOG_COVER_CLASSES };
+#define COVER_CLASS_COUNT (sizeof COVER_CLASS / sizeof COVER_CLASS[0])
+_Static_assert(sizeof COMPONENT_NAME / sizeof COMPONENT_NAME[0] == CAT_COMPONENT_COUNT, "CATALOG_COMPONENTS : un nom par famille");
+
 /* Commande d'un bouton pas a pas (types[].buttons[].command) : il parcourt son cycle. */
 #define BUTTON_STEP "step"
 /* Creneau ou se range la trame d'un bouton pas a pas. Le pas a pas n'est pas encore emis (#134, etape 5) :
@@ -34,6 +39,7 @@ int catalog_cmd_of(const char *name) {
     for (int c = 0; name && c < CAT_CMD_COUNT; c++) if (!strcmp(name, COMMAND_NAME[c])) return c;
     return -1;
 }
+const char *catalog_component_name(catalog_component_t c) { return (unsigned)c < CAT_COMPONENT_COUNT ? COMPONENT_NAME[c] : NULL; }
 const char *catalog_cmd_name(catalog_cmd_t cmd) { return (unsigned)cmd < CAT_CMD_COUNT ? COMMAND_NAME[cmd] : NULL; }
 static int encoder_of(const char *name) {
     for (int e = 0; name && e < CAT_ENC_COUNT; e++) if (!strcmp(name, ENCODER_NAME[e])) return e;
@@ -124,6 +130,18 @@ static int read_type(const cJSON *t, char *err, size_t errlen) {
     catalog_type_t *out = &s_types[s_n_types++];
     snprintf(out->key, sizeof out->key, "%s", t->string);
     out->positional = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(t, "positional"));
+    /* L'entite Home Assistant : une famille que ce firmware sait annoncer, une classe de cette famille */
+    const cJSON *entity = cJSON_GetObjectItemCaseSensitive(t, "entity");
+    const char *component = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entity, "component"));
+    const char *dclass = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(entity, "device_class"));
+    int comp = -1;
+    for (int c = 0; component && c < CAT_COMPONENT_COUNT; c++) if (!strcmp(component, COMPONENT_NAME[c])) comp = c;
+    if (comp < 0) return fail(err, errlen, "entity.component inconnu", t->string);
+    out->component = (catalog_component_t)comp;
+    bool known = false;
+    for (size_t c = 0; dclass && c < COVER_CLASS_COUNT; c++) if (!strcmp(dclass, COVER_CLASS[c])) known = true;
+    if (!known) return fail(err, errlen, "entity.device_class inconnue", t->string);
+    snprintf(out->device_class, sizeof out->device_class, "%s", dclass);
     const cJSON *legacy = cJSON_GetObjectItemCaseSensitive(t, "legacy");
     out->legacy = legacy ? (int)int_in(legacy, "code", 0, 255) : CATALOG_NO_LEGACY;
     if (legacy && out->legacy < 0) return fail(err, errlen, "legacy.code hors 0..255", t->string);

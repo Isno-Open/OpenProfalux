@@ -491,6 +491,7 @@
           ],
           "properties": {
             "component": {
+              "description": "La famille d'entites Home Assistant : du code, celles que le firmware sait annoncer (catalog.h, CATALOG_COMPONENTS).",
               "type": "string",
               "enum": [
                 "cover"
@@ -498,9 +499,18 @@
             },
             "device_class": {
               "type": "string",
+              "description": "Les classes d'un cover de Home Assistant, celles que le firmware connait (catalog.h, CATALOG_COVER_CLASSES) : le generateur refuse toute divergence.",
               "enum": [
+                "awning",
+                "blind",
+                "curtain",
+                "damper",
+                "door",
+                "garage",
+                "gate",
+                "shade",
                 "shutter",
-                "gate"
+                "window"
               ]
             }
           }

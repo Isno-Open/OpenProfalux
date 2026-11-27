@@ -1061,7 +1061,8 @@ _Static_assert(COVER_NAME_MAX == SH_ID_LEN - 1, "COVER_NAME_MAX (profiles.json n
 static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
 
 static bool volet_positional(const volet_t *v) {
-    return s_log_frames && !v->central && !is_zone(v)
+    const catalog_type_t *t = catalog_type(v->type);   /* un type sans position (portail) n'en publie jamais */
+    return t && t->positional && s_log_frames && !v->central && !is_zone(v)
         && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
 }
 
@@ -1205,7 +1206,11 @@ static void announce_one(volet_t *v) {
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
             "\"position_open\":100,\"position_closed\":0,", slug, slug);
-    snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
+    /* L'entite vient du TYPE de l'appareil (types[].entity) : sa famille fait le topic, sa classe le
+     * device_class. Un type que le catalogue ne declare pas n'est pas annonce : il n'a ni boutons ni entite. */
+    const catalog_type_t *type = catalog_type(v->type);
+    if (!type) { ESP_LOGW(TAG, "%s : type %s inconnu du catalogue, pas annonce a Home Assistant", v->id, v->type); free(pl); return; }
+    snprintf(topic, sizeof(topic), "homeassistant/%s/openprofalux_%s/config", catalog_component_name(type->component), slug);
     /* Cles en TOUTES LETTRES (alignees sur OpenXtraflame) ; device PARTAGE (un seul appareil
      * "OpenProfalux" regroupe tous les volets) ; topics command/state SLUGIFIES.
      * optimistic : HA en deduit assumed_state, et son interface laisse alors Ouvrir et Fermer
@@ -1214,7 +1219,7 @@ static void announce_one(volet_t *v) {
      * C'est le cas reel : le moteur ne renvoie rien, l'etat est suppose. HA continue de lire
      * state_topic ; il affiche juste l'etat vise des l'envoi, avant celui du boitier. */
     snprintf(pl, 1536,
-        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"shutter\","
+        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"%s\","
         "\"command_topic\":\"openprofalux/cover/%s/set\","
         "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"optimistic\":true,"
         "%s"
@@ -1222,7 +1227,7 @@ static void announce_one(volet_t *v) {
         "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
         "\"device\":{\"identifiers\":[\"openprofalux\"],\"name\":\"%s\","
         "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
-        v->id, slug, slug, slug, pos, slug, s_device, devname, cu);
+        v->id, slug, slug, type->device_class, slug, pos, slug, s_device, devname, cu);
     pub_defer(topic, pl, 1, 1);
     free(pl);
     publish_volet_state(v);
@@ -1262,8 +1267,10 @@ static void announce_extras(void) {
 static void clear_one(volet_t *v) {
     char topic[96], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);
-    snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
-    pub_defer(topic, "", 0, 1);   /* vide + retenu -> HA retire l'entite */
+    for (int c = 0; c < CAT_COMPONENT_COUNT; c++) {   /* sous chaque famille : le type a pu changer depuis l'annonce */
+        snprintf(topic, sizeof(topic), "homeassistant/%s/openprofalux_%s/config", catalog_component_name((catalog_component_t)c), slug);
+        pub_defer(topic, "", 0, 1);   /* vide + retenu -> HA retire l'entite */
+    }
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/state", slug);
     pub_defer(topic, "", 0, 1);
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);

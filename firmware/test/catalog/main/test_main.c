@@ -18,6 +18,8 @@
 #define EVENO_PROFILE          "eveno-enrol"
 #define PROFALUX_ENROL_PROFILE "profalux-enrol"
 #define EVENO_BRAND            "Eveno"
+/* L'entite d'un type ecrit a la main : sans elle, le type est refuse avant la faute qu'un essai vise. */
+#define ENT "\"entity\":{\"component\":\"cover\",\"device_class\":\"shutter\"}"
 
 static int s_fail;
 #define CHECK(cond, what) do { if (cond) printf("  ok   %s\n", what); else { printf("  ECHEC %s\n", what); s_fail = 1; } } while (0)
@@ -98,6 +100,10 @@ int main(int argc, char **argv) {
     CHECK(names, "C26 nom d'une commande : celui que catalog_cmd_of relit");
     CHECK(gt && gt->step.len == 4 && gt->step.act[0] == CAT_CMD_UP && gt->step.act[2] == CAT_CMD_DOWN && gt->step.press_gap_ms > 0
           && st && st->step.len == 0, "C27 le portail a un cycle pas a pas et son delai ; le volet n'en a pas");
+    CHECK(st && gt && st->component == CAT_COMPONENT_COVER && !strcmp(st->device_class, "shutter")
+          && gt->component == CAT_COMPONENT_COVER && !strcmp(gt->device_class, "gate")
+          && !strcmp(catalog_component_name(CAT_COMPONENT_COVER), "cover") && catalog_component_name(CAT_COMPONENT_COUNT) == NULL,
+          "C28 entite Home Assistant : le volet est un cover shutter, le portail un cover gate");
     const catalog_profile_t *eveno = catalog_profile(EVENO_PROFILE), *base = catalog_profile(PROFALUX_ENROL_PROFILE);
     CHECK(eveno && base && eveno->freq_khz != base->freq_khz && eveno->te_us == base->te_us
           && eveno->repeat_bit == base->repeat_bit && eveno->rmt == base->rmt && eveno->encoder == CAT_ENC_KEELOQ
@@ -126,21 +132,24 @@ int main(int argc, char **argv) {
     refused("{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1},\"enrol\":{\"code\":5}}}}",
             "enrol : code", "R9 enrolement KeeLoq sans ses salves");
     refused("{\"protocols\":[]}", "objet protocols", "R10 protocols n'est pas un objet");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":0}},\"b\":{\"legacy\":{\"code\":0}}}}", "meme numero legacy", "R12 deux types avec le meme numero legacy");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"legacy\":{\"code\":300}}}}", "legacy.code hors", "R15 numero legacy hors 0..255");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"ouvre\"}]}}}", "bouton de commande inconnue", "R16 bouton d'une commande inconnue");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"ouvre\"]}]}}}", "cycle : commande inconnue", "R17 cycle d'une commande inconnue");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"stop\",\"down\",\"stop\",\"up\"],\"press_gap_ms\":1000}]}}}", "cycle trop long", "R18 cycle plus long que le lecteur");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"]}]}}}", "sans cycle ou sans press_gap_ms", "R19 bouton pas a pas sans delai");
-    refused("{\"protocols\":{},\"types\":{\"a\":{\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"],\"press_gap_ms\":1000},{\"id\":\"y\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"],\"press_gap_ms\":1000}]}}}", "deux boutons pas a pas", "R20 deux boutons pas a pas");
-    refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"legacy\":{\"code\":0}},\"b\":{" ENT ",\"legacy\":{\"code\":0}}}}", "meme numero legacy", "R12 deux types avec le meme numero legacy");
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"legacy\":{\"code\":300}}}}", "legacy.code hors", "R15 numero legacy hors 0..255");
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"buttons\":[{\"id\":\"x\",\"command\":\"ouvre\"}]}}}", "bouton de commande inconnue", "R16 bouton d'une commande inconnue");
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"ouvre\"]}]}}}", "cycle : commande inconnue", "R17 cycle d'une commande inconnue");
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"stop\",\"down\",\"stop\",\"up\"],\"press_gap_ms\":1000}]}}}", "cycle trop long", "R18 cycle plus long que le lecteur");
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"]}]}}}", "sans cycle ou sans press_gap_ms", "R19 bouton pas a pas sans delai");
+    refused("{\"protocols\":{},\"types\":{\"a\":{" ENT ",\"buttons\":[{\"id\":\"x\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"],\"press_gap_ms\":1000},{\"id\":\"y\",\"command\":\"step\",\"cycle\":[\"up\",\"down\"],\"press_gap_ms\":1000}]}}}", "deux boutons pas a pas", "R20 deux boutons pas a pas");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"entity\":{\"component\":\"light\",\"device_class\":\"shutter\"}}}}", "entity.component inconnu", "R21 famille d'entite que ce firmware n'annonce pas");
+    refused("{\"protocols\":{},\"types\":{\"a\":{\"entity\":{\"component\":\"cover\",\"device_class\":\"lumiere\"}}}}", "entity.device_class inconnue", "R22 classe d'entite inconnue");
+    refused("{\"protocols\":{},\"types\":{\"a\":{}}}", "entity.component inconnu", "R23 type sans entite");
+    refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{" ENT "}},"
             "\"profiles\":[{\"id\":\"b\",\"inherits\":\"a\"},{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000}}]}",
             "base absente", "R13 base declaree apres ce qui en herite");
-    refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
+    refused("{\"protocols\":{\"p\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{" ENT "}},"
             "\"profiles\":[{\"id\":\"a\",\"protocol\":\"p\",\"types\":[\"v\"]}]}",
             "sans protocole, type ou porteuse", "R14 profil sans porteuse");
     /* un modele de trop : CATALOG_MODELS_MAX + 1 noms */
-    char many[4096]; int n = snprintf(many, sizeof many, "{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{}},"
+    char many[4096]; int n = snprintf(many, sizeof many, "{\"protocols\":{\"a\":{\"encoder\":\"keeloq\",\"press\":{\"frames\":1}}},\"types\":{\"v\":{" ENT "}},"
                                "\"profiles\":[{\"id\":\"p\",\"protocol\":\"a\",\"types\":[\"v\"],\"radio\":{\"freq_khz\":868000},\"models\":[");
     for (int i = 0; i <= CATALOG_MODELS_MAX; i++) n += snprintf(many + n, sizeof many - (size_t)n, "%s\"m%d\"", i ? "," : "", i);
     snprintf(many + n, sizeof many - (size_t)n, "]}]}");

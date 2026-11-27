@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CATALOG_PATH, SCHEMA_PATH, boardBands, checkCatalog, checkFirmware, checkShape, firmwareLimits, spriteIcons } from './gen-catalog.ts';
+import { CATALOG_PATH, SCHEMA_PATH, boardBands, checkCatalog, checkFirmware, checkSchemaFirmware, checkShape, firmwareLimits, spriteIcons } from './gen-catalog.ts';
 
 /* Les profils du vrai catalogue que ce banc casse, par leur identifiant. */
 const PROFILE = { cameReplay: 'came-replay', eveno: 'eveno-enrol', neosol: 'neosol-enrol', profaluxEnrol: 'profalux-enrol', somfy: 'somfy-rts-enrol' } as const;
@@ -176,11 +176,12 @@ test('modeles : les numeros gardes en NVS designent toujours le meme modele', ()
 
 /* Les appels : le generateur lui-meme refuse, sort en erreur et n'engendre rien. */
 const script = fileURLToPath(new URL('./gen-catalog.ts', import.meta.url));
-function run(doc: Json): { code: number; out: string; generated: boolean } {
+function run(doc: Json, schemaDoc?: Json): { code: number; out: string; generated: boolean } {
   const dir = mkdtempSync(join(tmpdir(), 'catalog-'));
-  const input = join(dir, 'profiles.json'), output = join(dir, 'catalog.generated.ts');
+  const input = join(dir, 'profiles.json'), output = join(dir, 'catalog.generated.ts'), schemaPath = join(dir, 'profiles.schema.json');
   writeFileSync(input, JSON.stringify(doc));
-  const r = spawnSync(process.execPath, [script, input, output], { encoding: 'utf8' });
+  writeFileSync(schemaPath, JSON.stringify(schemaDoc ?? schema));
+  const r = spawnSync(process.execPath, [script, input, output, schemaPath], { encoding: 'utf8' });
   return { code: r.status ?? -1, out: r.stderr, generated: existsSync(output) };
 }
 
@@ -229,4 +230,41 @@ test('firmware : deux boutons pas a pas sur un type sont refuses', () => {
   const doc = real(); const b = doc.types.portail.buttons[0];
   doc.types.portail.buttons.push({ ...b, id: 'second', position: { row: 1, col: 0 } });
   refuses(doc, /firmware : type portail, 2 boutons pas a pas, le lecteur en prend 1/);
+});
+
+/* Le schema tel qu'on le lit, a modifier dans un essai. */
+const schemaCopy = (): Json => JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
+const entityOf = (sc: Json): Json => sc.$defs.DeviceType.properties.entity.properties;
+
+test("entite : le schema enumere exactement les familles et les classes que le firmware connait", () => {
+  assert.deepEqual(checkSchemaFirmware(schemaCopy(), limits), []);
+  assert.ok(limits.coverClasses.includes('gate') && limits.components.includes('cover'));
+});
+
+test("entite : une classe que le schema accepte et pas le firmware est refusee", () => {
+  const sc = schemaCopy(); entityOf(sc).device_class.enum.push('lumiere');
+  assert.match(checkSchemaFirmware(sc, limits).join('\n'), /entity\.device_class enumere .*lumiere/);
+});
+
+test("entite : une classe que le firmware connait et que le schema oublie est refusee", () => {
+  const sc = schemaCopy(); entityOf(sc).device_class.enum = entityOf(sc).device_class.enum.filter((c: string) => c !== 'garage');
+  assert.match(checkSchemaFirmware(sc, limits).join('\n'), /entity\.device_class/);
+});
+
+test("entite : une famille que le firmware n'annonce pas est refusee", () => {
+  const sc = schemaCopy(); entityOf(sc).component.enum.push('light');
+  assert.match(checkSchemaFirmware(sc, limits).join('\n'), /entity\.component/);
+});
+
+test("appel : un schema qui diverge du firmware fait echouer le generateur, sans rien engendrer", () => {
+  const sc = schemaCopy(); entityOf(sc).device_class.enum.push('lumiere');
+  const r = run(real(), sc);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /entity\.device_class/);
+  assert.equal(r.generated, false);
+});
+
+test("forme : une classe d'entite inconnue est refusee", () => {
+  const doc = real(); doc.types.portail.entity.device_class = 'lumiere';
+  refuses(doc, /forme : \/types\/portail\/entity\/device_class/);
 });
