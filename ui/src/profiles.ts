@@ -16,7 +16,7 @@ export const ADD = { copy: 'copy', enrol: 'enrol' } as const satisfies Record<st
 /* Codage d'un protocole (« code ») : un code fixe se rejoue tel quel. */
 const CODE_FIXED = 'fixed';
 /* Commande d'un bouton pas a pas (types[].buttons[].command). */
-export const STEP = 'step' satisfies ButtonCommand;
+export const STEP = COMMAND.step satisfies ButtonCommand;
 
 /** Un profil resolu, a plat : ce que les ecrans lisent. */
 export interface ProfileView {

@@ -7,7 +7,8 @@ import type { Encoder } from './api/catalog.generated';
 type ValueOf<T> = T[keyof T];
 
 /* Commandes d'un appareil (corps de /api/shutter, /api/pfx/cmd, captures). */
-export const COMMAND = { up: 'up', stop: 'stop', down: 'down', position: 'pos', prog: 'prog' } as const;
+/* step : un appui du bouton pas a pas d'un portail (le boitier suit son cycle ; #134, etape 5). */
+export const COMMAND = { up: 'up', stop: 'stop', down: 'down', position: 'pos', prog: 'prog', step: 'step' } as const;
 export type Command = ValueOf<typeof COMMAND>;
 /* Les trois commandes d'un pave, dans l'ordre d'affichage. */
 export const MOVE_COMMANDS = [COMMAND.up, COMMAND.stop, COMMAND.down] as const;
