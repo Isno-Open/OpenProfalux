@@ -354,6 +354,55 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
     return buf;
 }
 
+/* ── Encodeur et profil d'un appareil ── */
+char *cfg_rejeu_empty(void) { return strdup("{}"); }
+
+bool cfg_volet_is_blank(const volet_t *v) {
+    return !v->virt && !v->central && !v->rejeu && !v->up[0] && !v->down[0] && !v->stop[0];
+}
+
+catalog_encoder_t cfg_volet_encoder(const volet_t *v) {
+    if (!v->virt) {
+        if (v->rejeu) return CAT_ENC_RAW_REPLAY;
+        return cfg_volet_is_blank(v) ? CAT_ENC_NONE : CAT_ENC_KEELOQ;
+    }
+    switch ((volet_proto_t)v->proto) {
+    case VOLET_PROTO_PROFALUX:  return CAT_ENC_KEELOQ;
+    case VOLET_PROTO_SOMFY_RTS: return CAT_ENC_SOMFY_RTS;
+    default:                    return CAT_ENC_NONE;
+    }
+}
+
+const catalog_profile_t *cfg_volet_assign_profile(volet_t *v, const char *wanted) {
+    if (v->central) return NULL;
+    const catalog_encoder_t enc = cfg_volet_encoder(v);
+    const catalog_profile_t *p = catalog_profile(wanted);
+    if (p && (p->encoder != enc || p->enrol != v->virt)) {
+        ESP_LOGW(TAG, "'%s' : profil %s refuse (autre encodeur ou autre methode)", v->id, wanted);
+        p = NULL;
+    }
+    if (!p && !v->profile[0] && enc != CAT_ENC_NONE) p = catalog_profile_infer(enc, v->virt, v->marque);
+    if (p) strlcpy(v->profile, p->id, sizeof v->profile);
+    if (p && !v->type[0]) strlcpy(v->type, p->type, sizeof v->type);
+    return catalog_profile(v->profile);
+}
+
+int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, const cfg_tx_t *somfy) {
+    int n = 0;
+    for (int i = 0; i < *m->nvolets; i++) {
+        volet_t *v = &m->volets[i];
+        if (v->central || v->profile[0]) continue;
+        const catalog_profile_t *p = cfg_volet_assign_profile(v, NULL);
+        if (!p) { ESP_LOGW(TAG, "migration : '%s' sans profil (vide ou inclassable), garde son comportement", v->id); continue; }
+        /* le rejeu ne lit que sa porteuse, qu'il prend de sa capture : rien a figer */
+        if (p->encoder == CAT_ENC_KEELOQ)    cfg_volet_rebase_tx(v, p, keeloq);
+        if (p->encoder == CAT_ENC_SOMFY_RTS) cfg_volet_rebase_tx(v, p, somfy);
+        ESP_LOGW(TAG, "migration : '%s' -> profil %s, type %s", v->id, v->profile, v->type);
+        n++;
+    }
+    return n;
+}
+
 /* ── Reglages d'emission : la fiche, sinon le profil ── */
 cfg_tx_t cfg_volet_tx(const volet_t *v, const catalog_profile_t *p) {
     cfg_tx_t t = {

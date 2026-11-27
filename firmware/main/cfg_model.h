@@ -154,6 +154,24 @@ bool cfg_volet_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t 
  * Applique a la migration et a chaque ecriture des reglages (shutters_set_tx_params). */
 void cfg_volet_inherit_equal(volet_t *v, const catalog_profile_t *p);
 
+/* Document de rejeu d'un appareil cree sans capture encore ("{}", sur le tas ; NULL sans memoire). */
+char *cfg_rejeu_empty(void);
+/* Fiche qui n'a rien a emettre : ni identite generee, ni rejeu, ni trame copiee (une centrale n'en est
+ * pas une). Typiquement la coquille d'un appareil dont la capture n'a jamais ete enregistree. */
+bool cfg_volet_is_blank(const volet_t *v);
+/* Ce que l'appareil dit de lui-meme : son encodeur. CAT_ENC_NONE pour une fiche vide, ou d'un protocole
+ * que ce firmware ne connait pas (io, ecrit par une autre branche) : elle reste alors sans profil plutot
+ * que de passer pour une copie Profalux. */
+catalog_encoder_t cfg_volet_encoder(const volet_t *v);
+/* Donne son profil a un appareil : `wanted` s'il existe et convient a son encodeur et a sa methode,
+ * sinon (s'il n'en a pas) celui de sa marque. Son type, s'il n'en a pas, est celui du profil. Une
+ * centrale n'a pas de profil. Renvoie le profil de la fiche, ou NULL. */
+const catalog_profile_t *cfg_volet_assign_profile(volet_t *v, const char *wanted);
+/* Migration vers les profils (#134) : chaque fiche sans profil recoit le sien (cfg_volet_assign_profile),
+ * puis ses reglages sont rebases sur ce qu'elle emet aujourd'hui (keeloq, somfy : les defauts qu'elle
+ * heritait). Une fiche vide ou inclassable reste telle quelle. Renvoie le nombre de fiches migrees. */
+int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, const cfg_tx_t *somfy);
+
 char *cfg_model_export(const cfg_model_t *m);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */

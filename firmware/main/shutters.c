@@ -291,32 +291,9 @@ static volet_t *get_or_create(const char *id) {
 
 /* ── Profil d'un appareil (catalogue) ── */
 static const catalog_profile_t *profile_of(const volet_t *v) { return catalog_profile(v->profile); }
-/* Ce que l'appareil dit de lui-meme : son encodeur, et s'il est enrole (sinon copie). Un protocole que ce
- * firmware ne connait pas (une fiche ecrite par une autre branche, io par exemple) n'a pas d'encodeur :
- * CAT_ENC_COUNT, et l'appareil reste sans profil plutot que de passer pour un Profalux. */
-static catalog_encoder_t encoder_of(const volet_t *v) {
-    if (!v->virt) return v->rejeu ? CAT_ENC_RAW_REPLAY : CAT_ENC_KEELOQ;
-    switch ((volet_proto_t)v->proto) {
-    case VOLET_PROTO_PROFALUX:  return CAT_ENC_KEELOQ;
-    case VOLET_PROTO_SOMFY_RTS: return CAT_ENC_SOMFY_RTS;
-    default:                    return CAT_ENC_COUNT;
-    }
-}
-/* Donne son profil a un appareil : celui demande s'il existe et convient a son encodeur et a sa methode,
- * sinon (s'il n'en a pas) celui de sa marque. Son type, s'il n'en a pas, est celui du profil. Une
- * centrale n'a pas de profil : elle n'emet rien en propre. Sous LOCK. Renvoie le profil, ou NULL. */
-static const catalog_profile_t *assign_profile(volet_t *v, const char *wanted) {
-    if (v->central) return NULL;
-    const catalog_profile_t *p = catalog_profile(wanted);
-    if (p && (p->encoder != encoder_of(v) || p->enrol != v->virt)) {
-        ESP_LOGW(TAG, "'%s' : profil %s refuse (autre encodeur ou autre methode)", v->id, wanted);
-        p = NULL;
-    }
-    if (!p && !v->profile[0]) p = catalog_profile_infer(encoder_of(v), v->virt, v->marque);
-    if (p) strlcpy(v->profile, p->id, sizeof v->profile);
-    if (p && !v->type[0]) strlcpy(v->type, p->type, sizeof v->type);
-    return profile_of(v);
-}
+/* Encodeur et profil d'un appareil : cfg_model.c (cfg_volet_encoder, cfg_volet_assign_profile), ou le
+ * banc cfg_store les eprouve. Sous LOCK. */
+static const catalog_profile_t *assign_profile(volet_t *v, const char *wanted) { return cfg_volet_assign_profile(v, wanted); }
 
 /* nom volet -> slug HA-safe ([a-zA-Z0-9_-]) : espaces/accents interdits dans les topics
  * (decouverte HA ET command/state), sinon commandes/decouverte cassees. */
@@ -563,19 +540,7 @@ static void migrate_profiles(void) {
     const cfg_tx_t keeloq = { .freq_khz = cc1101_get_freq_khz(), .te_us = (uint16_t)cc1101_get_tx_te(),
                               .rpt = cc1101_get_tx_repeat_bit() ? 1 : 0, .rmt = cc1101_get_tx_rmt() ? 1 : 0 };
     const cfg_tx_t somfy = { .freq_khz = SOMFY_RTS_FREQ_KHZ, .rpt = -1, .rmt = -1, .frame_bits = SOMFY_RTS_FRAME_BITS };
-    int n = 0;
-    for (int i = 0; i < s_nvolets; i++) {
-        volet_t *v = &s_volets[i];
-        if (v->central || v->profile[0]) continue;
-        const catalog_profile_t *p = assign_profile(v, NULL);
-        if (!p) { ESP_LOGW(TAG, "migration : '%s' sans profil (inclassable), garde son comportement", v->id); continue; }
-        /* le rejeu ne lit que sa porteuse, qu'il prend de sa capture : rien a figer */
-        if (p->encoder == CAT_ENC_KEELOQ)    cfg_volet_rebase_tx(v, p, &keeloq);
-        if (p->encoder == CAT_ENC_SOMFY_RTS) cfg_volet_rebase_tx(v, p, &somfy);
-        ESP_LOGW(TAG, "migration : '%s' -> profil %s, type %s", v->id, v->profile, v->type);
-        n++;
-    }
-    if (n) save_cfg();
+    if (cfg_model_migrate_profiles(&s_model, &keeloq, &somfy)) save_cfg();
 }
 
 static cfg_layout_t load_cfg(void) {
@@ -1400,12 +1365,14 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
-    assign_profile(v, NULL);   /* une telecommande copiee : le profil de sa marque, s'il n'en a pas */
     uint8_t btn = bits_button(bits);
     if      (!strcmp(action, "up"))   { strlcpy(v->up, bits, SH_BITS_LEN);   v->up_btn = btn; }
     else if (!strcmp(action, "down")) { strlcpy(v->down, bits, SH_BITS_LEN); v->down_btn = btn; }
     else if (!strcmp(action, "stop")) { strlcpy(v->stop, bits, SH_BITS_LEN); v->stop_btn = btn; }
     else { UNLOCK(); return -1; }
+    /* une telecommande copiee : le profil de sa marque, s'il n'en a pas. APRES la trame : une fiche
+     * vide n'a pas d'encodeur, donc pas de profil (cfg_volet_encoder). */
+    assign_profile(v, NULL);
     /* memorise le serial de cette telecommande pour ce volet (sync position) */
     uint32_t ser = 0; if ((int)strlen(bits) >= 60) for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)ser);
@@ -1525,6 +1492,9 @@ int shutters_create_rejeu(const char *id, const char *type) {
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
     v->virt = false;
+    /* Un rejeu sans capture encore : un document vide le dit. Sans lui, la fiche passait pour une copie
+     * KeeLoq et recevait le profil d'une telecommande Profalux (constate sur une Super). */
+    if (!v->rejeu && !(v->rejeu = cfg_rejeu_empty())) { UNLOCK(); return -1; }
     strlcpy(v->type, type, sizeof v->type);
     assign_profile(v, NULL);
     save_cfg();

@@ -18,6 +18,9 @@ typedef enum { CAT_CMD_UP, CAT_CMD_STOP, CAT_CMD_DOWN, CAT_CMD_PROG, CAT_CMD_COU
 /* Encodeurs de ce firmware (catalogue « encoder ») : un protocole au plus par encodeur, tant que la
  * fiche d'un appareil ne designe pas son profil (#134, etape 3). */
 typedef enum { CAT_ENC_KEELOQ, CAT_ENC_SOMFY_RTS, CAT_ENC_RAW_REPLAY, CAT_ENC_COUNT } catalog_encoder_t;
+/* Aucun encodeur : une fiche qui n'a rien a emettre, ou d'un protocole que ce firmware ne connait pas.
+ * Aucun profil ne le porte. */
+#define CAT_ENC_NONE CAT_ENC_COUNT
 
 #define CATALOG_NO_CODE      (-1)
 #define CATALOG_MODELS_MAX   16

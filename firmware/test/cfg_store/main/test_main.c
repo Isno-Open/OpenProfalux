@@ -106,6 +106,7 @@ const char *__asan_default_options(void) { return "detect_leaks=0"; }
 #define GATE_KEY        "portail"
 #define PROFALUX_ENROL  "profalux-enrol"
 #define CAME_REPLAY     "came-replay"
+#define PROFALUX_COPY   "profalux-copy"
 #define UNKNOWN_KEY     "garage"
 #define NVS_MAX 0x8000                      /* taille maximale geree par le banc */
 static const esp_partition_t *s_part;
@@ -516,6 +517,33 @@ int main(void) {
             r.freq_khz = came ? came->freq_khz : 0;
             cfg_volet_inherit_equal(&r, came);
             CHECK(came && r.freq_khz == came->freq_khz, "rejeu : la porteuse egale au profil reste ecrite (0 = celle de la capture)");
+        }
+
+        /* Fiche vide, rejeu sans capture, copie : leur encodeur, et le profil que leur donne la migration.
+         * La coquille d'un appareil dont la capture n'a jamais ete enregistree passait pour une copie
+         * Profalux, a 868 MHz (constate sur une Super). */
+        {
+            const cfg_tx_t keeloq = { .freq_khz = 868425, .te_us = 400, .rpt = 1, .rmt = 1 };
+            const cfg_tx_t somfy = { .rpt = -1, .rmt = -1 };
+            store_reset(&g_tmp);
+            volet_t *blank = &g_tmp.volets[g_tmp.nvolets++], *fresh = &g_tmp.volets[g_tmp.nvolets++], *copy = &g_tmp.volets[g_tmp.nvolets++];
+            strlcpy(blank->id, "Coquille", SH_ID_LEN); strlcpy(blank->type, GATE_KEY, sizeof blank->type);
+            strlcpy(fresh->id, "Rejeu neuf", SH_ID_LEN); strlcpy(fresh->type, GATE_KEY, sizeof fresh->type);
+            fresh->rejeu = cfg_rejeu_empty();
+            strlcpy(copy->id, "Copie", SH_ID_LEN); strlcpy(copy->up, "1010", SH_BITS_LEN);
+            CHECK(cfg_volet_is_blank(blank) && cfg_volet_encoder(blank) == CAT_ENC_NONE, "fiche vide : aucun encodeur");
+            CHECK(fresh->rejeu && cfg_volet_encoder(fresh) == CAT_ENC_RAW_REPLAY, "rejeu sans capture : encodeur de rejeu");
+            CHECK(cfg_volet_encoder(copy) == CAT_ENC_KEELOQ, "trame copiee : KeeLoq");
+            int n = cfg_model_migrate_profiles(&g_tmp.m, &keeloq, &somfy);
+            CHECK(blank->profile[0] == 0 && blank->freq_khz == 0 && blank->te_us == 0,
+                  "migration : une fiche vide reste sans profil ni reglage (profil '%s', %u kHz)", blank->profile, (unsigned)blank->freq_khz);
+            CHECK(!strcmp(fresh->profile, CAME_REPLAY), "migration : un rejeu sans capture prend le profil de rejeu (%s)", fresh->profile);
+            CHECK(!strcmp(copy->profile, PROFALUX_COPY), "migration : une copie prend le profil de copie (%s)", copy->profile);
+            CHECK(n == 2, "migration : %d fiches classees sur 3 (la vide ne l'est pas)", n);
+            strlcpy(blank->up, "1010", SH_BITS_LEN);
+            CHECK(cfg_volet_assign_profile(blank, NULL) && !strcmp(blank->profile, PROFALUX_COPY),
+                  "apprentissage : la fiche recoit son profil des qu'elle a une trame (%s)", blank->profile);
+            cfg_volet_release(fresh);
         }
     }
 
