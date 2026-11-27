@@ -63,6 +63,8 @@ static void on_alloc_failed(size_t size, uint32_t caps, const char *fn) {
 #endif
 
 static const char *TAG = "main";
+/* Espace NVS de l'ancien firmware io d'essai (branche io, jamais fusionnee). */
+#define STALE_IO_NAMESPACE "iohc"
 static bool s_log_frames = false;   /* option UI "capture toutes les trames" (namespace cfg) */
 static bool s_mqtt_obey  = true;    /* obeir aux ordres cover MQTT (namespace cfg) ; defaut oui */
 static bool s_debug      = false;   /* switch UI "debug console" : logge chaque capture RX */
@@ -252,6 +254,15 @@ void app_main(void) {
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase(); nvs_flash_init();
     }
+    /* Essai ponctuel pour une seule carte : vide l'espace laisse par un ancien
+     * firmware io d'essai, pour rendre sa place a la configuration. */
+    { nvs_handle_t ph;
+      if (nvs_open(STALE_IO_NAMESPACE, NVS_READWRITE, &ph) == ESP_OK) {
+          esp_err_t pe = nvs_erase_all(ph);
+          if (pe == ESP_OK) pe = nvs_commit(ph);
+          nvs_close(ph);
+          ESP_LOGW(TAG, "espace NVS '%s' vide : %s", STALE_IO_NAMESPACE, esp_err_to_name(pe));
+      } }
 
     /* 1b. OTA (retour automatique : l'image en essai est validee plus bas apres ~60 s) */
     ota_init();
