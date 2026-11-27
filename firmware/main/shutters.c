@@ -321,9 +321,14 @@ int shutters_remote_dump(int i, int from, char *serial, int sser, char *name, in
 /* La serialisation et le rangement sont dans cfg_model.c / cfg_store.c. Les
  * echecs sont journalises : une NVS pleine faisait autrefois echouer TOUTES les
  * sauvegardes sans le moindre message. */
+/* Le dernier enregistrement a echoue : la config en memoire n'est pas celle de la NVS, et sera perdue au
+ * redemarrage. Annonce dans /api/status ("unsaved"), pour que l'interface le dise quel que soit le
+ * chemin (ajout, capture, reglage, mouvement). Une Super a perdu ainsi deux appareils sans un mot. */
+static bool s_cfg_unsaved;
 static esp_err_t save_cfg(void) {
     char key[8] = "";
     esp_err_t e = cfg_model_save(&s_model, key);
+    s_cfg_unsaved = e != ESP_OK;
     if (e != ESP_OK)
         ESP_LOGE(TAG, "save_cfg ECHEC sur '%s' : %s (%d volets)", key, esp_err_to_name(e), s_nvolets);
     return e;
@@ -2217,6 +2222,7 @@ static cJSON *status_tail_json(void) {
         cJSON_AddBoolToObject(wifi, "fallback", wifi_bridge_in_fallback());   /* reessaie seul (mode secours) */
     }
     cJSON_AddBoolToObject(root, "mqtt", s_mqtt_ready);
+    if (s_cfg_unsaved) cJSON_AddBoolToObject(root, "unsaved", true);   /* config non enregistree : voir save_cfg */
     cJSON_AddBoolToObject(root, "listening", s_log_frames);   /* ecoute permanente = position fiable */
     cJSON_AddNumberToObject(root, "uptime", (double)(esp_timer_get_time() / 1000000));   /* s depuis boot : date les trames RF cote UI */
     return root;

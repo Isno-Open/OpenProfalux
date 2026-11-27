@@ -48,7 +48,8 @@ onMounted(start);
   <LoginScreen v-if="state.isProtected && !state.loggedIn" />
   <div v-else class="page">
     <AppHeader :theme="theme" @toggle-theme="chooseTheme(theme === THEME.dark ? THEME.light : THEME.dark)" />
-    <div v-if="state.offline" class="offline" role="status">Boîtier injoignable : nouvelle tentative toutes les 3 s.<template v-if="lastOkTime"> Affiché : l'état de {{ lastOkTime }}.</template></div>
+    <div v-if="state.status?.unsaved" class="alert" role="alert">Configuration non enregistrée : la mémoire du boîtier est pleine. Les derniers changements seront perdus au redémarrage. La place restante est dans Système, État.</div>
+    <div v-if="state.offline" class="alert" role="status">Boîtier injoignable : nouvelle tentative toutes les 3 s.<template v-if="lastOkTime"> Affiché : l'état de {{ lastOkTime }}.</template></div>
     <OpTabs :tabs="tabs" :active="route.tab" @choose="id => navigate(id)" />
     <main class="content">
       <OpSubtabs v-if="visibleSections.length" :items="visibleSections" :active="activeSection" @choose="id => navigate(`${route.tab}/${id}`)" />
@@ -66,5 +67,5 @@ onMounted(start);
 </template>
 
 <style scoped>
-.offline{margin-top:10px;padding:9px 12px;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--danger) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--danger) 40%,var(--border));color:var(--text);font-size:.86rem}
+.alert{margin-top:10px;padding:9px 12px;border-radius:var(--radius-sm);background:color-mix(in srgb,var(--danger) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--danger) 40%,var(--border));color:var(--text);font-size:.86rem}
 </style>

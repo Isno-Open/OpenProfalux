@@ -46,6 +46,8 @@ export interface BatteryState { low: boolean }
 
 export interface Status {
   uptime: number;
+  /* Le dernier enregistrement de la config a echoue (memoire pleine) : elle sera perdue au redemarrage. */
+  unsaved?: boolean;
   listening: boolean;
   volets: Device[];
   remotes: Record<string, string>;
