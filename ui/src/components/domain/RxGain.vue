@@ -9,8 +9,10 @@ import OpField from '../base/OpField.vue';
 import OpSelect from '../base/OpSelect.vue';
 import OpButton from '../base/OpButton.vue';
 const gain = defineModel<string | number>({ default: 39 });
-const props = defineProps<{ radio: number }>();
-const emit = defineEmits<{ calibrated: [gain: number] }>();
+/* save enregistre le gain trouve : une fonction appelee directement, pas un evenement. La calibration dure ~25 s ; si
+   l'ecran est quitte entre-temps, Vue ignore l'evenement d'un composant demonte, et le gain, que le firmware n'applique
+   qu'en RAM, serait perdu au redemarrage. */
+const props = defineProps<{ radio: number; save: (gain: number) => Promise<boolean> }>();
 const uid = useId();
 const GAINS = [
   { value: 7, label: '0x07 · gain max (le plus sensible, capte aussi le bruit)' },
@@ -28,8 +30,7 @@ async function calibrate(): Promise<void> {
     const r = await withRadio(() => api.calibrateGain(props.radio, g => { message.value = `Appuie… (essai du gain ${hex(g)})`; }));
     const result = r.result ?? Number(gain.value);
     gain.value = result;
-    message.value = `✓ Calibré : gain ${hex(result)} (enregistré)`;
-    emit('calibrated', result);
+    message.value = await props.save(result) ? `✓ Calibré : gain ${hex(result)} (enregistré)` : `Calibré : gain ${hex(result)}, mais pas enregistré.`;
   } catch (e) {
     message.value = e === FAILURE.busy ? '' : e === FAILURE.start ? '✗ Calibration non lancée par le boîtier : réessaie dans un instant.'
       : '✗ Aucune trame captée. Vérifie l\'antenne, ou essaie un autre module CC1101.';

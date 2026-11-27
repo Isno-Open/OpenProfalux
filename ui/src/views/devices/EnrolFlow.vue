@@ -20,6 +20,10 @@ const gestures = ref(false);              // emission finie : les gestes sont a 
 const testAllowedAt = ref(0);             // instant ou le test est permis (gestes faits + delai du moteur) ; 0 = gestes pas faits
 const name = ref('');
 const done = ref<Message | null>(null);
+/* Le dernier etat du boitier (/api/pfx), partage par toutes les instances de l'ecran : si l'ecran est rouvert pendant
+   une capture, la relecture finale, faite par l'instance de depart (demontee depuis), doit atteindre l'ecran affiche.
+   Chaque instance le recopie dans son pfx (watch de lastPfx). */
+const lastPfx = ref<import('../../api/types').PfxState | null>(null);
 </script>
 
 <script setup lang="ts">
@@ -93,11 +97,12 @@ const identityLine = computed(() => {
 async function read(): Promise<void> {
   const d = await api.pfxState().catch(() => null);
   if (!d) return;
-  pfx.value = d;
-  if (d.active) model.value = d.model ?? 0;
+  lastPfx.value = d;
   const serial = d.active ? d.serial ?? '' : '';
   if (serial !== owner.value) { owner.value = serial; gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
 }
+/* L'ecran affiche recopie l'etat du boitier relu par n'importe quelle instance, avec le modele de l'identite active. */
+watch(lastPfx, d => { if (!d) return; pfx.value = d; if (d.active) model.value = d.model ?? 0; }, { immediate: true, flush: 'sync' });
 onMounted(() => {
   clock = setInterval(() => { now.value = Date.now(); }, COUNTDOWN_TICK_MS);
   read();
