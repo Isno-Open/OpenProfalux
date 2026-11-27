@@ -18,8 +18,12 @@
 #define EVENO_PROFILE          "eveno-enrol"
 #define PROFALUX_ENROL_PROFILE "profalux-enrol"
 #define EVENO_BRAND            "Eveno"
+/* L'entite Home Assistant que profiles.json declare pour le volet et pour le portail. */
+#define COVER_COMPONENT "cover"
+#define SHUTTER_CLASS   "shutter"
+#define GATE_CLASS      "gate"
 /* L'entite d'un type ecrit a la main : sans elle, le type est refuse avant la faute qu'un essai vise. */
-#define ENT "\"entity\":{\"component\":\"cover\",\"device_class\":\"shutter\"}"
+#define ENT "\"entity\":{\"component\":\"" COVER_COMPONENT "\",\"device_class\":\"" SHUTTER_CLASS "\"}"
 
 static int s_fail;
 #define CHECK(cond, what) do { if (cond) printf("  ok   %s\n", what); else { printf("  ECHEC %s\n", what); s_fail = 1; } } while (0)
@@ -100,9 +104,9 @@ int main(int argc, char **argv) {
     CHECK(names, "C26 nom d'une commande : celui que catalog_cmd_of relit");
     CHECK(gt && gt->step.len == 4 && gt->step.act[0] == CAT_CMD_UP && gt->step.act[2] == CAT_CMD_DOWN && gt->step.press_gap_ms > 0
           && st && st->step.len == 0, "C27 le portail a un cycle pas a pas et son delai ; le volet n'en a pas");
-    CHECK(st && gt && st->component == CAT_COMPONENT_COVER && !strcmp(st->device_class, "shutter")
-          && gt->component == CAT_COMPONENT_COVER && !strcmp(gt->device_class, "gate")
-          && !strcmp(catalog_component_name(CAT_COMPONENT_COVER), "cover") && catalog_component_name(CAT_COMPONENT_COUNT) == NULL,
+    CHECK(st && gt && st->component == CAT_COMPONENT_COVER && !strcmp(st->device_class, SHUTTER_CLASS)
+          && gt->component == CAT_COMPONENT_COVER && !strcmp(gt->device_class, GATE_CLASS)
+          && !strcmp(catalog_component_name(CAT_COMPONENT_COVER), COVER_COMPONENT) && catalog_component_name(CAT_COMPONENT_COUNT) == NULL,
           "C28 entite Home Assistant : le volet est un cover shutter, le portail un cover gate");
     const catalog_profile_t *eveno = catalog_profile(EVENO_PROFILE), *base = catalog_profile(PROFALUX_ENROL_PROFILE);
     CHECK(eveno && base && eveno->freq_khz != base->freq_khz && eveno->te_us == base->te_us
