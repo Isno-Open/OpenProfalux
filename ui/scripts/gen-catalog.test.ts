@@ -232,32 +232,35 @@ test('firmware : deux boutons pas a pas sur un type sont refuses', () => {
   refuses(doc, /firmware : type portail, 2 boutons pas a pas, le lecteur en prend 1/);
 });
 
+/* Les entites que les essais nomment : la famille et la classe du portail, une classe que le firmware connait
+ * hors du catalogue, et des valeurs qu'aucun lecteur ne connait. */
+const ENTITY = { cover: 'cover', gate: 'gate', garage: 'garage', unknownClass: 'lumiere', unknownComponent: 'light' } as const;
 /* Le schema tel qu'on le lit, a modifier dans un essai. */
 const schemaCopy = (): Json => JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 const entityOf = (sc: Json): Json => sc.$defs.DeviceType.properties.entity.properties;
 
 test("entite : le schema enumere exactement les familles et les classes que le firmware connait", () => {
   assert.deepEqual(checkSchemaFirmware(schemaCopy(), limits), []);
-  assert.ok(limits.coverClasses.includes('gate') && limits.components.includes('cover'));
+  assert.ok(limits.coverClasses.includes(ENTITY.gate) && limits.components.includes(ENTITY.cover));
 });
 
 test("entite : une classe que le schema accepte et pas le firmware est refusee", () => {
-  const sc = schemaCopy(); entityOf(sc).device_class.enum.push('lumiere');
-  assert.match(checkSchemaFirmware(sc, limits).join('\n'), /entity\.device_class enumere .*lumiere/);
+  const sc = schemaCopy(); entityOf(sc).device_class.enum.push(ENTITY.unknownClass);
+  assert.match(checkSchemaFirmware(sc, limits).join('\n'), new RegExp(`entity\\.device_class enumere .*${ENTITY.unknownClass}`));
 });
 
 test("entite : une classe que le firmware connait et que le schema oublie est refusee", () => {
-  const sc = schemaCopy(); entityOf(sc).device_class.enum = entityOf(sc).device_class.enum.filter((c: string) => c !== 'garage');
+  const sc = schemaCopy(); entityOf(sc).device_class.enum = entityOf(sc).device_class.enum.filter((c: string) => c !== ENTITY.garage);
   assert.match(checkSchemaFirmware(sc, limits).join('\n'), /entity\.device_class/);
 });
 
 test("entite : une famille que le firmware n'annonce pas est refusee", () => {
-  const sc = schemaCopy(); entityOf(sc).component.enum.push('light');
+  const sc = schemaCopy(); entityOf(sc).component.enum.push(ENTITY.unknownComponent);
   assert.match(checkSchemaFirmware(sc, limits).join('\n'), /entity\.component/);
 });
 
 test("appel : un schema qui diverge du firmware fait echouer le generateur, sans rien engendrer", () => {
-  const sc = schemaCopy(); entityOf(sc).device_class.enum.push('lumiere');
+  const sc = schemaCopy(); entityOf(sc).device_class.enum.push(ENTITY.unknownClass);
   const r = run(real(), sc);
   assert.equal(r.code, 1);
   assert.match(r.out, /entity\.device_class/);
@@ -265,6 +268,6 @@ test("appel : un schema qui diverge du firmware fait echouer le generateur, sans
 });
 
 test("forme : une classe d'entite inconnue est refusee", () => {
-  const doc = real(); doc.types.portail.entity.device_class = 'lumiere';
+  const doc = real(); doc.types.portail.entity.device_class = ENTITY.unknownClass;
   refuses(doc, /forme : \/types\/portail\/entity\/device_class/);
 });
