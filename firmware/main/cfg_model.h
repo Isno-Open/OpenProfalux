@@ -105,6 +105,9 @@ typedef struct {
     int   target;            /* -1 = aucun, sinon 0..100 */
     bool  own_move;          /* true = notre commande (on stream) ; false = externe (on suit sans emettre) */
     int64_t last_tick_us;
+    /* Generation de l'ordre pas a pas en cours : chaque nouvel ordre l'avance, et un ordre a plusieurs appuis
+     * qui la retrouve changee apres une attente s'efface devant le plus recent (un stop interrompt la suite). */
+    uint8_t step_gen;
     int   pub_pos;           /* derniere position publiee MQTT (evite le spam) */
     int   pub_dir;           /* derniere direction publiee MQTT */
 } volet_t;

@@ -1672,7 +1672,7 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     int rc = -1;
     if (active && name && *name)
-        rc = shutters_create_virtual(name, id.serial, id.counter);
+        rc = shutters_create_virtual(name, id.serial, id.counter, s_enrol_profile[0] ? s_enrol_profile : NULL);
     if (rc == 0) {
         /* Grave dans la fiche les params d'emission resolus du profil (issue #111) : la porteuse de la
          * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet

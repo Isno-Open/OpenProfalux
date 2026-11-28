@@ -52,8 +52,9 @@ int  shutters_unignore_remote(const char *serial);
 /* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet. Cree le volet si absent. */
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
 /* Cree un volet "virtuel PFX" a partir d'une identite 0x067 enrolee (pilote par generation,
- * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
-int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
+ * pas rejeu) : apparait dans l'onglet Volets + cover HA. `profile` : le profil choisi a l'ajout, qui
+ * donne son type a une fiche neuve (NULL : deduit). Retourne 0 si OK. */
+int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, const char *profile);
 /* Volet Somfy RTS (adresse 24 bits, pas de capture). Un nom deja pris est refuse : le reprendre
  * remettait le code roulant a 1 (le moteur appaire ignorait alors toutes les commandes) ou
  * convertissait un volet Profalux en Somfy. Seule exception, le meme volet Somfy a la meme adresse

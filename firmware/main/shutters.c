@@ -969,10 +969,25 @@ static int step_remaining(volet_t *v, const catalog_cycle_t *c, catalog_cmd_t wa
     if (integrate_move(v, esp_timer_get_time())) end_of_travel(v);
     return step_presses(c, step_next_of(v, c), step_state(v), want);
 }
-/* Ordre ouvrir / fermer / stop : autant d'appuis que le cycle en demande, espaces de press_gap_ms. L'attente se fait
- * sous le verrou : quelques secondes au plus (un cycle de 4 appuis), le temps qu'un humain mettrait. 0 : obtenu (ou
- * deja obtenu) ; SH_CMD_REFUSED : rien emis, ou le cycle n'y mene pas. */
-static int step_command(volet_t *v, const catalog_cycle_t *c, catalog_cmd_t want) {
+/* Attente entre deux appuis, verrou RELACHE : pendant ce temps, la boucle de suivi integre les autres appareils et
+ * emet leurs STOP aux positions demandees. Au retour, l'appareil est retrouve par son nom (une suppression a pu
+ * decaler le tableau). NULL : il a disparu, ou un ordre plus recent a pris la main (sa generation a change). */
+static volet_t *step_wait(const char *id, uint8_t gen, uint32_t gap_ms) {
+    UNLOCK();
+    pub_flush();
+    vTaskDelay(pdMS_TO_TICKS(gap_ms));
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v) { ESP_LOGW(TAG, "pas a pas '%s' : appareil disparu pendant l'attente, appuis restants abandonnes", id); return NULL; }
+    if (v->step_gen != gen) { ESP_LOGW(TAG, "pas a pas '%s' : un ordre plus recent prend la main", id); return NULL; }
+    return v;
+}
+/* Ordre ouvrir / fermer / stop : autant d'appuis que le cycle en demande, espaces de press_gap_ms. L'attente relache
+ * le verrou (step_wait) : `*vp` peut donc changer, et vaut NULL si l'appareil a disparu ou si un ordre plus recent l'a
+ * remplace. 0 : obtenu (ou deja obtenu, ou remplace) ; SH_CMD_REFUSED : rien emis, ou le cycle n'y mene pas. */
+static int step_command(volet_t **vp, const catalog_cycle_t *c, catalog_cmd_t want) {
+    volet_t *v = *vp;
+    const uint8_t gen = ++v->step_gen;   /* tout ordre interrompt la suite d'appuis d'un ordre precedent */
     /* Un arret demande a un portail immobile ne fait rien : un appui le mettrait en marche. */
     if (want == CAT_CMD_STOP && v->dir == 0) return 0;
     /* Sans temps de course mesure, la fin de course suivie n'est qu'un repli : en deduire plusieurs appuis risquerait
@@ -987,7 +1002,9 @@ static int step_command(volet_t *v, const catalog_cycle_t *c, catalog_cmd_t want
     for (int i = 0; ; i++) {
         int k = step_remaining(v, c, want);
         if (k > 0 && i) {
-            vTaskDelay(pdMS_TO_TICKS(c->press_gap_ms));
+            char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof id);
+            if (!(v = *vp = step_wait(id, gen, c->press_gap_ms))) return 0;
+            if (!(c = step_cycle_of(v))) return SH_CMD_REFUSED;   /* type change pendant l'attente */
             k = step_remaining(v, c, want);
         }
         if (k == 0) return 0;
@@ -1015,13 +1032,15 @@ static void resume_steps_at_boot(void) {
     }
 }
 /* Ordre a un appareil (hors centrale) : par le cycle de son bouton pas a pas s'il en a un, sinon par le bouton de
- * chaque commande. `step` : un appui du bouton pas a pas. 0 si emis (ou deja obtenu), SH_CMD_REFUSED sinon. */
-static int device_cmd(volet_t *v, const char *cmd, int value) {
+ * chaque commande. `step` : un appui du bouton pas a pas. 0 si emis (ou deja obtenu), SH_CMD_REFUSED sinon. Un ordre
+ * a plusieurs appuis relache le verrou entre deux : au retour, `*vp` est l'appareil retrouve, ou NULL. */
+static int device_cmd(volet_t **vp, const char *cmd, int value) {
+    volet_t *v = *vp;
     const catalog_cycle_t *c = step_cycle_of(v);
     const int want = catalog_cmd_of(cmd);
     if (c) {
-        if (!strcmp(cmd, CMD_STEP)) return step_press_once(v, c) ? 0 : SH_CMD_REFUSED;
-        if (want == CAT_CMD_UP || want == CAT_CMD_STOP || want == CAT_CMD_DOWN) return step_command(v, c, (catalog_cmd_t)want);
+        if (!strcmp(cmd, CMD_STEP)) { v->step_gen++; return step_press_once(v, c) ? 0 : SH_CMD_REFUSED; }
+        if (want == CAT_CMD_UP || want == CAT_CMD_STOP || want == CAT_CMD_DOWN) return step_command(vp, c, (catalog_cmd_t)want);
         ESP_LOGW(TAG, "'%s' : commande %s sans objet pour un bouton pas a pas, refusee", v->id, cmd);
         return SH_CMD_REFUSED;
     }
@@ -1308,16 +1327,23 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
     ESP_LOGW(TAG, "CMD %s '%s' (up=%dc stop=%dc down=%dc)", cmd, id,
              (int)strlen(v->up), (int)strlen(v->stop), (int)strlen(v->down));
     if (v->central) {   /* centrale : diffuse la commande a chaque volet membre (CSV) */
-        char mid[SH_ID_LEN];
-        for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
+        /* Un portail membre relache le verrou entre ses appuis : la liste et la centrale elle-meme peuvent changer
+         * pendant ce temps. On parcourt donc une COPIE des membres, et on retrouve la centrale par son nom. */
+        char cid[SH_ID_LEN], mid[SH_ID_LEN];
+        strlcpy(cid, v->id, sizeof cid);
+        char *members = strdup(v->members ? v->members : "");   /* sur le tas : la liste peut faire ~600 octets */
+        if (!members) { ESP_LOGW(TAG, "CMD %s '%s' : memoire insuffisante, refusee", cmd, cid); UNLOCK(); return SH_CMD_REFUSED; }
+        for (const char *p = cfg_members_next(members, mid); p; p = cfg_members_next(p, mid)) {
             volet_t *m = find_volet(mid);
-            if (!m || m == v || m->central) continue;
+            if (!m || !strcmp(mid, cid) || m->central) continue;
             /* un membre qui refuse la commande (aucun bouton ne la porte) ne bloque pas les autres ; un portail
              * pas a pas y obeit par son cycle */
             const int mc = catalog_cmd_of(cmd);
-            if (mc == CAT_CMD_UP || mc == CAT_CMD_DOWN || mc == CAT_CMD_STOP) device_cmd(m, cmd, 0);
-            publish_volet_state(m);
+            if (mc == CAT_CMD_UP || mc == CAT_CMD_DOWN || mc == CAT_CMD_STOP) device_cmd(&m, cmd, 0);
+            if (m) publish_volet_state(m);
         }
+        free(members);
+        if (!(v = find_volet(cid))) { UNLOCK(); pub_flush(); return 0; }   /* centrale supprimee pendant un portail */
         if (!strcmp(cmd, "up")) v->position = 0; else if (!strcmp(cmd, "down")) v->position = 100;
         v->dir = 0;
         publish_volet_state(v);
@@ -1340,8 +1366,8 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
-    const int rc = device_cmd(v, cmd, value);
-    publish_volet_state(v);
+    const int rc = device_cmd(&v, cmd, value);
+    if (v) publish_volet_state(v);
     UNLOCK();
     pub_flush();
     return rc;
@@ -1565,7 +1591,7 @@ uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
 
 /* Cree (ou convertit) un volet VIRTUEL a partir d'une identite 0x067 enrolee : il apparait
  * dans l'onglet Volets + en cover HA, et pilote le moteur par generation (compteur roulant). */
-int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
+int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, const char *profile) {
     if (!id || !*id) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
@@ -1574,7 +1600,10 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     v->proto = VOLET_PROTO_PROFALUX;   /* seul generateur cable aujourd'hui */
     v->virt_serial = serial;
     v->virt_counter = counter;
-    assign_profile(v, NULL);   /* precise ensuite par shutters_set_tx_params, avec le profil choisi */
+    /* Le profil CHOISI des la creation : il donne son type a une fiche neuve (boutons, classe Home Assistant).
+     * Attribue plus tard, il ne remplacerait plus le type deja pose par le profil generique. Une fiche existante
+     * convertie garde son type (cfg_device_assign_profile ne remplace qu'un type vide). */
+    assign_profile(v, profile);
     /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
      * qui pilotent le moteur, pour le suivi de position). L'y melanger bloquait l'ajout d'une vraie
      * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
