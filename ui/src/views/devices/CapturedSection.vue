@@ -3,12 +3,13 @@
 // supprimee revient si elle est de nouveau captee ; une telecommande ignoree ne revient plus.
 import { computed, reactive, ref } from 'vue';
 import { state, refresh, toast, renameFailureText } from '../../store';
-import { hasComma } from '../../profiles';
+import { hasComma, isSomfy } from '../../profiles';
 import api from '../../api/index';
 import { BUTTON, COMMAND, TONE, type MoveCommand } from '../../domain';
 import OpCard from '../../components/base/OpCard.vue';
 import OpBadge from '../../components/base/OpBadge.vue';
 import OpButton from '../../components/base/OpButton.vue';
+import OpSelect from '../../components/base/OpSelect.vue';
 import OpStatline from '../../components/base/OpStatline.vue';
 import OpTagBox from '../../components/base/OpTagBox.vue';
 import SignalBars from '../../components/domain/SignalBars.vue';
@@ -26,7 +27,30 @@ const describe = (serial: string, name: string): string => (name ? `« ${name} �
 
 const creating = ref('');    // serial pour lequel on saisit le nom du volet
 const deviceName = ref('');
-function openCreation(serial: string, name: string): void { creating.value = serial; deviceName.value = name; }
+function openCreation(serial: string, name: string): void { attaching.value = ''; creating.value = serial; deviceName.value = name; }
+/* Associer la telecommande a un volet enrole (telecommande virtuelle Profalux) deja cree, pour que le boitier suive
+   sa position quand on le manoeuvre avec la vraie telecommande (issue #159). Un volet clone n'est pas propose : ses
+   commandes emises seraient remplacees. */
+const enrolled = computed(() => (status.value?.volets ?? []).filter(d => d.virt && !isSomfy(d)).map(d => ({ value: d.id, label: d.id })));
+const attaching = ref('');   // serial pour lequel on choisit le volet
+const target = ref<string | number>('');
+function openAttachment(serial: string): void { creating.value = ''; attaching.value = serial; target.value = enrolled.value[0]?.value ?? ''; }
+const symbols = (list: MoveCommand[]): string => list.map(a => SYMBOL[a]).join(' ');
+/* Commandes trouvees dans le journal RF et commandes manquantes, dans l'ordre du pave. */
+function movesOf(reply: { learned?: string }): { learned: MoveCommand[]; missing: MoveCommand[] } {
+  const found = (reply.learned || '').split(',').filter(Boolean);
+  return { learned: MOVES.filter(m => found.includes(m)), missing: MOVES.filter(m => !found.includes(m)) };
+}
+async function attach(serial: string): Promise<void> {
+  const id = String(target.value);
+  if (!id) return;
+  try {
+    const { learned, missing } = movesOf(await api.attachRemote(serial, id));
+    toast(`Télécommande associée à « ${id} » : ${symbols(learned)} suivis${missing.length ? ` · ${symbols(missing)} absents du journal, appuie dessus puis recommence` : ''}`);
+    attaching.value = '';
+    refresh();
+  } catch (e) { toast(`Refusé : ${e}`); }
+}
 const SYMBOL: Record<MoveCommand, string> = { [COMMAND.up]: '▲', [COMMAND.stop]: '■', [COMMAND.down]: '▼' };
 const MOVES: MoveCommand[] = [COMMAND.up, COMMAND.stop, COMMAND.down];
 async function createDevice(serial: string): Promise<void> {
@@ -34,11 +58,8 @@ async function createDevice(serial: string): Promise<void> {
   if (!n || hasComma(n)) { toast('Donne un nom au volet, sans virgule'); return; }
   try {
     const d = await api.deviceFromRemote(serial, n);
-    const learned = (d.learned || '').split(',').filter(Boolean);
-    const missing = MOVES.filter(a => !learned.includes(a));
-    const symbols = (list: MoveCommand[]): string => list.map(a => SYMBOL[a]).join(' ');
-    const learnedMoves = learned.flatMap(a => MOVES.filter(m => m === a));   // dans l'ordre du firmware
-    toast(`Volet « ${n} » créé : ${symbols(learnedMoves)} appris${missing.length ? ` · ${symbols(missing)} à apprendre` : ''}`);
+    const { learned, missing } = movesOf(d);
+    toast(`Volet « ${n} » créé : ${symbols(learned)} appris${missing.length ? ` · ${symbols(missing)} à apprendre` : ''}`);
     creating.value = '';
     refresh();
   } catch (e) { toast(`Refusé : ${e}`); }
@@ -92,7 +113,15 @@ async function unignore(serial: string): Promise<void> {
                    @keydown.enter="createDevice(serial)" @keydown.esc="creating = ''">
             <OpButton small :variant="BUTTON.primary" @click="createDevice(serial)">Créer</OpButton>
           </span>
-          <OpButton v-else small title="Créer un volet avec les dernières trames de cette télécommande dans le journal RF" @click="openCreation(serial, name)">+ Créer le volet</OpButton>
+          <span v-else-if="attaching === serial" class="row creation">
+            <OpSelect v-model="target" :options="enrolled" aria-label="Volet enrôlé à associer" />
+            <OpButton small :variant="BUTTON.primary" @click="attach(serial)">Associer</OpButton>
+            <OpButton small :variant="BUTTON.ghost" @click="attaching = ''">Annuler</OpButton>
+          </span>
+          <span v-else class="row creation">
+            <OpButton small title="Créer un volet avec les dernières trames de cette télécommande dans le journal RF" @click="openCreation(serial, name)">+ Créer le volet</OpButton>
+            <OpButton v-if="enrolled.length" small title="Suivre la position d'un volet enrôlé quand il est manœuvré avec cette télécommande" @click="openAttachment(serial)">Associer à un volet</OpButton>
+          </span>
         </span>
         <span class="actions">
           <OpButton small :variant="BUTTON.ghost" title="Ne plus l'enregistrer quand elle est captée" @click="ignore(serial, name)">Ignorer</OpButton>

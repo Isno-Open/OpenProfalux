@@ -103,7 +103,7 @@ export default {
     return poll<PfxCaptureReply>('/api/pfx/capture/poll', d => !!d.done, 20, 1000);
   },
   pfxRenew: () => post<PfxRenewReply>('/api/pfx/renew'),
-  pfxLearn: () => post('/api/pfx/learn'),
+  pfxLearn: (body: Record<string, unknown>) => post('/api/pfx/learn', body),
   pfxCommand: (cmd: Command) => requireOk(post('/api/pfx/cmd', { cmd })),
   pfxSave: (id: string) => requireOk(post('/api/pfx/save_volet', { id })),
   pfxForget: () => post('/api/pfx/forget'),
@@ -118,4 +118,5 @@ export default {
   remoteIgnore: (serial: string) => postWithText<OkReply>('/api/remote/ignore', { serial }),
   remoteUnignore: (serial: string) => requireOk(post('/api/remote/unignore', { serial })),
   deviceFromRemote: (serial: string, name: string) => postWithText<DeviceFromRemoteReply>('/api/remote/create_volet', { serial, name }),
+  attachRemote: (serial: string, id: string) => postWithText<DeviceFromRemoteReply>('/api/remote/attach', { serial, id }),
 };

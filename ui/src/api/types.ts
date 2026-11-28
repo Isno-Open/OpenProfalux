@@ -1,7 +1,7 @@
 // Les contrats echanges avec le firmware (web_ui.c, shutters.c, ota.c...) : un type par reponse ou par corps
 // envoye. Les noms de champs sont ceux du JSON du firmware (des donnees, pas des identifiants : ils restent tels
 // quels). Les fausses donnees (mock*.ts) sont verifiees contre ces memes types.
-import type { Command, Flag } from '../domain';
+import type { Command, Flag, TxFieldName } from '../domain';
 
 /* Refus metier commun a beaucoup de routes : { ok: 0, err }. */
 export interface OkReply { ok?: number; err?: string }
@@ -132,12 +132,14 @@ export interface PfxState {
   counter?: number;
   remote?: string;
   model?: number;
-  marque?: string;
+  marque?: string;                                      // marque de la session (celle de la derniere capture)
+  tx?: Partial<Record<TxFieldName, number>>;            // reglages d'emission de la session (0 = heriter du profil)
 }
 export interface PfxCaptureReply { done: boolean | number; rc: number; new: boolean | number; serial: string; remote: string }
 export interface PfxRenewReply extends OkReply { serial?: string; rc?: number }
 
 /* Telecommandes captees. */
+/* Creation d'un volet depuis une telecommande captee, ou association a un volet enrole : les commandes trouvees. */
 export interface DeviceFromRemoteReply { learned?: string }
 
 /* /api/config (lecture) : reglages du boitier et de la radio primaire. */

@@ -117,10 +117,11 @@ watch([pfx, profile], () => {
 }, { immediate: true });
 onUnmounted(() => clearInterval(clock));
 
-/* Reglages du panneau -> corps de /api/pfx/capture : le firmware lit des booleens, une option absente reste
-   « heriter », une frequence ou un TE a 0 n'est pas envoye. */
-function captureBody(): Record<string, unknown> {
-  const v = panel.value ? panel.value.read() : {}, body: Record<string, unknown> = { model: Number(model.value) };
+/* Reglages du panneau -> corps de /api/pfx/capture et de /api/pfx/learn : le firmware lit des booleens, une option
+   absente reste « heriter », une frequence ou un TE a 0 n'est pas envoye. Envoyes aux DEUX requetes (issue #159) : une
+   valeur changee apres la capture part dans la trame d'apprentissage. */
+function txBody(): Record<string, unknown> {
+  const v = panel.value ? panel.value.read() : {}, body: Record<string, unknown> = {};
   if (v.freq_khz) body.freq_khz = v.freq_khz;
   if (v.te_us) body.te_us = v.te_us;
   if (v.tx_rpt) body.tx_repeat_bit = v.tx_rpt === TRISTATE.yes;
@@ -128,6 +129,13 @@ function captureBody(): Record<string, unknown> {
   if (profile.value?.marque) body.marque = profile.value.marque;
   return body;
 }
+/* Ce que le boitier emettra : les reglages de sa session, relus apres chaque capture et chaque emission. Le panneau
+   les affiche (ils survivent a un changement d'onglet et a un F5). Ceux d'une autre marque ne sont pas repris : ce
+   panneau-ci part alors du profil choisi. */
+const sessionValues = computed(() => {
+  const d = pfx.value;
+  return d?.tx && d.marque && d.marque === profile.value?.marque ? d.tx : {};
+});
 function restart(): void { gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
 
 function captureOutcome(d: PfxCaptureReply & { used_by?: string }): Message {
@@ -153,7 +161,7 @@ async function capture(): Promise<void> {
   captureMsg.value = { tone: TONE.neutral, text: text(), running: true };
   const ticker = setInterval(() => { n = Math.max(0, n - 1); if (captureMsg.value) captureMsg.value = { ...captureMsg.value, text: text() }; }, 1000);
   try {
-    const d = await api.pfxCapture(captureBody());
+    const d = await api.pfxCapture({ model: Number(model.value), ...txBody() });
     captureMsg.value = captureOutcome(d);
   } catch (e) {
     captureMsg.value = { tone: TONE.danger, text: e === FAILURE.start ? 'Échec du démarrage de la capture' : 'Aucune réponse du boîtier' };
@@ -179,7 +187,7 @@ async function sendLearnFrame(): Promise<void> {
   emission.value = { tone: TONE.neutral, text: text(), running: true };
   const ticker = setInterval(() => { n = Math.max(0, n - 1); if (emission.value) emission.value = { ...emission.value, text: text() }; }, 1000);
   try {
-    const r = await api.pfxLearn();
+    const r = await api.pfxLearn(txBody());
     if (r && r.ok) {
       emission.value = { tone: TONE.ok, text: 'Émission finie. Fais les gestes ci-dessous MAINTENANT, puis clique « J\'ai fait les gestes ».' };
       gestures.value = true;   // les gestes ne se montrent qu'a la fin de l'emission
@@ -236,7 +244,7 @@ const subtitle = computed(() => (profile.value ? `${profile.value.nom}${profile.
         <OpField label="Modèle de moteur" control="pfx-model">
           <OpSelect id="pfx-model" v-model="model" :options="modelOptions" @update:model-value="modelSet = true" />
         </OpField>
-        <TxParamsPanel ref="panel" :profile="profile" tune />
+        <TxParamsPanel ref="panel" :profile="profile" :values="sessionValues" tune />
         <div class="row">
           <OpButton :variant="active ? BUTTON.normal : BUTTON.primary" :icon="ICON.remote" :disabled="state.radioBusy" @click="capture">{{ active ? 'Recapturer' : 'Capturer' }}</OpButton>
         </div>
