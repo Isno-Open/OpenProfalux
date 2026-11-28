@@ -1,0 +1,19 @@
+{
+ "state": 0,
+ "total": 0,
+ "written": 0,
+ "msg": "",
+ "version": "banc",
+ "target": "external",
+ "latest": "",
+ "latest_url": "",
+ "checks": 0,
+ "checking": 0,
+ "check_waiting": 0,
+ "img": "",
+ "rb_auto": 0,
+ "annulee": "",
+ "annulee_auto": 0,
+ "rb_possible": 0,
+ "precedente": ""
+}

@@ -1,0 +1,27 @@
+{
+ "active": 0,
+ "radios": [
+  {
+   "idx": 0,
+   "band": "868",
+   "carrier_khz": 868425,
+   "freq_khz": 868425,
+   "band_low_khz": 868000,
+   "band_high_khz": 868600,
+   "partnum": 0,
+   "version": 20,
+   "present": true,
+   "primary": true,
+   "radio_profile": "profalux",
+   "freq_custom_khz": 0,
+   "rx_gain": 39,
+   "tx_te": 400,
+   "tx_repeat_bit": true,
+   "tx_rmt": true,
+   "profiles": [
+    "profalux",
+    "eveno"
+   ]
+  }
+ ]
+}

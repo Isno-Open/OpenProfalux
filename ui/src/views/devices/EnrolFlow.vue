@@ -6,7 +6,7 @@
 // (/api/pfx) : une identite en cours se reprend apres un F5. La marque choisie dans la pyramide est dans l'adresse
 // (#remotes/enrol/<index>).
 import { ref } from 'vue';
-import type { Tone } from '../../domain';
+import type { Tone, TxFieldName } from '../../domain';
 
 interface Message { tone: Tone; text: string; running?: boolean; more?: string; help?: boolean }
 /* L'avancement vit hors de l'ecran, qui est demonte a chaque changement d'onglet : emission faite, gestes faits et
@@ -20,10 +20,13 @@ const gestures = ref(false);              // emission finie : les gestes sont a 
 const testAllowedAt = ref(0);             // instant ou le test est permis (gestes faits + delai du moteur) ; 0 = gestes pas faits
 const name = ref('');
 const done = ref<Message | null>(null);
+/* Reglages saisis dans le panneau avance et pas encore envoyes au boitier, par marque : ils survivent eux aussi a un
+   aller-retour sur un autre onglet (issue #159, ils revenaient au profil et la capture partait avec ses valeurs). */
+const draft = ref<{ brand: string; values: Partial<Record<TxFieldName, number>> } | null>(null);
 </script>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, onUnmounted, watch } from 'vue';
 import { route, navigate } from '../../router';
 import { state, refresh, toast } from '../../store';
 import { profiles, types, hasComma, mhz } from '../../profiles';
@@ -133,9 +136,17 @@ function txBody(): Record<string, unknown> {
    les affiche (ils survivent a un changement d'onglet et a un F5). Ceux d'une autre marque ne sont pas repris : ce
    panneau-ci part alors du profil choisi. */
 const sessionValues = computed(() => {
-  const d = pfx.value;
-  return d?.tx && d.marque && d.marque === profile.value?.marque ? d.tx : {};
+  const d = pfx.value, brand = profile.value?.marque;
+  if (draft.value && draft.value.brand === brand) return draft.value.values;
+  return d?.tx && d.marque && d.marque === brand ? d.tx : {};
 });
+/* L'ecran est demonte a chaque changement d'onglet : la saisie en cours est gardee pour le retour. */
+onBeforeUnmount(() => {
+  const brand = profile.value?.marque;
+  draft.value = panel.value && brand ? { brand, values: panel.value.read() } : null;
+});
+/* Les reglages viennent d'etre envoyes au boitier, ou la session est finie : la suite se lit dans sa session. */
+function dropDraft(): void { draft.value = null; }
 function restart(): void { gestures.value = false; testAllowedAt.value = 0; emission.value = null; }
 
 function captureOutcome(d: PfxCaptureReply & { used_by?: string }): Message {
@@ -162,6 +173,7 @@ async function capture(): Promise<void> {
   const ticker = setInterval(() => { n = Math.max(0, n - 1); if (captureMsg.value) captureMsg.value = { ...captureMsg.value, text: text() }; }, 1000);
   try {
     const d = await api.pfxCapture({ model: Number(model.value), ...txBody() });
+    dropDraft();
     captureMsg.value = captureOutcome(d);
   } catch (e) {
     captureMsg.value = { tone: TONE.danger, text: e === FAILURE.start ? 'Échec du démarrage de la capture' : 'Aucune réponse du boîtier' };
@@ -188,6 +200,7 @@ async function sendLearnFrame(): Promise<void> {
   const ticker = setInterval(() => { n = Math.max(0, n - 1); if (emission.value) emission.value = { ...emission.value, text: text() }; }, 1000);
   try {
     const r = await api.pfxLearn(txBody());
+    dropDraft();
     if (r && r.ok) {
       emission.value = { tone: TONE.ok, text: 'Émission finie. Fais les gestes ci-dessous MAINTENANT, puis clique « J\'ai fait les gestes ».' };
       gestures.value = true;   // les gestes ne se montrent qu'a la fin de l'emission

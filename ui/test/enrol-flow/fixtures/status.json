@@ -1,0 +1,19 @@
+{
+ "remotes": {},
+ "remotes_max": 16,
+ "remote_refused": "",
+ "remotes_ignored": [],
+ "remote_battery": {},
+ "volets": [],
+ "rf": [],
+ "listening": 1,
+ "uptime": 120,
+ "wifi": {
+  "ssid": "banc",
+  "rssi": -55,
+  "ip": "192.0.2.10"
+ },
+ "mqtt": {
+  "connected": 0
+ }
+}
