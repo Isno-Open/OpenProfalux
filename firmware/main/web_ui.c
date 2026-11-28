@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include "enrol_gate.h"
+#include "enrol_tx.h"
 #include "radio.h"
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
@@ -1371,36 +1372,30 @@ static void pfx_capture_task(void *arg) {
 /* Params d'emission resolus depuis le PROFIL choisi dans la pyramide (porteuse de la marque, TE, bit
  * de repetition, RMT), recus a la capture d'enrolement, poses pour l'emission d'apprentissage, puis
  * graves dans la fiche du volet au save (issue #111). Tri-etat tx_override_t pour rpt/rmt. */
-static uint32_t s_enrol_freq = 0, s_enrol_te = 0;
-static uint8_t  s_enrol_rpt = TXOVR_INHERIT, s_enrol_rmt = TXOVR_INHERIT;
-static char     s_enrol_marque[SH_ID_LEN] = "";
+static enrol_tx_t s_enrol_tx = { 0, 0, TXOVR_INHERIT, TXOVR_INHERIT };   /* regles dans enrol_tx.h (issue #159) */
+static char      s_enrol_marque[SH_ID_LEN] = "";
 /* cJSON bool/number -> tri-etat tx_override_t (absent = heriter). */
 static uint8_t txovr_of(cJSON *j, const char *key) {
     cJSON *x = cJSON_GetObjectItem(j, key);
     if (!cJSON_IsBool(x) && !cJSON_IsNumber(x)) return TXOVR_INHERIT;
     return (cJSON_IsTrue(x) || (cJSON_IsNumber(x) && x->valuedouble != 0)) ? TXOVR_ON : TXOVR_OFF;
 }
-/* Pose les reglages d'emission de la SESSION d'enrolement, pour la radio (pfx_enrol) et pour la fiche. */
+/* Reglages du panneau avance portes par une requete (capture ET apprentissage) : une cle absente vaut
+ * « heriter ». Un seul lecteur, pour que les deux requetes ne divergent pas. */
+static enrol_tx_t enrol_tx_request(cJSON *j) {
+    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz"), *tu = cJSON_GetObjectItem(j, "te_us");
+    return (enrol_tx_t){ .freq_khz = cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0,
+                         .te_us    = cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0,
+                         .rpt = txovr_of(j, "tx_repeat_bit"), .rmt = txovr_of(j, "tx_rmt") };
+}
+/* Pose les reglages de la session sur la radio de l'enrolement (pfx_enrol). */
 static void enrol_tx_apply(void) {
-    tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
-                       .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
-                       .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
+    tx_params_t tp = enrol_tx_params(&s_enrol_tx);
     pfx_enrol_set_tx_params(&tp);
 }
-/* Lit les reglages du panneau avance dans une requete (capture ET apprentissage, issue #159) : une cle
- * absente vaut « heriter ». Un seul lecteur, pour que les deux requetes ne divergent pas. */
-static void enrol_tx_read(cJSON *j) {
-    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz"); s_enrol_freq = cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0;
-    cJSON *tu = cJSON_GetObjectItem(j, "te_us");     s_enrol_te   = cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0;
-    s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
-    s_enrol_rmt = txovr_of(j, "tx_rmt");
-    strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
-    enrol_tx_apply();
-}
-/* Fin de session (identite deselectionnee, ou migree dans un volet) : les reglages ne suivent pas le
- * prochain enrolement, qui repart du profil. */
-static void enrol_tx_clear(void) {
-    s_enrol_freq = 0; s_enrol_te = 0; s_enrol_rpt = TXOVR_INHERIT; s_enrol_rmt = TXOVR_INHERIT; s_enrol_marque[0] = 0;
+/* Fin de session (identite deselectionnee, ou migree dans un volet) : le prochain enrolement repart du profil. */
+static void enrol_tx_end(void) {
+    enrol_tx_clear(&s_enrol_tx); s_enrol_marque[0] = 0;
     enrol_tx_apply();
 }
 static esp_err_t h_pfx_capture(httpd_req_t *r) {
@@ -1409,7 +1404,11 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *mo = cJSON_GetObjectItem(j, "model");
     s_pcap_model = cJSON_IsNumber(mo) ? (int)mo->valuedouble : -1;
-    enrol_tx_read(j);   /* reglages du profil (facultatifs) : memorises pour la fiche, poses pour l'apprentissage */
+    /* Reglages du profil (facultatifs) : memorises pour la fiche, et poses pour l'apprentissage. */
+    enrol_tx_t request = enrol_tx_request(j);
+    enrol_tx_capture(&s_enrol_tx, &request);
+    strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
+    enrol_tx_apply();
     cJSON_Delete(j);
     ESP_LOGW(TAG, "PFX CAPTURE: requete recue (model=%d, active=%d)", s_pcap_model, s_pcap_active);
     if (!s_pcap_active) {
@@ -1478,10 +1477,10 @@ static esp_err_t h_pfx_get(httpd_req_t *r) {
     cJSON_AddStringToObject(o, "remote", remote);
     cJSON_AddStringToObject(o, "marque", s_enrol_marque);
     cJSON *tx = cJSON_AddObjectToObject(o, "tx");
-    cJSON_AddNumberToObject(tx, "freq_khz", s_enrol_freq);
-    cJSON_AddNumberToObject(tx, "te_us", s_enrol_te);
-    cJSON_AddNumberToObject(tx, "tx_rpt", s_enrol_rpt);
-    cJSON_AddNumberToObject(tx, "tx_rmt", s_enrol_rmt);
+    cJSON_AddNumberToObject(tx, "freq_khz", s_enrol_tx.freq_khz);
+    cJSON_AddNumberToObject(tx, "te_us", s_enrol_tx.te_us);
+    cJSON_AddNumberToObject(tx, "tx_rpt", s_enrol_tx.rpt);
+    cJSON_AddNumberToObject(tx, "tx_rmt", s_enrol_tx.rmt);
     cJSON *models = cJSON_AddArrayToObject(o, "models");
     int nm = pfx_enrol_model_count();
     for (int i = 0; i < nm; i++) {
@@ -1515,7 +1514,11 @@ static esp_err_t h_pfx_learn(httpd_req_t *r) {
      * part bien dans la trame d'apprentissage. Sans corps (ancien client), ceux de la capture restent. */
     char *body = read_body(r);
     cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
-    if (cJSON_IsObject(j) && j->child) enrol_tx_read(j);
+    bool given = cJSON_IsObject(j) && j->child;
+    enrol_tx_t request = enrol_tx_request(j);
+    enrol_tx_learn(&s_enrol_tx, &request, given);
+    if (given && jstr(j, "marque")) strlcpy(s_enrol_marque, jstr(j, "marque"), SH_ID_LEN);
+    enrol_tx_apply();
     cJSON_Delete(j);
     int rc = pfx_enrol_emit_learn();
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
@@ -1532,7 +1535,7 @@ static esp_err_t h_pfx_cmd(httpd_req_t *r) {
 static esp_err_t h_pfx_forget(httpd_req_t *r) {
     pfx_enrol_forget();
     eg_reset(&s_egate);
-    enrol_tx_clear();
+    enrol_tx_end();
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"ok\":1}");
 }
@@ -1714,10 +1717,10 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
          * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet
          * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
          * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
-        shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt, 0,
+        shutters_set_tx_params(name, s_enrol_tx.freq_khz, s_enrol_tx.te_us, s_enrol_tx.rpt, s_enrol_tx.rmt, 0,
                                s_enrol_marque[0] ? s_enrol_marque : NULL);   /* enrolement KeeLoq : pas de frame_bits */
         pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
-        enrol_tx_clear();
+        enrol_tx_end();
     }
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
