@@ -82,6 +82,7 @@ idf_component_register(
         "mdns_name.c"
         "captive_dns.c"
         "enrol_gate.c"
+        "enrol_tx.c"
         "net_watch.c"
         "freq_sweep.c"
         "rx_confirm.c"

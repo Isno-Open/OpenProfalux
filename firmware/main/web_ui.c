@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include "enrol_gate.h"
+#include "enrol_tx.h"
 #include "radio.h"
 #include "rf_capture.h"   /* capture OOK brute + rejeu (issue #95) */
 #include "ota.h"
@@ -564,6 +565,21 @@ static esp_err_t h_remote_create_volet(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     char learned[24]; const char *why = NULL;
     int rc = shutters_create_volet_from_remote(jstr(j, "name"), jstr(j, "serial"), learned, sizeof(learned), &why);
+    cJSON_Delete(j);
+    if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
+    char out[64]; snprintf(out, sizeof(out), "{\"ok\":1,\"learned\":\"%s\"}", learned);
+    httpd_resp_set_type(r, "application/json");
+    httpd_resp_sendstr(r, out);
+    return ESP_OK;
+}
+/* ── /api/remote/attach : {"serial":"0x...","id":"..."} -> {"ok":1,"learned":"up,stop,down"} ──
+ * Associe une telecommande captee a un volet enrole EXISTANT, pour suivre sa position (issue #159). */
+static esp_err_t h_remote_attach(httpd_req_t *r) {
+    char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
+    cJSON *j = cJSON_Parse(body); free(body);
+    if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
+    char learned[24]; const char *why = NULL;
+    int rc = shutters_attach_remote(jstr(j, "id"), jstr(j, "serial"), learned, sizeof(learned), &why);
     cJSON_Delete(j);
     if (rc != 0) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, why ? why : "refus");
     char out[64]; snprintf(out, sizeof(out), "{\"ok\":1,\"learned\":\"%s\"}", learned);
@@ -1356,14 +1372,31 @@ static void pfx_capture_task(void *arg) {
 /* Params d'emission resolus depuis le PROFIL choisi dans la pyramide (porteuse de la marque, TE, bit
  * de repetition, RMT), recus a la capture d'enrolement, poses pour l'emission d'apprentissage, puis
  * graves dans la fiche du volet au save (issue #111). Tri-etat tx_override_t pour rpt/rmt. */
-static uint32_t s_enrol_freq = 0, s_enrol_te = 0;
-static uint8_t  s_enrol_rpt = TXOVR_INHERIT, s_enrol_rmt = TXOVR_INHERIT;
-static char     s_enrol_marque[SH_ID_LEN] = "";
+static enrol_tx_t s_enrol_tx = { 0, 0, TXOVR_INHERIT, TXOVR_INHERIT };   /* regles dans enrol_tx.h (issue #159) */
+static char      s_enrol_marque[SH_ID_LEN] = "";
 /* cJSON bool/number -> tri-etat tx_override_t (absent = heriter). */
 static uint8_t txovr_of(cJSON *j, const char *key) {
     cJSON *x = cJSON_GetObjectItem(j, key);
     if (!cJSON_IsBool(x) && !cJSON_IsNumber(x)) return TXOVR_INHERIT;
     return (cJSON_IsTrue(x) || (cJSON_IsNumber(x) && x->valuedouble != 0)) ? TXOVR_ON : TXOVR_OFF;
+}
+/* Reglages du panneau avance portes par une requete (capture ET apprentissage) : une cle absente vaut
+ * « heriter ». Un seul lecteur, pour que les deux requetes ne divergent pas. */
+static enrol_tx_t enrol_tx_request(cJSON *j) {
+    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz"), *tu = cJSON_GetObjectItem(j, "te_us");
+    return (enrol_tx_t){ .freq_khz = cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0,
+                         .te_us    = cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0,
+                         .rpt = txovr_of(j, "tx_repeat_bit"), .rmt = txovr_of(j, "tx_rmt") };
+}
+/* Pose les reglages de la session sur la radio de l'enrolement (pfx_enrol). */
+static void enrol_tx_apply(void) {
+    tx_params_t tp = enrol_tx_params(&s_enrol_tx);
+    pfx_enrol_set_tx_params(&tp);
+}
+/* Fin de session (identite deselectionnee, ou migree dans un volet) : le prochain enrolement repart du profil. */
+static void enrol_tx_end(void) {
+    enrol_tx_clear(&s_enrol_tx); s_enrol_marque[0] = 0;
+    enrol_tx_apply();
 }
 static esp_err_t h_pfx_capture(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
@@ -1371,16 +1404,11 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     cJSON *mo = cJSON_GetObjectItem(j, "model");
     s_pcap_model = cJSON_IsNumber(mo) ? (int)mo->valuedouble : -1;
-    /* Params du profil (facultatifs) : memorises pour la fiche, et poses pour l'apprentissage. */
-    cJSON *fk = cJSON_GetObjectItem(j, "freq_khz"); s_enrol_freq = cJSON_IsNumber(fk) ? (uint32_t)fk->valuedouble : 0;
-    cJSON *tu = cJSON_GetObjectItem(j, "te_us");     s_enrol_te   = cJSON_IsNumber(tu) ? (uint32_t)tu->valuedouble : 0;
-    s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
-    s_enrol_rmt = txovr_of(j, "tx_rmt");
+    /* Reglages du profil (facultatifs) : memorises pour la fiche, et poses pour l'apprentissage. */
+    enrol_tx_t request = enrol_tx_request(j);
+    enrol_tx_capture(&s_enrol_tx, &request);
     strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
-    tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
-                       .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
-                       .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
-    pfx_enrol_set_tx_params(&tp);
+    enrol_tx_apply();
     cJSON_Delete(j);
     ESP_LOGW(TAG, "PFX CAPTURE: requete recue (model=%d, active=%d)", s_pcap_model, s_pcap_active);
     if (!s_pcap_active) {
@@ -1431,21 +1459,43 @@ static esp_err_t h_pfx_renew(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, out);
 }
+/* /api/pfx : l'identite en cours, les modeles, et les reglages d'emission de la session (`tx`, memes noms et
+ * memes tri-etats que la fiche d'un volet). L'ecran les affiche tels quels : ce qu'il montre est ce que le
+ * boitier emettra (issue #159). */
 static esp_err_t h_pfx_get(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
-    char out[720]; int p = 0;
-    p += snprintf(out + p, sizeof(out) - p,
-                  "{\"active\":%d,\"learn_ok\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
-                  active ? 1 : 0, eg_learn_allowed(&s_egate) ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
+    char serial[SH_SERIAL_LEN], remote[SH_SERIAL_LEN];
+    snprintf(serial, sizeof(serial), "0x%07X", (unsigned)id.serial);
+    snprintf(remote, sizeof(remote), "0x%07X", (unsigned)id.remote);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "active", active ? 1 : 0);
+    cJSON_AddNumberToObject(o, "learn_ok", eg_learn_allowed(&s_egate) ? 1 : 0);
+    cJSON_AddNumberToObject(o, "model", id.model);
+    cJSON_AddStringToObject(o, "serial", serial);
+    cJSON_AddNumberToObject(o, "idx", id.idx);
+    cJSON_AddNumberToObject(o, "counter", id.counter);
+    cJSON_AddStringToObject(o, "remote", remote);
+    cJSON_AddStringToObject(o, "marque", s_enrol_marque);
+    cJSON *tx = cJSON_AddObjectToObject(o, "tx");
+    cJSON_AddNumberToObject(tx, "freq_khz", s_enrol_tx.freq_khz);
+    cJSON_AddNumberToObject(tx, "te_us", s_enrol_tx.te_us);
+    cJSON_AddNumberToObject(tx, "tx_rpt", s_enrol_tx.rpt);
+    cJSON_AddNumberToObject(tx, "tx_rmt", s_enrol_tx.rmt);
+    cJSON *models = cJSON_AddArrayToObject(o, "models");
     int nm = pfx_enrol_model_count();
     for (int i = 0; i < nm; i++) {
         const pfx_model_t *m = pfx_enrol_model(i);
-        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"routine\":\"%s\"}",
-                      i ? "," : "", m->name, m->routine);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", m->name);
+        cJSON_AddStringToObject(e, "routine", m->routine);
+        cJSON_AddItemToArray(models, e);
     }
-    snprintf(out + p, sizeof(out) - p, "]}");
+    char *js = cJSON_PrintUnformatted(o); cJSON_Delete(o);
+    if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "memoire");
     httpd_resp_set_type(r, "application/json");
-    return httpd_resp_sendstr(r, out);
+    esp_err_t e = httpd_resp_sendstr(r, js);
+    free(js);
+    return e;
 }
 static esp_err_t h_pfx_learn(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
@@ -1460,6 +1510,16 @@ static esp_err_t h_pfx_learn(httpd_req_t *r) {
         free(js);
         return e;
     }
+    /* Reglages du panneau avance, relus a l'emission (issue #159) : une valeur changee apres la capture
+     * part bien dans la trame d'apprentissage. Sans corps (ancien client), ceux de la capture restent. */
+    char *body = read_body(r);
+    cJSON *j = body ? cJSON_Parse(body) : NULL; free(body);
+    bool given = cJSON_IsObject(j) && j->child;
+    enrol_tx_t request = enrol_tx_request(j);
+    enrol_tx_learn(&s_enrol_tx, &request, given);
+    if (given && jstr(j, "marque")) strlcpy(s_enrol_marque, jstr(j, "marque"), SH_ID_LEN);
+    enrol_tx_apply();
+    cJSON_Delete(j);
     int rc = pfx_enrol_emit_learn();
     return httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
 }
@@ -1475,6 +1535,7 @@ static esp_err_t h_pfx_cmd(httpd_req_t *r) {
 static esp_err_t h_pfx_forget(httpd_req_t *r) {
     pfx_enrol_forget();
     eg_reset(&s_egate);
+    enrol_tx_end();
     httpd_resp_set_type(r, "application/json");
     return httpd_resp_sendstr(r, "{\"ok\":1}");
 }
@@ -1656,9 +1717,10 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
          * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet
          * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
          * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
-        shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt, 0,
+        shutters_set_tx_params(name, s_enrol_tx.freq_khz, s_enrol_tx.te_us, s_enrol_tx.rpt, s_enrol_tx.rmt, 0,
                                s_enrol_marque[0] ? s_enrol_marque : NULL);   /* enrolement KeeLoq : pas de frame_bits */
         pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
+        enrol_tx_end();
     }
     cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
@@ -1734,7 +1796,7 @@ static esp_err_t h_session(httpd_req_t *r) {
  * relever par table. Une route de trop n'est PAS enregistree (404) : depuis #42, 49 routes
  * protegees pour 48 places laissaient /api/central dehors. tools/check_routes.py (CI) compte les
  * reg(s, "...") et reg_open(s, "...") de ce fichier et echoue avant que ca se reproduise. */
-#define MAX_ROUTES      72
+#define MAX_ROUTES      76
 #define MAX_OPEN_ROUTES 16
 static esp_err_t (*s_route_h[MAX_ROUTES])(httpd_req_t *);
 static int s_nroutes = 0;
@@ -2053,6 +2115,7 @@ void web_ui_start(void) {
     reg(s, "/api/remote",    HTTP_POST, h_remote);
     reg(s, "/api/remote/delete", HTTP_POST, h_remote_delete);
     reg(s, "/api/remote/create_volet", HTTP_POST, h_remote_create_volet);
+    reg(s, "/api/remote/attach", HTTP_POST, h_remote_attach);
     reg(s, "/api/remote/ignore", HTTP_POST, h_remote_ignore);
     reg(s, "/api/remote/unignore", HTTP_POST, h_remote_unignore);
     reg(s, "/api/config",    HTTP_GET,  h_config_get);

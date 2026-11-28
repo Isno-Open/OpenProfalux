@@ -4,7 +4,7 @@
 // ouvert, 100 = ferme). Les captures, l'enrolement et le calage reussissent apres un court delai, comme si on
 // appuyait bien sur la telecommande.
 import profilesTable from '../../../firmware/main/web/profiles.json';   // la vraie table, source unique
-import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
+import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, TRISTATE, TX_FIELD, type Command } from '../domain';
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
 import type { Device, LearnedCommand, OkReply, PfxState, Profiles, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
@@ -55,6 +55,19 @@ const movements: Record<string, Movement> = {};
 const session: Session = { protected: true, authed: !new URLSearchParams(location.search).has('connexion') };
 interface PfxIdentity { serial: string; idx: number; counter: number; remote: string; model: number; marque?: string }
 let pfx: PfxIdentity | null = null;                // identite virtuelle en cours d'enrolement
+/* Reglages d'emission de la session d'enrolement, comme le firmware : poses a la capture et a l'apprentissage,
+   remis a zero quand l'identite est deselectionnee ou enregistree. */
+let pfxTx: NonNullable<PfxState['tx']> = {};
+let pfxBrand = '';
+function readSessionTx(body: Record<string, unknown>): void {
+  const tristate = (v: unknown): number => (typeof v === 'boolean' ? (v ? TRISTATE.yes : TRISTATE.no) : TRISTATE.inherit);
+  pfxTx = {
+    [TX_FIELD.frequency]: Number(body.freq_khz) || 0, [TX_FIELD.te]: Number(body.te_us) || 0,
+    [TX_FIELD.repeat]: tristate(body.tx_repeat_bit), [TX_FIELD.rmt]: tristate(body.tx_rmt),
+  };
+  pfxBrand = typeof body.marque === 'string' ? body.marque : '';
+}
+function clearSessionTx(): void { pfxTx = {}; pfxBrand = ''; }
 let nextIdentity = 0x0670013;
 
 const find = (id: string): Device | undefined => devices.find(x => x.id === id);
@@ -202,8 +215,10 @@ export default {
   },
 
   /* Telecommande virtuelle (enrolement) */
-  async pfxState(): Promise<PfxState> { return { models: PFX_MODELS, active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}) }; },
-  async pfxCapture({ model, marque }: Record<string, unknown>) {
+  async pfxState(): Promise<PfxState> { return { models: PFX_MODELS, active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}), marque: pfxBrand, tx: pfxTx }; },
+  async pfxCapture(body: Record<string, unknown>) {
+    const { model, marque } = body;
+    readSessionTx(body);
     await wait(2500);
     pfx = { serial: hex7(nextIdentity++), idx: 12, counter: 1, remote: '0x0E5A3B9', model: Number(model) || 0, marque: typeof marque === 'string' ? marque : undefined };
     return { done: true, rc: 0, new: true, serial: pfx.serial, remote: pfx.remote };
@@ -213,16 +228,16 @@ export default {
     pfx.serial = hex7(nextIdentity++); pfx.idx += 1;
     return okWith({ serial: pfx.serial });
   },
-  async pfxLearn() { await wait(4500); if (pfx) pfx.counter += 6; return ok(); },
+  async pfxLearn(body: Record<string, unknown>) { readSessionTx(body); await wait(4500); if (pfx) pfx.counter += 6; return ok(); },
   async pfxCommand() { await wait(900); if (pfx) pfx.counter += 1; return ok(); },
   async pfxSave(id: string) {
     await wait(300);
     if (find(id)) throw 'exists';
     newDevice({ id, virt: true, proto: PROTOCOL.profalux, virt_serial: pfx?.serial, marque: pfx?.marque || BRAND.profalux });
-    pfx = null;
+    pfx = null; clearSessionTx();
     return ok();
   },
-  async pfxForget() { pfx = null; return ok(); },
+  async pfxForget() { pfx = null; clearSessionTx(); return ok(); },
 
   /* Somfy RTS */
   async somfyCreate({ id, address }: { id: string; address: string }) {
@@ -261,6 +276,14 @@ export default {
     await wait(400);
     if (find(name)) throw 'exists';
     newDevice({ id: name, marque: BRAND.profalux, serials: [serial], cmd: { up: { b: 2, s: serial }, down: { b: 8, s: serial } } });
+    return { learned: 'up,down' };
+  },
+  /* Associer une telecommande captee a un volet enrole : memes trames du journal, rangees pour le suivi. */
+  async attachRemote(serial: string, id: string) {
+    await wait(400);
+    const d = find(id);
+    if (!d || !d.virt) throw 'refus';
+    if (!d.serials.includes(serial)) d.serials.push(serial);
     return { learned: 'up,down' };
   },
 } satisfies typeof realApi;

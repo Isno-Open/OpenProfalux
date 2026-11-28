@@ -1634,19 +1634,15 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
     return shutters_learn_assign(id, action, bits);   /* prend son propre LOCK */
 }
 
-/* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste) : pour chaque
- * commande, la trame la plus recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les
- * commandes absentes du journal restent a apprendre. *learned recoit "up,stop,down" (celles
- * trouvees). Refuse un nom deja pris : on ne reecrit pas un volet existant. */
-int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
-    *why = NULL; if (cap) learned[0] = 0;
-    if (!id || !*id) { *why = "nom manquant"; return -1; }
-    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+/* Affecte a un volet les commandes d'une telecommande deja captee : pour chaque commande, la trame la plus
+ * recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les commandes absentes du journal restent a
+ * apprendre. *learned recoit "up,stop,down" (celles trouvees). Coeur commun de la creation et de
+ * l'association : une seule lecture du journal. */
+static int assign_from_journal(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
     static const struct { const char *action; uint8_t btn; } CMD[] = {
         { "up", PFX_BTN_UP }, { "stop", PFX_BTN_STOP }, { "down", PFX_BTN_DOWN } };
     char bits[3][SH_BITS_LEN] = {{0}};
     LOCK();
-    if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
     /* du plus recent au plus ancien : s_rfhead est la prochaine place libre de l'anneau */
     for (int k = 1; k <= s_rf_n; k++) {
         rfrec_t *r = &s_rf[(s_rfhead - k + s_rf_n) % s_rf_n];
@@ -1659,14 +1655,47 @@ int shutters_create_volet_from_remote(const char *id, const char *serial, char *
     if (!bits[0][0] && !bits[1][0] && !bits[2][0]) { *why = "aucune trame ▲ ■ ▼ de cette telecommande dans le journal RF"; return -1; }
     for (int c = 0; c < 3; c++) {
         if (!bits[c][0]) continue;
-        if (shutters_learn_assign(id, CMD[c].action, bits[c]) != 0) { *why = "creation du volet impossible"; return -1; }
+        if (shutters_learn_assign(id, CMD[c].action, bits[c]) != 0) { *why = "affectation au volet impossible"; return -1; }
         if (cap) { if (learned[0]) strlcat(learned, ",", cap); strlcat(learned, CMD[c].action, cap); }
     }
+    return 0;
+}
+
+/* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste). Refuse un nom deja pris :
+ * on ne reecrit pas un volet existant. */
+int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
+    *why = NULL; if (cap) learned[0] = 0;
+    if (!id || !*id) { *why = "nom manquant"; return -1; }
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    LOCK();
+    bool taken = find_volet(id) != NULL;
+    UNLOCK();
+    if (taken) { *why = "un volet porte deja ce nom"; return -1; }
+    if (assign_from_journal(id, serial, learned, cap, why) != 0) return -1;
     LOCK();
     remote_t *rm = remote_find(serial);
     if (rm && !rm->name[0]) { strlcpy(rm->name, id, SH_ID_LEN); save_cfg(); }   /* nomme la telecommande comme le volet */
     UNLOCK();
     ESP_LOGW(TAG, "volet '%s' cree depuis la telecommande %s (journal RF) : %s", id, serial, learned);
+    return 0;
+}
+
+/* Associe une telecommande deja captee a un volet enrole EXISTANT (telecommande virtuelle Profalux), pour
+ * suivre sa position quand la vraie telecommande le manoeuvre (issue #159). Le volet continue d'emettre
+ * avec son identite virtuelle : les trames rangees ne servent qu'au suivi. Refuse un volet clone ou
+ * rejoue, dont elles remplaceraient les commandes emises. */
+int shutters_attach_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
+    *why = NULL; if (cap) learned[0] = 0;
+    if (!id || !*id) { *why = "volet manquant"; return -1; }
+    if (!serial || !*serial) { *why = "serial manquant"; return -1; }
+    LOCK();
+    volet_t *v = find_volet(id);
+    bool known = v != NULL, enrolled = v && is_pfx_virt(v);
+    UNLOCK();
+    if (!known) { *why = "volet inconnu"; return -1; }
+    if (!enrolled) { *why = "ce volet n'est pas une telecommande virtuelle Profalux"; return -1; }
+    if (assign_from_journal(id, serial, learned, cap, why) != 0) return -1;
+    ESP_LOGW(TAG, "telecommande %s associee au volet '%s' (journal RF) : %s", serial, id, learned);
     return 0;
 }
 

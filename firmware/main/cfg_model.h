@@ -31,15 +31,7 @@ typedef enum {
 
 #include "dev_type.h"   /* dev_type_t : type d'appareil (en-tete sans dependance, teste sur PC) */
 
-/* Tri-etat d'une option d'emission PAR APPAREIL (bit de repetition, RMT). 0 = heriter du defaut
- * (profil, puis firmware) ; on force explicitement ensuite. La valeur 0 est la sentinelle "heriter"
- * pour qu'un volet fraichement memset() herite naturellement, et pour que la cle soit OMISE du JSON
- * quand on herite (sauvegardes existantes inchangees, issue #111). */
-typedef enum {
-    TXOVR_INHERIT = 0,   /* heriter du defaut du profil */
-    TXOVR_OFF     = 1,   /* forcer desactive pour cet appareil */
-    TXOVR_ON      = 2,   /* forcer active pour cet appareil */
-} tx_override_t;
+#include "tx_override.h"   /* tx_override_t : tri-etat d'une option d'emission (en-tete sans dependance) */
 
 typedef struct {
     char id[SH_ID_LEN];

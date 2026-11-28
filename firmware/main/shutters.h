@@ -100,6 +100,7 @@ void shutters_on_rx(const char *bits, uint32_t serial, uint8_t button, int8_t rs
 int  shutters_adopt(const char *id, const char *action, const char *serial, uint32_t hop);
 /* Volet cree depuis une telecommande du journal RF (derniere trame ▲ ■ ▼) ; learned = "up,stop,down". */
 int  shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why);
+int  shutters_attach_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why);
 /* Rejoue telle quelle une trame captee (serial+hop) depuis le journal RF (bouton "rejouer" du debug). */
 int  shutters_replay_frame(const char *serial, uint32_t hop);
 /* Journal RF pour /api/rf : la page [offset, offset + limit) des trames triees par date

@@ -296,6 +296,50 @@ jobs:
              -o enrol_gate_host_test
           ./enrol_gate_host_test
 
+  # Les reglages d'emission de la session d'enrolement (enrol_tx.c) : ceux du panneau avance partent a
+  # la capture ET a l'apprentissage. Voir firmware/test/enrol-tx (issue #159).
+  banc-enrol-tx:
+    name: Banc de test des reglages d'emission de l'enrolement
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: enrol_tx (gcc + AddressSanitizer)
+        working-directory: firmware/test/enrol-tx
+        run: |
+          cc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -fsanitize=address -g \
+             -I main -I ../../main main/test_main.c ../../main/enrol_tx.c \
+             -o enrol_tx_host_test
+          ./enrol_tx_host_test
+
+  # L'ecran d'enrolement dans un vrai navigateur, sans boitier (issue #159) : les reglages saisis dans le
+  # panneau avance doivent etre ceux que le boitier emet, apres une capture ratee comme apres un changement
+  # d'onglet. Le temoin rejoue les memes gestes sur l'interface 0.2.16 et EXIGE l'echec : un banc qui ne
+  # peut pas echouer ne prouve rien. Voir ui/test/enrol-flow.
+  banc-ecran-enrolement:
+    name: Banc de l'ecran d'enrolement (navigateur)
+    needs: interface
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: interface-web
+          path: ui/dist
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Playwright et Chromium
+        run: |
+          pip install -r ui/test/enrol-flow/requirements.txt
+          playwright install --with-deps chromium
+      - name: Temoin, l'interface 0.2.16 reproduit le defaut
+        run: ui/test/enrol-flow/run.sh legacy
+      - name: L'interface du depot emet ce qui est saisi
+        run: ui/test/enrol-flow/run.sh current
+
   # Le garde-fou reseau (net_watch.c) : quand relancer le Wi-Fi, quand redemarrer, et jamais sur
   # une passerelle qui n'a jamais repondu. Voir firmware/test/net-watch. Pur, un simple gcc suffit.
   banc-net-watch:
