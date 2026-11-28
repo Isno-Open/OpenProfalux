@@ -19,6 +19,10 @@
  * puis rouverte : elle relit tout depuis la flash). */
 #include <stdbool.h>
 #include <stdio.h>
+#include <dirent.h>
+#include <malloc.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include "esp_log.h"
@@ -26,6 +30,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "cfg_model.h"
+#include "step_cycle.h"
 #include "cfg_store.h"
 
 /* ════ Coupure de courant ════════════════════════════════════════════════ */
@@ -71,11 +76,13 @@ static void arm(long k) { s_budget = k; s_armed = true; s_dead = false; }
  * octets arrive sur le disque, puis plus rien ne se fait, ni renommage, ni
  * suppression, ni ecriture NVS, jusqu'au redemarrage. */
 static bool s_file_cut;
+static long s_fwrites;   /* ecritures de fichier : un enregistrement ne reecrit pas une capture inchangee */
 size_t __real_fwrite(const void *, size_t, size_t, FILE *);
 int    __real_rename(const char *, const char *);
 int    __real_remove(const char *);
 size_t __wrap_fwrite(const void *p, size_t sz, size_t n, FILE *f) {
     if (s_dead) return 0;
+    s_fwrites++;
     if (s_file_cut) {
         size_t part = __real_fwrite(p, sz, n / 2, f);
         fflush(f);
@@ -100,6 +107,14 @@ int __wrap_remove(const char *a) { return s_dead ? -1 : __real_remove(a); }
 const char *__asan_default_options(void) { return "detect_leaks=0"; }
 
 /* ════ Outils NVS ═════════════════════════════════════════════════════════ */
+/* Le catalogue du firmware, lu depuis le dossier du banc (firmware/test/cfg_store). */
+#define CATALOG_PATH "../../main/web/profiles.json"
+/* Cles du catalogue que ce banc nomme. */
+#define GATE_KEY        "portail"
+#define PROFALUX_ENROL  "profalux-enrol"
+#define CAME_REPLAY     "came-replay"
+#define PROFALUX_COPY   "profalux-copy"
+#define UNKNOWN_KEY     "garage"
 #define NVS_MAX 0x8000                      /* taille maximale geree par le banc */
 static const esp_partition_t *s_part;
 static int s_fail;
@@ -157,8 +172,10 @@ typedef struct {
     volet_t  volets[SH_MAX_VOLETS];   int nvolets;
     cfg_model_t m;
 } store_t;
+/* Dossier des captures de rejeu des exemplaires (T15) ; NULL : en NVS, comme avant. */
+static const char *s_capture_dir;
 static void store_bind(store_t *s) {
-    s->m = (cfg_model_t){ &s->log_frames, s->remotes, &s->nremotes, s->volets, &s->nvolets };
+    s->m = (cfg_model_t){ &s->log_frames, s->remotes, &s->nremotes, s->volets, &s->nvolets, s_capture_dir };
 }
 static void store_reset(store_t *s) { memset(s, 0, sizeof(*s)); store_bind(s); }
 /* Copie profonde : la liste des membres d'une centrale vit sur le tas, et deux
@@ -168,6 +185,7 @@ static void store_copy(store_t *dst, const store_t *src) {
     for (int i = 0; i < dst->nvolets; i++) {
         dst->volets[i].members = NULL;
         cfg_volet_set_members(&dst->volets[i], src->volets[i].members);
+        dst->volets[i].rejeu = src->volets[i].rejeu ? strdup(src->volets[i].rejeu) : NULL;
     }
 }
 static store_t g_ref, g_ram;
@@ -180,6 +198,8 @@ static volet_t *mk_volet(store_t *s, const char *id, unsigned seed, uint32_t up_
     volet_t *v = &s->volets[s->nvolets++];
     memset(v, 0, sizeof(*v));
     snprintf(v->id, sizeof(v->id), "%s", id);
+    /* une fiche a toujours un type : celui d'un volet (mode legacy 0), comme une fiche v0.2.16 relue */
+    snprintf(v->type, sizeof(v->type), "%s", catalog_type_of_legacy(0) ? catalog_type_of_legacy(0) : "");
     snprintf(v->serials[0], SH_SERIAL_LEN, "0x%07X", 0x0A10000u + seed * 0x111u);
     v->n_serials = 1;
     bits66(v->up, seed * 3 + 1); bits66(v->down, seed * 3 + 2); bits66(v->stop, seed * 3 + 3);
@@ -230,7 +250,10 @@ static bool volet_equal(const volet_t *a, const volet_t *b) {
         && a->central == b->central && !strcmp(a->members ? a->members : "", b->members ? b->members : "")
         && a->travel_up_ms == b->travel_up_ms && a->travel_down_ms == b->travel_down_ms
         && a->orientation == b->orientation && a->order == b->order
-        && (int)(a->position + 0.5f) == (int)(b->position + 0.5f);
+        && !strcmp(a->type, b->type) && !strcmp(a->profile, b->profile)
+        && !strcmp(a->rejeu ? a->rejeu : "", b->rejeu ? b->rejeu : "")
+        && (int)(a->position + 0.5f) == (int)(b->position + 0.5f)
+        && a->step_known == b->step_known && (!a->step_known || a->step_next == b->step_next);
 }
 static bool hdr_equal(const store_t *a, const store_t *b) {
     if (a->log_frames != b->log_frames || a->nremotes != b->nremotes) return false;
@@ -347,6 +370,30 @@ static void fill_frames(int size) {
     nvs_commit(h); nvs_close(h);
 }
 
+/* ════ Captures de rejeu en fichier (T15) ═════════════════════════════════ */
+#define CAPTURE_DIR "/tmp/cfg_store_test_captures"
+#define CAPTURE_BAD "/nonexistent-cfg-store-test/captures"   /* ecriture impossible */
+static void clear_captures(void) {
+    DIR *d = opendir(CAPTURE_DIR); struct dirent *e; char p[512];
+    while (d && (e = readdir(d))) if (e->d_name[0] != '.') { snprintf(p, sizeof p, "%s/%s", CAPTURE_DIR, e->d_name); remove(p); }
+    if (d) closedir(d);
+}
+static int count_captures(void) {
+    DIR *d = opendir(CAPTURE_DIR); struct dirent *e; int n = 0;
+    while (d && (e = readdir(d))) if (e->d_name[0] != '.') n++;
+    if (d) closedir(d);
+    return n;
+}
+/* Un appareil a rejeu, comme ceux qu'ajoute l'ecran de capture. */
+static void add_replay(store_t *s, const char *capture) {
+    char id[SH_ID_LEN];
+    snprintf(id, sizeof(id), "Portail ajoute %02d", s->nvolets);
+    volet_t *v = mk_volet(s, id, 40u + (unsigned)s->nvolets, 0, 0);
+    v->n_serials = 0; v->up[0] = v->down[0] = v->stop[0] = 0; v->up_btn = v->down_btn = v->stop_btn = 0;
+    snprintf(v->type, sizeof v->type, "%s", GATE_KEY);
+    v->rejeu = strdup(capture);
+}
+
 /* ════ Demarrage du firmware ══════════════════════════════════════════════
  * Les memes appels que shutters_init(), dans le meme ordre : la config, le
  * dataset de trames, puis cfg_store_finish_boot(). Le fichier du dataset vit
@@ -408,9 +455,146 @@ int main(void) {
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "nvs");
     if (!s_part || s_part->size > NVS_MAX) { printf("partition 'nvs' absente ou trop grande\n"); return 2; }
     const bool field_size = s_part->size == 0x4000;
+    /* Le vrai catalogue : la fiche y lit ses types (mode legacy) et ses profils. */
+    char *catalog = cfg_read_file(CATALOG_PATH, 1 << 18, NULL);
+    char cat_err[CATALOG_ERR_MAX] = "";
+    if (!catalog || catalog_load(catalog, cat_err, sizeof cat_err) != 0) { printf("catalogue illisible : %s %s\n", CATALOG_PATH, cat_err); return 2; }
+    free(catalog);
     printf("== Banc cfg_model + cfg_store : NVS ESP-IDF reelle, partition emulee de %u Ko ==\n", (unsigned)(s_part->size / 1024));
     cfg_layout_t lay;
     char fk[8] = "";
+
+    /* ── T0p. Type et profil de la fiche (#134, etape 3), sans NVS ── */
+    printf("\n[T0p] Type par sa cle, profil, reglages herites, migration\n");
+    {
+        const char *shutter = catalog_type_of_legacy(0), *gate = catalog_type_of_legacy(1);
+        CHECK(shutter && gate && !strcmp(gate, GATE_KEY), "mode legacy : 0 et 1 sont des types du catalogue");
+        cJSON *root = cJSON_Parse("{\"remotes\":{},\"volets\":["
+            "{\"id\":\"A\",\"type\":1},{\"id\":\"B\"},{\"id\":\"C\",\"type\":\"portail\",\"profile\":\"came-replay\"},"
+            "{\"id\":\"D\",\"type\":\"garage\"},{\"id\":\"E\",\"type\":7}]}");
+        store_reset(&g_tmp);
+        cfg_model_import(&g_tmp.m, root);
+        cJSON_Delete(root);
+        const volet_t *a = &g_tmp.volets[0], *b = &g_tmp.volets[1], *c = &g_tmp.volets[2], *d = &g_tmp.volets[3], *e = &g_tmp.volets[4];
+        CHECK(!strcmp(a->type, gate), "ancien numero 1 : lu comme la cle du portail (%s)", a->type);
+        CHECK(!strcmp(b->type, shutter), "ancienne fiche sans type : celle du numero 0 (%s)", b->type);
+        CHECK(!strcmp(c->type, GATE_KEY) && !strcmp(c->profile, CAME_REPLAY), "cle et profil lus tels quels");
+        CHECK(!strcmp(d->type, UNKNOWN_KEY), "cle inconnue du catalogue : gardee (version plus recente)");
+        CHECK(e->type[0] == 0, "numero qu'aucun type ne porte : type vide, rien d'invente");
+        char *js = cfg_model_export(&g_tmp.m);
+        cJSON *out = cJSON_Parse(js);
+        const cJSON *va = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 0);
+        CHECK(cJSON_IsString(cJSON_GetObjectItem(va, "type")) && !strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(va, "type")), gate),
+              "ecriture : la cle, jamais le numero (mode legacy : lu, jamais ecrit)");
+        const cJSON *vb = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 1);
+        CHECK(!cJSON_GetObjectItem(vb, "type"), "type par defaut : pas ecrit (la NVS n'a que 16 Ko)");
+        CHECK(js && !strstr(js, "\"type\":1") && !strstr(js, "\"type\":0"), "aucun numero de type dans l'export");
+        const cJSON *vc = cJSON_GetArrayItem(cJSON_GetObjectItem(out, "volets"), 2);
+        CHECK(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(vc, "profile")) ?: "", CAME_REPLAY), "le profil est ecrit");
+        cJSON_Delete(out); free(js);
+
+        /* Ce qu'emet un appareil : la fiche, sinon le profil */
+        const catalog_profile_t *p = catalog_profile(PROFALUX_ENROL);
+        CHECK(p && p->freq_khz && p->te_us && p->repeat_bit >= 0 && p->rmt >= 0, "profil %s complet", PROFALUX_ENROL);
+        volet_t v; memset(&v, 0, sizeof v);
+        cfg_tx_t t = cfg_device_tx(&v, p);
+        CHECK(p && t.freq_khz == p->freq_khz && t.te_us == p->te_us && t.rpt == p->repeat_bit && t.rmt == p->rmt,
+              "fiche a 0 : les valeurs du profil");
+        v.freq_khz = 868330; v.te_us = 390; v.tx_rpt = TXOVR_OFF; v.tx_rmt = TXOVR_OFF;
+        t = cfg_device_tx(&v, p);
+        CHECK(t.freq_khz == 868330 && t.te_us == 390 && t.rpt == 0 && t.rmt == 0, "fiche reglee : la fiche prime");
+        memset(&v, 0, sizeof v);
+        t = cfg_device_tx(&v, NULL);
+        CHECK(t.freq_khz == 0 && t.te_us == 0 && t.rpt == -1 && t.rmt == -1, "sans profil : rien d'impose, la radio garde son defaut");
+
+        /* Migration : aucune emission ne change. Pour chaque combinaison (fiche a 0 ou reglee, defaut
+         * d'aujourd'hui egal ou non au profil), ce que l'appareil emettait avant (la fiche, sinon le defaut
+         * d'aujourd'hui) est ce qu'il emet apres (la fiche, sinon le profil). */
+        if (p) {
+            const uint32_t freqs[] = { 0, p->freq_khz, 868350 };
+            const uint16_t tes[] = { 0, p->te_us, 380 };
+            const uint8_t ovr[] = { TXOVR_INHERIT, TXOVR_OFF, TXOVR_ON };
+            const int8_t nows[] = { 0, 1 };
+            int bad = 0, cases = 0;
+            for (int fi = 0; fi < 3; fi++) for (int nf = 1; nf < 3; nf++)
+            for (int ti = 0; ti < 3; ti++) for (int nt = 1; nt < 3; nt++)
+            for (int oi = 0; oi < 3; oi++) for (int no = 0; no < 2; no++) {
+                volet_t w; memset(&w, 0, sizeof w);
+                w.freq_khz = freqs[fi]; w.te_us = tes[ti]; w.tx_rpt = ovr[oi]; w.tx_rmt = ovr[(oi + 1) % 3];
+                const cfg_tx_t now = { .freq_khz = freqs[nf], .te_us = tes[nt], .rpt = nows[no], .rmt = nows[1 - no] };
+                cfg_tx_t before = cfg_device_tx(&w, NULL);
+                if (!before.freq_khz) before.freq_khz = now.freq_khz;
+                if (!before.te_us) before.te_us = now.te_us;
+                if (before.rpt < 0) before.rpt = now.rpt;
+                if (before.rmt < 0) before.rmt = now.rmt;
+                cfg_device_rebase_tx(&w, p, &now);
+                cfg_tx_t after = cfg_device_tx(&w, p);
+                cases++;
+                if (before.freq_khz != after.freq_khz || before.te_us != after.te_us || before.rpt != after.rpt || before.rmt != after.rmt) bad++;
+            }
+            CHECK(bad == 0, "migration : %d emissions changees sur %d combinaisons", bad, cases);
+            volet_t w; memset(&w, 0, sizeof w);
+            const cfg_tx_t now = { .freq_khz = p->freq_khz, .te_us = p->te_us, .rpt = p->repeat_bit, .rmt = p->rmt };
+            CHECK(cfg_device_rebase_tx(&w, p, &now) == false && w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT,
+                  "migration : un appareil egal a son profil le suit (tout a 0, fiche inchangee)");
+            w.freq_khz = 868350;
+            const cfg_tx_t elsewhere = { .freq_khz = 868350, .te_us = p->te_us, .rpt = p->repeat_bit, .rmt = p->rmt };
+            CHECK(cfg_device_rebase_tx(&w, p, &elsewhere) == false && w.freq_khz == 868350, "migration : un reglage different du profil est garde");
+            memset(&w, 0, sizeof w);
+            CHECK(cfg_device_rebase_tx(&w, p, &elsewhere) == true && w.freq_khz == 868350,
+                  "migration : un defaut d'aujourd'hui different du profil est fige dans la fiche");
+            w.freq_khz = p->freq_khz; w.te_us = p->te_us; w.tx_rpt = p->repeat_bit ? TXOVR_ON : TXOVR_OFF;
+            cfg_device_inherit_equal(&w, p);
+            CHECK(w.freq_khz == 0 && w.te_us == 0 && w.tx_rpt == TXOVR_INHERIT, "ecriture : une valeur egale au profil revient a 0");
+            const catalog_profile_t *came = catalog_profile(CAME_REPLAY);
+            volet_t r; memset(&r, 0, sizeof r);
+            char capture[] = "{\"f\":433900}";
+            r.rejeu = capture;
+            r.freq_khz = came ? came->freq_khz : 0;
+            cfg_device_inherit_equal(&r, came);
+            CHECK(came && r.freq_khz == came->freq_khz, "rejeu : la porteuse egale au profil reste ecrite (0 = celle de la capture)");
+        }
+
+        /* Fiche vide, rejeu sans capture, copie : leur encodeur, et le profil que leur donne la migration.
+         * La coquille d'un appareil dont la capture n'a jamais ete enregistree passait pour une copie
+         * Profalux, a 868 MHz (constate sur une Super). */
+        {
+            const cfg_tx_t keeloq = { .freq_khz = 868425, .te_us = 400, .rpt = 1, .rmt = 1 };
+            const cfg_tx_t somfy = { .rpt = -1, .rmt = -1 };
+            store_reset(&g_tmp);
+            volet_t *blank = &g_tmp.volets[g_tmp.nvolets++], *fresh = &g_tmp.volets[g_tmp.nvolets++], *copy = &g_tmp.volets[g_tmp.nvolets++];
+            strlcpy(blank->id, "Coquille", SH_ID_LEN); strlcpy(blank->type, GATE_KEY, sizeof blank->type);
+            strlcpy(fresh->id, "Rejeu neuf", SH_ID_LEN); strlcpy(fresh->type, GATE_KEY, sizeof fresh->type);
+            fresh->rejeu = cfg_replay_empty();
+            strlcpy(copy->id, "Copie", SH_ID_LEN); strlcpy(copy->up, "1010", SH_BITS_LEN);
+            CHECK(cfg_device_is_blank(blank) && cfg_device_encoder(blank) == CAT_ENC_NONE, "fiche vide : aucun encodeur");
+            CHECK(fresh->rejeu && cfg_device_encoder(fresh) == CAT_ENC_RAW_REPLAY, "rejeu sans capture : encodeur de rejeu");
+            CHECK(cfg_device_encoder(copy) == CAT_ENC_KEELOQ, "trame copiee : KeeLoq");
+            int n = cfg_model_migrate_profiles(&g_tmp.m, &keeloq, &somfy);
+            CHECK(blank->profile[0] == 0 && blank->freq_khz == 0 && blank->te_us == 0,
+                  "migration : une fiche vide reste sans profil ni reglage (profil '%s', %u kHz)", blank->profile, (unsigned)blank->freq_khz);
+            CHECK(!strcmp(fresh->profile, CAME_REPLAY), "migration : un rejeu sans capture prend le profil de rejeu (%s)", fresh->profile);
+            CHECK(!strcmp(copy->profile, PROFALUX_COPY), "migration : une copie prend le profil de copie (%s)", copy->profile);
+            CHECK(n == 2, "migration : %d fiches classees sur 3 (la vide ne l'est pas)", n);
+            /* Copie captee sur une radio reglee ailleurs que le profil : elle garde la porteuse de la radio */
+            {
+                const catalog_profile_t *pc = catalog_profile(PROFALUX_COPY);
+                const cfg_tx_t radio = { .freq_khz = 868330, .te_us = pc ? pc->te_us : 0, .rpt = pc ? pc->repeat_bit : -1, .rmt = pc ? pc->rmt : -1 };
+                volet_t c2; memset(&c2, 0, sizeof c2); strlcpy(c2.id, "Copie 868330", SH_ID_LEN); strlcpy(c2.up, "1010", SH_BITS_LEN);
+                const catalog_profile_t *got = cfg_device_assign_copy_profile(&c2, &radio);
+                cfg_tx_t t = cfg_device_tx(&c2, got);
+                CHECK(got && !strcmp(c2.profile, PROFALUX_COPY) && t.freq_khz == 868330 && c2.te_us == 0,
+                      "copie : profil %s, emet a %u kHz (radio 868330), TE de la fiche %u (egal au profil : 0)", c2.profile, (unsigned)t.freq_khz, (unsigned)c2.te_us);
+                c2.freq_khz = 868999;
+                cfg_device_assign_copy_profile(&c2, &radio);
+                CHECK(c2.freq_khz == 868999, "copie qui avait deja son profil : ses reglages ne bougent pas");
+            }
+            strlcpy(blank->up, "1010", SH_BITS_LEN);
+            CHECK(cfg_device_assign_profile(blank, NULL) && !strcmp(blank->profile, PROFALUX_COPY),
+                  "apprentissage : la fiche recoit son profil des qu'elle a une trame (%s)", blank->profile);
+            cfg_volet_release(fresh);
+        }
+    }
 
     /* ── T0. Serialisation JSON, sans NVS ── */
     printf("\n[T0] Serialisation JSON : export, import, anciens exports\n");
@@ -1039,6 +1223,232 @@ int main(void) {
         printf("  coupure entre effacement et renommage : temporaire complet repris -> %s\n", repris ? "OK" : "KO");
         remove(COPY); remove(COPY ".tmp");
         free(exp); free(exp2);
+    }
+
+
+    /* ── T15. Captures de rejeu en fichier, hors de la NVS ── */
+    printf("\n[T15] Captures de rejeu en fichier (SPIFFS sur le boitier), hors de la NVS\n");
+    {
+        /* Une capture comme celles d'une Super : 3 trames de 49 impulsions (~2,3 Ko en clair). */
+        char cap[4096]; int p = snprintf(cap, sizeof cap, "{\"f\":433920,\"up\":\"");
+        for (int i = 0; i < 300 && p < (int)sizeof cap - 16; i++) p += snprintf(cap + p, sizeof cap - p, "%s%d", i ? "," : "", i % 2 ? -500 - i : 170 + i);
+        snprintf(cap + p, sizeof cap - p, "\"}");
+        mkdir(CAPTURE_DIR, 0755);
+
+        /* a. Ce que tient la NVS d'un boitier de terrain, captures en NVS puis en fichier */
+        int fit[2] = { 0, 0 };
+        for (int f = 0; f < 2; f++) {
+            s_capture_dir = f ? CAPTURE_DIR : NULL; clear_captures();
+            use_snapshot(g_migrated); store_copy(&g_ref, &g_sat_ref);
+            while (g_ref.nvolets < SH_MAX_VOLETS) {
+                add_replay(&g_ref, cap);
+                if (save_ref(fk) != ESP_OK) { cfg_model_remove(&g_ref.m, g_ref.nvolets - 1); break; }
+                fit[f]++;
+            }
+        }
+        printf("  appareils a capture ajoutes : %d en NVS, %d en fichier\n", fit[0], fit[1]);
+        CHECK(fit[1] >= 3 * (fit[0] + 1), "captures en fichier : %d appareils, en NVS : %d (gain attendu)", fit[1], fit[0]);
+
+        /* b. Relecture : la meme config, la capture lue dans son fichier, le document sans elle. La NVS
+         *    vient d'etre remplie jusqu'au refus : on lui rend de la place pour les essais qui suivent. */
+        for (int k = 0; k < 3; k++) cfg_model_remove(&g_ref.m, g_ref.nvolets - 1);
+        CHECK(save_ref(fk) == ESP_OK, "enregistrement avec de la marge : refuse (cle '%s')", fk);
+        reboot();
+        bool same = flash_is(&g_ref, NULL);
+        CHECK(same, "relecture des captures en fichier");
+        nvs_handle_t h; char doc[1024]; size_t dl = sizeof doc; bool slim = false;
+        char key[8]; snprintf(key, sizeof key, "v%u", (unsigned)(g_ref.nvolets - 1) % 100u);
+        if (nvs_open("shutters", NVS_READONLY, &h) == ESP_OK) {
+            slim = nvs_get_str(h, key, doc, &dl) == ESP_OK && strstr(doc, "\"rejeu_file\"") && !strstr(doc, "\"rejeu\"");
+            nvs_close(h);
+        }
+        CHECK(slim, "document NVS : le nom du fichier, pas la capture");
+        char *exp = cfg_model_export(&g_ref.m);
+        CHECK(exp && strstr(exp, "\"rejeu\"") && !strstr(exp, "\"rejeu_file\""), "export : la capture en clair, comme avant");
+        free(exp);
+        printf("  relecture %s, document NVS %s\n", same ? "identique" : "DIFFERENTE", slim ? "sans la capture" : "AVEC la capture");
+
+        /* c. Un mouvement ne reecrit aucune capture ; une capture changee, la sienne seulement */
+        long w0 = s_fwrites; int refused = 0;
+        for (int m = 0; m < 100; m++) { move_one(&g_ref, m); refused += save_ref(fk) != ESP_OK; }
+        long moves = s_fwrites - w0;
+        CHECK(refused == 0, "%d mouvements refuses sur 100", refused);
+        volet_t *last = &g_ref.volets[g_ref.nvolets - 1];
+        free(last->rejeu); last->rejeu = strdup("{\"f\":433920,\"up\":\"170,-500\"}");
+        w0 = s_fwrites; save_ref(fk); long changed = s_fwrites - w0;
+        reboot();
+        bool same2 = flash_is(&g_ref, NULL);
+        CHECK(moves == 0 && changed == 1 && same2, "ecritures : %ld pour 100 mouvements, %ld pour une capture changee, relecture %d", moves, changed, same2);
+        printf("  100 mouvements : %ld ecriture de fichier ; une capture changee : %ld -> %s\n", moves, changed, moves == 0 && changed == 1 ? "OK" : "KO");
+
+        /* d. Appareil supprime : son fichier part, apres l'enregistrement */
+        int before = count_captures();
+        cfg_model_remove(&g_ref.m, g_ref.nvolets - 1);
+        save_ref(fk);
+        int after = count_captures();
+        CHECK(after == before - 1 && after == fit[1] - 4, "suppression : %d fichiers avant, %d apres", before, after);
+        printf("  appareil supprime : %d -> %d fichiers -> %s\n", before, after, after == before - 1 ? "OK" : "KO");
+
+        /* e. Coupure pendant l'ecriture d'une capture : l'etat d'avant se relit, capture comprise */
+        store_t was; store_copy(&was, &g_ref);
+        last = &g_ref.volets[g_ref.nvolets - 1];
+        free(last->rejeu); last->rejeu = strdup("{\"f\":433920,\"up\":\"180,-510,180,-510\"}");   /* une autre capture */
+        last->position = (float)(((int)last->position + 50) % 101);
+        s_file_cut = true;
+        save_ref(fk);
+        CHECK(!s_file_cut, "la capture changee n'a pas ete ecrite : la coupure n'a pas eu lieu");
+        s_file_cut = false;
+        reboot();
+        bool kept = flash_is(&was, NULL);
+        CHECK(kept, "coupure pendant l'ecriture d'une capture : etat d'avant %s", kept ? "relu" : "PERDU");
+        printf("  coupure pendant l'ecriture d'une capture : etat d'avant relu -> %s\n", kept ? "OK" : "KO");
+
+        /* g. Une capture relue ne garde que sa taille en RAM, pas le plafond de lecture : douze tampons de
+         *    64 Ko epuisaient un ESP32 (revue de la PR #156) */
+        load_seen();
+        const volet_t *sv = &g_seen.volets[g_seen.nvolets - 1];
+        size_t want = sv->rejeu ? strlen(sv->rejeu) + 1 : 0, held = sv->rejeu ? malloc_usable_size(sv->rejeu) : 0;
+        CHECK(want && held < want + 64, "capture relue : %zu octets tenus pour %zu utiles", held, want);
+        printf("  capture relue : %zu octets en RAM pour %zu -> %s\n", held, want, want && held < want + 64 ? "OK" : "KO");
+
+        /* h. Une capture qu'on n'a pas pu relire garde son fichier et son nom : le prochain enregistrement
+         *    ne l'efface pas, et elle revient au demarrage suivant */
+        char path[512], *saved = NULL;
+        snprintf(path, sizeof path, "%s/%s", CAPTURE_DIR, sv->replay_file);   /* l'etat relu, celui d'avant la coupure (e) */
+        size_t sl = 0; saved = cfg_read_file(path, 1 << 20, &sl);
+        FILE *tf = fopen(path, "wb"); if (tf) fclose(tf);   /* fichier vide : illisible */
+        int files0 = count_captures();
+        load_seen();
+        bool lost = !g_seen.volets[g_seen.nvolets - 1].rejeu;
+        esp_err_t es = cfg_model_save(&g_seen.m, NULL);
+        bool file_kept = count_captures() == files0 && access(path, F_OK) == 0;
+        /* la sauvegarde et la copie d'avant restauration refusent de sortir sans cette capture */
+        char *ex_unread = cfg_model_export(&g_seen.m);
+        bool export_refused = !ex_unread && cfg_model_export_len(&g_seen.m) == SIZE_MAX
+                           && !cfg_model_save_copy(&g_seen.m, CAPTURE_DIR "/copie.json");
+        free(ex_unread);
+        tf = fopen(path, "wb"); if (tf && saved) fwrite(saved, 1, sl, tf); if (tf) fclose(tf);
+        /* fichier lisible de nouveau : l'export le relit, meme si le demarrage l'avait manque */
+        char *ex_back = cfg_model_export(&g_seen.m);
+        int caps = 0; for (const char *q = ex_back; q && (q = strstr(q, "\"rejeu\":")); q++) caps++;
+        int want_caps = 0; for (int k = 0; k < g_seen.nvolets; k++) want_caps += g_seen.volets[k].rejeu || g_seen.volets[k].replay_file[0];
+        bool export_reads = ex_back && caps == want_caps && strlen(ex_back) == cfg_model_export_len(&g_seen.m);
+        free(ex_back);
+        CHECK(export_refused && export_reads, "export d'une capture non relue : refuse si illisible %d, relue sinon %d (%d/%d)",
+              export_refused, export_reads, caps, want_caps);
+        printf("  export d'une capture non relue : refuse si illisible %d, relue sinon %d -> %s\n", export_refused, export_reads,
+               export_refused && export_reads ? "OK" : "KO");
+        free(saved);
+        reboot();
+        bool back = flash_is(&was, NULL);
+        CHECK(saved && lost && es == ESP_OK && file_kept && back,
+              "capture non relue : perdue a la lecture %d, fichier garde %d, revenue %d", lost, file_kept, back);
+        printf("  capture non relue : fichier garde %d, revenue au demarrage suivant %d -> %s\n", file_kept, back, file_kept && back ? "OK" : "KO");
+
+        /* f. Fichier impossible a ecrire : la capture reste dans la NVS, et se relit */
+        s_capture_dir = CAPTURE_BAD;
+        wipe(); system_state(); model_init(&g_ref);
+        add_replay(&g_ref, "{\"f\":433920,\"up\":\"170,-500\"}");
+        esp_err_t e13 = save_ref(fk);
+        reboot();
+        bool inl = e13 == ESP_OK && flash_is(&g_ref, NULL);
+        CHECK(inl, "dossier impossible : capture gardee en NVS (%s)", esp_err_to_name(e13));
+        printf("  dossier impossible : capture gardee dans la NVS -> %s\n", inl ? "OK" : "KO");
+        s_capture_dir = NULL; clear_captures();
+    }
+
+    /* ── T16. Tout ce qui est sauvegarde se restaure : une capture qui ferait depasser CFG_BACKUP_MAX est refusee ── */
+    printf("\n[T16] Plafond de la sauvegarde (CFG_BACKUP_MAX = %u octets) : la capture qui le depasserait est refusee\n", (unsigned)CFG_BACKUP_MAX);
+    {
+        s_capture_dir = CAPTURE_DIR; clear_captures();
+        wipe(); system_state(); model_init(&g_ref);
+        /* a. La longueur calculee est celle de l'export, modele vide compris */
+        store_t empty; store_reset(&empty);
+        char *e0 = cfg_model_export(&empty.m), *e1 = cfg_model_export(&g_ref.m);
+        bool len_ok = e0 && e1 && cfg_model_export_len(&empty.m) == strlen(e0) && cfg_model_export_len(&g_ref.m) == strlen(e1);
+        free(e0); free(e1);
+        /* b. Des portails captes jusqu'au refus. Une trame de 300 impulsions par portail. */
+        enum { PULSES = 300 };
+        static uint8_t lvl[PULSES]; static uint16_t us[PULSES];
+        for (int i = 0; i < PULSES; i++) { lvl[i] = (uint8_t)(i % 2 == 0); us[i] = (uint16_t)(300 + i * 7); }
+        const size_t reserved = 500;   /* la table d'enrolement d'un boitier */
+        int accepted = 0; cfg_capture_rc_t rc = CFG_CAPTURE_OK; bool over = false, len_track = true;
+        while (g_ref.nvolets < SH_MAX_VOLETS) {
+            add_replay(&g_ref, "{}");
+            volet_t *v = &g_ref.volets[g_ref.nvolets - 1];
+            rc = cfg_device_store_capture(&g_ref.m, v, "up", 433920, lvl, us, PULSES, reserved);
+            char *ex = cfg_model_export(&g_ref.m);
+            if (ex) { over |= strlen(ex) + reserved > CFG_BACKUP_MAX; len_track &= strlen(ex) == cfg_model_export_len(&g_ref.m); }
+            free(ex);
+            if (rc != CFG_CAPTURE_OK) break;
+            accepted++;
+        }
+        const volet_t *refused = &g_ref.volets[g_ref.nvolets - 1];
+        bool unchanged = refused->rejeu && !strcmp(refused->rejeu, "{}");
+        CHECK(len_ok && len_track, "longueur calculee differente de l'export");
+        CHECK(rc == CFG_CAPTURE_BACKUP_FULL && accepted > 0 && !over && unchanged,
+              "plafond : %d captures acceptees, refus %d, depassement %d, capture refusee laissee intacte %d", accepted, rc, over, unchanged);
+        printf("  %d portails captes, le suivant refuse (%s), aucune sauvegarde au-dela du plafond -> %s\n",
+               accepted, rc == CFG_CAPTURE_BACKUP_FULL ? "sauvegarde pleine" : "AUTRE", !over && unchanged ? "OK" : "KO");
+        s_capture_dir = NULL; clear_captures();
+    }
+
+    /* ── T17. Une commande s'emet par le bouton de son type ; sans bouton, elle est refusee ── */
+    printf("\n[T17] Emission par bouton : le creneau de chaque commande, ou le refus\n");
+    {
+        volet_t v; memset(&v, 0, sizeof v);
+        const char *shutter = catalog_type_of_legacy(0), *gate = catalog_type_of_legacy(1);
+        snprintf(v.type, sizeof v.type, "%s", shutter ? shutter : "");
+        bool vol = cfg_device_slot(&v, CAT_CMD_UP) == CAT_CMD_UP && cfg_device_slot(&v, CAT_CMD_STOP) == CAT_CMD_STOP
+                && cfg_device_slot(&v, CAT_CMD_DOWN) == CAT_CMD_DOWN && cfg_device_slot(&v, CAT_CMD_PROG) == CATALOG_NO_SLOT;
+        snprintf(v.type, sizeof v.type, "%s", gate ? gate : "");
+        bool gat = cfg_device_slot(&v, CAT_CMD_UP) == CAT_CMD_UP && cfg_device_slot(&v, CAT_CMD_STOP) == CAT_CMD_UP
+                && cfg_device_slot(&v, CAT_CMD_DOWN) == CAT_CMD_UP;
+        snprintf(v.type, sizeof v.type, "type-d-une-autre-version");
+        bool unk = cfg_device_slot(&v, CAT_CMD_UP) == CATALOG_NO_SLOT && cfg_device_slot(&v, CAT_CMD_COUNT) == CATALOG_NO_SLOT;
+        CHECK(shutter && gate && vol, "volet : chaque commande par son bouton, prog refusee");
+        CHECK(gat, "portail : ouvrir, stop et fermer par son bouton pas a pas");
+        CHECK(unk, "type inconnu de ce catalogue : tout est refuse");
+        printf("  volet %s, portail %s, type inconnu refuse %s\n", vol ? "OK" : "KO", gat ? "OK" : "KO", unk ? "OK" : "KO");
+    }
+
+    /* ── T18. Bouton pas a pas : le cycle du portail (catalogue), et sa position retenue par la fiche ── */
+    printf("\n[T18] Pas a pas : nombre d'appuis par etat, fin de course, position du cycle retenue\n");
+    {
+        const catalog_type_t *gt = catalog_type(catalog_type_of_legacy(1));
+        const catalog_cycle_t *c = gt ? &gt->step : NULL;
+        const step_state_t closed = { 0, false, true }, open = { 0, true, false }, opening = { +1, false, false },
+                           midway = { 0, false, false };
+        bool came = c && c->len == 4 && c->act[0] == CAT_CMD_UP && c->act[1] == CAT_CMD_STOP && c->act[2] == CAT_CMD_DOWN
+                 && c->act[3] == CAT_CMD_STOP && c->press_gap_ms > 0;
+        uint8_t n = step_next_at_rest(c, true);
+        bool rest = n == 0 && step_next_at_rest(c, false) == 2;
+        bool counts = step_presses(c, n, closed, CAT_CMD_UP) == 1 && step_presses(c, n, closed, CAT_CMD_DOWN) == 0
+                   && step_presses(c, n, closed, CAT_CMD_STOP) == 0;
+        bool press = step_press(c, &n) == CAT_CMD_UP && n == 1;   /* ferme : un appui ouvre */
+        bool during = step_presses(c, n, opening, CAT_CMD_DOWN) == 2 && step_presses(c, n, opening, CAT_CMD_STOP) == 1
+                   && step_presses(c, n, opening, CAT_CMD_UP) == 0;   /* en ouverture : stop puis ferme */
+        uint8_t m = 1; step_travel_end(c, &m);
+        bool end = m == 2 && step_presses(c, m, open, CAT_CMD_DOWN) == 1 && step_presses(c, m, open, CAT_CMD_UP) == 0;   /* en butee, la carte saute le stop */
+        uint8_t k = 2; step_travel_end(c, &k);
+        bool no_skip = k == 2;   /* rien a sauter si le prochain appui n'est pas un stop */
+        bool mid = step_presses(c, 2, midway, CAT_CMD_UP) == 3;   /* arrete en chemin, prochain = ferme : ferme, stop, ouvre */
+        const catalog_cycle_t two = { 2, { CAT_CMD_UP, CAT_CMD_DOWN }, 1000 };
+        bool refuse = step_presses(&two, 1, opening, CAT_CMD_STOP) == -1 && step_presses(NULL, 0, closed, CAT_CMD_UP) == -1;
+        CHECK(came, "cycle du portail lu dans le catalogue : ouvre, stop, ferme, stop, avec un delai");
+        CHECK(rest && counts && press, "au repos ferme : un appui ouvre, fermer et stop n'appuient pas");
+        CHECK(during, "en ouverture : fermer = 2 appuis (stop puis ferme), stop = 1");
+        CHECK(end && no_skip, "fin de course : la carte saute le stop qui suivait");
+        CHECK(mid, "arrete en chemin : ouvrir passe par ferme et stop");
+        CHECK(refuse, "un ordre que le cycle ne permet pas est refuse (-1)");
+        /* la position du cycle survit a l'enregistrement */
+        s_capture_dir = NULL; wipe(); system_state(); model_init(&g_ref);
+        add_replay(&g_ref, "{\"f\":433920,\"up\":\"170,-500\"}");
+        volet_t *g = &g_ref.volets[g_ref.nvolets - 1]; g->step_next = 3; g->step_known = true;
+        bool kept = save_ref(fk) == ESP_OK && (reboot(), flash_is(&g_ref, NULL));
+        CHECK(kept, "position du cycle retenue a l'enregistrement");
+        printf("  cycle %s, repos %s, en ouverture %s, fin de course %s, refus %s, retenue %s\n", came ? "OK" : "KO",
+               rest && counts && press ? "OK" : "KO", during ? "OK" : "KO", end && no_skip ? "OK" : "KO", refuse ? "OK" : "KO", kept ? "OK" : "KO");
     }
 
     printf("\n== %s (%d echec%s) ==\n", s_fail ? "ECHEC" : "TOUT EST BON", s_fail, s_fail > 1 ? "s" : "");

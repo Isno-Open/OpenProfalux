@@ -26,6 +26,11 @@
 #include "cloud_enroll.h"   /* cloud_want : gate d'activation du cloud (testée) */
 #include "shutters.h"
 #include "pfx_enrol.h"
+#include "catalog.h"
+
+/* Le catalogue embarque en clair (EMBED_TXTFILES : termine par un NUL), a cote de sa copie compressee
+   que l'interface recoit. */
+extern const char profiles_json_txt[] asm("_binary_profiles_json_start");
 #include "web_ui.h"
 #include "ota.h"
 #include <esp_timer.h>
@@ -310,9 +315,23 @@ void app_main(void) {
         ESP_LOGW(TAG, "TX SELFTEST ECHEC : puce NE passe PAS en TX (config/SPI).");
     cc1101_rx_probe();   /* sonde de bruit RX au boot (comparaison module/antenne) */
 
-    /* 4c. Modele cover + arbitre radio (RX permanent gere en interne) */
+    /* 4c. Le catalogue (web/profiles.json, embarque en clair) : les donnees de protocole que les
+     * emetteurs lisent. Illisible, il ne fige pas le boitier : les emetteurs refusent d'emettre, le
+     * reste (interface, reseau, mise a jour) marche, pour qu'on puisse en remettre un bon. */
+    char cat_err[CATALOG_ERR_MAX];
+    if (catalog_load(profiles_json_txt, cat_err, sizeof cat_err) == 0)
+        ESP_LOGI(TAG, "catalogue lu : %d modeles", catalog_model_count());
+    else
+        ESP_LOGE(TAG, "%s : aucune emission possible", cat_err);
+
+    /* 4d. Modele cover + arbitre radio (RX permanent gere en interne) */
     memprobe("boot-radio");
     shutters_set_update_auto(s_upd_auto);   /* avant shutters_init : la 1re verification en tient compte */
+    /* TE et options d'emission enregistres, remis AVANT shutters_init : la migration vers les profils fige
+     * ce que chaque appareil emet aujourd'hui, et le lit dans la radio (revue de la PR #156). */
+    cc1101_set_tx_te(s_tx_te);
+    cc1101_set_tx_repeat_bit(s_tx_rpt);
+    cc1101_set_tx_rmt(s_tx_rmt);
     shutters_init();
     memprobe("boot-volets");
     pfx_enrol_init();   /* identite virtuelle 0x067 (apprentissage sans telecommande, experimental) */
@@ -320,9 +339,6 @@ void app_main(void) {
     shutters_set_mqtt_obey(s_mqtt_obey);   /* obeir aux ordres MQTT (defaut oui ; coupe = carte secondaire) */
     cc1101_set_rx_debug(s_debug);   /* switch DEBUG console restaure au boot */
     cc1101_set_rx_gain(s_rx_gain);  /* plafond de gain RX restaure au boot */
-    cc1101_set_tx_te(s_tx_te);      /* TE d'emission restaure au boot */
-    cc1101_set_tx_repeat_bit(s_tx_rpt);   /* bit de repetition (option) restaure au boot */
-    cc1101_set_tx_rmt(s_tx_rmt);          /* emission RMT (option) restauree au boot */
     /* Radios SECONDAIRES (issue #95) : la radio 0 garde les cles NVS historiques (ci-dessus) ;
      * chaque radio i>0 a ses propres cles indexees (rprofN, rfreqN, rxgN, rteN, rrptN, rrmtN).
      * On resout sa frequence dans SA bande (defaut = porteuse declaree) et on applique freq, gain,

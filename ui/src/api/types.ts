@@ -14,7 +14,8 @@ export interface LearnedCommand { b: number; s: string }
 /* Un appareil de /api/status (champ volets) : volet, portail, centrale ou zone. */
 export interface Device {
   id: string;
-  type?: number;
+  type?: string;          // la cle d'un type du catalogue (« volet », « portail »)
+  profile?: string;       // l'identifiant de son profil ; absent pour un appareil inclassable
   marque?: string;
   central?: boolean;
   zone?: boolean;
@@ -45,6 +46,8 @@ export interface BatteryState { low: boolean }
 
 export interface Status {
   uptime: number;
+  /* Le dernier enregistrement de la config a echoue (memoire pleine) : elle sera perdue au redemarrage. */
+  unsaved?: boolean;
   listening: boolean;
   volets: Device[];
   remotes: Record<string, string>;
@@ -58,39 +61,8 @@ export interface Status {
 
 /* Corps de /api/shutter. */
 export interface ShutterOrder { id: string; cmd: Command; value?: number }
-export interface ShutterReply extends OkReply { busy?: boolean }
-
-/* profiles.json : types d'appareil, profils (marque, methode), roles et bornes. */
-export interface TypeEntry {
-  label: string;
-  code: number;
-  icon?: string;
-  positional?: boolean;
-  dpad?: Partial<Record<Command, string>>;
-  travel_s?: { min: number; max: number };
-  capture?: { cmd: string; label: string }[];
-}
-export interface ProfileTx { te_us?: number; repeat_bit?: boolean; rmt?: boolean; frame_bits?: number }
-export interface Profile {
-  nom: string;
-  marque: string;
-  type: string;          // une cle de types (DEVICE_TYPE)
-  mecanisme: string;     // MECHANISM
-  flow: string;          // FLOW
-  band: string;
-  freq_khz?: number;
-  description?: string;
-  rx?: { datarate_baud?: number; bandwidth_khz?: number };
-  tx?: ProfileTx;
-}
-export interface RoleEntry { label?: string; icon?: string; members_label?: string; members?: string[]; positional_only?: boolean; list_first?: boolean }
-export interface Profiles {
-  types: Record<string, TypeEntry>;   // cles : DEVICE_TYPE, et celles qu'une version future ajoutera
-  profils: Profile[];
-  roles?: { central?: RoleEntry; zone?: RoleEntry };
-  name_max?: number;
-  devices_max?: number;
-}
+/* Pilotage. refused : rien emis, aucun bouton du type ne porte la commande ou sa trame manque. */
+export interface ShutterReply extends OkReply { busy?: boolean; refused?: boolean }
 
 /* /api/radios. */
 export interface RadioSummary { idx: number; band: string; chip?: string; freq_khz?: number; ok?: boolean }
@@ -113,7 +85,9 @@ export interface RadiosReply { active?: number; radios: RadioDetail[] }
 
 /* Detection (/api/capture/last) et captures brutes. */
 export interface CaptureLast { n: number; band?: string; freq_khz?: number; rssi?: number; nframes?: number }
-export interface ReplayCaptureReply { n: number }
+/* Capture de rejeu : n impulsions, ou refus. backup_full : la sauvegarde aurait depasse ce que le boitier sait
+   restaurer, rien n'a ete enregistre. */
+export interface ReplayCaptureReply { n: number; backup_full?: boolean }
 /* Capture d'une commande KeeLoq (/api/learn/poll). */
 export interface LearnPoll { bits?: string; serial: string; button: string; rssi: number }
 /* Balayage « Caler sur ma telecommande » (/api/rx/sweep). */
@@ -122,7 +96,8 @@ export interface Sweep { state: number; status: number; center_khz: number; from
 export interface GainCalibration { state: number; testing?: number; result?: number }
 
 /* Telecommande virtuelle (/api/pfx). */
-export interface PfxModel { name: string; routine: string }
+/* Un modele que l'etape identify reconnait, et le profil qui le reconnait (catalogue, profiles[].models). */
+export interface PfxModel { name: string; profile: string }
 export interface PfxState {
   models: PfxModel[];
   active: Flag;

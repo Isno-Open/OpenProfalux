@@ -5,6 +5,7 @@
 #include "shutters.h"
 #include "cfg_model.h"   /* tx_override_t (TXOVR_*) : tri-etat des options d'emission par appareil */
 #include "pfx_enrol.h"
+#include "catalog.h"
 #include "pfx_keys.h"   /* pfx_key_for_serial : refuser une adresse Somfy = identite 0x067 */
 #include "somfy_rts.h"  /* SOMFY_RTS_ADDR_MAX */
 #include <ctype.h>
@@ -349,8 +350,9 @@ static esp_err_t h_shutter(httpd_req_t *r) {
     cJSON *val = cJSON_GetObjectItem(j, "value");
     int rc = (id && cmd) ? shutters_cmd_synced(id, cmd, val ? (int)val->valuedouble : 0) : -1;
     cJSON_Delete(j);
-    char resp[56];
-    snprintf(resp, sizeof(resp), "{\"ok\":%d,\"busy\":%d,\"tx_marc\":%d}", rc == 0 ? 1 : 0, rc == SH_CMD_BUSY ? 1 : 0, g_tx_marc);
+    char resp[72];
+    snprintf(resp, sizeof(resp), "{\"ok\":%d,\"busy\":%d,\"refused\":%d,\"tx_marc\":%d}",
+             rc == 0 ? 1 : 0, rc == SH_CMD_BUSY ? 1 : 0, rc == SH_CMD_REFUSED ? 1 : 0, g_tx_marc);
     httpd_resp_sendstr(r, resp);
     return ESP_OK;
 }
@@ -379,14 +381,13 @@ static esp_err_t h_volet_rename(httpd_req_t *r) {
     return ESP_OK;
 }
 
-/* ── /api/volet/type : {"id":"...","type":N} -> corrige le dev_type d'un appareil existant.
+/* ── /api/volet/type : {"id":"...","type":"<cle>"} -> corrige le type (catalogue) d'un appareil existant.
  * Repare un type mal attribue (volet/portail) sans reenroler : identite, compteur, captures conserves. */
 static esp_err_t h_volet_type(httpd_req_t *r) {
     char *body = read_body(r); if (!body) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "body");
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
-    cJSON *ty = cJSON_GetObjectItem(j, "type");
-    int rc = shutters_set_type(jstr(j, "id"), ty ? (uint8_t)cJSON_GetNumberValue(ty) : 0);
+    int rc = shutters_set_type(jstr(j, "id"), jstr(j, "type"));   /* une cle que le catalogue ne declare pas : refusee */
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -500,7 +501,7 @@ static esp_err_t h_volet_txparams(httpd_req_t *r) {
         cJSON_IsNumber(xp) ? (int)xp->valuedouble : -1,
         cJSON_IsNumber(xm) ? (int)xm->valuedouble : -1,
         cJSON_IsNumber(fb) ? (int)fb->valuedouble : 0,
-        jstr(j, "marque"));
+        jstr(j, "marque"), jstr(j, "profile"));
     cJSON_Delete(j);
     httpd_resp_sendstr(r, rc == 0 ? "{\"ok\":1}" : "{\"ok\":0}");
     return ESP_OK;
@@ -910,9 +911,9 @@ static esp_err_t h_backup(httpd_req_t *r) {
     free(js);
     return e;
 }
-/* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets,
- * dont des centrales a longue liste de membres. */
-#define RESTORE_MAX_BODY (24 * 1024)
+/* Une sauvegarde peut depasser les 8 Ko des autres requetes : jusqu'a 24 volets, dont des centrales a
+ * longue liste de membres, et des captures de rejeu. Le boitier refuse ce qui la ferait depasser. */
+#define RESTORE_MAX_BODY CFG_BACKUP_MAX
 /* Mauvais fichier ou copie absente : 400 ; copie ou NVS en echec cote boitier : 500 (#33).
  * La raison part dans le corps, l'UI l'affiche en clair. */
 static esp_err_t restore_reply(httpd_req_t *r, int rc, const char *err) {
@@ -1359,6 +1360,7 @@ static void pfx_capture_task(void *arg) {
 static uint32_t s_enrol_freq = 0, s_enrol_te = 0;
 static uint8_t  s_enrol_rpt = TXOVR_INHERIT, s_enrol_rmt = TXOVR_INHERIT;
 static char     s_enrol_marque[SH_ID_LEN] = "";
+static char     s_enrol_profile[CATALOG_ID_MAX] = "";   /* le profil choisi dans la pyramide */
 /* cJSON bool/number -> tri-etat tx_override_t (absent = heriter). */
 static uint8_t txovr_of(cJSON *j, const char *key) {
     cJSON *x = cJSON_GetObjectItem(j, key);
@@ -1377,6 +1379,7 @@ static esp_err_t h_pfx_capture(httpd_req_t *r) {
     s_enrol_rpt = txovr_of(j, "tx_repeat_bit");
     s_enrol_rmt = txovr_of(j, "tx_rmt");
     strlcpy(s_enrol_marque, jstr(j, "marque") ?: "", SH_ID_LEN);
+    strlcpy(s_enrol_profile, jstr(j, "profile") ?: "", sizeof s_enrol_profile);
     tx_params_t tp = { .freq_khz = s_enrol_freq, .te_us = s_enrol_te,
                        .rpt = s_enrol_rpt == TXOVR_ON ? 1 : s_enrol_rpt == TXOVR_OFF ? 0 : -1,
                        .rmt = s_enrol_rmt == TXOVR_ON ? 1 : s_enrol_rmt == TXOVR_OFF ? 0 : -1 };
@@ -1433,19 +1436,35 @@ static esp_err_t h_pfx_renew(httpd_req_t *r) {
 }
 static esp_err_t h_pfx_get(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
-    char out[720]; int p = 0;
-    p += snprintf(out + p, sizeof(out) - p,
-                  "{\"active\":%d,\"learn_ok\":%d,\"model\":%d,\"serial\":\"0x%07X\",\"idx\":%d,\"counter\":%d,\"remote\":\"0x%07X\",\"models\":[",
-                  active ? 1 : 0, eg_learn_allowed(&s_egate) ? 1 : 0, id.model, (unsigned)id.serial, id.idx, id.counter, (unsigned)id.remote);
-    int nm = pfx_enrol_model_count();
-    for (int i = 0; i < nm; i++) {
-        const pfx_model_t *m = pfx_enrol_model(i);
-        p += snprintf(out + p, sizeof(out) - p, "%s{\"name\":\"%s\",\"routine\":\"%s\"}",
-                      i ? "," : "", m->name, m->routine);
+    /* Construit avec cJSON : la liste des modeles vient du catalogue, sa longueur n'est pas bornee ici,
+     * et un nom y est echappe. */
+    char serial[12], remote[12];
+    snprintf(serial, sizeof serial, "0x%07X", (unsigned)id.serial);
+    snprintf(remote, sizeof remote, "0x%07X", (unsigned)id.remote);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "active", active ? 1 : 0);
+    cJSON_AddNumberToObject(o, "learn_ok", eg_learn_allowed(&s_egate) ? 1 : 0);
+    cJSON_AddNumberToObject(o, "model", id.model);
+    cJSON_AddStringToObject(o, "serial", serial);
+    cJSON_AddNumberToObject(o, "idx", id.idx);
+    cJSON_AddNumberToObject(o, "counter", id.counter);
+    cJSON_AddStringToObject(o, "remote", remote);
+    /* Les modeles du catalogue, et le profil qui reconnait chacun (l'interface y lit les gestes). */
+    cJSON *models = cJSON_AddArrayToObject(o, "models");
+    for (int i = 0; i < catalog_model_count(); i++) {
+        const catalog_model_t *m = catalog_model(i);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", m->name);
+        cJSON_AddStringToObject(e, "profile", m->profile);
+        cJSON_AddItemToArray(models, e);
     }
-    snprintf(out + p, sizeof(out) - p, "]}");
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
     httpd_resp_set_type(r, "application/json");
-    return httpd_resp_sendstr(r, out);
+    if (!js) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "memoire");
+    esp_err_t res = httpd_resp_sendstr(r, js);
+    free(js);
+    return res;
 }
 static esp_err_t h_pfx_learn(httpd_req_t *r) {
     httpd_resp_set_type(r, "application/json");
@@ -1579,7 +1598,7 @@ static esp_err_t h_somfy_create(httpd_req_t *r) {
         err = "adresse invalide : un nombre de 1 a 0xFFFFFF (24 bits)";
     else if (pfx_key_for_serial(address, NULL, NULL))
         err = "adresse reservee (ressemble a une identite Profalux 0x067), choisis-en une autre";
-    sh_somfy_create_t rc = err ? SH_SOMFY_INVALID : shutters_create_virtual_somfy(id, address);
+    sh_somfy_create_t rc = err ? SH_SOMFY_INVALID : shutters_create_virtual_somfy(id, address, jstr(j, "profile"));
     if (!err) switch (rc) {
         case SH_SOMFY_CREATED:       break;
         case SH_SOMFY_NAME_TOO_LONG: err = "nom trop long (accents comptes double)"; break;
@@ -1602,11 +1621,12 @@ static esp_err_t h_rejeu_create(httpd_req_t *r) {
     cJSON *j = cJSON_Parse(body); free(body);
     if (!j) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "json");
     const char *id = jstr(j, "id");
-    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "type"));   /* dev_type_t */
+    const char *type = jstr(j, "type");   /* cle d'un type du catalogue */
     const char *err = NULL;
     if (!id || !*id) err = "nom manquant";
     else if (strchr(id, ',')) err = "virgule dans le nom";
-    int rc = err ? -1 : shutters_create_rejeu(id, (uint8_t)type);
+    else if (!catalog_type(type)) err = "type inconnu du catalogue";
+    int rc = err ? -1 : shutters_create_rejeu(id, type);
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "ok", rc == 0 ? 1 : 0);
     if (err) cJSON_AddStringToObject(o, "err", err);
@@ -1632,9 +1652,11 @@ static esp_err_t h_rejeu_capture(httpd_req_t *r) {
     cJSON *bwj = cJSON_GetObjectItem(j, "bandwidth_khz");
     if (cJSON_IsNumber(drj) && cJSON_IsNumber(bwj))
         cc1101_set_capture_rx((uint32_t)drj->valuedouble, (uint32_t)bwj->valuedouble);
-    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio, freq_khz) : -1;
+    bool backup_full = false;
+    int n = (id && cmd) ? shutters_rejeu_capture(id, cmd, radio, freq_khz, &backup_full) : -1;
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "n", n);
+    if (backup_full) cJSON_AddBoolToObject(o, "backup_full", true);   /* refusee : la sauvegarde deborderait */
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o); cJSON_Delete(j);
     httpd_resp_set_type(r, "application/json");
@@ -1650,14 +1672,15 @@ static esp_err_t h_pfx_save_volet(httpd_req_t *r) {
     pfx_ident_t id; bool active = pfx_enrol_get(&id);
     int rc = -1;
     if (active && name && *name)
-        rc = shutters_create_virtual(name, id.serial, id.counter);
+        rc = shutters_create_virtual(name, id.serial, id.counter, s_enrol_profile[0] ? s_enrol_profile : NULL);
     if (rc == 0) {
         /* Grave dans la fiche les params d'emission resolus du profil (issue #111) : la porteuse de la
          * marque, le TE, le bit de repetition et le RMT. Les commandes ulterieures de CE volet
          * reemettront avec SES valeurs, sans toucher aux autres marques sur la meme radio. L'UI peut
          * aussi surcharger chaque valeur dans le panneau avance ("marque" absente -> inchangee). */
         shutters_set_tx_params(name, s_enrol_freq, s_enrol_te, s_enrol_rpt, s_enrol_rmt, 0,
-                               s_enrol_marque[0] ? s_enrol_marque : NULL);   /* enrolement KeeLoq : pas de frame_bits */
+                               s_enrol_marque[0] ? s_enrol_marque : NULL,
+                               s_enrol_profile[0] ? s_enrol_profile : NULL);   /* enrolement KeeLoq : pas de frame_bits */
         pfx_enrol_confirm(); pfx_enrol_forget(); eg_reset(&s_egate);   /* moteur valide ; l'identite vit desormais dans le volet */
     }
     cJSON_Delete(j);

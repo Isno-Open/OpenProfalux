@@ -6,10 +6,126 @@
 #if __has_include(<bsd/string.h>)
 #include <bsd/string.h>   /* strlcpy sur PC (banc de test) ; newlib la fournit sur l'ESP32 */
 #endif
+#include <dirent.h>
+#include <inttypes.h>
 #include "esp_log.h"
 #include "cover_attrs.h"   /* slug et identifiant stable d'un appareil (unite pure) */
 
 static const char *TAG = "cfg_model";
+
+/* ── Captures de rejeu en fichier ──
+ * Le document NVS d'un appareil ne porte plus que le nom du fichier ("rejeu_file"). L'export (sauvegarde,
+ * restauration) garde la capture en clair : son format ne change pas. Le fichier est ecrit AVANT le
+ * document qui le nomme, et un fichier qu'aucun document ne nomme n'est efface qu'apres un
+ * enregistrement reussi : une coupure ne laisse jamais un document sans sa capture. */
+/* Cle du document NVS qui nomme le fichier de la capture (donnee du format, pas un identifiant). */
+#define DOC_KEY_REPLAY_FILE "rejeu_file"
+/* Cle de la position du cycle pas a pas d'un appareil (donnee du format). */
+#define DOC_KEY_STEP "step"
+/* Cle du tableau des appareils dans l'export (sauvegarde) : donnee du format. */
+#define DOC_KEY_DEVICES "volets"
+#define REPLAY_FILE_PREFIX "rj"
+#define REPLAY_FILE_EXT    ".json"
+#define REPLAY_FILE_TMP    ".tmp"              /* suffixe du temporaire de cfg_write_file */
+#define REPLAY_FILE_HEX    8
+#define REPLAY_FILE_MAX    (64 * 1024)         /* au-dela, un fichier n'est pas une capture de ce firmware */
+#define REPLAY_PATH_MAX    96
+
+/* FNV-1a 32 bits. Jamais 0 : 0 veut dire « aucun contenu connu sur disque ». */
+static uint32_t fnv1a(const char *s) {
+    uint32_t h = 2166136261u;
+    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    return h ? h : 1u;
+}
+/* Un nom que ce firmware a pu ecrire : seul nom lu, et seul nom efface (un document retouche a la main
+ * ne fait pas lire ni effacer autre chose). */
+static bool replay_name_ok(const char *n) {
+    const size_t lp = strlen(REPLAY_FILE_PREFIX);
+    if (strlen(n) != lp + REPLAY_FILE_HEX + strlen(REPLAY_FILE_EXT) || strncmp(n, REPLAY_FILE_PREFIX, lp)) return false;
+    for (size_t i = 0; i < REPLAY_FILE_HEX; i++) {
+        const char c = n[lp + i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return !strcmp(n + lp + REPLAY_FILE_HEX, REPLAY_FILE_EXT);
+}
+static bool replay_path(char *out, const char *dir, const char *name) {
+    return snprintf(out, REPLAY_PATH_MAX, "%s/%s", dir, name) < REPLAY_PATH_MAX;
+}
+/* Nom deja pris par un autre appareil dont la capture est en fichier ? */
+static bool replay_name_taken(const cfg_model_t *m, int self, const char *name) {
+    for (int k = 0; k < *m->nvolets; k++)
+        if (k != self && !strcmp(m->volets[k].replay_file, name)) return true;   /* relue ou non */
+    return false;
+}
+/* Range la capture de l'appareil i dans son fichier. true : elle y est, et v->replay_file la nomme ;
+ * false : elle reste dans le document NVS (pas de dossier, ou fichier impossible a ecrire). */
+static bool replay_store_file(const cfg_model_t *m, int i) {
+    volet_t *v = &m->volets[i];
+    if (!m->capture_dir || !v->rejeu) return false;
+    if (!v->replay_file[0] || replay_name_taken(m, i, v->replay_file)) {
+        /* un nom tire de l'identifiant stable ; un autre appareil le porte deja : le suivant */
+        uint32_t h = fnv1a(v->uid[0] ? v->uid : v->id);
+        for (int t = 0; t < SH_MAX_VOLETS; t++, h++) {
+            snprintf(v->replay_file, sizeof v->replay_file, REPLAY_FILE_PREFIX "%08" PRIx32 REPLAY_FILE_EXT, h);
+            if (!replay_name_taken(m, i, v->replay_file)) break;
+        }
+        v->replay_hash = 0;   /* nouveau nom : rien encore sur disque */
+    }
+    const uint32_t h = fnv1a(v->rejeu);
+    if (v->replay_hash == h) return true;
+    char path[REPLAY_PATH_MAX];
+    if (!replay_path(path, m->capture_dir, v->replay_file) || !cfg_write_file(path, v->rejeu, strlen(v->rejeu))) {
+        ESP_LOGW(TAG, "'%s' : capture non ecrite en fichier, elle reste dans la NVS", v->id);
+        v->replay_file[0] = 0;   /* le document la porte en clair : il ne nomme plus de fichier */
+        v->replay_hash = 0;
+        return false;
+    }
+    v->replay_hash = h;
+    return true;
+}
+/* Apres un enregistrement reussi : efface les fichiers de capture qu'aucun appareil ne nomme plus
+ * (appareil supprime, capture retiree). Un temporaire suit le sort de son fichier. */
+static void replay_sweep(const cfg_model_t *m) {
+    if (!m->capture_dir) return;
+    DIR *d = opendir(m->capture_dir);
+    if (!d) return;
+    /* On efface apres closedir : retirer une entree pendant le parcours n'est pas garanti sur SPIFFS. */
+    char gone[2 * SH_MAX_VOLETS][CFG_REPLAY_NAME_LEN + sizeof(REPLAY_FILE_TMP)];
+    int ngone = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && ngone < (int)(sizeof gone / sizeof gone[0])) {
+        char name[sizeof gone[0]];
+        if (strlen(e->d_name) >= sizeof name) continue;
+        strcpy(name, e->d_name);
+        size_t n = strlen(name), lt = strlen(REPLAY_FILE_TMP);
+        if (n > lt && !strcmp(name + n - lt, REPLAY_FILE_TMP)) name[n - lt] = 0;
+        if (!replay_name_ok(name)) continue;
+        bool used = false;
+        /* une fiche dont la capture n'a pas ete relue nomme encore son fichier : il reste */
+        for (int k = 0; k < *m->nvolets && !used; k++) used = !strcmp(m->volets[k].replay_file, name);
+        if (!used) strcpy(gone[ngone++], e->d_name);
+    }
+    closedir(d);
+    for (int i = 0; i < ngone; i++) {
+        char path[REPLAY_PATH_MAX];
+        if (replay_path(path, m->capture_dir, gone[i]) && remove(path) == 0)
+            ESP_LOGI(TAG, "capture %s : plus aucun appareil ne la nomme, effacee", gone[i]);
+    }
+}
+/* Relit la capture que nomme un document NVS. */
+static void replay_load_file(const cfg_model_t *m, volet_t *v, const char *name) {
+    char path[REPLAY_PATH_MAX];
+    size_t n = 0;
+    char *buf = (m->capture_dir && replay_name_ok(name) && replay_path(path, m->capture_dir, name))
+              ? cfg_read_file(path, REPLAY_FILE_MAX, &n) : NULL;
+    /* Meme non relue (RAM, fichier abime), la fiche garde le nom : le document qui l'enregistre de
+     * nouveau le nomme encore, et le menage n'efface pas le fichier. La capture revient au demarrage
+     * suivant si c'etait la RAM. */
+    if (replay_name_ok(name)) strlcpy(v->replay_file, name, sizeof v->replay_file);
+    if (!buf) { ESP_LOGE(TAG, "'%s' : capture %s introuvable", v->id, name); return; }
+    v->rejeu = buf;
+    v->replay_hash = fnv1a(buf);
+}
 
 /* ── Membres d'une centrale ── */
 int cfg_volet_set_members(volet_t *v, const char *csv) {
@@ -75,7 +191,15 @@ int cfg_model_ensure_uids(const cfg_model_t *m) {
 }
 
 /* ── Modele -> JSON ── */
-static cJSON *volet_to_json(const volet_t *v) {
+/* Le type qu'une fiche a quand elle n'en ecrit pas : celui de son profil, sinon celui des fiches d'avant
+ * les types par cle (mode legacy, numero 0). NULL si le catalogue ne dit rien. */
+static const char *default_type(const volet_t *v) {
+    const catalog_profile_t *p = catalog_profile(v->profile);
+    return p ? p->type : catalog_type_of_legacy(0);
+}
+
+/* replay_file : la capture est dans ce fichier, le document ne porte que son nom (NVS) ; NULL : en clair. */
+static cJSON *volet_to_json(const volet_t *v, const char *replay_file) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
     /* Identifiant stable : omis tant qu'il vaut le slug du nom (jamais renomme), pour garder les
@@ -97,6 +221,7 @@ static cJSON *volet_to_json(const volet_t *v) {
     cJSON_AddNumberToObject(o, "orientation", v->orientation);
     cJSON_AddNumberToObject(o, "order", v->order);   /* rang d'affichage UI (-1 = non range) */
     cJSON_AddNumberToObject(o, "position", (int)(v->position + 0.5f));
+    if (v->step_known) cJSON_AddNumberToObject(o, DOC_KEY_STEP, v->step_next);   /* cycle pas a pas suivi */
     if (v->virt) {   /* volet virtuel : identite 0x067 + compteur roulant persiste */
         cJSON_AddBoolToObject(o, "virt", true);
         cJSON_AddNumberToObject(o, "virt_serial", v->virt_serial);
@@ -106,15 +231,19 @@ static cJSON *volet_to_json(const volet_t *v) {
         if (v->proto != VOLET_PROTO_PROFALUX)
             cJSON_AddNumberToObject(o, "proto", v->proto);
     }
-    /* Type d'appareil (dev_type_t) : attribut GENERAL, pas reserve aux virtuels. Un rejeu (CAME)
-     * portail doit aussi persister son type, sinon il retombe en volet au reboot. Omis quand = volet (0). */
-    if (v->type != TYPE_VOLET)
-        cJSON_AddNumberToObject(o, "type", v->type);
+    /* Le profil, quand on le connait. Le type : la cle du catalogue, jamais son numero (mode legacy :
+     * lu, jamais ecrit), et seulement s'il differe du type par defaut (default_type) : la NVS d'une
+     * carte n'a que 16 Ko, et une fiche ordinaire n'a pas a grossir pour redire son profil. */
+    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);
+    const char *def = default_type(v);
+    if (!def || strcmp(v->type, def)) cJSON_AddStringToObject(o, "type", v->type);
     if (v->central) cJSON_AddBoolToObject(o, "central", true);
     /* Centrale : volets membres. Zone : volets suiveurs. Toujours ecrit pour une
      * centrale (meme vide, comme avant) ; pour un volet, seulement s'il en a. */
     if (v->central || v->members) cJSON_AddStringToObject(o, "members", v->members ? v->members : "");
-    if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
+    if (v->rejeu && replay_file) cJSON_AddStringToObject(o, DOC_KEY_REPLAY_FILE, replay_file);   /* capture en fichier */
+    else if (v->rejeu) cJSON_AddStringToObject(o, "rejeu", v->rejeu);   /* rejeu brut par commande */
+    else if (replay_file) cJSON_AddStringToObject(o, DOC_KEY_REPLAY_FILE, replay_file);   /* capture non relue : son nom reste */
     /* Parametres d'emission par appareil (etage 2, issue #111). Omis quand ils valent le defaut
      * (0 = heriter), pour garder les sauvegardes existantes a l'identique et rester compatible dans
      * les deux sens : une version anterieure ignore ces cles, celle-ci les retrouve a 0 si absentes. */
@@ -134,10 +263,29 @@ static cJSON *hdr_to_json(const cfg_model_t *m) {
     for (int i = 0; i < *m->nremotes; i++) cJSON_AddStringToObject(rem, m->remotes[i].serial, m->remotes[i].name);
     return root;
 }
+/* L'objet d'export d'un appareil. Une capture que le demarrage n'a pas pu relire (RAM, fichier abime) est
+ * relue pour lui : une sauvegarde qui l'omettrait se restaurerait sans elle, et son fichier serait ensuite
+ * efface. NULL si elle reste illisible, ou plus de memoire : l'export echoue plutot que de sortir incomplet
+ * (revue de la PR #156). */
+static cJSON *device_export_json(const cfg_model_t *m, const volet_t *v) {
+    if (v->rejeu || !v->replay_file[0]) return volet_to_json(v, NULL);
+    char path[REPLAY_PATH_MAX];
+    char *buf = (m->capture_dir && replay_path(path, m->capture_dir, v->replay_file))
+              ? cfg_read_file(path, REPLAY_FILE_MAX, NULL) : NULL;
+    if (!buf) { ESP_LOGE(TAG, "'%s' : capture %s illisible, export refuse", v->id, v->replay_file); return NULL; }
+    volet_t with = *v;
+    with.rejeu = buf;
+    cJSON *o = volet_to_json(&with, NULL);   /* copie le texte : buf se libere ici */
+    free(buf);
+    return o;
+}
 char *cfg_model_export(const cfg_model_t *m) {
     cJSON *root = hdr_to_json(m);
-    cJSON *vols = cJSON_AddArrayToObject(root, "volets");
-    for (int i = 0; i < *m->nvolets; i++) cJSON_AddItemToArray(vols, volet_to_json(&m->volets[i]));
+    cJSON *vols = cJSON_AddArrayToObject(root, DOC_KEY_DEVICES);
+    for (int i = 0; i < *m->nvolets; i++) {
+        cJSON *o = device_export_json(m, &m->volets[i]);
+        if (!o || !cJSON_AddItemToArray(vols, o)) { cJSON_Delete(o); cJSON_Delete(root); return NULL; }
+    }
     char *js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
@@ -146,6 +294,52 @@ static char *print_and_free(cJSON *j) {   /* NULL si plus de memoire : cfg_store
     char *s = j ? cJSON_PrintUnformatted(j) : NULL;
     cJSON_Delete(j);
     return s;
+}
+#define EXPORT_DEVICES_OPEN  "\"" DOC_KEY_DEVICES "\":["
+#define EXPORT_DEVICES_CLOSE "]}"
+/* Meme texte que cfg_model_export : l'en-tete sans son '}', une virgule s'il a des champs, le tableau des
+ * appareils separes par des virgules, puis "]}". SIZE_MAX si plus de memoire. */
+size_t cfg_model_export_len(const cfg_model_t *m) {
+    char *h = print_and_free(hdr_to_json(m));
+    if (!h) return SIZE_MAX;
+    const size_t hl = strlen(h);
+    size_t len = hl - 1 + (hl > 2 ? 1 : 0) + strlen(EXPORT_DEVICES_OPEN) + strlen(EXPORT_DEVICES_CLOSE);
+    free(h);
+    for (int i = 0; i < *m->nvolets; i++) {
+        char *d = print_and_free(device_export_json(m, &m->volets[i]));
+        if (!d) return SIZE_MAX;
+        len += strlen(d) + (i ? 1 : 0);
+        free(d);
+    }
+    return len;
+}
+cfg_capture_rc_t cfg_device_store_capture(const cfg_model_t *m, volet_t *v, const char *cmd, uint32_t freq,
+                                          const uint8_t *lvl, const uint16_t *us, int n, size_t reserved) {
+    if (n < 2) return CFG_CAPTURE_ERR;
+    const size_t cap = (size_t)n * 9 + 1;   /* « -65535, » au plus par impulsion */
+    char *csv = malloc(cap);
+    if (!csv) return CFG_CAPTURE_ERR;
+    size_t p = 0;
+    for (int i = 0; i < n; i++)
+        p += (size_t)snprintf(csv + p, cap - p, "%s%d", i ? "," : "", lvl[i] ? (int)us[i] : -(int)us[i]);
+    cJSON *j = v->rejeu ? cJSON_Parse(v->rejeu) : NULL;
+    if (!j) j = cJSON_CreateObject();
+    cJSON_DeleteItemFromObject(j, "f");   cJSON_AddNumberToObject(j, "f", freq);
+    cJSON_DeleteItemFromObject(j, cmd);   cJSON_AddStringToObject(j, cmd, csv);
+    char *out = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j); free(csv);
+    if (!out) return CFG_CAPTURE_ERR;
+    char *was = v->rejeu;
+    v->rejeu = out;
+    const size_t len = cfg_model_export_len(m);
+    if (len == SIZE_MAX || len + reserved > CFG_BACKUP_MAX) {
+        v->rejeu = was; free(out);
+        ESP_LOGW(TAG, "'%s' : capture refusee, la sauvegarde ferait %u octets (au plus %u)",
+                 v->id, (unsigned)(len + reserved), (unsigned)CFG_BACKUP_MAX);
+        return len == SIZE_MAX ? CFG_CAPTURE_ERR : CFG_CAPTURE_BACKUP_FULL;
+    }
+    free(was);
+    return CFG_CAPTURE_OK;
 }
 /* Un document a la fois : la config n'est jamais tenue entiere en RAM, ni
  * reecrite en bloc. Un volet inchange ne coute rien, la NVS ignore une valeur
@@ -157,11 +351,15 @@ esp_err_t cfg_model_save(const cfg_model_t *m, char *failed_key) {
         char *d = print_and_free(hdr_to_json(m));
         cfg_store_put_hdr(&tx, d); free(d);
         for (int i = 0; i < *m->nvolets; i++) {
-            d = print_and_free(volet_to_json(&m->volets[i]));
+            const volet_t *v = &m->volets[i];
+            const bool in_file = replay_store_file(m, i);   /* le fichier AVANT le document qui le nomme */
+            const bool unread = m->capture_dir && !v->rejeu && v->replay_file[0];   /* capture non relue */
+            d = print_and_free(volet_to_json(v, in_file || unread ? v->replay_file : NULL));
             cfg_store_put_volet(&tx, d); free(d);
         }
     }
     esp_err_t e = cfg_store_end(&tx);
+    if (e == ESP_OK) replay_sweep(m);
     if (failed_key) memcpy(failed_key, tx.failed_key, sizeof(tx.failed_key));
     return e;
 }
@@ -218,6 +416,10 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
     cJSON *ord = cJSON_GetObjectItem(o, "order");
     v->order          = ord ? (int)cJSON_GetNumberValue(ord) : -1;
     v->position       = cJSON_GetNumberValue(cJSON_GetObjectItem(o, "position"));
+    cJSON *stp = cJSON_GetObjectItem(o, DOC_KEY_STEP);   /* absent : jamais suivi */
+    if (cJSON_IsNumber(stp) && stp->valuedouble >= 0 && stp->valuedouble < CATALOG_CYCLE_MAX) {
+        v->step_next = (uint8_t)stp->valuedouble; v->step_known = true;
+    }
     cJSON *vt = cJSON_GetObjectItem(o, "virt");
     if (cJSON_IsTrue(vt)) {
         v->virt         = true;
@@ -226,10 +428,15 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         cJSON *pr       = cJSON_GetObjectItem(o, "proto");   /* absent -> Profalux (0) */
         v->proto        = pr ? (uint8_t)cJSON_GetNumberValue(pr) : (uint8_t)VOLET_PROTO_PROFALUX;
     }
-    /* Type d'appareil : GENERAL (lu pour tout appareil, pas seulement les virtuels), sinon un rejeu
-     * portail repasse volet au reboot. Absent -> volet (0). */
+    /* Type d'appareil : une cle du catalogue. Une fiche v0.2.16 porte un numero, ou rien pour un volet
+     * (mode legacy, traduit par le catalogue). Une cle inconnue est gardee telle quelle : elle vient
+     * peut-etre d'une version plus recente, et l'effacer perdrait l'information. */
+    strlcpy(v->profile, cJSON_GetStringValue(cJSON_GetObjectItem(o, "profile")) ?: "", sizeof v->profile);
     cJSON *ty = cJSON_GetObjectItem(o, "type");
-    v->type   = ty ? (uint8_t)cJSON_GetNumberValue(ty) : (uint8_t)TYPE_VOLET;
+    const char *key = cJSON_IsString(ty) ? cJSON_GetStringValue(ty)
+                    : cJSON_IsNumber(ty) ? catalog_type_of_legacy((int)cJSON_GetNumberValue(ty))
+                    : default_type(v);   /* absent : le type par defaut (celui du profil, sinon du numero 0) */
+    strlcpy(v->type, key ? key : "", sizeof v->type);
     v->central = cJSON_IsTrue(cJSON_GetObjectItem(o, "central"));
     /* Membres d'une centrale, ou suiveurs d'une zone. Une liste ecrite par le
      * firmware tient toujours : seul un fichier modifie a la main peut depasser
@@ -239,7 +446,9 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
         ESP_LOGE(TAG, "%s '%s' : liste de membres de %u o refusee (trop longue ou plus de memoire)",
                  v->central ? "centrale" : "zone", v->id, (unsigned)strlen(mem));
     const char *rj = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rejeu"));
+    const char *rf = cJSON_GetStringValue(cJSON_GetObjectItem(o, DOC_KEY_REPLAY_FILE));
     v->rejeu = (rj && *rj) ? strdup(rj) : NULL;   /* rejeu brut par commande ; libere par cfg_volet_release */
+    if (!v->rejeu && rf && *rf) replay_load_file(m, v, rf);   /* document NVS : la capture est en fichier */
     /* Parametres d'emission par appareil (etage 2, issue #111). memset() a deja mis 0 = heriter : on
      * ne surcharge que si la cle est presente. Compatible avec une config anterieure (cles absentes). */
     cJSON *fk = cJSON_GetObjectItem(o, "freq_khz"); if (fk) v->freq_khz = (uint32_t)cJSON_GetNumberValue(fk);
@@ -251,14 +460,14 @@ static void parse_volet_json(const cfg_model_t *m, cJSON *o) {
 }
 void cfg_model_import(const cfg_model_t *m, cJSON *root) {
     parse_hdr_json(m, root);
-    cJSON *vols = cJSON_GetObjectItem(root, "volets");
+    cJSON *vols = cJSON_GetObjectItem(root, DOC_KEY_DEVICES);
     for (cJSON *o = vols ? vols->child : NULL; o; o = o->next) parse_volet_json(m, o);
     cfg_model_ensure_uids(m);
 }
 bool cfg_model_is_backup(const cJSON *root) {
     if (!cJSON_IsObject(root)) return false;
     const cJSON *rem = cJSON_GetObjectItemCaseSensitive(root, "remotes");
-    return cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(root, "volets")) && (!rem || cJSON_IsObject(rem));
+    return cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(root, DOC_KEY_DEVICES)) && (!rem || cJSON_IsObject(rem));
 }
 bool cfg_model_save_copy(const cfg_model_t *m, const char *path) {
     char *js = cfg_model_export(m);
@@ -280,7 +489,7 @@ static void on_cfg_doc(void *ctx, int index, const char *doc) {
 /* L'ancienne config (cle NVS unique) contient-elle au moins un volet ? */
 static bool legacy_has_volets(const char *doc) {
     cJSON *j = cJSON_Parse(doc);
-    bool yes = cJSON_GetArraySize(cJSON_GetObjectItem(j, "volets")) > 0;
+    bool yes = cJSON_GetArraySize(cJSON_GetObjectItem(j, DOC_KEY_DEVICES)) > 0;
     cJSON_Delete(j);
     return yes;
 }
@@ -331,11 +540,115 @@ char *cfg_read_file(const char *path, size_t cap, size_t *n) {
     FILE *f = fopen(path, "rb");
     if (!f && snprintf(tmp, sizeof(tmp), "%s.tmp", path) < (int)sizeof(tmp)) f = fopen(tmp, "rb");
     if (!f) return NULL;
-    char *buf = malloc(cap + 1);
-    size_t got = buf ? fread(buf, 1, cap + 1, f) : 0;
+    /* Le tampon a la taille du fichier, cap n'est qu'un plafond : une capture relue en garde le tampon
+     * tant que l'appareil existe, et des tampons de cap octets chacun epuisaient la RAM d'un ESP32
+     * (revue de la PR #156). */
+    long size = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    if (size <= 0 || (size_t)size > cap || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = malloc((size_t)size + 1);
+    size_t got = buf ? fread(buf, 1, (size_t)size + 1, f) : 0;
     fclose(f);
-    if (!buf || got == 0 || got > cap) { free(buf); return NULL; }
+    if (!buf || got != (size_t)size) { free(buf); return NULL; }
     buf[got] = 0;
     if (n) *n = got;
     return buf;
+}
+
+/* ── Encodeur et profil d'un appareil ── */
+char *cfg_replay_empty(void) { return strdup("{}"); }
+
+int cfg_device_slot(const volet_t *v, catalog_cmd_t cmd) {
+    const catalog_type_t *t = catalog_type(v->type);
+    return (t && (unsigned)cmd < CAT_CMD_COUNT) ? t->slot[cmd] : CATALOG_NO_SLOT;
+}
+
+bool cfg_device_is_blank(const volet_t *v) {
+    return !v->virt && !v->central && !v->rejeu && !v->up[0] && !v->down[0] && !v->stop[0];
+}
+
+catalog_encoder_t cfg_device_encoder(const volet_t *v) {
+    if (!v->virt) {
+        if (v->rejeu) return CAT_ENC_RAW_REPLAY;
+        return cfg_device_is_blank(v) ? CAT_ENC_NONE : CAT_ENC_KEELOQ;
+    }
+    switch ((volet_proto_t)v->proto) {
+    case VOLET_PROTO_PROFALUX:  return CAT_ENC_KEELOQ;
+    case VOLET_PROTO_SOMFY_RTS: return CAT_ENC_SOMFY_RTS;
+    default:                    return CAT_ENC_NONE;
+    }
+}
+
+const catalog_profile_t *cfg_device_assign_profile(volet_t *v, const char *wanted) {
+    if (v->central) return NULL;
+    const catalog_encoder_t enc = cfg_device_encoder(v);
+    const catalog_profile_t *p = catalog_profile(wanted);
+    if (p && (p->encoder != enc || p->enrol != v->virt)) {
+        ESP_LOGW(TAG, "'%s' : profil %s refuse (autre encodeur ou autre methode)", v->id, wanted);
+        p = NULL;
+    }
+    if (!p && !v->profile[0] && enc != CAT_ENC_NONE) p = catalog_profile_infer(enc, v->virt, v->marque);
+    if (p) strlcpy(v->profile, p->id, sizeof v->profile);
+    if (p && !v->type[0]) strlcpy(v->type, p->type, sizeof v->type);
+    return catalog_profile(v->profile);
+}
+
+const catalog_profile_t *cfg_device_assign_copy_profile(volet_t *v, const cfg_tx_t *radio) {
+    const bool had_profile = v->profile[0];
+    const catalog_profile_t *p = cfg_device_assign_profile(v, NULL);
+    if (!had_profile && p && p->encoder == CAT_ENC_KEELOQ) cfg_device_rebase_tx(v, p, radio);
+    return p;
+}
+
+int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, const cfg_tx_t *somfy) {
+    int n = 0;
+    for (int i = 0; i < *m->nvolets; i++) {
+        volet_t *v = &m->volets[i];
+        if (v->central || v->profile[0]) continue;
+        const catalog_profile_t *p = cfg_device_assign_profile(v, NULL);
+        if (!p) { ESP_LOGW(TAG, "migration : '%s' sans profil (vide ou inclassable), garde son comportement", v->id); continue; }
+        /* le rejeu ne lit que sa porteuse, qu'il prend de sa capture : rien a figer */
+        if (p->encoder == CAT_ENC_KEELOQ)    cfg_device_rebase_tx(v, p, keeloq);
+        if (p->encoder == CAT_ENC_SOMFY_RTS) cfg_device_rebase_tx(v, p, somfy);
+        ESP_LOGW(TAG, "migration : '%s' -> profil %s, type %s", v->id, v->profile, v->type);
+        n++;
+    }
+    return n;
+}
+
+/* ── Reglages d'emission : la fiche, sinon le profil ── */
+cfg_tx_t cfg_device_tx(const volet_t *v, const catalog_profile_t *p) {
+    cfg_tx_t t = {
+        .freq_khz   = v->freq_khz ? v->freq_khz : (p ? p->freq_khz : 0),
+        .te_us      = v->te_us ? v->te_us : (p ? p->te_us : 0),
+        .rpt        = v->tx_rpt == TXOVR_ON ? 1 : v->tx_rpt == TXOVR_OFF ? 0 : (p ? p->repeat_bit : -1),
+        .rmt        = v->tx_rmt == TXOVR_ON ? 1 : v->tx_rmt == TXOVR_OFF ? 0 : (p ? p->rmt : -1),
+        .frame_bits = v->frame_bits ? v->frame_bits : (p ? p->frame_bits : 0),
+    };
+    return t;
+}
+
+void cfg_device_inherit_equal(volet_t *v, const catalog_profile_t *p) {
+    if (!p) return;
+    /* Un rejeu brut : sa porteuse a 0 est celle de SA CAPTURE, pas celle du profil. Une valeur egale au
+     * profil reste donc ecrite, sinon il emettrait sur la capture (revue de la PR #156). */
+    if (!v->rejeu && p->freq_khz && v->freq_khz == p->freq_khz) v->freq_khz = 0;
+    if (p->te_us && v->te_us == p->te_us)          v->te_us = 0;
+    if (p->repeat_bit >= 0 && v->tx_rpt == (p->repeat_bit ? TXOVR_ON : TXOVR_OFF)) v->tx_rpt = TXOVR_INHERIT;
+    if (p->rmt >= 0 && v->tx_rmt == (p->rmt ? TXOVR_ON : TXOVR_OFF))               v->tx_rmt = TXOVR_INHERIT;
+    if (p->frame_bits && v->frame_bits == p->frame_bits) v->frame_bits = 0;
+}
+
+bool cfg_device_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now) {
+    if (!p || !now) return false;
+    const volet_t before = *v;
+    /* 1. figer ce que l'appareil emet aujourd'hui, pour chaque reglage qu'il laissait au defaut */
+    if (!v->freq_khz)   v->freq_khz   = now->freq_khz;
+    if (!v->te_us)      v->te_us      = now->te_us;
+    if (v->tx_rpt == TXOVR_INHERIT && now->rpt >= 0) v->tx_rpt = now->rpt ? TXOVR_ON : TXOVR_OFF;
+    if (v->tx_rmt == TXOVR_INHERIT && now->rmt >= 0) v->tx_rmt = now->rmt ? TXOVR_ON : TXOVR_OFF;
+    if (!v->frame_bits) v->frame_bits = now->frame_bits;
+    /* 2. rendre au profil ce qui lui est egal */
+    cfg_device_inherit_equal(v, p);
+    return v->freq_khz != before.freq_khz || v->te_us != before.te_us || v->tx_rpt != before.tx_rpt
+        || v->tx_rmt != before.tx_rmt || v->frame_bits != before.frame_bits;
 }

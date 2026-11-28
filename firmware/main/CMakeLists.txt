@@ -71,6 +71,8 @@ idf_component_register(
         "github_tag.c"
         "mqtt_tls_policy.c"
         "shutters.c"
+        "catalog.c"
+        "step_cycle.c"
         "remote_battery.c"
         "cfg_store.c"
         "cfg_model.c"
@@ -109,6 +111,9 @@ idf_component_register(
         "${WEB_GZ_DIR}/manifest.webmanifest.gz"
         "${WEB_GZ_DIR}/profiles.json.gz"
         "web/icon-192.png"
+    # Le catalogue EN CLAIR, que le firmware lit au demarrage (catalog.c) ; sa copie .gz est servie.
+    EMBED_TXTFILES
+        "web/profiles.json"
     REQUIRES
         nvs_flash
         spiffs

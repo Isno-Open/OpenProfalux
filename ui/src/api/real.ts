@@ -2,8 +2,9 @@
 // corps que l'interface d'avant (app.js) : le firmware n'a rien a changer.
 import { FAILURE, HTTP_UNAUTHORIZED, SCAN_STATE, type Command } from '../domain';
 import { json, post, requireOk, poll } from './http';
+import type { Catalog } from './catalog.generated';
 import type {
-  CaptureLast, DeviceFromRemoteReply, LearnPoll, OkReply, PfxCaptureReply, PfxRenewReply, PfxState, Profiles, RadioSummary,
+  CaptureLast, DeviceFromRemoteReply, LearnPoll, OkReply, PfxCaptureReply, PfxRenewReply, PfxState, RadioSummary,
   ReplayCaptureReply, Session, ShutterOrder, ShutterReply, Status, Sweep,
 } from './types';
 
@@ -15,7 +16,7 @@ export interface CaptureRequest {
   id: string;
   action: Command;
   replay: boolean;
-  type: number;
+  type: string;   // cle d'un type du catalogue
   brand?: string;
   radio: number;
   freq_khz: number;
@@ -45,7 +46,7 @@ export default {
     .then(r => r.ok, () => false),
   logout: (): Promise<unknown> => fetch('/api/logout', { method: 'POST' }),
   status: (signal?: AbortSignal) => json<Status>('/api/status', { signal }),
-  profiles: (signal?: AbortSignal) => json<Profiles>('/profiles.json', { signal }),
+  profiles: (signal?: AbortSignal) => json<Catalog>('/profiles.json', { signal }),
   sendShutter: (order: ShutterOrder) => post<ShutterReply>('/api/shutter', order),
   saveDisplayOrder: (ids: string[]) => requireOk(post('/api/volet/order', { ids })),
 
@@ -66,6 +67,7 @@ export default {
         body.bandwidth_khz = rx.bandwidth_khz;
       }
       const d = await post<ReplayCaptureReply>('/api/rejeu/capture', body).catch(() => null);
+      if (d?.backup_full) return Promise.reject(FAILURE.backupFull);
       return d && d.n > 0 ? d : Promise.reject(FAILURE.nothing);
     }
     await post(`/api/learn/start?radio=${radio}${freq_khz ? `&freq_khz=${freq_khz}` : ''}`, { action });
@@ -90,7 +92,7 @@ export default {
   },
   saveTxParams: (body: Record<string, unknown>) => requireOk(post('/api/volet/txparams', body)),
   rename: (id: string, name: string) => requireOk(post('/api/volet/rename', { id, name })),
-  setType: (id: string, type: number) => requireOk(post('/api/volet/type', { id, type })),
+  setType: (id: string, type: string) => requireOk(post('/api/volet/type', { id, type })),
   deleteDevice: (id: string) => requireOk(post('/api/volet/delete', { id })),
   setOrientation: (id: string, value: number) => requireOk(post('/api/volet/orientation', { id, orientation: value })),
   setFollowers: (id: string, members: string[]) => requireOk(post('/api/volet/followers', { id, members })),

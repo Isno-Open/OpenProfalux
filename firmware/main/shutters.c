@@ -8,6 +8,8 @@
 #include "cfg_model.h"
 #include "remote_battery.h"
 #include "pfx_enrol.h"
+#include "catalog.h"
+#include "step_cycle.h"      /* bouton pas a pas : le cycle du portail */
 #include "pfx_keys.h"   /* pfx_key_for_serial : predicat "serial = identite 0x067 valide ?" */
 #include "virt_counter.h"   /* compteur des telecommandes virtuelles a la restauration */
 #include "cover_attrs.h"    /* description d'un appareil pour le portail cloud (attrs) */
@@ -85,7 +87,9 @@ static bool     s_mqtt_ready = false;   /* true apres shutters_mqtt_announce() *
 static bool     s_log_frames = false;   /* publie toutes les trames captees en MQTT */
 static bool     s_mqtt_obey  = true;    /* la carte obeit-elle aux ordres cover MQTT (emission) ? defaut oui */
 /* La config persistante, telle que cfg_model.c la lit et l'ecrit. */
-static const cfg_model_t s_model = { &s_log_frames, s_remotes, &s_nremotes, s_volets, &s_nvolets };
+/* Point de montage de la partition SPIFFS "storage" : dataset de trames, ring RF, copie de config, captures. */
+#define SPIFFS_BASE "/spiffs"
+static const cfg_model_t s_model = { &s_log_frames, s_remotes, &s_nremotes, s_volets, &s_nvolets, SPIFFS_BASE };   /* captures de rejeu : SPIFFS */
 static bool     s_frames_dirty = false; /* dataset modifie -> a resauvegarder (SPIFFS) */
 static bool     s_ring_dirty = false;    /* ring RF modifie -> a resauvegarder (SPIFFS) */
 static bool     s_pos_dirty = false;     /* position d'un volet a changer/figer -> sauver la cfg (retenir la position au reboot) */
@@ -288,6 +292,12 @@ static volet_t *get_or_create(const char *id) {
     return v;
 }
 
+/* ── Profil d'un appareil (catalogue) ── */
+static const catalog_profile_t *profile_of(const volet_t *v) { return catalog_profile(v->profile); }
+/* Encodeur et profil d'un appareil : cfg_model.c (cfg_device_encoder, cfg_device_assign_profile), ou le
+ * banc cfg_store les eprouve. Sous LOCK. */
+static const catalog_profile_t *assign_profile(volet_t *v, const char *wanted) { return cfg_device_assign_profile(v, wanted); }
+
 /* nom volet -> slug HA-safe ([a-zA-Z0-9_-]) : espaces/accents interdits dans les topics
  * (decouverte HA ET command/state), sinon commandes/decouverte cassees. */
 static void slugify(char *dst, int cap, const char *src) { cover_slug(dst, (size_t)cap, src); }   /* une seule regle : cover_attrs.c */
@@ -314,9 +324,14 @@ int shutters_remote_dump(int i, int from, char *serial, int sser, char *name, in
 /* La serialisation et le rangement sont dans cfg_model.c / cfg_store.c. Les
  * echecs sont journalises : une NVS pleine faisait autrefois echouer TOUTES les
  * sauvegardes sans le moindre message. */
+/* Le dernier enregistrement a echoue : la config en memoire n'est pas celle de la NVS, et sera perdue au
+ * redemarrage. Annonce dans /api/status ("unsaved"), pour que l'interface le dise quel que soit le
+ * chemin (ajout, capture, reglage, mouvement). Une Super a perdu ainsi deux appareils sans un mot. */
+static bool s_cfg_unsaved;
 static esp_err_t save_cfg(void) {
     char key[8] = "";
     esp_err_t e = cfg_model_save(&s_model, key);
+    s_cfg_unsaved = e != ESP_OK;
     if (e != ESP_OK)
         ESP_LOGE(TAG, "save_cfg ECHEC sur '%s' : %s (%d volets)", key, esp_err_to_name(e), s_nvolets);
     return e;
@@ -328,7 +343,7 @@ static esp_err_t save_cfg(void) {
  * En SPIFFS, a cote du ring RF. Il vivait en NVS ("framesv2", jusqu'a 4 Ko) : le plus
  * gros occupant d'une NVS de 16 Ko qui saturait. Donnee NON critique (jeu de trames
  * pour la recherche) : une coupure en pleine ecriture n'en perd au pire que la fin. */
-#define FRAMES_FILE "/spiffs/frames.bin"
+#define FRAMES_FILE SPIFFS_BASE "/frames.bin"
 static void save_frames(void) {
     static uint32_t buf[FRAMES_MAX * 4];   /* records {serial, hop, t, bouton} */
     int n = 0;
@@ -392,7 +407,7 @@ static void build_frame_bits(char *out, uint32_t serial, uint8_t button, uint32_
 /* Persistance BORNEE du ring RF en NVS : on ne stocke que les METADONNEES {serial,bouton,hop,t,rssi}
  * (16 o/trame) et on RECONSTRUIT les bits au boot -> les trames restent REJOUABLES apres reboot/flash. */
 typedef struct { uint32_t serial, hop, t; uint8_t button; int8_t rssi; uint16_t _pad; } ringrec_t;
-#define RING_FILE "/spiffs/rfring.bin"
+#define RING_FILE SPIFFS_BASE "/rfring.bin"
 /* Conversion par blocs de RING_CHUNK, meme format de fichier qu'avant (int head, puis
  * s_rf_n enregistrements) : un tampon du ring entier immobilisait 16 Ko de RAM pour
  * une sauvegarde par minute au plus. Partage sans risque : load_ring tourne au
@@ -400,7 +415,7 @@ typedef struct { uint32_t serial, hop, t; uint8_t button; int8_t rssi; uint16_t 
 #define RING_CHUNK 64
 static ringrec_t s_ringchunk[RING_CHUNK];
 static void spiffs_mount(void) {   /* la NVS (16 Ko) ne tient pas le ring 300 -> SPIFFS (partition storage, 960 Ko) */
-    esp_vfs_spiffs_conf_t c = { .base_path = "/spiffs", .partition_label = "storage", .max_files = 4, .format_if_mount_failed = true };
+    esp_vfs_spiffs_conf_t c = { .base_path = SPIFFS_BASE, .partition_label = "storage", .max_files = 4, .format_if_mount_failed = true };
     esp_err_t e = esp_vfs_spiffs_register(&c);
     ESP_LOGI(TAG, "spiffs mount: %s", esp_err_to_name(e));
 }
@@ -515,24 +530,52 @@ static void migrate_tx_overrides(void) {
     bool changed = false;
     for (int i = 0; i < s_nvolets; i++) {
         volet_t *v = &s_volets[i];
-        if (!(v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX)) continue;
+        /* fiches d'avant les profils seulement : avec un profil, « heriter » veut dire heriter DU PROFIL, et
+         * l'ancien global l'ecraserait a chaque demarrage (revue de la PR #156) */
+        if (!(v->virt && (volet_proto_t)v->proto == VOLET_PROTO_PROFALUX) || v->profile[0]) continue;
         if (v->tx_rpt == TXOVR_INHERIT) { v->tx_rpt = rp ? TXOVR_ON : TXOVR_OFF; changed = true; }
         if (v->tx_rmt == TXOVR_INHERIT) { v->tx_rmt = rm ? TXOVR_ON : TXOVR_OFF; changed = true; }
     }
     if (changed) { ESP_LOGW(TAG, "migration #111 : bit de repetition/RMT (ancien global %d/%d) grave par appareil", rp, rm); save_cfg(); }
 }
+/* Migration vers les profils (#134, etape 3) : une fiche ecrite avant (v0.2.16) recoit le profil de sa
+ * marque et de son mecanisme, et son type si elle n'en avait pas. Puis ses reglages d'emission sont
+ * rebases (cfg_device_rebase_tx) : ce qu'elle heritait de la radio est fige, ce qui egale le profil
+ * revient a 0. Aucune emission ne change. Une fiche qu'on ne sait pas classer reste telle quelle. */
+/* Ce qu'emet aujourd'hui un appareil KeeLoq pour un reglage laisse a 0 : celui de la radio. */
+static cfg_tx_t keeloq_radio_tx(void) {
+    return (cfg_tx_t){ .freq_khz = cc1101_get_freq_khz(), .te_us = (uint16_t)cc1101_get_tx_te(),
+                       .rpt = cc1101_get_tx_repeat_bit() ? 1 : 0, .rmt = cc1101_get_tx_rmt() ? 1 : 0 };
+}
+static void migrate_profiles(void) {
+    /* Ce qu'un appareil emet aujourd'hui pour un reglage laisse a 0 : la radio (KeeLoq), la norme
+     * (Somfy : SOMFY_RTS_FREQ_KHZ, trame de 56 bits). */
+    const cfg_tx_t keeloq = keeloq_radio_tx();
+    const cfg_tx_t somfy = { .freq_khz = SOMFY_RTS_FREQ_KHZ, .rpt = -1, .rmt = -1, .frame_bits = SOMFY_RTS_FRAME_BITS };
+    if (cfg_model_migrate_profiles(&s_model, &keeloq, &somfy)) save_cfg();
+}
+
+static void resume_steps_at_boot(void);   /* (defini plus bas) : un portail redemarre en pleine course */
 static cfg_layout_t load_cfg(void) {
     cfg_layout_t lay = cfg_model_load(&s_model);
     for (int i = 0; i < s_nvolets; i++)   /* DIAGNOSTIC : verifie que la calibration est bien relue */
         ESP_LOGI(TAG, "cfg volet '%s' : up=%u ms down=%u ms pos=%d",
                  s_volets[i].id, (unsigned)s_volets[i].travel_up_ms, (unsigned)s_volets[i].travel_down_ms, (int)(s_volets[i].position + 0.5f));
     migrate_tx_overrides();
+    migrate_profiles();   /* apres #111 : les options figees par appareil y sont deja */
+    resume_steps_at_boot();
     return lay;
 }
 
 /* ── RF ── */
-#define PRESS_REPEATS 10   /* nb de trames par "appui" : le bit-bang peut etre preempte par le WiFi
-                              (trame corrompue) ; plus de repetitions = plus de chances qu'une passe propre */
+/* Trames par "appui" : catalogue, protocole de l'encodeur (press.frames). Pour KeeLoq, le bit-bang peut
+ * etre preempte par le WiFi (trame corrompue) : plus de repetitions = plus de chances d'une passe propre.
+ * Le catalogue ne donnant rien, on n'emet pas : 0 trame. */
+static int press_frames(catalog_encoder_t enc) {
+    const catalog_protocol_t *p = catalog_protocol(enc);
+    if (!p || !p->press_frames) ESP_LOGE(TAG, "catalogue sans press.frames pour l'encodeur %d : rien emis", (int)enc);
+    return p ? p->press_frames : 0;
+}
 /* Params d'emission RESOLUS depuis la fiche (defini plus bas) : porteuse/TE/rpt/rmt par appareil. */
 static tx_params_t tx_params_of(const volet_t *v);
 
@@ -541,8 +584,10 @@ static tx_params_t tx_params_of(const volet_t *v);
  * `v` (optionnel) porte la fiche : si present, emission PAR APPAREIL (porteuse/TE/rpt/rmt de la
  * fiche, appliques puis restaures par radio_tx_device) -> une marque clonee garde SA frequence sur
  * une radio partagee (bug terrain Eveno/Profalux). `v==NULL` = rejeu de trame RF brute sans volet. */
-static void emit_press(const volet_t *v, const char *bits) {
-    if (!bits || !bits[0]) return;
+static bool emit_press(const volet_t *v, const char *bits) {
+    if (!bits || !bits[0]) return false;
+    int frames = press_frames(CAT_ENC_KEELOQ);
+    if (!frames) return false;
     /* Log de CE QU'ON EMET (serial/bouton/hop decodes de la trame), symetrique du log RX.
      * Permet de verifier qu'on rejoue bien la trame captee (et de voir le hop emis). */
     int n = (int)strlen(bits);
@@ -552,14 +597,15 @@ static void emit_press(const volet_t *v, const char *bits) {
         for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
         for (int i = 0; i < 4;  i++) if (bits[60 + i] == '1') btn |= (1u << i);
         ESP_LOGW(TAG, "TX serial=0x%07X bouton=0x%X hop=0x%08X (%d bits, rafale x%d)",
-                 (unsigned)ser, btn, (unsigned)hop, n, PRESS_REPEATS);
+                 (unsigned)ser, btn, (unsigned)hop, n, frames);
     }
     if (v) {
         tx_params_t p = tx_params_of(v);
-        radio_tx_device(bits, PRESS_REPEATS, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
+        radio_tx_device(bits, frames, &p);   /* par appareil : porteuse/TE/rpt/rmt de la fiche */
     } else {
-        radio_tx(bits, PRESS_REPEATS);              /* trame brute sans volet (rejeu RF debug) */
+        radio_tx(bits, frames);              /* trame brute sans volet (rejeu RF debug) */
     }
+    return true;
 }
 
 /* ── Rejeu BRUT par commande (code fixe OOK, agnostique : CAME, 433 cheap...) ──
@@ -567,8 +613,8 @@ static void emit_press(const volet_t *v, const char *bits) {
  * chaque valeur = impulsions signees +us haut / -us bas). On le rejoue a l'identique, suivi
  * d'un silence inter-trame, repete. Ne touche ni au clone bit-string ni au virtuel. */
 #define REJEU_MAX_PULSES 512
-#define REJEU_GAP_US     12000   /* silence inter-trame, couvre le CAME (~11,5 ms) */
-#define REJEU_REPEATS    8
+/* Trames par appui et silence inter-trame : catalogue, protocole de l'encodeur de rejeu (press.frames,
+ * press.gap_us ; 12 ms couvrent le CAME, ~11,5 ms). */
 
 /* Rejoue la commande `cmd` ("up"/"stop"/"down") d'un volet a rejeu brut. true si emis. */
 static bool rejeu_emit(volet_t *v, const char *cmd) {
@@ -578,16 +624,15 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
     /* Frequence d'emission : la fiche (editable dans Modifier, par appareil) prime sur la frequence
      * captee. Permet de faire cohabiter CAME, Profalux et Eveno sur des frequences differentes. */
     uint32_t freq = v->freq_khz ? v->freq_khz : (uint32_t)cJSON_GetNumberValue(cJSON_GetObjectItem(j, "f"));
+    /* `cmd` est le creneau du bouton qui porte la commande (cfg_device_slot) : un portail a bouton unique
+     * rejoue sa trame unique pour Ouvrir, Stop et Fermer parce que son type le declare (cycle du bouton
+     * pas a pas), plus par un repli sur la premiere trame venue. Creneau sans capture : rien emis. */
     const char *csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, cmd));
-    /* Portail a bouton UNIQUE (CAME & co) : la telecommande n'a qu'un bouton, le moteur enchaine
-     * la sequence lui-meme (ouvre -> stop -> ferme). On ne capture donc qu'une commande ; Ouvrir /
-     * Stop / Fermer du pave rejouent la meme trame. Repli : si la commande demandee n'a pas ete
-     * captee, on rejoue la premiere commande presente. */
-    if (!csv || !*csv)
-        for (const char *const *c = (const char *[]){ "up", "stop", "down", NULL }; *c && (!csv || !*csv); c++)
-            csv = cJSON_GetStringValue(cJSON_GetObjectItem(j, *c));
     bool ok = false;
-    if (csv && *csv && freq) {
+    const catalog_protocol_t *proto = catalog_protocol(CAT_ENC_RAW_REPLAY);
+    if (!proto || !proto->press_frames || !proto->press_gap_us)
+        ESP_LOGE(TAG, "catalogue sans press.frames ni press.gap_us pour le rejeu : rien emis");
+    else if (csv && *csv && freq) {
         static uint8_t  lvl[REJEU_MAX_PULSES + 1];
         static uint32_t us[REJEU_MAX_PULSES + 1];
         int n = 0;
@@ -598,9 +643,9 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
             p = end; if (*p == ',') p++;
         }
         if (n >= 2) {
-            lvl[n] = 0; us[n] = REJEU_GAP_US; n++;   /* silence inter-trame */
+            lvl[n] = 0; us[n] = proto->press_gap_us; n++;   /* silence inter-trame */
             int r = 0;
-            for (int k = 0; k < REJEU_REPEATS && r == 0; k++)
+            for (int k = 0; k < proto->press_frames && r == 0; k++)
                 r = radio_tx_ook_pulses(freq, lvl, us, n);
             ESP_LOGW(TAG, "REJEU brut '%s' cmd=%s : %d impulsions a %u kHz, rc=%d",
                      v->id, cmd, n - 1, (unsigned)freq, r);
@@ -611,25 +656,15 @@ static bool rejeu_emit(volet_t *v, const char *cmd) {
     return ok;
 }
 
-/* Range le cadre capte (lvl/us, n impulsions) comme commande `cmd` de v, a la frequence freq. */
-static int rejeu_store(volet_t *v, const char *cmd, uint32_t freq,
-                       const uint8_t *lvl, const uint16_t *us, int n) {
-    if (n < 2) return -1;
-    char *csv = malloc((size_t)n * 9 + 1);
-    if (!csv) return -1;
-    int p = 0;
-    for (int i = 0; i < n; i++)
-        p += snprintf(csv + p, (size_t)n * 9 + 1 - p, "%s%d", i ? "," : "",
-                      lvl[i] ? (int)us[i] : -(int)us[i]);
-    cJSON *j = v->rejeu ? cJSON_Parse(v->rejeu) : NULL;
-    if (!j) j = cJSON_CreateObject();
-    cJSON_DeleteItemFromObject(j, "f");   cJSON_AddNumberToObject(j, "f", freq);
-    cJSON_DeleteItemFromObject(j, cmd);   cJSON_AddStringToObject(j, cmd, csv);
-    char *out = cJSON_PrintUnformatted(j);
-    cJSON_Delete(j); free(csv);
-    if (!out) return -1;
-    free(v->rejeu); v->rejeu = out;   /* out = heap cJSON, libere par cfg_volet_release */
-    return 0;
+/* Ce que la sauvegarde porte hors du modele : la table d'enrolement (cle "pfx_enrol", shutters_export_json). */
+#define BACKUP_KEY_PFX_ENROL "pfx_enrol"
+static size_t backup_reserved(void) {
+    cJSON *t = pfx_enrol_export();
+    char *e = t ? cJSON_PrintUnformatted(t) : NULL;
+    cJSON_Delete(t);
+    size_t n = e ? strlen(e) + strlen(",\"" BACKUP_KEY_PFX_ENROL "\":") : 0;
+    free(e);
+    return n;
 }
 /* Rejoue TELLE QUELLE une trame captee (identifiee par serial+hop dans l'anneau RF).
  * Sert au bouton "rejouer" du debug RF : on renvoie la trame brute, sans passer par un volet. */
@@ -715,17 +750,17 @@ static inline bool is_pfx_virt(const volet_t *v) {
  * fichier"). Le firmware lit donc des valeurs concretes. Pour une fiche heritee (0 / TXOVR_INHERIT,
  * legacy pre-pyramide), les sentinelles (freq/te 0, rpt/rmt -1) disent a radio_tx_device de GARDER le
  * reglage radio courant : un repli invisible, pas une definition de defaut dupliquee. */
+/* La fiche, sinon son profil (cfg_device_tx) ; ce que ni l'une ni l'autre ne dit garde le defaut de la radio. */
 static tx_params_t tx_params_of(const volet_t *v) {
-    tx_params_t p = {
-        .freq_khz = v->freq_khz,
-        .te_us    = v->te_us,
-        .rpt = v->tx_rpt == TXOVR_ON ? 1 : v->tx_rpt == TXOVR_OFF ? 0 : -1,
-        .rmt = v->tx_rmt == TXOVR_ON ? 1 : v->tx_rmt == TXOVR_OFF ? 0 : -1,
-    };
+    cfg_tx_t t = cfg_device_tx(v, profile_of(v));
+    tx_params_t p = { .freq_khz = t.freq_khz, .te_us = t.te_us, .rpt = t.rpt, .rmt = t.rmt };
     return p;
 }
 
-static bool emit_virt_profalux(volet_t *v, uint8_t button) {
+static bool emit_virt_profalux(volet_t *v, catalog_cmd_t cmd) {
+    int code = catalog_code(CAT_ENC_KEELOQ, cmd), frames = press_frames(CAT_ENC_KEELOQ);
+    if (code == CATALOG_NO_CODE || !frames) { ESP_LOGE(TAG, "catalogue : pas de code KeeLoq pour la commande %d, rien emis", (int)cmd); return false; }
+    uint8_t button = (uint8_t)code;
     char bits[68];
     uint16_t cnt = v->virt_counter;
     if (pfx_enrol_frame(v->virt_serial, button, cnt, bits) != 0) return false;   /* rien emis */
@@ -741,7 +776,7 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
         return false;
     }
     tx_params_t p = tx_params_of(v);
-    radio_tx_device(bits, PRESS_REPEATS, &p);
+    radio_tx_device(bits, frames, &p);
     ESP_LOGW(TAG, "TX VIRT serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)v->virt_serial, button, cnt, (unsigned)cc1101_get_tx_te());
     return true;
@@ -752,7 +787,10 @@ static bool emit_virt_profalux(volet_t *v, uint8_t button) {
  * d'adresse (24 bits) et virt_counter de code roulant : memes champs que la telecommande
  * virtuelle Profalux, reinterpretes par protocole. Reserve-puis-emet comme Profalux : on
  * persiste le PROCHAIN code AVANT d'emettre (au pire un code saute, jamais un rejeu). */
-static bool somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
+static bool somfy_emit_cmd(volet_t *v, catalog_cmd_t command) {
+    int c = catalog_code(CAT_ENC_SOMFY_RTS, command), frames = press_frames(CAT_ENC_SOMFY_RTS);
+    if (c == CATALOG_NO_CODE || !frames) { ESP_LOGE(TAG, "catalogue : pas de code Somfy pour la commande %d, rien emis", (int)command); return false; }
+    somfy_rts_cmd_t cmd = (somfy_rts_cmd_t)c;
     uint16_t code = v->virt_counter;
     somfy_rts_remote_t r = { .address = v->virt_serial & SOMFY_RTS_ADDR_MAX, .rolling_code = code };
     uint8_t frame[SOMFY_RTS_FRAME_BYTES];
@@ -767,27 +805,25 @@ static bool somfy_emit_cmd(volet_t *v, somfy_rts_cmd_t cmd) {
      * telecommande) ; 80 bits = format etendu (somfy_tx_emit80) pour les recepteurs qui l'exigent. Sur un
      * BSO a lames, c'est la DUREE de l'appui qui decide course/orientation, pas le format : la rafale
      * courte fait la course complete dans les deux cas. frame_bits 0 (defaut memset) = 56. */
-    if (v->frame_bits == 80) somfy_tx_emit80(frame, cmd, SOMFY_RTS_TX_REPEATS, v->freq_khz);
-    else                     somfy_tx_emit(frame, SOMFY_RTS_TX_REPEATS, v->freq_khz);
+    cfg_tx_t t = cfg_device_tx(v, profile_of(v));   /* porteuse et format : la fiche, sinon le profil */
+    if (t.frame_bits == 80) somfy_tx_emit80(frame, cmd, frames - 1, t.freq_khz);   /* repetitions apres la 1re */
+    else                    somfy_tx_emit(frame, frames - 1, t.freq_khz);
     ESP_LOGW(TAG, "TX SOMFY addr=0x%06X cmd=0x%X code=%u",
              (unsigned)(v->virt_serial & SOMFY_RTS_ADDR_MAX), cmd, (unsigned)code);
     return true;
 }
-static bool emit_virt_somfy(volet_t *v, uint8_t button) {
-    return somfy_emit_cmd(v, somfy_tx_cmd_from_button(button));
-}
 
 /* Emission d'un volet virtuel, aiguillee par son protocole. Profalux/KeeLoq et Somfy RTS
  * (issue #73) sont cables ; chaque protocole porte sa propre radio, sans toucher aux
- * autres. `button` est un code PFX_BTN_*, traduit par protocole. Renvoie true si une trame a
+ * autres. `cmd` est traduite en code par le catalogue, protocole par protocole. Renvoie true si une trame a
  * ete emise : un protocole non cable (ou une trame Profalux non construite) renvoie false, pour
  * que l'appelant ne simule pas un mouvement qui n'a rien envoye au moteur. */
-static bool emit_virt(volet_t *v, uint8_t button) {
+static bool emit_virt(volet_t *v, catalog_cmd_t cmd) {
     switch ((volet_proto_t)v->proto) {
     case VOLET_PROTO_PROFALUX:
-        return emit_virt_profalux(v, button);
+        return emit_virt_profalux(v, cmd);
     case VOLET_PROTO_SOMFY_RTS:
-        return emit_virt_somfy(v, button);
+        return somfy_emit_cmd(v, cmd);
     default:
         ESP_LOGW(TAG, "volet '%s' : protocole %u pas encore cable, rien emis",
                  v->id, (unsigned)v->proto);
@@ -803,28 +839,38 @@ static void zone_follow(volet_t *z, int dir);   /* (defini plus bas) : les suive
  * qu'une fois la rafale partie : ecrite avant, une commande qui echoue (code roulant non enregistre)
  * changeait la cible d'un mouvement EN COURS, que la boucle de tick croyait alors atteinte, et le
  * suivi s'arretait pendant que le moteur continuait (revue de la PR #131). */
-static void start_move(volet_t *v, int dir, int target) {
+/* Emet la commande `cmd` par le bouton de son type qui la porte (cfg_device_slot). false si aucun bouton
+ * ne la porte, ou si sa trame manque (clone sans cette trame, rejeu sans cette capture) : la commande est
+ * refusee, jamais acquittee sans emission (docs/PROFILES.md, section 7). */
+static bool emit_cmd(volet_t *v, catalog_cmd_t cmd) {
+    const int slot = cfg_device_slot(v, cmd);
+    if (slot == CATALOG_NO_SLOT) {
+        ESP_LOGW(TAG, "'%s' : aucun bouton du type '%s' ne porte la commande %s, refusee", v->id, v->type, catalog_cmd_name(cmd));
+        return false;
+    }
+    if (v->virt)  return emit_virt(v, (catalog_cmd_t)slot);
+    if (v->rejeu) return rejeu_emit(v, catalog_cmd_name((catalog_cmd_t)slot));   /* rejeu brut par commande */
+    /* vraie telecommande capturee, par appareil ; sans la trame de ce bouton, rien */
+    const char *bits = slot == CAT_CMD_UP ? v->up : slot == CAT_CMD_STOP ? v->stop : slot == CAT_CMD_DOWN ? v->down : NULL;
+    return emit_press(v, bits);
+}
+static bool start_move(volet_t *v, int dir, int target) {
     radio_pause_rx(true);   /* le temps de nos rafales, l'ecoute permanente ne doit pas bloquer le TX */
-    bool sent;
-    if (v->virt) sent = emit_virt(v, dir > 0 ? PFX_BTN_UP : PFX_BTN_DOWN);
-    else if (v->rejeu) sent = rejeu_emit(v, dir > 0 ? "up" : "down");   /* rejeu brut par commande */
-    else       { emit_press(v, dir > 0 ? v->up : v->down); sent = true; }   /* vraie telecommande capturee : toujours emise, par appareil */
+    const bool sent = emit_cmd(v, dir > 0 ? CAT_CMD_UP : CAT_CMD_DOWN);
     if (!sent) {
         /* Rien n'est parti (protocole non cable) : ne pas enclencher le suivi, sinon la boucle de
          * tick ferait avancer et publier une position que le moteur n'a jamais recue. */
         radio_pause_rx(false);
-        return;
+        return false;
     }
     v->target = target;
     v->dir = dir; v->own_move = true;
     v->last_tick_us = esp_timer_get_time();
     zone_follow(v, dir);
+    return true;
 }
-static void do_stop(volet_t *v) {
-    bool sent = true;
-    if (v->virt) sent = emit_virt(v, PFX_BTN_STOP);
-    else if (v->rejeu) rejeu_emit(v, "stop");   /* rejeu brut par commande */
-    else         emit_press(v, v->stop);    /* rafale STOP = fige le moteur a la position voulue, par appareil */
+static bool do_stop(volet_t *v) {
+    const bool sent = emit_cmd(v, CAT_CMD_STOP);   /* rafale STOP = fige le moteur a la position voulue */
     if (!sent && v->dir) {
         /* STOP non emis (code roulant non enregistre, voir emit_virt_profalux) : le moteur continue
          * jusqu'a sa butee. On l'y suit, comme un mouvement lance par la vraie telecommande, au lieu
@@ -838,6 +884,7 @@ static void do_stop(volet_t *v) {
         zone_follow(v, 0);
     }
     radio_pause_rx(false);  /* fin de notre commande : on reprend l'ecoute (sync + frame-log) */
+    return sent;
 }
 /* Sync depuis une commande EXTERNE (vraie telecommande) : suit sans emettre.
  * Le moteur part vers la butee (target) ; l'arret intermediaire vient du STOP (freeze). */
@@ -846,6 +893,172 @@ static void track_move(volet_t *v, int dir) {
     v->last_tick_us = esp_timer_get_time();
 }
 static void freeze(volet_t *v) { v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true; }
+
+/* Integre le mouvement suivi jusqu'a `now` : la position avance au rythme du temps de course (repli si non
+ * etalonne). true si la butee ou la cible est atteinte. Partagee par la boucle de suivi et par les appuis successifs
+ * d'un portail pas a pas, qui changent de sens sans attendre la boucle. */
+#define TRAVEL_FALLBACK_MS 18000   /* course supposee d'un appareil non etalonne */
+#define TRAVEL_MIN_MS      500     /* en dessous, le temps de course n'est pas un etalonnage */
+static bool integrate_move(volet_t *v, int64_t now) {
+    if (v->dir == 0) return false;
+    uint32_t travel = v->dir > 0 ? v->travel_up_ms : v->travel_down_ms;
+    if (travel < TRAVEL_MIN_MS) travel = TRAVEL_FALLBACK_MS;
+    float dms = (now - v->last_tick_us) / 1000.0f;
+    v->last_tick_us = now;
+    /* Convention : position = % de FERMETURE. 0 = ouvert (haut), 100 = ferme (bas).
+     * Monter (dir=+1) DIMINUE la position ; descendre (dir=-1) l'augmente -> d'ou le -=. */
+    v->position -= v->dir * (dms / travel) * 100.0f;
+    if (v->position < 0) v->position = 0;
+    if (v->position > 100) v->position = 100;
+    /* cible atteinte ou butee (monter -> vers 0 ; descendre -> vers 100) */
+    return (v->dir > 0 && (v->position <= 0   || (v->target >= 0 && v->position <= v->target)))
+        || (v->dir < 0 && (v->position >= 100 || (v->target >= 0 && v->position >= v->target)));
+}
+
+/* ── Bouton PAS A PAS (portail a bouton unique, docs/PROFILES.md section 5.1 ; #134, etape 5) ──
+ * La carte du moteur decide ce que fait chaque appui, selon le cycle que declare le TYPE (catalog_cycle_t,
+ * step_cycle.h). Le boitier suit ce cycle comme la telecommande : un ordre ouvrir / fermer / stop devient le nombre
+ * d'appuis qui y mene, et chaque appui fait avancer le suivi. Le suivi ne voit ni la telecommande d'origine ni une
+ * refermeture automatique : l'une ou l'autre le decale jusqu'a la prochaine fin de course qu'il croit atteindre. */
+static const catalog_cycle_t *step_cycle_of(const volet_t *v) {
+    if (v->central) return NULL;
+    const catalog_type_t *t = catalog_type(v->type);
+    return (t && t->step.len) ? &t->step : NULL;
+}
+static step_state_t step_state(const volet_t *v) {
+    return (step_state_t){ .dir = v->dir, .at_open = v->dir == 0 && v->position <= 1, .at_closed = v->dir == 0 && v->position >= 99 };
+}
+/* Position du cycle : celle suivie, ou, pour une fiche qui ne l'a jamais suivie, celle d'un portail au repos. */
+static uint8_t step_next_of(volet_t *v, const catalog_cycle_t *c) {
+    if (!v->step_known || v->step_next >= c->len) {
+        v->step_next = step_next_at_rest(c, v->position >= 99);
+        v->step_known = true;
+    }
+    return v->step_next;
+}
+/* Fin d'une pleine course que nous avons lancee : en butee ; pour un portail pas a pas, la carte saute le stop qui
+ * suivait le mouvement. */
+static void end_of_travel(volet_t *v) {
+    const catalog_cycle_t *c = step_cycle_of(v);
+    if (c) { uint8_t n = step_next_of(v, c); step_travel_end(c, &n); v->step_next = n; }
+    v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true; radio_pause_rx(false);
+}
+/* Un appui : emet la trame du bouton pas a pas, avance le cycle et suit ce que fait le portail. false si rien
+ * n'est parti. Le bouton pas a pas porte toutes les commandes de son cycle : sa trame est celle d'ouvrir. */
+static bool step_press_once(volet_t *v, const catalog_cycle_t *c) {
+    /* Le mouvement en cours avance jusqu'a cet appui : entre deux appuis d'une meme commande, la boucle de suivi n'a
+     * pas la main (verrou). S'il a atteint sa butee, la carte a deja saute le stop. */
+    if (integrate_move(v, esp_timer_get_time())) end_of_travel(v);
+    radio_pause_rx(true);   /* comme start_move : l'ecoute ne doit pas bloquer le TX */
+    if (!emit_cmd(v, CAT_CMD_UP)) { radio_pause_rx(false); return false; }
+    uint8_t n = step_next_of(v, c);
+    const int a = step_press(c, &n);
+    v->step_next = n; s_pos_dirty = true;   /* retenir la position du cycle au redemarrage */
+    if (a == CAT_CMD_UP || a == CAT_CMD_DOWN) {
+        v->dir = a == CAT_CMD_UP ? +1 : -1; v->target = a == CAT_CMD_UP ? 0 : 100;
+        v->own_move = true; v->last_tick_us = esp_timer_get_time();
+    } else {
+        v->dir = 0; v->target = -1; v->own_move = false; radio_pause_rx(false);
+    }
+    ESP_LOGW(TAG, "pas a pas '%s' : appui -> %s (prochain : position %u du cycle)", v->id,
+             a == CAT_CMD_UP ? "ouverture" : a == CAT_CMD_DOWN ? "fermeture" : "arret", (unsigned)n);
+    return true;
+}
+/* Appuis encore necessaires pour obtenir `want`, le mouvement en cours avance jusqu'a maintenant. */
+static int step_remaining(volet_t *v, const catalog_cycle_t *c, catalog_cmd_t want) {
+    if (integrate_move(v, esp_timer_get_time())) end_of_travel(v);
+    return step_presses(c, step_next_of(v, c), step_state(v), want);
+}
+/* Attente entre deux appuis, verrou RELACHE : pendant ce temps, la boucle de suivi integre les autres appareils et
+ * emet leurs STOP aux positions demandees. Au retour, l'appareil est retrouve par son nom (une suppression a pu
+ * decaler le tableau). NULL : il a disparu, ou un ordre plus recent a pris la main (sa generation a change). */
+static volet_t *step_wait(const char *id, uint8_t gen, uint32_t gap_ms) {
+    UNLOCK();
+    pub_flush();
+    vTaskDelay(pdMS_TO_TICKS(gap_ms));
+    LOCK();
+    volet_t *v = find_volet(id);
+    if (!v) { ESP_LOGW(TAG, "pas a pas '%s' : appareil disparu pendant l'attente, appuis restants abandonnes", id); return NULL; }
+    if (v->step_gen != gen) { ESP_LOGW(TAG, "pas a pas '%s' : un ordre plus recent prend la main", id); return NULL; }
+    return v;
+}
+/* Ordre ouvrir / fermer / stop : autant d'appuis que le cycle en demande, espaces de press_gap_ms. L'attente relache
+ * le verrou (step_wait) : `*vp` peut donc changer, et vaut NULL si l'appareil a disparu ou si un ordre plus recent l'a
+ * remplace. 0 : obtenu (ou deja obtenu, ou remplace) ; SH_CMD_REFUSED : rien emis, ou le cycle n'y mene pas. */
+static int step_command(volet_t **vp, const catalog_cycle_t *c, catalog_cmd_t want) {
+    volet_t *v = *vp;
+    const uint8_t gen = ++v->step_gen;   /* tout ordre interrompt la suite d'appuis d'un ordre precedent */
+    /* Un arret demande a un portail immobile ne fait rien : un appui le mettrait en marche. */
+    if (want == CAT_CMD_STOP && v->dir == 0) return 0;
+    /* Sans temps de course mesure, la fin de course suivie n'est qu'un repli : en deduire plusieurs appuis risquerait
+     * d'arreter un portail qu'on voulait fermer. Un appui alors, comme la telecommande, et le suivi reste indicatif. */
+    if (!cover_travel_ok(v->travel_up_ms) || !cover_travel_ok(v->travel_down_ms)) {
+        ESP_LOGW(TAG, "pas a pas '%s' : temps de course non etalonne, un seul appui", v->id);
+        return step_press_once(v, c) ? 0 : SH_CMD_REFUSED;
+    }
+    /* Appui par appui, l'action restante est RECALCULEE : pendant l'attente, le portail peut atteindre une butee, et
+     * la carte saute alors le stop prevu ; un nombre d'appuis fige d'avance finirait par un appui de trop. L'attente
+     * ne precede qu'un appui encore necessaire. Au plus la longueur du cycle. */
+    for (int i = 0; ; i++) {
+        int k = step_remaining(v, c, want);
+        if (k > 0 && i) {
+            char id[SH_ID_LEN]; strlcpy(id, v->id, sizeof id);
+            if (!(v = *vp = step_wait(id, gen, c->press_gap_ms))) return 0;
+            if (!(c = step_cycle_of(v))) return SH_CMD_REFUSED;   /* type change pendant l'attente */
+            k = step_remaining(v, c, want);
+        }
+        if (k == 0) return 0;
+        if (k < 0 || i >= c->len) {
+            ESP_LOGW(TAG, "pas a pas '%s' : ordre %s refuse, le cycle du type '%s' n'y mene pas", v->id, catalog_cmd_name(want), v->type);
+            return SH_CMD_REFUSED;
+        }
+        if (!step_press_once(v, c)) return SH_CMD_REFUSED;
+    }
+}
+/* Redemarrage pendant une course : la fiche a garde le cycle d'un portail EN MOUVEMENT (le prochain appui est le
+ * stop qui suit ce mouvement), mais le suivi repart immobile. La carte du moteur, elle, ne s'est pas arretee : on
+ * REPREND la course depuis la position retenue, comme si elle se poursuivait depuis la mise sous tension. La boucle
+ * de suivi la mene a sa butee et saute alors le stop, comme la carte. */
+static void resume_steps_at_boot(void) {
+    for (int i = 0; i < s_nvolets; i++) {
+        volet_t *v = &s_volets[i];
+        const catalog_cycle_t *c = step_cycle_of(v);
+        if (!c || !v->step_known || v->step_next >= c->len || c->act[v->step_next] != CAT_CMD_STOP) continue;
+        const int was = c->act[(v->step_next + c->len - 1) % c->len];
+        if (was != CAT_CMD_UP && was != CAT_CMD_DOWN) continue;
+        v->dir = was == CAT_CMD_UP ? +1 : -1; v->target = was == CAT_CMD_UP ? 0 : 100;
+        v->own_move = true; v->last_tick_us = 0;
+        ESP_LOGW(TAG, "pas a pas '%s' : redemarrage pendant une %s, la course suivie reprend", v->id, was == CAT_CMD_UP ? "ouverture" : "fermeture");
+    }
+}
+/* Ordre a un appareil (hors centrale) : par le cycle de son bouton pas a pas s'il en a un, sinon par le bouton de
+ * chaque commande. `step` : un appui du bouton pas a pas. 0 si emis (ou deja obtenu), SH_CMD_REFUSED sinon. Un ordre
+ * a plusieurs appuis relache le verrou entre deux : au retour, `*vp` est l'appareil retrouve, ou NULL. */
+static int device_cmd(volet_t **vp, const char *cmd, int value) {
+    volet_t *v = *vp;
+    const catalog_cycle_t *c = step_cycle_of(v);
+    const int want = catalog_cmd_of(cmd);
+    if (c) {
+        if (!strcmp(cmd, CMD_STEP)) { v->step_gen++; return step_press_once(v, c) ? 0 : SH_CMD_REFUSED; }
+        if (want == CAT_CMD_UP || want == CAT_CMD_STOP || want == CAT_CMD_DOWN) return step_command(vp, c, (catalog_cmd_t)want);
+        ESP_LOGW(TAG, "'%s' : commande %s sans objet pour un bouton pas a pas, refusee", v->id, cmd);
+        return SH_CMD_REFUSED;
+    }
+    /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). Une commande que l'appareil n'a pas emise (aucun
+     * bouton ne la porte, trame absente) est REFUSEE : l'appelant le dit, rien n'est acquitte. */
+    bool sent = false;
+    if (want == CAT_CMD_UP)        sent = start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
+    else if (want == CAT_CMD_DOWN) sent = start_move(v, -1, 100);   /* fermer : descendre vers 100 */
+    else if (want == CAT_CMD_STOP) sent = do_stop(v);
+    else if (!strcmp(cmd, CMD_POS)) {   /* value = % de fermeture voulu */
+        if (value < 0) value = 0;
+        if (value > 100) value = 100;
+        if (value > v->position + 1)      sent = start_move(v, -1, value);   /* plus ferme -> descendre */
+        else if (value < v->position - 1) sent = start_move(v, +1, value);   /* plus ouvert -> monter */
+        else { v->target = value; v->dir = 0; sent = true; }
+    } else ESP_LOGW(TAG, "'%s' : commande %s inconnue, refusee", v->id, cmd);
+    return sent ? 0 : SH_CMD_REFUSED;
+}
 
 /* ── Home Assistant : discovery + etat (MQTT) ── */
 static void ha_state_str(const volet_t *v, char *out) {
@@ -867,7 +1080,8 @@ _Static_assert(COVER_NAME_MAX == SH_ID_LEN - 1, "COVER_NAME_MAX (profiles.json n
 static int volet_rank(const volet_t *v) { return v->order >= 0 ? v->order + 1 : 0; }
 
 static bool volet_positional(const volet_t *v) {
-    return s_log_frames && !v->central && !is_zone(v)
+    const catalog_type_t *t = catalog_type(v->type);   /* un type sans position (portail) n'en publie jamais */
+    return t && t->positional && s_log_frames && !v->central && !is_zone(v)
         && cover_travel_ok(v->travel_up_ms) && cover_travel_ok(v->travel_down_ms);
 }
 
@@ -1011,7 +1225,11 @@ static void announce_one(volet_t *v) {
             "\"position_topic\":\"openprofalux/cover/%s/position\","
             "\"set_position_topic\":\"openprofalux/cover/%s/set_position\","
             "\"position_open\":100,\"position_closed\":0,", slug, slug);
-    snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
+    /* L'entite vient du TYPE de l'appareil (types[].entity) : sa famille fait le topic, sa classe le
+     * device_class. Un type que le catalogue ne declare pas n'est pas annonce : il n'a ni boutons ni entite. */
+    const catalog_type_t *type = catalog_type(v->type);
+    if (!type) { ESP_LOGW(TAG, "%s : type %s inconnu du catalogue, pas annonce a Home Assistant", v->id, v->type); free(pl); return; }
+    snprintf(topic, sizeof(topic), "homeassistant/%s/openprofalux_%s/config", catalog_component_name(type->component), slug);
     /* Cles en TOUTES LETTRES (alignees sur OpenXtraflame) ; device PARTAGE (un seul appareil
      * "OpenProfalux" regroupe tous les volets) ; topics command/state SLUGIFIES.
      * optimistic : HA en deduit assumed_state, et son interface laisse alors Ouvrir et Fermer
@@ -1020,7 +1238,7 @@ static void announce_one(volet_t *v) {
      * C'est le cas reel : le moteur ne renvoie rien, l'etat est suppose. HA continue de lire
      * state_topic ; il affiche juste l'etat vise des l'envoi, avant celui du boitier. */
     snprintf(pl, 1536,
-        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"shutter\","
+        "{\"name\":\"%s\",\"unique_id\":\"openprofalux_%s\",\"object_id\":\"openprofalux_%s\",\"device_class\":\"%s\","
         "\"command_topic\":\"openprofalux/cover/%s/set\","
         "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"optimistic\":true,"
         "%s"
@@ -1028,7 +1246,7 @@ static void announce_one(volet_t *v) {
         "\"availability_topic\":\"openprofalux/%s/status\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\","
         "\"device\":{\"identifiers\":[\"openprofalux\"],\"name\":\"%s\","
         "\"manufacturer\":\"isno.fr\",\"model\":\"OpenProfalux\",\"configuration_url\":\"%s\"}}",
-        v->id, slug, slug, slug, pos, slug, s_device, devname, cu);
+        v->id, slug, slug, type->device_class, slug, pos, slug, s_device, devname, cu);
     pub_defer(topic, pl, 1, 1);
     free(pl);
     publish_volet_state(v);
@@ -1068,8 +1286,10 @@ static void announce_extras(void) {
 static void clear_one(volet_t *v) {
     char topic[96], slug[SH_ID_LEN];
     slugify(slug, sizeof(slug), v->id);
-    snprintf(topic, sizeof(topic), "homeassistant/cover/openprofalux_%s/config", slug);
-    pub_defer(topic, "", 0, 1);   /* vide + retenu -> HA retire l'entite */
+    for (int c = 0; c < CAT_COMPONENT_COUNT; c++) {   /* sous chaque famille : le type a pu changer depuis l'annonce */
+        snprintf(topic, sizeof(topic), "homeassistant/%s/openprofalux_%s/config", catalog_component_name((catalog_component_t)c), slug);
+        pub_defer(topic, "", 0, 1);   /* vide + retenu -> HA retire l'entite */
+    }
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/state", slug);
     pub_defer(topic, "", 0, 1);
     snprintf(topic, sizeof(topic), "openprofalux/cover/%s/position", slug);
@@ -1107,15 +1327,23 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
     ESP_LOGW(TAG, "CMD %s '%s' (up=%dc stop=%dc down=%dc)", cmd, id,
              (int)strlen(v->up), (int)strlen(v->stop), (int)strlen(v->down));
     if (v->central) {   /* centrale : diffuse la commande a chaque volet membre (CSV) */
-        char mid[SH_ID_LEN];
-        for (const char *p = cfg_members_next(v->members, mid); p; p = cfg_members_next(p, mid)) {
+        /* Un portail membre relache le verrou entre ses appuis : la liste et la centrale elle-meme peuvent changer
+         * pendant ce temps. On parcourt donc une COPIE des membres, et on retrouve la centrale par son nom. */
+        char cid[SH_ID_LEN], mid[SH_ID_LEN];
+        strlcpy(cid, v->id, sizeof cid);
+        char *members = strdup(v->members ? v->members : "");   /* sur le tas : la liste peut faire ~600 octets */
+        if (!members) { ESP_LOGW(TAG, "CMD %s '%s' : memoire insuffisante, refusee", cmd, cid); UNLOCK(); return SH_CMD_REFUSED; }
+        for (const char *p = cfg_members_next(members, mid); p; p = cfg_members_next(p, mid)) {
             volet_t *m = find_volet(mid);
-            if (!m || m == v || m->central) continue;
-            if      (!strcmp(cmd, "up"))   start_move(m, +1, 0);
-            else if (!strcmp(cmd, "down")) start_move(m, -1, 100);
-            else if (!strcmp(cmd, "stop")) { do_stop(m); }
-            publish_volet_state(m);
+            if (!m || !strcmp(mid, cid) || m->central) continue;
+            /* un membre qui refuse la commande (aucun bouton ne la porte) ne bloque pas les autres ; un portail
+             * pas a pas y obeit par son cycle */
+            const int mc = catalog_cmd_of(cmd);
+            if (mc == CAT_CMD_UP || mc == CAT_CMD_DOWN || mc == CAT_CMD_STOP) device_cmd(&m, cmd, 0);
+            if (m) publish_volet_state(m);
         }
+        free(members);
+        if (!(v = find_volet(cid))) { UNLOCK(); pub_flush(); return 0; }   /* centrale supprimee pendant un portail */
         if (!strcmp(cmd, "up")) v->position = 0; else if (!strcmp(cmd, "down")) v->position = 100;
         v->dir = 0;
         publish_volet_state(v);
@@ -1128,30 +1356,21 @@ int shutters_cmd(const char *id, const char *cmd, int value) {
             UNLOCK(); return -1;
         }
         radio_pause_rx(true);
-        bool sent = somfy_emit_cmd(v, SOMFY_RTS_CMD_PROG);
+        const catalog_protocol_t *rts = catalog_protocol(CAT_ENC_SOMFY_RTS);   /* commande d'appairage : enrol.command */
+        bool sent = rts && rts->enrol.command >= 0 && somfy_emit_cmd(v, (catalog_cmd_t)rts->enrol.command);
         radio_pause_rx(false);
         UNLOCK();
         return sent ? 0 : -1;
     }
-    if (!strcmp(cmd, "pos") && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
+    if (!strcmp(cmd, CMD_POS) && is_zone(v)) {   /* zone : pas de position (voir announce_one) */
         ESP_LOGW(TAG, "CMD pos refusee : '%s' est une zone", id);
         UNLOCK(); return -1;
     }
-    /* position = % de FERMETURE (0 = ouvert/haut, 100 = ferme/bas). */
-    if (!strcmp(cmd, "up"))        start_move(v, +1, 0);     /* ouvrir : monter vers 0 */
-    else if (!strcmp(cmd, "down")) start_move(v, -1, 100);   /* fermer : descendre vers 100 */
-    else if (!strcmp(cmd, "stop")) { do_stop(v); }
-    else if (!strcmp(cmd, "pos"))  {   /* value = % de fermeture voulu */
-        if (value < 0) value = 0;
-        if (value > 100) value = 100;
-        if (value > v->position + 1)      start_move(v, -1, value);   /* plus ferme -> descendre */
-        else if (value < v->position - 1) start_move(v, +1, value);   /* plus ouvert -> monter */
-        else { v->target = value; v->dir = 0; }
-    }
-    publish_volet_state(v);
+    const int rc = device_cmd(&v, cmd, value);
+    if (v) publish_volet_state(v);
     UNLOCK();
     pub_flush();
-    return 0;
+    return rc;
 }
 
 /* ── Synchro inter-cartes : compteur roulant PARTAGE + verrou d'emission, par MQTT.
@@ -1286,22 +1505,11 @@ static void tick_task(void *arg) {
         for (int i = 0; i < s_nvolets; i++) {
             volet_t *v = &s_volets[i];
             if (v->dir == 0) continue;
-            uint32_t travel = v->dir > 0 ? v->travel_up_ms : v->travel_down_ms;
-            if (travel < 500) travel = 18000;   /* defaut si non calibre */
-            float dms = (now - v->last_tick_us) / 1000.0f;
-            v->last_tick_us = now;
-            /* Convention : position = % de FERMETURE. 0 = ouvert (haut), 100 = ferme (bas).
-             * Monter (dir=+1) DIMINUE la position ; descendre (dir=-1) l'augmente -> d'ou le -=. */
-            v->position -= v->dir * (dms / travel) * 100.0f;
-            if (v->position < 0) v->position = 0;
-            if (v->position > 100) v->position = 100;
-            /* cible atteinte ou butee -> stop (monter -> vers 0 ; descendre -> vers 100) */
-            int reached = (v->dir > 0 && (v->position <= 0   || (v->target >= 0 && v->position <= v->target)))
-                       || (v->dir < 0 && (v->position >= 100 || (v->target >= 0 && v->position >= v->target)));
+            const bool reached = integrate_move(v, now);
             if (reached) {
                 if (!v->own_move) freeze(v);                                /* mouvement externe : on fige le suivi */
                 else if (v->target > 0 && v->target < 100) do_stop(v);      /* notre commande vers une position INTERMEDIAIRE : STOP pour figer */
-                else { v->dir = 0; v->target = -1; v->own_move = false; s_pos_dirty = true; radio_pause_rx(false); } /* pleine course : butee, own_move false, retenir la position */
+                else end_of_travel(v);   /* pleine course : butee, own_move false, retenir la position (et le cycle) */
             }
             /* sinon mouvement en cours : le moteur (le notre, lance par une rafale, ou l'externe)
              * tourne tout seul jusqu'au STOP / butee ; on integre juste la position sans re-emettre */
@@ -1333,6 +1541,10 @@ int shutters_learn_assign(const char *id, const char *action, const char *bits) 
     else if (!strcmp(action, "down")) { strlcpy(v->down, bits, SH_BITS_LEN); v->down_btn = btn; }
     else if (!strcmp(action, "stop")) { strlcpy(v->stop, bits, SH_BITS_LEN); v->stop_btn = btn; }
     else { UNLOCK(); return -1; }
+    /* une telecommande copiee : le profil de sa marque, s'il n'en a pas. APRES la trame : une fiche
+     * vide n'a pas d'encodeur, donc pas de profil (cfg_device_encoder). */
+    const cfg_tx_t radio = keeloq_radio_tx();
+    cfg_device_assign_copy_profile(v, &radio);
     /* memorise le serial de cette telecommande pour ce volet (sync position) */
     uint32_t ser = 0; if ((int)strlen(bits) >= 60) for (int i = 0; i < 28; i++) if (bits[32 + i] == '1') ser |= (1u << i);
     char shex[SH_SERIAL_LEN]; snprintf(shex, sizeof(shex), "0x%07X", (unsigned)ser);
@@ -1379,7 +1591,7 @@ uint16_t shutters_virt_counter_for_serial(uint32_t serial) {
 
 /* Cree (ou convertit) un volet VIRTUEL a partir d'une identite 0x067 enrolee : il apparait
  * dans l'onglet Volets + en cover HA, et pilote le moteur par generation (compteur roulant). */
-int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
+int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, const char *profile) {
     if (!id || !*id) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
@@ -1388,6 +1600,10 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
     v->proto = VOLET_PROTO_PROFALUX;   /* seul generateur cable aujourd'hui */
     v->virt_serial = serial;
     v->virt_counter = counter;
+    /* Le profil CHOISI des la creation : il donne son type a une fiche neuve (boutons, classe Home Assistant).
+     * Attribue plus tard, il ne remplacerait plus le type deja pose par le profil generique. Une fiche existante
+     * convertie garde son type (cfg_device_assign_profile ne remplace qu'un type vide). */
+    assign_profile(v, profile);
     /* L'identite d'emission 0x067 NE VA PAS dans `serials` (= l'ensemble des VRAIES telecommandes
      * qui pilotent le moteur, pour le suivi de position). L'y melanger bloquait l'ajout d'une vraie
      * telecommande (garde-fou anti-melange). L'identite virtuelle est exposee a part (virt_serial). */
@@ -1407,7 +1623,7 @@ int shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter) {
 /* Cree (ou convertit) un volet VIRTUEL Somfy RTS : contrairement au Profalux, pas de capture
  * d'identite, on choisit une adresse 24 bits. Le code roulant part a 1 et se persiste comme
  * le Profalux. L'appairage reel (commande PROG) se declenche ensuite depuis l'UI. */
-sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address) {
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address, const char *profile) {
     if (!id || !*id || !address || address > SOMFY_RTS_ADDR_MAX) return SH_SOMFY_INVALID;
     if (strlen(id) >= SH_ID_LEN) return SH_SOMFY_NAME_TOO_LONG;
     /* Une adresse Somfy ne doit JAMAIS ressembler a une identite Profalux 0x067 valide. Sinon un
@@ -1434,6 +1650,9 @@ sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address
     v->proto = VOLET_PROTO_SOMFY_RTS;
     v->virt_serial = address;
     v->virt_counter = 1;
+    /* le profil choisi a l'ajout, sinon celui de la marque : porteuse et format de trame (56 ou 80 bits),
+     * tant que la fiche laisse 0. Attribue ici, avant le premier PROG (revue de la PR #156). */
+    assign_profile(v, profile);
     save_cfg();
     announce_one(v);
     UNLOCK();
@@ -1443,42 +1662,47 @@ sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address
 }
 
 /* Cree (ou convertit) un appareil a REJEU BRUT : ni clone bit-string, ni virtuel. Les cadres
- * par commande arrivent ensuite par shutters_rejeu_capture. `type` = dev_type_t (portail/volet). */
-int shutters_create_rejeu(const char *id, uint8_t type) {
-    if (!id || !*id) return -1;
+ * par commande arrivent ensuite par shutters_rejeu_capture. `type` : la cle d'un type du catalogue. */
+int shutters_create_rejeu(const char *id, const char *type) {
+    if (!id || !*id || !catalog_type(type)) return -1;
     LOCK();
     volet_t *v = get_or_create(id);
     if (!v) { UNLOCK(); return -1; }
     v->virt = false;
-    v->type = type;
+    /* Un rejeu sans capture encore : un document vide le dit. Sans lui, la fiche passait pour une copie
+     * KeeLoq et recevait le profil d'une telecommande Profalux (constate sur une Super). */
+    if (!v->rejeu && !(v->rejeu = cfg_replay_empty())) { UNLOCK(); return -1; }
+    strlcpy(v->type, type, sizeof v->type);
+    assign_profile(v, NULL);
     save_cfg();
     announce_one(v);
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "appareil rejeu brut '%s' cree (type %u)", id, type);
+    ESP_LOGW(TAG, "appareil rejeu brut '%s' cree (type %s)", id, type);
     return 0;
 }
 
-/* Corrige le type (dev_type_t) d'un appareil DEJA cree, sans reenroler ni recapturer : l'id,
- * l'identite, le compteur et les captures restent. Sert a reparer un type mal attribue. */
-int shutters_set_type(const char *id, uint8_t type) {
-    if (!id || !*id || type > TYPE_PORTAIL) return -1;   /* borne sur dev_type_t declare */
+/* Corrige le type d'un appareil DEJA cree, sans reenroler ni recapturer : l'id, l'identite, le compteur
+ * et les captures restent. Sert a reparer un type mal attribue. `type` : la cle d'un type du catalogue. */
+int shutters_set_type(const char *id, const char *type) {
+    if (!id || !*id || !catalog_type(type)) return -1;   /* seulement un type que le catalogue declare */
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
-    v->type = type;
+    strlcpy(v->type, type, sizeof v->type);
     save_cfg();
     announce_one(v);   /* republie l'entite (un libelle HA peut dependre du type) */
     UNLOCK();
     pub_flush();
-    ESP_LOGW(TAG, "appareil '%s' : type change en %u", id, type);
+    ESP_LOGW(TAG, "appareil '%s' : type change en %s", id, type);
     return 0;
 }
 
 /* Capture le cadre OOK brut d'UNE commande (cmd = "up"/"stop"/"down") sur la radio `radio` et
  * le range dans l'appareil. La capture (~15 s, mutex radio) se fait HORS du LOCK shutters ; le
  * rangement + sauvegarde sous LOCK. Rend le nombre d'impulsions (>0), <=0 si rien / erreur. */
-int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz) {
+int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz, bool *backup_full) {
+    *backup_full = false;
     if (!id || !*id || !cmd || !*cmd) return -1;
     static uint8_t  lvl[REJEU_MAX_PULSES];
     static uint16_t us[REJEU_MAX_PULSES];
@@ -1490,9 +1714,11 @@ int shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t 
     uint32_t freq = freq_khz ? freq_khz : (cur ? cur : carrier);   /* freq du profil de marque si fournie, sinon porteuse de la radio */
     LOCK();
     volet_t *v = find_volet(id);
-    int rc = v ? rejeu_store(v, cmd, freq, lvl, us, n) : -1;
-    if (rc == 0) save_cfg();
+    const size_t reserved = backup_reserved();
+    cfg_capture_rc_t rc = v ? cfg_device_store_capture(&s_model, v, cmd, freq, lvl, us, n, reserved) : CFG_CAPTURE_ERR;
+    if (rc == CFG_CAPTURE_OK) save_cfg();
     UNLOCK();
+    *backup_full = rc == CFG_CAPTURE_BACKUP_FULL;
     if (rc != 0) return -1;
     ESP_LOGW(TAG, "rejeu capture '%s' cmd=%s : %d impulsions a %u kHz, RSSI %d dBm", id, cmd, n, (unsigned)freq, rssi);
     return n;
@@ -1580,6 +1806,9 @@ int shutters_create_central(const char *id, const char *members_csv) {
         return -1;
     }
     v->central = true; v->virt = false;
+    /* Le type d'une centrale : celui qu'avaient les fiches sans type (mode legacy, numero 0), comme avant
+     * les profils ; le cloud en tire les commandes de la centrale. */
+    if (!v->type[0]) strlcpy(v->type, catalog_type_of_legacy(0) ?: "", sizeof v->type);
     v->position = 50; v->dir = 0; v->target = -1;
     save_cfg();
     announce_one(v);
@@ -1635,15 +1864,18 @@ int shutters_adopt(const char *id, const char *action, const char *serial, uint3
 }
 
 /* Cree un volet a partir d'une telecommande deja captee (Telecommandes > Liste) : pour chaque
- * commande, la trame la plus recente de ce serial dans le journal RF (boutons PFX_BTN_*). Les
+ * commande, la trame la plus recente de ce serial dans le journal RF (codes KeeLoq du catalogue). Les
  * commandes absentes du journal restent a apprendre. *learned recoit "up,stop,down" (celles
  * trouvees). Refuse un nom deja pris : on ne reecrit pas un volet existant. */
 int shutters_create_volet_from_remote(const char *id, const char *serial, char *learned, size_t cap, const char **why) {
     *why = NULL; if (cap) learned[0] = 0;
     if (!id || !*id) { *why = "nom manquant"; return -1; }
     if (!serial || !*serial) { *why = "serial manquant"; return -1; }
-    static const struct { const char *action; uint8_t btn; } CMD[] = {
-        { "up", PFX_BTN_UP }, { "stop", PFX_BTN_STOP }, { "down", PFX_BTN_DOWN } };
+    /* Codes des boutons d'une telecommande KeeLoq : catalogue (protocole de l'encodeur KeeLoq). */
+    const struct { const char *action; int btn; } CMD[] = {
+        { "up",   catalog_code(CAT_ENC_KEELOQ, CAT_CMD_UP) },
+        { "stop", catalog_code(CAT_ENC_KEELOQ, CAT_CMD_STOP) },
+        { "down", catalog_code(CAT_ENC_KEELOQ, CAT_CMD_DOWN) } };
     char bits[3][SH_BITS_LEN] = {{0}};
     LOCK();
     if (find_volet(id)) { UNLOCK(); *why = "un volet porte deja ce nom"; return -1; }
@@ -1692,18 +1924,21 @@ int shutters_set_orientation(const char *id, int orientation) {
 /* Ecrit les parametres d'emission PAR APPAREIL dans la fiche (etage 2, issue #111). Appele au save
  * d'un enrolement (valeurs resolues depuis le profil) et a l'edition du panneau avance. Sentinelles :
  * freq_khz/te_us a 0 = heriter du defaut ; tx_rpt/tx_rmt = tx_override_t (0 heriter, 1 off, 2 on).
- * marque=NULL laisse la provenance inchangee. Une valeur < 0 ou > plafond est ignoree (garde l'actuelle). */
+ * marque=NULL laisse la provenance inchangee, profile=NULL le profil. Une valeur < 0 ou > plafond est
+ * ignoree (garde l'actuelle). */
 int shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
-                           int rpt, int rmt, int frame_bits, const char *marque) {
+                           int rpt, int rmt, int frame_bits, const char *marque, const char *profile) {
     LOCK();
     volet_t *v = find_volet(id);
     if (!v) { UNLOCK(); return -1; }
+    if (profile) assign_profile(v, profile);   /* le profil choisi a l'ajout ou a l'edition */
     v->freq_khz = freq_khz;                                  /* 0 = heriter */
     v->te_us    = (te_us && (te_us < 200 || te_us > 900)) ? v->te_us : te_us;   /* hors plage HCS300 : on garde */
     if (rpt >= TXOVR_INHERIT && rpt <= TXOVR_ON) v->tx_rpt = (uint8_t)rpt;
     if (rmt >= TXOVR_INHERIT && rmt <= TXOVR_ON) v->tx_rmt = (uint8_t)rmt;
     if (frame_bits == 56 || frame_bits == 80) v->frame_bits = (uint8_t)frame_bits;   /* Somfy ; autre = inchange */
     if (marque) strlcpy(v->marque, marque, SH_ID_LEN);
+    cfg_device_inherit_equal(v, profile_of(v));   /* egal au profil : herite, pour suivre ses corrections */
     save_cfg();
     UNLOCK();
     return 0;
@@ -2065,7 +2300,9 @@ static cJSON *status_head_json(void) {
 static cJSON *status_device_json(const volet_t *v) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "id", v->id);
-    cJSON_AddNumberToObject(o, "type", v->type);   /* dev_type_t EXPLICITE (0 = volet, 1 = portail) : l'UI filtre dessus, plus d'hypothese "absent = volet". Codes miroir de profiles.json types[].code. */
+    /* Type et profil par leur cle du catalogue : l'interface y lit libelles, boutons et reglages. */
+    if (v->type[0])    cJSON_AddStringToObject(o, "type", v->type);
+    if (v->profile[0]) cJSON_AddStringToObject(o, "profile", v->profile);
     if (v->virt) {   /* volet a telecommande virtuelle -> pas d'apprentissage */
         cJSON_AddBoolToObject(o, "virt", true);
         bool somfy = (volet_proto_t)v->proto == VOLET_PROTO_SOMFY_RTS;
@@ -2160,6 +2397,7 @@ static cJSON *status_tail_json(void) {
         cJSON_AddBoolToObject(wifi, "fallback", wifi_bridge_in_fallback());   /* reessaie seul (mode secours) */
     }
     cJSON_AddBoolToObject(root, "mqtt", s_mqtt_ready);
+    if (s_cfg_unsaved) cJSON_AddBoolToObject(root, "unsaved", true);   /* config non enregistree : voir save_cfg */
     cJSON_AddBoolToObject(root, "listening", s_log_frames);   /* ecoute permanente = position fiable */
     cJSON_AddNumberToObject(root, "uptime", (double)(esp_timer_get_time() / 1000000));   /* s depuis boot : date les trames RF cote UI */
     return root;
@@ -2252,14 +2490,14 @@ char *shutters_export_json(void) {
     cJSON *root = js ? cJSON_Parse(js) : NULL;
     if (!root) return js;
     free(js);
-    cJSON_AddItemToObject(root, "pfx_enrol", pfx_enrol_export());
+    cJSON_AddItemToObject(root, BACKUP_KEY_PFX_ENROL, pfx_enrol_export());
     js = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return js;
 }
 /* Copie de la config d'avant la derniere restauration (Systeme > Sauvegarde, "Revenir"). */
-#define PREV_CFG_FILE "/spiffs/config-avant.json"
-#define PREV_CFG_MAX  (24 * 1024)   /* = RESTORE_MAX_BODY (web_ui.c) */
+#define PREV_CFG_FILE SPIFFS_BASE "/config-avant.json"
+#define PREV_CFG_MAX  CFG_BACKUP_MAX   /* meme plafond que la restauration : la copie s'y relit */
 
 int shutters_import_json(const char *js, const char **err) {
     *err = "format";
@@ -2684,7 +2922,7 @@ void shutters_mqtt_on_message(const char *topic, const char *data, int len) {
         else if (!strcasecmp(payload, "CLOSE")) shutters_cmd_synced(id, "down", 0);
         else if (!strcasecmp(payload, "STOP"))  shutters_cmd_synced(id, "stop", 0);
     } else if (!strcmp(sub, "set_position")) {
-        shutters_cmd_synced(id, "pos", 100 - atoi(payload));   /* HA envoie le % d'ouverture -> on convertit en fermeture */
+        shutters_cmd_synced(id, CMD_POS, 100 - atoi(payload));   /* HA envoie le % d'ouverture -> on convertit en fermeture */
     }
 }
 

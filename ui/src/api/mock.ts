@@ -4,10 +4,13 @@
 // ouvert, 100 = ferme). Les captures, l'enrolement et le calage reussissent apres un court delai, comme si on
 // appuyait bien sur la telecommande.
 import profilesTable from '../../../firmware/main/web/profiles.json';   // la vraie table, source unique
-import { BAND, BRAND, COMMAND, FLAG, PROTOCOL, type Command } from '../domain';
+import { BAND, BRAND, COMMAND, DEVICE_TYPE, FLAG, PROTOCOL, type Command } from '../domain';
+/* Les profils des fausses fiches (identifiants du catalogue). */
+const MOCK_PROFILE = { copy: 'profalux-copy', enrol: 'profalux-enrol', replay: 'came-replay' } as const;
 import type realApi from './real';
 import type { CaptureRequest, CaptureResult } from './real';
-import type { Device, LearnedCommand, OkReply, PfxState, Profiles, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
+import type { Catalog } from './catalog.generated';
+import type { Device, LearnedCommand, OkReply, PfxModel, PfxState, RadioSummary, RfFrame, Session, ShutterOrder, Status } from './types';
 
 const WRONG_PASSWORD = 'faux';   // le seul mot de passe refuse en mode mock (essai de l'ecran de connexion)
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -20,12 +23,12 @@ const threeCommands = (s: string): Device['cmd'] => ({ up: { b: 2, s }, stop: { 
 
 const devices: Device[] = [
   { id: 'Général', central: true, members: 'Salon,Cuisine,Chambre,Bureau', order: 0, serials: ['0x0A1B2E0'], cmd: {} },
-  { id: 'Salon', type: 0, marque: 'Profalux', ...TX_INHERIT, position: 0, order: 1, orientation: 180, serials: ['0x0A1B2C3'], cmd: threeCommands('0x0A1B2C3'), travel_up_ms: 21000, travel_down_ms: 19500 },
-  { id: 'Cuisine', type: 0, marque: 'Profalux', ...TX_INHERIT, position: 65, order: 2, orientation: 90, serials: ['0x0A1B2D7'], cmd: threeCommands('0x0A1B2D7'), travel_up_ms: 18000, travel_down_ms: 17000 },
-  { id: 'Chambre', type: 0, marque: 'Profalux', ...TX_INHERIT, te_us: 400, tx_rpt: 2, position: 100, order: 3, orientation: -1, virt: true, proto: 'profalux', virt_serial: '0x0670012', serials: ['0x0B44A10'], cmd: {}, travel_up_ms: 20000, travel_down_ms: 19000 },
-  { id: 'Bureau', type: 0, marque: 'Profalux', ...TX_INHERIT, freq_khz: 868330, position: 40, order: 4, orientation: -1, serials: ['0x0B44A21'], cmd: { up: { b: 2, s: '0x0B44A21' }, down: { b: 8, s: '0x0B44A21' } }, travel_up_ms: 16000, travel_down_ms: 15000 },
-  { id: 'Étage', type: 0, zone: true, members: 'Chambre,Bureau', order: 5, serials: ['0x0B44A30'], cmd: {} },
-  { id: 'Portail entrée', type: 1, marque: 'CAME', ...TX_INHERIT, freq_khz: 433920, rejeu: true, rejeu_cmds: { up: true }, order: 6, serials: [], cmd: {} },
+  { id: 'Salon', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, marque: 'Profalux', ...TX_INHERIT, position: 0, order: 1, orientation: 180, serials: ['0x0A1B2C3'], cmd: threeCommands('0x0A1B2C3'), travel_up_ms: 21000, travel_down_ms: 19500 },
+  { id: 'Cuisine', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, marque: 'Profalux', ...TX_INHERIT, position: 65, order: 2, orientation: 90, serials: ['0x0A1B2D7'], cmd: threeCommands('0x0A1B2D7'), travel_up_ms: 18000, travel_down_ms: 17000 },
+  { id: 'Chambre', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.enrol, marque: 'Profalux', ...TX_INHERIT, te_us: 400, tx_rpt: 2, position: 100, order: 3, orientation: -1, virt: true, proto: 'profalux', virt_serial: '0x0670012', serials: ['0x0B44A10'], cmd: {}, travel_up_ms: 20000, travel_down_ms: 19000 },
+  { id: 'Bureau', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, marque: 'Profalux', ...TX_INHERIT, freq_khz: 868330, position: 40, order: 4, orientation: -1, serials: ['0x0B44A21'], cmd: { up: { b: 2, s: '0x0B44A21' }, down: { b: 8, s: '0x0B44A21' } }, travel_up_ms: 16000, travel_down_ms: 15000 },
+  { id: 'Étage', type: DEVICE_TYPE.shutter, profile: MOCK_PROFILE.copy, zone: true, members: 'Chambre,Bureau', order: 5, serials: ['0x0B44A30'], cmd: {} },
+  { id: 'Portail entrée', type: DEVICE_TYPE.gate, profile: MOCK_PROFILE.replay, marque: 'CAME', ...TX_INHERIT, freq_khz: 433920, rejeu: true, rejeu_cmds: { up: true }, order: 6, serials: [], cmd: {} },
 ];
 const remotes: Record<string, string> = {
   '0x0A1B2E0': 'Télécommande générale', '0x0A1B2C3': 'Salon', '0x0A1B2D7': 'Cuisine', '0x0B44A10': 'Chambre', '0x0B44A21': 'Bureau',
@@ -40,12 +43,6 @@ const rfFrames: RfFrame[] = [
 const radios: RadioSummary[] = [
   { idx: 0, band: BAND.mhz868, chip: 'CC1101', freq_khz: 868425, ok: true },
   { idx: 1, band: BAND.mhz433, chip: 'CC1101', freq_khz: 433920, ok: true },
-];
-const PFX_MODELS = [
-  { name: 'Profalux MAI-EMPX / MUR / NOE', routine: 'R6' },
-  { name: 'FranciaFlex M4G', routine: 'R6' },
-  { name: 'Profalux NeoSol', routine: 'R8' },
-  { name: 'Profalux MAI-RDPX / RDTELPX', routine: 'R7' },
 ];
 
 /* Mouvements en cours : position de depart et d'arrivee (% de fermeture, 100 = ferme), debut, duree. */
@@ -95,7 +92,7 @@ function replaceMember(previous: string, next: string): void {
 }
 
 function newDevice(fields: Partial<Device> & { id: string }): Device {
-  const d: Device = { type: 0, ...TX_INHERIT, position: 100, order: -1, orientation: -1, serials: [], cmd: {}, travel_up_ms: 0, travel_down_ms: 0, ...fields };
+  const d: Device = { type: DEVICE_TYPE.shutter, ...TX_INHERIT, position: 100, order: -1, orientation: -1, serials: [], cmd: {}, travel_up_ms: 0, travel_down_ms: 0, ...fields };
   devices.push(d);
   return d;
 }
@@ -104,7 +101,11 @@ const copy = <T>(o: T): T => JSON.parse(JSON.stringify(o));
 const ok = (): OkReply => ({ ok: 1 });
 const okWith = <T extends object>(extra: T): OkReply & T => ({ ok: 1, ...extra });
 /* La table est verifiee contre le contrat : un champ de profiles.json qui s'en ecarte casse la verification. */
-const PROFILES: Profiles = profilesTable;
+/* La meme frontiere que la vraie route (real.ts, json<Catalog>) : le texte du catalogue, que le generateur a valide
+   contre son schema (scripts/gen-catalog.ts). Importe tel quel, le JSON n'aurait que des chaines, pas ses enumerations. */
+const PROFILES: Catalog = JSON.parse(JSON.stringify(profilesTable));
+/* Les modeles reconnus, comme le firmware les lit dans le catalogue (catalog.c) : dans l'ordre des profils. */
+const pfxModels = (): PfxModel[] => PROFILES.profiles.flatMap(p => (p.models ?? []).map(name => ({ name, profile: p.id })));
 
 export default {
   async session() { return { ...session }; },
@@ -115,7 +116,7 @@ export default {
     return true;
   },
   async logout(): Promise<unknown> { session.authed = false; return null; },
-  async profiles(): Promise<Profiles> { return copy(PROFILES); },
+  async profiles(): Promise<Catalog> { return copy(PROFILES); },
   async status(): Promise<Status> {
     advance();
     return copy({
@@ -186,7 +187,7 @@ export default {
     replaceMember(id, name);
     return ok();
   },
-  async setType(id: string, type: number) { mustFind(id).type = type; return ok(); },
+  async setType(id: string, type: string) { mustFind(id).type = type; return ok(); },
   async deleteDevice(id: string) {
     await wait(300);
     devices.splice(devices.indexOf(mustFind(id)), 1);
@@ -202,7 +203,7 @@ export default {
   },
 
   /* Telecommande virtuelle (enrolement) */
-  async pfxState(): Promise<PfxState> { return { models: PFX_MODELS, active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}) }; },
+  async pfxState(): Promise<PfxState> { return { models: pfxModels(), active: pfx ? FLAG.on : FLAG.off, learn_ok: pfx ? FLAG.on : FLAG.off, ...(pfx || {}) }; },
   async pfxCapture({ model, marque }: Record<string, unknown>) {
     await wait(2500);
     pfx = { serial: hex7(nextIdentity++), idx: 12, counter: 1, remote: '0x0E5A3B9', model: Number(model) || 0, marque: typeof marque === 'string' ? marque : undefined };

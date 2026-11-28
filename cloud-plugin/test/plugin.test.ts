@@ -141,6 +141,25 @@ test("types engendres depuis profiles.json : volet positionnel, portail sans pos
   assert.deepEqual(family.kinds.map((k) => k.id), [...kinds.map((k) => k.id), "remote", "remote-ignored"], "le plugin porte les types du firmware, puis ses telecommandes");
 });
 
+test("libelles des commandes : ceux que profiles.json declare (types[].commands), en francais et en anglais", () => {
+  // chaque type du catalogue, chaque commande qu'il expose : aucun nom ecrit ici, tout vient du catalogue
+  const catalog: { types: Record<string, { commands: Record<string, { label: string; en: string }> }> } =
+    JSON.parse(readFileSync(join(here, "../../../firmware/main/web/profiles.json"), "utf8"));
+  const at = (x: unknown, key: string): unknown => (typeof x === "object" && x !== null ? Reflect.get(x, key) : undefined);
+  const kinds = kindsOf(catalog);
+  const types = Object.entries(catalog.types);
+  assert.ok(types.length > 0);
+  for (const [id, type] of types) {
+    const kind = kinds.find((k) => at(k, "id") === id);
+    const controls = at(kind, "controls");
+    assert.ok(Array.isArray(controls), `type ${id} : controles attendus`);
+    for (const [command, text] of Object.entries(type.commands)) {
+      const control: unknown = controls.find((c: unknown) => at(c, "id") === command);
+      assert.deepEqual(at(control, "label"), { fr: text.label, en: text.en }, `${id} ${command}`);
+    }
+  }
+});
+
 test("commandes qui donnent acces : celles que profiles.json declare, pas une de plus ; une commande inconnue est refusee", () => {
   const p = profiles() as { types: Record<string, Record<string, unknown>> };
   const secureOf = (src: unknown, id: string): string[] =>

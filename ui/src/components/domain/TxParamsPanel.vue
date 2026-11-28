@@ -4,10 +4,9 @@
 // profil (txFields), jamais d'une liste en dur. « Caler sur ma telecommande » cherche la porteuse et la reporte
 // dans le champ Frequence.
 import { computed, reactive, ref, useId, watch } from 'vue';
-import { txFields, defaultSummary, mhz } from '../../profiles';
+import { txFields, defaultSummary, mhz, type ProfileView } from '../../profiles';
 import { withRadio, radioFor } from '../../store';
 import api from '../../api/index';
-import type { Profile } from '../../api/types';
 import { BUTTON, FAILURE, FIELD_KIND, SWEEP_STATUS, TONE, TRISTATE, TX_FIELD, type Tone, type TxFieldName } from '../../domain';
 import { ICON } from '../../icons';
 import OpDetails from '../base/OpDetails.vue';
@@ -20,7 +19,7 @@ import OpProgress from '../base/OpProgress.vue';
 
 export type TxValues = Partial<Record<TxFieldName, number>>;
 const props = withDefaults(defineProps<{
-  profile: Profile | null;
+  profile: ProfileView | null;
   values?: TxValues;                                    // surcharges de la fiche (0 = heriter du profil)
   open?: boolean;
   tune?: boolean;                                       // propose « Caler sur ma telecommande »
@@ -46,7 +45,7 @@ function fill(fromProfile: boolean): void {
 }
 /* Le statut est relu toutes les 3 s : on ne reremplit que si le profil ou la fiche ont vraiment change, sinon la
    saisie en cours serait effacee. */
-watch(() => JSON.stringify([props.profile?.marque, props.values]), () => fill(false), { immediate: true });
+watch(() => JSON.stringify([props.profile?.id, props.values]), () => fill(false), { immediate: true });
 
 /* Valeurs a envoyer : tri-etat non / oui pour les interrupteurs, comme la fiche du firmware. */
 function read(): TxValues {
@@ -91,8 +90,8 @@ const canTune = computed(() => props.tune && fields.value.some(f => f.name === T
       <OpProgress v-if="tuning?.running" label="Recherche de la porteuse" />
       <OpStatline v-if="tuning" :tone="tuning.tone">{{ tuning.text }}</OpStatline>
     </div>
-    <OpDetails v-model:open="opened" :title="`Réglages avancés d'émission · ${profile.marque}`" :icon="ICON.system">
-      <p class="hint">Pré-réglé depuis le profil <b>{{ profile.marque }}</b> : {{ fields.map(defaultSummary).join(' · ') }}.
+    <OpDetails v-model:open="opened" :title="`Réglages avancés d'émission · ${profile.brand || profile.name}`" :icon="ICON.system">
+      <p class="hint">Pré-réglé depuis le profil <b>{{ profile.brand || profile.name }}</b> : {{ fields.map(defaultSummary).join(' · ') }}.
         Une valeur changée ne vaut que pour cet appareil, même sur la même radio.</p>
       <div class="fields">
         <OpField v-for="f in fields" :key="f.name" :label="f.label" :hint="f.help || ''" :control="`${uid}-${f.name}`">

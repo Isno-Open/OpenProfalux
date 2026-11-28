@@ -1,5 +1,7 @@
 {
-  "_contract": "Table de profils : SOURCE UNIQUE de l'ecran unifie 'Ajouter un appareil'. PYRAMIDE type -> marque -> profil. ALIGNE sur le schema DEPLOYE (box de Pascal, feat/came) : bloc 'rx' (reglage RX de capture), bloc 'tx' (encoder/short_us/long_us/repeats/gap_us pour le rejeu-encode CAME ; te_us/repeat_bit/rmt pour KeeLoq ; frame_bits pour Somfy). AJOUTS de la session connecteur (Noe) a integrer par Max : 'freq_khz' top-level par profil (la porteuse, deployee aujourd'hui dans tx.freq_khz -> a remonter), section 'params' par trait, profils Profalux/Somfy enrichis (freq + tx), profils Eveno et NeoSol (famille KeeLoq basse, 868330). Les constantes de protocole d'une marque (ex. timing sync Somfy) restent dans SON moteur (somfy_rts.h), pas ici. 'description' par profil : la phrase montree a l'utilisateur sous la methode, dans l'interface ; les 'note' restent des notes de developpeur.",
+  "_contract": "Catalogue d'OpenProfalux, modele de docs/PROFILES.md (issue #134) : encodeur (du code), puis protocole, type, profil et appareil (des donnees). Valide par profiles.schema.json et par ui/scripts/gen-catalog.ts, qui engendre aussi les types TypeScript. Fichier public, servi sur /profiles.json : jamais de cle ni d'identite. 'description', 'text' et 'label' sont montres a l'utilisateur ; 'note' est une note de developpeur, jamais montree.",
+  "_legacy": "Mode legacy : les fiches ecrites jusqu'a la v0.2.16 designent leur type par un numero et n'ont pas de profil. 'legacy' sur un type donne ce numero ; il ne sert qu'a lire ces fiches et a les migrer, jamais a en ecrire.",
+  "_buttons": "Les boutons sont portes par le type, et seulement par lui. Un appareil qui a besoin d'une autre disposition prend un autre type. 'commands' : ce que le type expose a Home Assistant et au cloud ; 'buttons' : le pave de l'interface. Le protocole dit seulement comment emettre : 'fixed', chaque commande a son code ; 'free', chaque bouton emet la trame capturee pour lui.",
   "devices_max": 24,
   "name_max": 23,
   "roles": {
@@ -9,91 +11,216 @@
     "zone":    { "label": "Zone", "icon": "zone", "members_label": "Volets qui suivent la zone", "members": ["simple"], "positional_only": true,
                  "en": { "label": "Zone", "members_label": "Shutters following the zone" } }
   },
-  "params": {
-    "modulation":          { "statut": "certain" },
-    "band":                { "statut": "certain", "detecte": true },
-    "code":                { "statut": "certain" },
-    "mecanisme":           { "statut": "certain" },
-    "tx.encoder":          { "statut": "intention" },
-    "tx.short_us":         { "statut": "intention" },
-    "tx.long_us":          { "statut": "intention" },
-    "freq_khz":            { "statut": "valide" },
-    "rx.datarate_baud":    { "statut": "valide" },
-    "rx.bandwidth_khz":    { "statut": "valide" },
-    "tx.repeats":          { "statut": "valide" },
-    "tx.gap_us":           { "statut": "valide" },
-    "tx.te_us":            { "statut": "valide" },
-    "tx.repeat_bit":       { "statut": "valide" },
-    "tx.frame_bits":       { "statut": "valide" },
-    "tx.rmt":              { "statut": "implementation" },
-    "_note": "Structure PAR TRAIT (alignee sur pyramid-detect.js : params[k].statut, params[k].detecte). La detection ne filtre que statut=='certain'. certain = spec marque (modulation, band, code, mecanisme). valide = empirique grave en defaut profil (CAME 3800/135 n=1). releve = mesure sur trame reelle, vit dans la fiche appareil (ex. freq calee ; freq_khz est 'valide' en defaut ET surcharge 'releve' par appareil). implementation = choix firmware (RMT). intention = DECLARE mais PAS CABLE (le code ne lit rien : rx, encoder, short/long ; cible E4, et E6 pour batir vraiment l'encodeur). detecte = observable d'une capture. A reconcilier avec le params non committe de Max, sa version fait foi."
+  "traits": {
+    "_note": "Un trait par chemin dans le profil resolu (pyramid-detect.js). La detection ne filtre que sur un trait 'certain' ; 'detected' = observable sur une capture (aujourd'hui la bande, celle de la radio qui a entendu). La modulation est certaine mais pas detectable a l'aveugle (le CC1101 n'est pas un SDR).",
+    "radio.band":       { "status": "certain", "detected": true },
+    "radio.modulation": { "status": "certain" },
+    "protocol":         { "status": "certain" },
+    "add":              { "status": "certain" }
+  },
+  "protocols": {
+    "profalux": {
+      "label": "Profalux (KeeLoq)",
+      "encoder": "keeloq",
+      "code": "rolling",
+      "buttons": "fixed",
+      "commands": {
+        "up":   { "code": 2 },
+        "stop": { "code": 4 },
+        "down": { "code": 8 }
+      },
+      "press": { "frames": 10 },
+      "enrol": { "code": 5, "frames_per_burst": 9, "bursts": 5, "burst_gap_ms": 15 },
+      "procedures": {
+        "copy": [
+          { "step": "capture", "text": "Appuie sur chaque bouton de ta télécommande d'origine quand le boîtier te le demande." },
+          { "step": "test" }
+        ],
+        "enrol": [
+          { "step": "identify", "text": "Appuie sur un bouton de ta télécommande d'origine : le boîtier la reconnaît et propose le bon profil." },
+          { "step": "instruction", "from": "before", "optional": true },
+          { "step": "emit-enrol", "retry": true },
+          { "step": "instruction", "from": "gestures" },
+          { "step": "confirm", "wait_s": 10 },
+          { "step": "test" }
+        ]
+      },
+      "note": "Famille KeeLoq 0x067. Le codage sur l'air (preambule, en-tete, bits) reste dans l'encodeur keeloq (cc1101.c) ; le TE, le bit de repetition et le RMT se reglent dans le profil. frames_per_burst 9 mesure sur trames reelles. Valeurs lues par le firmware au commit 2 de #134 ; jusque-la elles doublent shutters.c et pfx_enrol.c."
+    },
+    "rts": {
+      "label": "Somfy RTS",
+      "encoder": "somfy-rts",
+      "code": "rolling",
+      "buttons": "fixed",
+      "commands": {
+        "up":   { "code": 2 },
+        "stop": { "code": 1 },
+        "down": { "code": 4 },
+        "prog": { "code": 8 }
+      },
+      "press": { "frames": 2 },
+      "enrol": { "command": "prog" },
+      "procedures": {
+        "enrol": [
+          { "step": "instruction", "text": "Sur la télécommande d'origine, appuie sur PROG jusqu'à ce que le volet fasse un va-et-vient." },
+          { "step": "emit-enrol", "retry": true },
+          { "step": "confirm", "text": "Le volet a refait un va-et-vient ?" },
+          { "step": "test" }
+        ]
+      },
+      "note": "Adresse 24 bits engendree par le boitier, code roulant. Le code de 'stop' est celui du bouton My de Somfy. Les timings de synchronisation (hw_sync 2560, sw_sync 4850, symbole 1280) sont ceux de la norme et restent dans l'encodeur (somfy_rts.h)."
+    },
+    "came": {
+      "label": "CAME (code fixe)",
+      "encoder": "raw-replay",
+      "code": "fixed",
+      "buttons": "free",
+      "press": { "frames": 8, "gap_us": 12000 },
+      "procedures": {
+        "copy": [
+          { "step": "capture", "text": "Appuie sur le bouton de ta télécommande quand le boîtier te le demande." },
+          { "step": "test" }
+        ]
+      },
+      "note": "Rejeu brut de la capture en attendant l'encodeur ook-fixe (etape 4 de #134), qui decodera la trame (320/640 us, 12 bits) et la reemettra propre."
+    }
   },
   "types": {
-    "volet":   { "label": "Volet",   "code": 0, "icon": "shutter", "positional": true, "dpad": { "up": "Montée", "stop": "Stop", "down": "Descente" },
-                 "en": { "label": "Shutter", "dpad": { "up": "Up", "stop": "Stop", "down": "Down" } },
-                 "travel_s": { "min": 1, "max": 180 },
-                 "capture": [ { "cmd": "up", "label": "Montée" }, { "cmd": "stop", "label": "Stop" }, { "cmd": "down", "label": "Descente" } ] },
-    "portail": { "label": "Portail", "code": 1, "icon": "gate", "dpad": { "up": "Ouvrir", "stop": "Stop", "down": "Fermer" },
-                 "en": { "label": "Gate", "dpad": { "up": "Open", "stop": "Stop", "down": "Close" } },
-                 "secure": [ "up", "stop", "down" ],
-                 "_secure": "Commandes qui DONNENT ACCES aux lieux : le portail cloud exige un code avant de les envoyer pour un tiers (Google Home). Les trois, parce qu'un portail a bouton unique rejoue la meme trame pour Ouvrir, Stop et Fermer (shutters.c, rejeu_emit) : « fermer » un portail ferme l'ouvre.",
-                 "capture": [ { "cmd": "up", "label": "Bouton du portail" } ] }
+    "volet": {
+      "label": "Volet", "en": { "label": "Shutter" },
+      "icon": "shutter",
+      "entity": { "component": "cover", "device_class": "shutter" },
+      "positional": true,
+      "travel_s": { "min": 1, "max": 180 },
+      "commands": {
+        "up":   { "label": "Montée",   "en": "Up" },
+        "stop": { "label": "Stop",     "en": "Stop" },
+        "down": { "label": "Descente", "en": "Down" }
+      },
+      "buttons": [
+        { "id": "up",   "command": "up",   "position": { "row": 0, "col": 0 } },
+        { "id": "stop", "command": "stop", "position": { "row": 1, "col": 0 } },
+        { "id": "down", "command": "down", "position": { "row": 2, "col": 0 } }
+      ],
+      "legacy": { "code": 0 }
+    },
+    "portail": {
+      "label": "Portail", "en": { "label": "Gate" },
+      "icon": "gate",
+      "entity": { "component": "cover", "device_class": "gate" },
+      "positional": false,
+      "commands": {
+        "up":   { "label": "Ouvrir", "en": "Open" },
+        "stop": { "label": "Stop",   "en": "Stop" },
+        "down": { "label": "Fermer", "en": "Close" }
+      },
+      "secure": ["up", "stop", "down"],
+      "_secure": "Commandes qui DONNENT ACCES aux lieux : le portail cloud exige un code avant de les envoyer pour un tiers (Google Home). Les trois, parce qu'un portail a bouton unique rejoue la meme trame pour Ouvrir, Stop et Fermer (shutters.c, rejeu_emit) : « fermer » un portail ferme l'ouvre.",
+      "buttons": [
+        { "id": "main", "command": "step", "label": "Bouton du portail", "en": "Gate button", "position": { "row": 0, "col": 0 },
+          "cycle": ["up", "stop", "down", "stop"], "press_gap_ms": 3000 }
+      ],
+      "legacy": { "code": 1 },
+      "note": "Portail a bouton unique, pas a pas : chaque appui fait avancer le moteur dans son cycle. press_gap_ms 3000 : un appui a 2 s ne passait pas chez Pascal. Un portail a trois boutons sera un autre type."
+    }
   },
-  "profils": [
+  "profiles": [
     {
-      "type": "portail", "marque": "CAME", "nom": "Portail CAME (cloner la télécommande)",
+      "id": "came-replay",
+      "name": "Portail CAME (cloner la télécommande)",
       "description": "Le boîtier enregistre le signal de ta télécommande et le rejoue à l'identique. Un seul bouton suffit : le moteur du portail enchaîne la séquence.",
-      "mecanisme": "rejeu", "modulation": "OOK", "code": "fixe", "band": "433",
-      "flow": "rejeu",
-      "freq_khz": 433920,
-      "rx": { "datarate_baud": 3800, "bandwidth_khz": 135 },
-      "tx": { "encoder": "came-top432", "short_us": 320, "long_us": 640, "repeats": 8, "gap_us": 11500 },
-      "note": "AUJOURD'HUI = rejeu BRUT de la capture (shutters.c:480), code fixe OOK. rx (3800/135), tx.encoder (came-top432), short_us/long_us (320/640) sont DECLARES mais CABLES NULLE PART (grep vide dans firmware/main) : le code ne les lit pas. Cabler rx dans la capture = E4. Batir VRAIMENT l'encodeur (decoder la capture en code puis re-synthetiser une trame propre 320/640) = E6, decision de fond (robuste, rend le datarate quasi caduc) vs rejeu brut (fragile, la regression de Pascal). repeats/gap_us = rejeu, cables. freq_khz top-level (le deploye le met dans tx, legacy)."
+      "brand": "CAME", "types": ["portail"],
+      "protocol": "came", "add": "copy",
+      "radio": { "band": "433", "freq_khz": 433920, "modulation": "OOK", "rx": { "datarate_baud": 3800, "bandwidth_khz": 135 } },
+      "test": { "status": "tested" },
+      "note": "Valide chez Pascal. rx 3800/135 releve sur sa telecommande (n=1)."
     },
     {
-      "type": "volet", "marque": "Profalux", "nom": "Cloner ma télécommande Profalux",
+      "id": "profalux-copy",
+      "name": "Cloner ma télécommande Profalux",
       "description": "Tu as la télécommande d'origine : le boîtier copie ses commandes, une capture par bouton.",
-      "mecanisme": "cloner", "modulation": "OOK", "code": "roulant", "band": "868",
-      "flow": "learn",
-      "freq_khz": 868425,
+      "brand": "Profalux", "types": ["volet"],
+      "protocol": "profalux", "add": "copy",
+      "radio": { "band": "868", "freq_khz": 868425, "modulation": "OOK" },
       "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
-      "note": "Generation KeeLoq depuis l'identite APPRISE de la telecommande d'origine. Pas de rx (on ne capture pas pour piloter, code roulant)."
+      "test": { "status": "tested" },
+      "note": "Emission KeeLoq depuis l'identite APPRISE de la telecommande d'origine. Pas de rx : on ne capture pas pour piloter, le code est roulant."
     },
     {
-      "type": "volet", "marque": "Profalux", "nom": "Nouvelle télécommande Profalux",
+      "id": "profalux-enrol",
+      "name": "Nouvelle télécommande Profalux",
       "description": "Le boîtier devient une nouvelle télécommande, que le moteur apprend. La télécommande d'origine sert au geste de validation.",
-      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
-      "flow": "enrol-pfx",
-      "freq_khz": 868425,
+      "brand": "Profalux", "types": ["volet"],
+      "protocol": "profalux", "add": "enrol",
+      "radio": { "band": "868", "freq_khz": 868425, "modulation": "OOK" },
       "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
-      "note": "Genere une identite virtuelle 0x067 neuve. te_us=400 nominal HCS300. repeat_bit=true = defaut famille KeeLoq (INVERSE l'usine, ne touche QUE les nouveaux enrolements). rmt=true = implementation."
+      "models": ["Profalux MAI-EMPX / MUR / NOE", "FranciaFlex M4G"],
+      "instructions": {
+        "gestures": [
+          "Monte le volet jusqu'en butée haute.",
+          "Descends de ~4 lames.",
+          "Remonte jusqu'en butée haute.",
+          "Le volet fait un va-et-vient = enrôlé ✅. S'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même : beaucoup de moteurs confirment sans bouger."
+        ]
+      },
+      "test": { "status": "tested" },
+      "note": "Ex-variante R6. Identite virtuelle 0x067 neuve. te_us 400 nominal HCS300. repeat_bit true : defaut de la famille, ne touche que les nouveaux enrolements."
     },
     {
-      "type": "volet", "marque": "Eveno", "nom": "Nouvelle télécommande Eveno",
+      "id": "eveno-enrol",
+      "inherits": "profalux-enrol",
+      "name": "Nouvelle télécommande Eveno",
       "description": "Le boîtier devient une nouvelle télécommande, que le moteur Eveno apprend. La télécommande d'origine sert au geste de validation.",
-      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
-      "flow": "enrol-pfx",
-      "freq_khz": 868330,
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
-      "note": "Famille KeeLoq basse, PHY commune Profalux, porteuse 868,330 (confirmee terrain par Olivier via 'Caler sur ma telecommande'). Coexiste avec Profalux (868,425) sur la radio 868 -> d'ou la freq PAR APPAREIL."
+      "brand": "Eveno",
+      "radio": { "freq_khz": 868330 },
+      "models": [],
+      "test": { "status": "tested" },
+      "note": "Famille KeeLoq basse, meme codage que Profalux, porteuse 868,330 confirmee sur le terrain par 'Caler sur ma telecommande'. Coexiste avec Profalux (868,425) sur la radio 868, d'ou la frequence par appareil. Aucun modele reconnu a l'identification : se choisit a la main."
     },
     {
-      "type": "volet", "marque": "NeoSol", "nom": "Nouveau volet Profalux NeoSol (solaire)",
+      "id": "neosol-enrol",
+      "inherits": "profalux-enrol",
+      "name": "Nouveau volet Profalux NeoSol (solaire)",
       "description": "Le boîtier devient une nouvelle télécommande du volet solaire, que le moteur apprend. La télécommande d'origine sert au geste de validation.",
-      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "868",
-      "flow": "enrol-pfx",
-      "freq_khz": 868330,
-      "tx": { "te_us": 400, "repeat_bit": true, "rmt": true },
-      "note": "Ligne Profalux solaire (famille KeeLoq). Porteuse 868,330 mesuree terrain par Olivier (= Eveno a n=1, deux marques distinctes, surchargeable par appareil). Guidage specifique a l'enrolement : position de reference AVANT, geste haut/bas/haut, delai (voir #35 compat). repeat_bit recommande."
+      "brand": "NeoSol",
+      "radio": { "freq_khz": 868330 },
+      "models": ["Profalux NeoSol"],
+      "instructions": {
+        "before": "NeoSol : AVANT d'émettre, descends le volet et laisse ~4 lames apparentes.",
+        "gestures": [
+          "Montée → laisse le volet s'arrêter seul en butée haute.",
+          "Descente → laisse ~4 lames apparentes.",
+          "Montée → laisse s'arrêter seul.",
+          "Le volet fait un va-et-vient = enrôlé ✅. S'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub."
+        ]
+      },
+      "test": { "status": "untested" },
+      "note": "Ex-variante R8. Ligne Profalux solaire, porteuse 868,330 mesuree sur le terrain. Moteur sur batterie : voir #35."
     },
     {
-      "type": "volet", "marque": "Somfy RTS", "nom": "Nouveau volet Somfy",
+      "id": "profalux-rdpx-enrol",
+      "inherits": "profalux-enrol",
+      "name": "Nouvelle télécommande Profalux (MAI-RDPX, RDTELPX)",
+      "models": ["Profalux MAI-RDPX / RDTELPX"],
+      "instructions": {
+        "gestures": [
+          "Monte → descends ~4 lames → remonte (procédure proche, à confirmer).",
+          "Va-et-vient = enrôlé. S'il ne bouge pas, attends ~10 s puis teste ▲ ■ ▼ quand même. Rapporte le résultat sur GitHub."
+        ]
+      },
+      "test": { "status": "untested" },
+      "note": "Ex-variante R7."
+    },
+    {
+      "id": "somfy-rts-enrol",
+      "name": "Nouveau volet Somfy",
       "description": "Pas besoin de télécommande d'origine : le boîtier choisit une adresse et le moteur l'apprend en mode appairage.",
-      "mecanisme": "enrolement", "modulation": "OOK", "code": "roulant", "band": "433",
-      "flow": "create-somfy", "endpoint": "/api/somfy/create",
-      "freq_khz": 433420,
+      "brand": "Somfy RTS", "types": ["volet"],
+      "protocol": "rts", "add": "enrol",
+      "radio": { "band": "433", "freq_khz": 433420, "modulation": "OOK" },
       "tx": { "frame_bits": 56 },
-      "note": "Generation RTS (adresse 24 bits + code roulant). freq 433,42 DISTINCTE du CAME 433,92 (meme band 433, porteuse differente). frame_bits 56/80 PAR VOLET (semantique : le 80 ajoute une extension). Le timing sync Somfy (hw_sync 2560, sw_sync 4850, symbol 1280, first x2 / repeat x7) est une CONSTANTE de protocole, source unique dans somfy_rts.h, PAS dupliquee ici."
+      "test": { "status": "tested" },
+      "note": "433,42, distincte du CAME 433,92 (meme bande, porteuse differente). frame_bits 56 ou 80 par appareil (le 80 ajoute une extension)."
     }
   ]
 }

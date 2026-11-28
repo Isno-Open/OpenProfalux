@@ -1,11 +1,11 @@
 #!/bin/sh
 # Construit l'interface web du boitier (ui/, Vue 3 + Vite) dans ui/dist : index.html, app.js et style.css,
 # que firmware/main/CMakeLists.txt compresse et embarque. A lancer avant idf.py, et apres chaque
-# modification de ui/ ou de firmware/main/web/ (profiles.json, pyramid-detect.js).
+# modification de ui/ ou de firmware/main/web/ (profiles.json, profiles.schema.json, pyramid-detect.js).
 #
 #   tools/build_ui.sh
 #
-# Prend npm s'il est installe (Node 22.12 ou plus recent), sinon Docker avec l'image figee ci-dessous :
+# Prend npm s'il est installe (Node 22.18 ou plus recent : le generateur du catalogue est en TypeScript, lance tel quel), sinon Docker avec l'image figee ci-dessous :
 # rien a installer sur le poste. Les versions des paquets sont figees par ui/package-lock.json (npm ci).
 set -e
 NODE_IMAGE=node:22.23.3-alpine

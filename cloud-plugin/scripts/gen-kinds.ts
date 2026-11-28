@@ -52,10 +52,13 @@ export function kindsOf(profiles: unknown, sprite: string): unknown[] {
   const devicesMax = profiles.devices_max;
   if (typeof devicesMax !== "number" || devicesMax < 1) throw new Error("profiles.json : devices_max (nombre maximal d'appareils) requis");
   const simple: Simple[] = Object.entries(profiles.types).map(([id, t]) => {
-    if (!isObj(t) || typeof t.label !== "string" || !isDpad(t.dpad)) throw new Error(`type ${id} : label et dpad requis`);
+    // libelles des commandes que le type expose (profiles.json types[].commands : { up: { label, en } ... })
+    const commands = isObj(t) ? t.commands : undefined;
+    const labelsOf = (lang: "label" | "en"): unknown => (isObj(commands) ? Object.fromEntries(ACTION_IDS.map((k) => [k, isObj(commands[k]) ? commands[k][lang] : undefined])) : undefined);
+    const dpad = labelsOf("label"), enDpad = labelsOf("en");
+    if (!isObj(t) || typeof t.label !== "string" || !isDpad(dpad)) throw new Error(`type ${id} : label et commands (up, stop, down : label) requis`);
     const en = t.en;
-    if (!isObj(en) || typeof en.label !== "string" || !en.label || !isDpad(en.dpad)) throw new Error(`type ${id} : libelles anglais requis (en.label, en.dpad)`);
-    const dpad = t.dpad, enDpad = en.dpad;
+    if (!isObj(en) || typeof en.label !== "string" || !en.label || !isDpad(enDpad)) throw new Error(`type ${id} : libelles anglais requis (en.label, commands.*.en)`);
     const text = (fr: string, e: string): Text => ({ fr, en: e });
     const glyphs: Dpad = { up: "▲", stop: "■", down: "▼" };
     // commandes qui donnent acces aux lieux (profiles.json "secure") : le portail exige un code avant

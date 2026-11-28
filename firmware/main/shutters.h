@@ -35,6 +35,11 @@ void shutters_mem_sizes(int *ring, int *hops_cap);
 /* Commande : cmd = "up" | "down" | "stop" | "pos" (value = 0..100). Rejoue la trame + suit la position. */
 int  shutters_cmd(const char *id, const char *cmd, int value);
 #define SH_CMD_BUSY (-2)   /* une emission du meme serial est deja en cours (ici ou sur l'autre carte) */
+/* Commandes de shutters_cmd en plus de celles du catalogue (up, stop, down, prog) : une position voulue, et un appui
+ * du bouton pas a pas d'un portail. */
+#define CMD_POS  "pos"
+#define CMD_STEP "step"
+#define SH_CMD_REFUSED (-3)   /* rien emis : aucun bouton du type ne porte la commande, ou sa trame manque */
 /* Comme shutters_cmd, mais synchronise le compteur roulant entre cartes (MQTT) et pose un verrou
  * d'emission : refuse (SH_CMD_BUSY) si une emission du meme serial est deja en cours. A appeler pour
  * tout ordre venant de HA ou de l'UI ; shutters_cmd reste l'emission brute (zones, centrales). */
@@ -47,8 +52,9 @@ int  shutters_unignore_remote(const char *serial);
 /* Apprentissage : affecte une trame captee (bitstring) a une action d'un volet. Cree le volet si absent. */
 int  shutters_learn_assign(const char *id, const char *action, const char *bits);
 /* Cree un volet "virtuel PFX" a partir d'une identite 0x067 enrolee (pilote par generation,
- * pas rejeu) : apparait dans l'onglet Volets + cover HA. Retourne 0 si OK. */
-int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter);
+ * pas rejeu) : apparait dans l'onglet Volets + cover HA. `profile` : le profil choisi a l'ajout, qui
+ * donne son type a une fiche neuve (NULL : deduit). Retourne 0 si OK. */
+int  shutters_create_virtual(const char *id, uint32_t serial, uint16_t counter, const char *profile);
 /* Volet Somfy RTS (adresse 24 bits, pas de capture). Un nom deja pris est refuse : le reprendre
  * remettait le code roulant a 1 (le moteur appaire ignorait alors toutes les commandes) ou
  * convertissait un volet Profalux en Somfy. Seule exception, le meme volet Somfy a la meme adresse
@@ -59,10 +65,10 @@ typedef enum {
     SH_SOMFY_NAME_TOO_LONG,    /* ne tiendrait pas dans SH_ID_LEN : il serait tronque */
     SH_SOMFY_NAME_TAKEN,       /* un autre appareil porte deja ce nom */
 } sh_somfy_create_t;
-sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address);
-int  shutters_create_rejeu(const char *id, uint8_t type);                /* appareil a rejeu brut OOK (code fixe) */
-int  shutters_set_type(const char *id, uint8_t type);                    /* corrige le dev_type d'un appareil existant */
-int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
+sh_somfy_create_t shutters_create_virtual_somfy(const char *id, uint32_t address, const char *profile);   /* profile : NULL = celui de la marque */
+int  shutters_create_rejeu(const char *id, const char *type);            /* appareil a rejeu brut OOK (code fixe) ; type = cle du catalogue */
+int  shutters_set_type(const char *id, const char *type);                /* corrige le type (cle du catalogue) d'un appareil existant */
+int  shutters_rejeu_capture(const char *id, const char *cmd, int radio, uint32_t freq_khz, bool *backup_full); /* capture le cadre brut d'une commande, a freq_khz (0 = porteuse radio) */
 /* Cree une "centrale" virtuelle : une commande (ouvrir/fermer/stop) diffusee a un GROUPE de
  * volets. members_csv = ids de volets separes par des virgules. Apparait en cover HA. */
 int  shutters_create_central(const char *id, const char *members_csv);
@@ -82,7 +88,7 @@ int  shutters_set_orientation(const char *id, int orientation);   /* azimut faca
 /* Params d'emission PAR APPAREIL (etage 2, issue #111) : porteuse, TE, tri-etat bit de repetition/RMT
  * (tx_override_t). freq_khz/te_us a 0 = heriter. marque=NULL = provenance inchangee. */
 int  shutters_set_tx_params(const char *id, uint32_t freq_khz, uint32_t te_us,
-                            int rpt, int rmt, int frame_bits, const char *marque);
+                            int rpt, int rmt, int frame_bits, const char *marque, const char *profile);
 /* Renomme un volet (change son id + met a jour membres/suiveurs + entite HA). 0 ok ; -4 nom deja pris. */
 int  shutters_rename_volet(const char *old_id, const char *new_id);
 /* Ordre d'affichage dans l'UI : CSV d'ids dans l'ordre voulu. N'affecte QUE

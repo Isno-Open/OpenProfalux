@@ -19,6 +19,8 @@
 #include "remote_battery.h"
 
 #define SH_MAX_REMOTES 16
+/* Nom du fichier d'une capture de rejeu : "rj" + 8 chiffres hexadecimaux + ".json", zero final compris. */
+#define CFG_REPLAY_NAME_LEN 16
 
 /* Protocole d'emission d'un volet VIRTUEL (qui GENERE sa trame). Profalux/KeeLoq est le
  * seul cable aujourd'hui, et vaut 0 : les volets deja persistes, sans ce champ, le
@@ -29,7 +31,7 @@ typedef enum {
     VOLET_PROTO_SOMFY_RTS = 1,   /* Somfy RTS : trame OOK 433,42 MHz (somfy_tx), code roulant */
 } volet_proto_t;
 
-#include "dev_type.h"   /* dev_type_t : type d'appareil (en-tete sans dependance, teste sur PC) */
+#include "catalog.h"    /* types et profils du catalogue : la fiche les designe par leur nom */
 
 /* Tri-etat d'une option d'emission PAR APPAREIL (bit de repetition, RMT). 0 = heriter du defaut
  * (profil, puis firmware) ; on force explicitement ensuite. La valeur 0 est la sentinelle "heriter"
@@ -56,7 +58,12 @@ typedef struct {
     uint32_t virt_serial;    /* serial 0x067 (contient le slot ; cle via pfx_key_for_serial) */
     uint16_t virt_counter;   /* compteur roulant courant */
     uint8_t  proto;          /* volet_proto_t : protocole d'emission (0 = Profalux, defaut) */
-    uint8_t  type;           /* dev_type_t : ce qu'on pilote (0 = volet, defaut). Oriente l'UI, pas l'emission. */
+    /* Ce qu'on pilote : la CLE d'un type du catalogue (« volet », « portail »). Une fiche v0.2.16 portait
+     * un numero (mode legacy), traduit a la lecture. Vide : type inconnu de ce catalogue. */
+    char     type[CATALOG_ID_MAX];
+    /* Le profil de l'appareil (catalogue) : un reglage d'emission laisse a 0 prend sa valeur. Vide :
+     * appareil qu'on ne sait pas classer, qui garde le comportement d'avant les profils. */
+    char     profile[CATALOG_ID_MAX];
     /* ── Parametres d'emission RESOLUS PAR APPAREIL (etage 2 de la pyramide, issue #111). ──
      * Chaque marque peut coexister sur une meme radio (Profalux 868425, Eveno/NeoSol 868330) : un
      * reglage global en casse une en reglant l'autre (bugs CAME datarate et Profalux/Eveno rmt/rpt
@@ -85,11 +92,22 @@ typedef struct {
     int   order;             /* rang d'affichage dans l'UI (croissant). -1 = pas encore range :
                               * l'UI place alors le volet a la fin, dans son ordre de creation. */
     float position;          /* 0..100 */
+    /* Bouton pas a pas (portail) : position du prochain appui dans le cycle de son type, mesuree chez lui
+     * (docs/PROFILES.md, section 6). step_known false : jamais suivie, elle se deduit de la position au repos. */
+    uint8_t step_next;
+    bool    step_known;
     /* ── Etat d'execution, NON persiste ── */
+    /* Capture rangee en fichier (cfg_model_t.capture_dir) : son nom, et l'empreinte du contenu qui y est.
+     * Un enregistrement ne reecrit le fichier que si la capture a change (chaque mouvement enregistre). */
+    char     replay_file[CFG_REPLAY_NAME_LEN];
+    uint32_t replay_hash;
     int   dir;               /* -1 down, 0 stop, +1 up */
     int   target;            /* -1 = aucun, sinon 0..100 */
     bool  own_move;          /* true = notre commande (on stream) ; false = externe (on suit sans emettre) */
     int64_t last_tick_us;
+    /* Generation de l'ordre pas a pas en cours : chaque nouvel ordre l'avance, et un ordre a plusieurs appuis
+     * qui la retrouve changee apres une attente s'efface devant le plus recent (un stop interrompt la suite). */
+    uint8_t step_gen;
     int   pub_pos;           /* derniere position publiee MQTT (evite le spam) */
     int   pub_dir;           /* derniere direction publiee MQTT */
 } volet_t;
@@ -111,6 +129,10 @@ typedef struct {
     bool     *log_frames;                 /* ecoute permanente */
     remote_t *remotes;  int *nremotes;    /* SH_MAX_REMOTES places */
     volet_t  *volets;   int *nvolets;     /* SH_MAX_VOLETS places */
+    /* Dossier des captures de rejeu (SPIFFS sur le boitier). NULL : elles restent dans le document NVS
+     * de leur appareil. Une capture fait jusqu'a plusieurs Ko : en NVS (16 Ko, partages avec le Wi-Fi et
+     * la calibration radio), deux d'entre elles ont suffi a remplir une Super. */
+    const char *capture_dir;
 } cfg_model_t;
 
 /* ── Membres d'une centrale (ou suiveurs d'une zone) ──
@@ -134,7 +156,66 @@ const char *cfg_members_next(const char *p, char id[SH_ID_LEN]);
 
 /* Toute la config (telecommandes + noms + trames de reference + calibration) en
  * UN document : l'export, et l'ancienne cle NVS unique. A liberer par l'appelant. */
+/* Ce qu'emet un appareil : la valeur de sa fiche, sinon celle de son profil (p, NULL si aucun).
+ * Sentinelles de sortie : freq_khz / te_us / frame_bits a 0 et rpt / rmt a -1 = ni la fiche ni le profil
+ * n'en disent rien (l'emetteur garde alors son defaut, comme avant les profils). */
+typedef struct { uint32_t freq_khz; uint16_t te_us; int8_t rpt, rmt; uint8_t frame_bits; } cfg_tx_t;
+cfg_tx_t cfg_device_tx(const volet_t *v, const catalog_profile_t *p);
+/* Migration d'une fiche qui vient de recevoir son profil : ecrit d'abord ce que l'appareil emet
+ * AUJOURD'HUI (now : les defauts qu'il heritait avant, pour chaque reglage laisse a 0), puis remet a 0
+ * ce qui egale le profil. Aucune emission ne change ; un appareil egal a son profil le suivra ensuite.
+ * Renvoie true si la fiche a change. */
+bool cfg_device_rebase_tx(volet_t *v, const catalog_profile_t *p, const cfg_tx_t *now);
+/* Un reglage egal a celui du profil revient a 0 (heriter) : l'appareil suivra une correction du profil.
+ * Sauf la porteuse d'un rejeu brut, dont le 0 veut dire « celle de la capture ».
+ * Applique a la migration et a chaque ecriture des reglages (shutters_set_tx_params). */
+void cfg_device_inherit_equal(volet_t *v, const catalog_profile_t *p);
+
+/* Le creneau dont l'appareil emet la commande `cmd` : celui du bouton de son type qui la porte
+ * (catalog_type_t.slot). CATALOG_NO_SLOT si aucun bouton ne la porte, ou si ce catalogue ne connait pas
+ * son type : la commande est alors REFUSEE, jamais acquittee sans emission (docs/PROFILES.md, section 7). */
+int cfg_device_slot(const volet_t *v, catalog_cmd_t cmd);
+/* Document de rejeu d'un appareil cree sans capture encore ("{}", sur le tas ; NULL sans memoire). */
+char *cfg_replay_empty(void);
+/* Fiche qui n'a rien a emettre : ni identite generee, ni rejeu, ni trame copiee (une centrale n'en est
+ * pas une). Typiquement la coquille d'un appareil dont la capture n'a jamais ete enregistree. */
+bool cfg_device_is_blank(const volet_t *v);
+/* Ce que l'appareil dit de lui-meme : son encodeur. CAT_ENC_NONE pour une fiche vide, ou d'un protocole
+ * que ce firmware ne connait pas (io, ecrit par une autre branche) : elle reste alors sans profil plutot
+ * que de passer pour une copie Profalux. */
+catalog_encoder_t cfg_device_encoder(const volet_t *v);
+/* Donne son profil a un appareil : `wanted` s'il existe et convient a son encodeur et a sa methode,
+ * sinon (s'il n'en a pas) celui de sa marque. Son type, s'il n'en a pas, est celui du profil. Une
+ * centrale n'a pas de profil. Renvoie le profil de la fiche, ou NULL. */
+const catalog_profile_t *cfg_device_assign_profile(volet_t *v, const char *wanted);
+/* Profil d'une telecommande copiee (apprentissage, « Telecommandes captees ») : celui de sa marque, s'il
+ * n'en a pas. Tout juste donne, la copie garde ce qu'emettait la radio (`radio` : porteuse reglee pour la
+ * capter, par exemple 868330 kHz), pas le defaut du profil : fige, puis rendu au profil ce qui lui est
+ * egal, comme a la migration (revue de la PR #156). Renvoie le profil de la fiche, ou NULL. */
+const catalog_profile_t *cfg_device_assign_copy_profile(volet_t *v, const cfg_tx_t *radio);
+/* Migration vers les profils (#134) : chaque fiche sans profil recoit le sien (cfg_device_assign_profile),
+ * puis ses reglages sont rebases sur ce qu'elle emet aujourd'hui (keeloq, somfy : les defauts qu'elle
+ * heritait). Une fiche vide ou inclassable reste telle quelle. Renvoie le nombre de fiches migrees. */
+int cfg_model_migrate_profiles(const cfg_model_t *m, const cfg_tx_t *keeloq, const cfg_tx_t *somfy);
+
 char *cfg_model_export(const cfg_model_t *m);
+
+/* Taille d'une sauvegarde que le boitier sait restaurer : le corps de /api/restore et la copie d'avant
+ * restauration sont lus ENTIERS en RAM (32 Ko libres sur un ATOM). On ne releve pas ce plafond ; on refuse
+ * ce qui ferait deborder la sauvegarde : tout ce qui est sauvegarde se restaure (revue de la PR #156). */
+#define CFG_BACKUP_MAX (24 * 1024)
+/* Longueur exacte de cfg_model_export(m), calculee appareil par appareil, sans tenir l'export en RAM. */
+size_t cfg_model_export_len(const cfg_model_t *m);
+typedef enum {
+    CFG_CAPTURE_OK          = 0,
+    CFG_CAPTURE_ERR         = -1,   /* trame trop courte, plus de memoire */
+    CFG_CAPTURE_BACKUP_FULL = -2,   /* la sauvegarde depasserait CFG_BACKUP_MAX : rien n'est change */
+} cfg_capture_rc_t;
+/* Range une trame captee (n impulsions : niveau lvl[i], duree us[i]) comme commande `cmd` du rejeu de v,
+ * a la porteuse freq (kHz). `reserved` : ce que la sauvegarde porte hors de ce modele (table d'enrolement).
+ * Si la sauvegarde depasserait alors CFG_BACKUP_MAX, la capture d'avant reste et rien n'est change. */
+cfg_capture_rc_t cfg_device_store_capture(const cfg_model_t *m, volet_t *v, const char *cmd, uint32_t freq,
+                                          const uint8_t *lvl, const uint16_t *us, int n, size_t reserved);
 /* Ajoute au modele le contenu d'un tel document. Le modele doit avoir ete remis
  * a zero avant. Un identifiant de volet deja present est ignore. */
 void  cfg_model_import(const cfg_model_t *m, cJSON *root);

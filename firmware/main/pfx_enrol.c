@@ -7,6 +7,7 @@
  * chemin PWM que le rejeu (radio_tx -> cc1101_tx_raw_bits), au TE du modèle choisi.
  */
 #include "pfx_enrol.h"
+#include "catalog.h"
 #include "keeloq.h"
 #include "pfx_keys.h"
 #include "shutters.h"
@@ -23,24 +24,11 @@
 static const char *TAG    = "pfx_enrol";
 static const char *NVS_NS = "pfx_enrol";
 
-/* Rafale par appui = ~9 trames (mesuré sur trames réelles Lecanard). Compteur figé sur la rafale. */
-#define PFX_BURST     9
-/* Apprentissage tenu ~5 s (comme STOP-en-P maintenu 5 s) : le moteur ne confirme
- * (va-et-vient) qu'apres ~5 s. ~5 salves de PFX_BURST ~= 5 s. */
-#define PFX_LEARN_ROUNDS 5
-/* Directions (montée/arrêt/descente) = PFX_BTN_* dans pfx_enrol.h (partagées avec shutters). */
-#define BTN_LEARN   0x5   /* trame d'apprentissage radio */
-
-/* Catalogue : tous routés canal PFX 0x636f, famille 0x067, même table de clés.
- * Seule la chorégraphie (R6/R7/R8) diffère par modèle ; le TE d'émission est celui du boîtier
- * (400 µs par défaut, issue #64). */
-static const pfx_model_t MODELS[] = {
-    { "Profalux MAI-EMPX / MUR / NOE", "R6" },
-    { "FranciaFlex M4G",               "R6" },
-    { "Profalux NeoSol",               "R8" },
-    { "Profalux MAI-RDPX / RDTELPX",   "R7" },
-};
-#define N_MODELS ((int)(sizeof(MODELS) / sizeof(MODELS[0])))
+/* Rafale par appui, salves et trame d'apprentissage : catalogue, protocole de l'encodeur KeeLoq
+ * (profiles.json, protocols.profalux.press et .enrol). 9 trames par rafale mesurees sur trames
+ * reelles ; ~5 salves tiennent l'apprentissage ~5 s, comme STOP-en-P maintenu : le moteur ne confirme
+ * (va-et-vient) qu'apres. Le catalogue absent ou illisible, rien n'est emis. */
+static const catalog_protocol_t *keeloq(void) { return catalog_protocol(CAT_ENC_KEELOQ); }
 
 static pfx_ident_t s_id;
 
@@ -124,8 +112,6 @@ static pfx_entry_t *map_find(uint32_t remote) {
 /* Compteur 16 bits qui reboucle : a est DEVANT b s'il le precede de moins d'un demi-tour. */
 static inline bool cnt_ahead(uint16_t a, uint16_t b) { return (int16_t)(a - b) > 0; }
 
-int                pfx_enrol_model_count(void) { return N_MODELS; }
-const pfx_model_t *pfx_enrol_model(int id)     { return (id >= 0 && id < N_MODELS) ? &MODELS[id] : NULL; }
 
 static void save(void) {
     nvs_handle_t h;
@@ -156,7 +142,7 @@ void pfx_enrol_init(void) {
         nvs_get_u32(h, "serial", &sr); nvs_get_u16(h, "counter", &c);
         nvs_get_u64(h, "key", &key); nvs_get_u32(h, "remote", &rem);
         nvs_close(h);
-        s_id.active = a; s_id.model = (m < N_MODELS) ? m : 0; s_id.idx = ix;
+        s_id.active = a; s_id.model = (m < catalog_model_count()) ? m : 0; s_id.idx = ix;
         s_id.serial = sr; s_id.counter = c; s_id.key = key; s_id.remote = rem;
         /* compat : ancienne identité sans clé stockée -> re-dérive de la table. */
         if (s_id.key == 0 && s_id.active)
@@ -172,7 +158,7 @@ static void load_slot(uint8_t slot, uint16_t counter, int model, uint32_t remote
     uint64_t key = 0; uint8_t idx = (uint8_t)(slot - 1);
     pfx_key_for_serial(serial, &key, &idx);
     s_id.active = true;
-    s_id.model  = (model >= 0 && model < N_MODELS) ? model : s_id.model;
+    s_id.model  = (model >= 0 && model < catalog_model_count()) ? model : s_id.model;
     s_id.idx = idx; s_id.serial = serial; s_id.counter = counter; s_id.key = key; s_id.remote = remote;
     save();
 }
@@ -367,8 +353,10 @@ void pfx_enrol_set_tx_params(const tx_params_t *p) { s_tx = p ? *p : (tx_params_
 
 static int emit(uint8_t button, uint16_t counter) {
     if (!s_id.active) return -1;
+    const catalog_protocol_t *p = keeloq();
+    if (!p || !p->enrol.frames_per_burst) { ESP_LOGE(TAG, "catalogue sans protocole KeeLoq : rien emis"); return -1; }
     char bits[68]; frame_with_key(s_id.serial, s_id.key, button, counter, bits);
-    radio_tx_device(bits, PFX_BURST, &s_tx);   /* rafale, compteur figé sur toute la rafale */
+    radio_tx_device(bits, p->enrol.frames_per_burst, &s_tx);   /* rafale, compteur figé sur toute la rafale */
     ESP_LOGW(TAG, "TX 0x067 serial=0x%07X btn=0x%X cnt=%u te=%u",
              (unsigned)s_id.serial, button, counter, (unsigned)cc1101_get_tx_te());
     return 0;
@@ -376,6 +364,8 @@ static int emit(uint8_t button, uint16_t counter) {
 
 int pfx_enrol_emit_learn(void) {
     if (!s_id.active) return -1;
+    const catalog_protocol_t *p = keeloq();
+    if (!p || p->enrol.code == CATALOG_NO_CODE) { ESP_LOGE(TAG, "catalogue sans trame d'apprentissage KeeLoq : rien emis"); return -1; }
     /* Trame d'apprentissage (btn5) tenue ~5 s : on répète la même trame en salves, avec un
      * yield entre chaque (nourrit le watchdog, évite un bit-bang bloquant de 5 s d'un coup).
      * Le moteur ne fait son va-et-vient de confirmation qu'après ~5 s.
@@ -388,23 +378,22 @@ int pfx_enrol_emit_learn(void) {
     s_id.counter = cnt + 1;   /* commandes à partir du suivant */
     save();
     char bits[68];
-    frame_with_key(s_id.serial, s_id.key, BTN_LEARN, cnt, bits);
-    for (int i = 0; i < PFX_LEARN_ROUNDS; i++) {
-        radio_tx_device(bits, PFX_BURST, &s_tx);
-        vTaskDelay(pdMS_TO_TICKS(15));
+    frame_with_key(s_id.serial, s_id.key, (uint8_t)p->enrol.code, cnt, bits);
+    for (int i = 0; i < p->enrol.bursts; i++) {
+        radio_tx_device(bits, p->enrol.frames_per_burst, &s_tx);
+        vTaskDelay(pdMS_TO_TICKS(p->enrol.burst_gap_ms));
     }
-    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x5 cnt=%u (~5s, %d salves) te=%u",
-             (unsigned)s_id.serial, cnt, PFX_LEARN_ROUNDS, (unsigned)cc1101_get_tx_te());
+    ESP_LOGW(TAG, "TX 0x067 APPRENTISSAGE serial=0x%07X btn=0x%X cnt=%u (%d salves) te=%u",
+             (unsigned)s_id.serial, (unsigned)p->enrol.code, cnt, p->enrol.bursts, (unsigned)cc1101_get_tx_te());
     return 0;
 }
 
 int pfx_enrol_cmd(const char *cmd) {
     if (!s_id.active || !cmd) return -1;
-    uint8_t b;
-    if      (!strcmp(cmd, "up"))   b = PFX_BTN_UP;
-    else if (!strcmp(cmd, "stop")) b = PFX_BTN_STOP;
-    else if (!strcmp(cmd, "down")) b = PFX_BTN_DOWN;
-    else return -1;
+    int c = catalog_cmd_of(cmd);
+    int code = c < 0 ? CATALOG_NO_CODE : catalog_code(CAT_ENC_KEELOQ, (catalog_cmd_t)c);
+    if (code == CATALOG_NO_CODE) return -1;
+    uint8_t b = (uint8_t)code;
     /* Réserve-puis-émets : on persiste le PROCHAIN compteur AVANT d'émettre (jamais de rejeu
      * au reboot ; au pire un compteur sauté, toléré par la fenêtre KeeLoq du moteur). */
     uint16_t cnt = s_id.counter;
