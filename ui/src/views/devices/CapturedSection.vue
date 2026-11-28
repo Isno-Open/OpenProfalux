@@ -41,8 +41,13 @@ function movesOf(reply: { learned?: string }): { learned: MoveCommand[]; missing
   const found = (reply.learned || '').split(',').filter(Boolean);
   return { learned: MOVES.filter(m => found.includes(m)), missing: MOVES.filter(m => !found.includes(m)) };
 }
-async function attach(serial: string): Promise<void> {
-  const id = String(target.value);
+/* Volet enrole qui suit deja cette telecommande, mais pas pour toutes ses commandes : le journal RF n'en portait
+   qu'une partie a l'association. Le bouton reste alors offert, pour ranger les commandes captees depuis. */
+function incomplete(serial: string): string {
+  const d = status.value?.volets.find(x => x.virt && !isSomfy(x) && x.serials.includes(serial));
+  return d && MOVES.some(m => !d.cmd[m]) ? d.id : '';
+}
+async function attach(serial: string, id: string): Promise<void> {
   if (!id) return;
   try {
     const { learned, missing } = movesOf(await api.attachRemote(serial, id));
@@ -107,7 +112,11 @@ async function unignore(serial: string): Promise<void> {
           <BatteryBadge :battery="status?.remote_battery?.[serial] ?? null" />
         </span>
         <span class="usage">
-          <OpBadge v-if="usedBy(serial)" :tone="TONE.accent">{{ usedBy(serial) }}</OpBadge>
+          <span v-if="usedBy(serial)" class="row creation">
+            <OpBadge :tone="TONE.accent">{{ usedBy(serial) }}</OpBadge>
+            <OpButton v-if="incomplete(serial)" small title="Appuie sur les boutons manquants de la télécommande, puis clique : le boîtier range leurs trames pour suivre la position"
+                      @click="attach(serial, incomplete(serial))">Compléter le suivi</OpButton>
+          </span>
           <span v-else-if="creating === serial" class="row creation">
             <input v-model="deviceName" class="op-input" placeholder="nom du volet" aria-label="Nom du volet à créer"
                    @keydown.enter="createDevice(serial)" @keydown.esc="creating = ''">
@@ -115,7 +124,7 @@ async function unignore(serial: string): Promise<void> {
           </span>
           <span v-else-if="attaching === serial" class="row creation">
             <OpSelect v-model="target" :options="enrolled" aria-label="Volet enrôlé à associer" />
-            <OpButton small :variant="BUTTON.primary" @click="attach(serial)">Associer</OpButton>
+            <OpButton small :variant="BUTTON.primary" @click="attach(serial, String(target))">Associer</OpButton>
             <OpButton small :variant="BUTTON.ghost" @click="attaching = ''">Annuler</OpButton>
           </span>
           <span v-else class="row creation">
